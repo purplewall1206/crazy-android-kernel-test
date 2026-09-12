@@ -25,6 +25,36 @@
  *    are an M4+ optimization; access the field only through the protocol
  *    helpers so the lock type can be swapped without touching callers.
  *
+ *  - The paper's RCursor holds the root-to-covering path read-locked for the
+ *    whole transaction (paper Figure 5 L13 releases everything at scope
+ *    exit).  Linux rwlock_t readers run with preemption disabled, so a
+ *    transaction that may allocate or copy a page cannot hold them that
+ *    long.  corten_lock_range() therefore releases the path read locks as
+ *    soon as the covering write lock is secured (see mm/corten.c); mutual
+ *    exclusion comes from the covering write lock alone.  Consequence: this
+ *    port does not get the paper's "parent read lock blocks concurrent
+ *    PT-page removal for the whole transaction" guarantee; that is covered
+ *    by the pin/stale protocol below instead.
+ *
+ * Pin / TLB-order discipline (invariant, reviewers read this first):
+ *
+ *   The PT-page uninstall hook runs from the TLB-batched free funnels, i.e.
+ *   a PT page can be torn down and batched for freeing BEFORE the flush that
+ *   makes its removal globally visible (paper Figure 7).  Therefore:
+ *
+ *   INVARIANT: every protocol reader (lock walk, transaction operation,
+ *   debugfs) must obtain a descriptor through corten_ptdesc_get() -- a pin
+ *   taken under rcu_read_lock() against a kfree_rcu() releaser -- and must
+ *   not retain any descriptor pointer beyond the matching
+ *   corten_ptdesc_put().  Un-pinned pointers into a descriptor are invalid
+ *   across any sleep/preemption point.  A descriptor found stale
+ *   (desc->stale != 0) means its PT page is being torn down: transaction
+ *   entry re-checks staleness under the descriptor locks and fails with
+ *   -EAGAIN so the caller can retry (paper Figure 7 "gets the stale PT page
+ *   and then retry").  M3 additionally owes an interlock making
+ *   corten_ptdesc_uninstall() wait for in-flight write-lock holders before
+ *   the PT page memory itself is handed back.
+ *
  * Nothing here has any effect unless CONFIG_CORTEN_MM is enabled AND the
  * kernel is booted with corten=on (static branch, default off).
  */
@@ -41,9 +71,8 @@ struct page;
 
 /*
  * State of one virtual page as stored in the per-PTE metadata array.
- * Mirrors the paper's Status enum (Figure 4).  This slice only defines the
- * state space; the fault/mmap paths that produce these states arrive with
- * slice 2b.
+ * Mirrors the paper's Status enum (Figure 4).  The states are produced and
+ * consumed through the transaction API below (corten_query/map/mark/unmap).
  */
 enum corten_page_state {
 	CORTEN_INVALID = 0,	/* paper: Invalid -- page not allocated */
@@ -59,16 +88,33 @@ enum corten_page_state {
 #define CORTEN_PERM_WRITE	_BITUL(1)
 #define CORTEN_PERM_EXEC	_BITUL(2)
 #define CORTEN_PERM_USER	_BITUL(3)
+#define CORTEN_PERM_ALL		(CORTEN_PERM_READ | CORTEN_PERM_WRITE | \
+				 CORTEN_PERM_EXEC | CORTEN_PERM_USER)
 
 /*
  * COW flags for corten_pte_meta.flags (paper Sec. 4.3): the shared bit marks
  * pages that may have more than one sharer after fork(), the writable bit
  * records whether the virtual page was actually writable before the fork
  * read-only protection.  A write fault on (shared && writable) copies the
- * page instead of just re-enabling write access.
+ * page instead of just re-enabling write access; a write fault on
+ * (shared && !writable) only re-enables read-only access (the page was
+ * read-only before the fork).  Rule enforced by corten_mark(): a logically
+ * writable page marked shared must carry CORTEN_PF_WRITABLE.
  */
 #define CORTEN_PF_SHARED	_BITUL(0)
 #define CORTEN_PF_WRITABLE	_BITUL(1)
+#define CORTEN_PF_ALL		(CORTEN_PF_SHARED | CORTEN_PF_WRITABLE)
+
+/*
+ * Flags for corten_map().
+ *
+ * CORTEN_MAP_FORCE: allow replacing an existing CORTEN_MAPPED metadata
+ * (e.g. a COW copy-in or a swap-in overwrite).  Without it corten_map() on
+ * an already-mapped page fails with -EEXIST so that double-mapping bugs
+ * surface as errors instead of silent refcount leaks.
+ */
+#define CORTEN_MAP_FORCE	_BITUL(0)
+#define CORTEN_MAP_ALL		CORTEN_MAP_FORCE
 
 /*
  * Entries per PTE page on x86-64.  Kept as a literal so this header stays
@@ -86,11 +132,12 @@ enum corten_page_state {
  * comes from the order-0 kmalloc caches.
  *
  * The 5 reserved bytes are where the payloads of the non-resident states
- * will live (slice 2b+): the backing file reference for CORTEN_FILE_MAPPED,
- * and the (device, block) pair plus on-disk offset for CORTEN_SWAPPED.
- * Whether those stay inline (compact IDs) or become indices into an
- * out-of-line table is decided in slice 2b; the struct size is not expected
- * to grow.
+ * will live (M3+): the backing file reference for CORTEN_FILE_MAPPED, the
+ * (device, block) pair plus on-disk offset for CORTEN_SWAPPED, and the
+ * physical-page identity for CORTEN_MAPPED (M3 writes it together with the
+ * hardware PTE).  Whether those stay inline (compact IDs) or become indices
+ * into an out-of-line table is decided in M3; the struct size is not
+ * expected to grow.
  */
 struct corten_pte_meta {
 	/* enum corten_page_state */
@@ -99,7 +146,7 @@ struct corten_pte_meta {
 	u8	perm;
 	/* CORTEN_PF_* (COW shared/writable, paper Sec. 4.3) */
 	u8	flags;
-	/* reserved: file ref / swap (dev, blk, off) payload, see above */
+	/* reserved: file ref / swap (dev, blk, off) / page identity payload */
 	u8	__resv[5];
 } __packed;
 
@@ -112,20 +159,35 @@ enum corten_pt_level {
 	CORTEN_LEVEL_PTE,
 };
 
-/* Slots for the PT pages pinned by one transaction (slice 2b placeholder). */
-#define CORTEN_HANDLE_MAX_PAGES	9
+/*
+ * Slots for the descent path of one transaction.  A 5-level x86-64 walk
+ * passes through at most 5 PT pages from the root to the covering page
+ * (PGD, P4D, PUD, PMD, PTE); during the walk all of them are held in
+ * @path read-locked, and once the covering write lock is secured the
+ * covering page is moved to @covering, leaving at most the 4 intermediate
+ * levels behind in @path (which the protocol releases before returning).
+ */
+#define CORTEN_TXN_PATH_MAX	5
 
 /**
- * struct corten_handle - transaction cursor over a locked VA range.
+ * struct corten_txn - transaction cursor over a locked VA range.
  *
  * Paper analogue: RCursor (paper Figure 4).  Produced by corten_lock_range(),
  * consumed by corten_query()/corten_map()/corten_mark()/corten_unmap(), and
  * released by corten_unlock() (the paper releases on RCursor scope exit; the
- * C port makes the release explicit).  Every operation on the handle is
- * atomic w.r.t. other transactions overlapping the range; transactions on
- * disjoint ranges do not contend (paper Sec. 3.3 concurrency semantics).
+ * C port makes the release explicit).
+ *
+ * ATOMICITY: the covering PT page's write lock is held continuously from a
+ * successful corten_lock_range() until corten_unlock().  All operations on
+ * the handle therefore run atomically with respect to any other transaction
+ * whose range overlaps this one (they serialize on the same descriptor
+ * lock); transactions on disjoint ranges touch different descriptors and do
+ * not contend (paper Sec. 3.3 concurrency semantics).
+ *
+ * Allocate on the stack (about 80 bytes) of the thread running the
+ * transaction; it must not be shared between threads.
  */
-struct corten_handle {
+struct corten_txn {
 	/** @mm: address space the range belongs to. */
 	struct mm_struct	*mm;
 	/** @start: first VA of the locked range. */
@@ -133,14 +195,24 @@ struct corten_handle {
 	/** @end: first VA past the locked range. */
 	unsigned long		end;
 	/**
-	 * @pages: PT pages pinned by the locking protocol -- the covering PT
-	 * page first, then (advanced protocol, slice 2b) its locked
-	 * descendants in DFS order.  Fixed-size placeholder; sized for one
-	 * root-to-leaf path of a 5-level x86-64 table plus margin.
+	 * @covering: descriptor of the covering PT page, write-locked and
+	 * pinned.  All transaction operations act on its metadata array.
+	 * NULL while @txn is not locked.
 	 */
-	struct corten_ptdesc	*pages[CORTEN_HANDLE_MAX_PAGES];
-	/** @nr_pages: number of valid entries in @pages. */
-	u8			nr_pages;
+	struct corten_ptdesc	*covering;
+	/**
+	 * @path: descent-path bookkeeping used by corten_lock_range() only
+	 * (root first).  On entry into the operations below it is always
+	 * empty; it is kept in the struct so the walk needs no separate
+	 * allocation and so a future sleepable path-lock scheme (or the
+	 * advanced protocol's locked descendants, paper Figure 6) can hold
+	 * state here.  Entries are pinned while stored.
+	 */
+	struct corten_ptdesc	*path[CORTEN_TXN_PATH_MAX];
+	/** @nr_path: number of valid entries in @path. */
+	u8			nr_path;
+	/** @level: enum corten_pt_level of @covering (informational). */
+	u8			level;
 };
 
 #ifdef CONFIG_CORTEN_MM
@@ -180,16 +252,17 @@ struct corten_ptdesc {
 	 * Protects this PT page and its metadata array for the transaction
 	 * protocols (paper Sec. 4.1).  rwlock_t is the starting point for the
 	 * CortenMMrw protocol; M4+ may swap in a pfq/BRAVO-based lock, so
-	 * take it only through the protocol helpers (slice 2b).
+	 * take it only through the protocol helpers.
 	 */
 	rwlock_t		lock;
 	/* Back-link: owning address space (descriptor -> AddrSpace). */
 	struct mm_struct	*mm;
 	/*
 	 * Base VA of the window this PT page covers once installed
-	 * (PMD_SIZE-aligned for a PTE-level page).  pte_alloc_one() runs
-	 * before the page is placed in the tree, so the installer fills
-	 * this in during slice 2b; it is 0 until then.
+	 * (PMD_SIZE-aligned for a PTE-level page).  The pte_alloc_one() hook
+	 * does not know the VA; the locking protocol fills this in the first
+	 * time the page becomes a covering page (until then it is 0 --
+	 * synthetic descriptor trees set it at construction).
 	 */
 	unsigned long		va_base;
 	/* Per-PTE metadata array, on demand, freed with the descriptor. */
@@ -200,7 +273,12 @@ struct corten_ptdesc {
 	u8			stale;
 	/* enum corten_pt_level of the page this descriptor is attached to. */
 	u8			level;
-	/* Populated child entries; slice 2b DFS locking / unmap pruning. */
+	/*
+	 * Populated child entries of this PT page.  Maintained by the
+	 * transaction operations that create/remove lower-level PT pages
+	 * (M3 ensure-alloc / M4 unmap pruning, paper Figure 6); the locking
+	 * protocol itself only reads it (debugfs).  Protected by @lock.
+	 */
 	u16			nr_children;
 	/* Debug: always CORTEN_PTDESC_MAGIC while alive. */
 	u32			magic;
@@ -212,81 +290,127 @@ struct corten_ptdesc {
  * corten_lock_range - lock a VA range for a transaction (paper:
  *                     AddrSpace::lock, Figure 5).
  * @mm: address space to operate on.
- * @start: first VA of the range.
- * @end: first VA past the range.
- * @handle: uninitialized handle receiving the transaction cursor.
+ * @start: first VA of the range (page aligned).
+ * @len: length of the range in bytes (> 0).
+ * @txn: uninitialized handle receiving the transaction cursor.
  *
- * Walks the page table from the root while a single child PT page covers
- * the whole range, then takes the covering PT page's write lock (rw
- * protocol; the advanced protocol additionally locks descendants, slice
- * 2b).  On success all operations through @handle are atomic w.r.t. other
- * transactions overlapping [@start, @end); transactions on disjoint ranges
- * proceed in parallel.  The caller must balance with corten_unlock().
+ * Implements the CortenMMrw locking protocol (paper Figure 5): descend from
+ * the root taking a read lock on every PT page whose single child fully
+ * covers [@start, start+len), and write-lock the lowest possible covering PT
+ * page.  On success @txn->covering identifies the covering page; all
+ * operations through @txn are atomic w.r.t. other transactions overlapping
+ * the range; transactions on disjoint ranges proceed in parallel.
  *
- * Return: 0 on success, negative error otherwise.  On error @handle is not
- * locked and must not be used.
+ * 2b scope limits (see mm/corten.c):
+ *  - only PTE-level pages carry descriptors so far (the M2a hooks), so the
+ *    range must fit into one PMD window (2M); wider ranges return
+ *    -EOPNOTSUPP (M4+ turns the cursor into an iterator over per-covering-
+ *    page transactions);
+ *  - a missing intermediate PT page (hole) reports -ENOENT without
+ *    allocating (M3 adds ensure-alloc under the covering write lock);
+ *  - the caller must keep the walked page-table hierarchy alive for the
+ *    duration of the call (e.g. hold mmap_lock for read or own a private
+ *    mm); M3's arena design retires upper-level PT pages only through the
+ *    transaction protocol and drops this requirement there.
+ *
+ * The caller must balance a successful lock with corten_unlock().  On error
+ * @txn is not locked and must not be passed to corten_unlock().
+ *
+ * Return: 0 on success, negative error otherwise.
  */
 int corten_lock_range(struct mm_struct *mm, unsigned long start,
-		      unsigned long end, struct corten_handle *handle);
+		      unsigned long len, struct corten_txn *txn);
 
 /**
  * corten_query - read the state of one virtual page in a transaction
  *                (paper: RCursor::query).
- * @handle: locked transaction handle.
- * @addr: virtual address to query, inside the locked range.
+ * @txn: locked transaction handle.
+ * @addr: virtual address to query (page aligned, inside the locked range).
  * @out: receives the page state (state, perm, COW flags).
  *
- * Return: 0 on success, negative error otherwise.
+ * A PT page without a metadata array queries as CORTEN_INVALID (nothing has
+ * been recorded for it yet).
+ *
+ * Return: 0 on success, -ERANGE if @addr is outside the locked range,
+ * -EINVAL on a misaligned @addr.
  */
-int corten_query(struct corten_handle *handle, unsigned long addr,
+int corten_query(struct corten_txn *txn, unsigned long addr,
 		 struct corten_pte_meta *out);
 
 /**
  * corten_map - program the MMU mapping for one virtual page in a
- *              transaction (paper: RCursor::map).
- * @handle: locked transaction handle.
- * @addr: virtual address to map, inside the locked range.
+ *              transaction (paper: RCursor::map, e.g. a page fault
+ *              installing a page, paper Figure 8 L22).
+ * @txn: locked transaction handle.
+ * @addr: virtual address to map (page aligned, inside the locked range).
  * @page: physical page to map.
  * @perm: CORTEN_PERM_* for the mapping.
+ * @flags: CORTEN_MAP_FORCE or 0.
+ *
+ * State machine: any state may transition to CORTEN_MAPPED (the paper's
+ * fault path maps onto PrivateAnon/Swapped/... pages alike), except an
+ * already CORTEN_MAPPED page, which requires %CORTEN_MAP_FORCE and fails
+ * with -EEXIST otherwise.
+ *
+ * 2b scope: this updates the metadata layer only.  Writing the hardware
+ * PTE (set_pte) and the TLB bookkeeping is wired in by M3 when the fault
+ * path learns to call this under the covering write lock.
  *
  * Return: 0 on success, negative error otherwise.
  */
-int corten_map(struct corten_handle *handle, unsigned long addr,
-	       struct page *page, u8 perm);
+int corten_map(struct corten_txn *txn, unsigned long addr, struct page *page,
+	       u8 perm, unsigned int flags);
 
 /**
  * corten_mark - change the recorded state of a VA range in a transaction
  *               (paper: RCursor::mark, e.g. virtually-allocate an anonymous
- *               range on mmap()).
- * @handle: locked transaction handle.
- * @start: first VA of the sub-range, inside the locked range.
- * @end: first VA past the sub-range.
- * @meta: the state to record for every page in the sub-range.
+ *               range on mmap(), or record the fork COW bits, paper
+ *               Sec. 4.3).
+ * @txn: locked transaction handle.
+ * @start: first VA of the sub-range (page aligned, inside the locked range).
+ * @len: length of the sub-range in bytes (> 0, multiple of PAGE_SIZE).
+ * @meta: the state to record for every page in the sub-range (state, perm,
+ *        COW flags).
+ *
+ * State machine: @meta->state == CORTEN_INVALID is rejected (-EINVAL; use
+ * corten_unmap()); a state change is legal from CORTEN_INVALID to one of
+ * PRIVATE_ANON/FILE_MAPPED/SHARED_ANON (virtual allocation) and from any
+ * state to itself (permission / COW-flag updates, e.g. mprotect or fork).
+ * A logically writable page marked shared must carry CORTEN_PF_WRITABLE
+ * (paper Sec. 4.3), else -EINVAL.
+ *
+ * The whole sub-range is validated before anything is written; on error no
+ * metadata is modified.
  *
  * Return: 0 on success, negative error otherwise.
  */
-int corten_mark(struct corten_handle *handle, unsigned long start,
-		unsigned long end, const struct corten_pte_meta *meta);
+int corten_mark(struct corten_txn *txn, unsigned long start, unsigned long len,
+		const struct corten_pte_meta *meta);
 
 /**
  * corten_unmap - remove the mapping of a VA range in a transaction
- *                (paper: RCursor::unmap; also retires PT pages that become
- *                empty, marking them stale per paper Figure 6).
- * @handle: locked transaction handle.
- * @start: first VA of the sub-range, inside the locked range.
- * @end: first VA past the sub-range.
+ *                (paper: RCursor::unmap; retiring emptied PT pages and
+ *                marking them stale, paper Figure 6, is M4 scope).
+ * @txn: locked transaction handle.
+ * @start: first VA of the sub-range (page aligned, inside the locked range).
+ * @len: length of the sub-range in bytes (> 0, multiple of PAGE_SIZE).
+ *
+ * Every page in the sub-range must be recorded (state != CORTEN_INVALID),
+ * else -ENOENT and nothing is changed.  The whole sub-range is validated
+ * before anything is written.  Dropping the physical page references is
+ * wired in by M3/M4; 2b only flips the metadata back to CORTEN_INVALID.
  *
  * Return: 0 on success, negative error otherwise.
  */
-int corten_unmap(struct corten_handle *handle, unsigned long start,
-		 unsigned long end);
+int corten_unmap(struct corten_txn *txn, unsigned long start,
+		 unsigned long len);
 
 /**
  * corten_unlock - release a transaction (paper: AddrSpace::unlock; releases
  *                 the acquired locks in reverse acquisition order).
- * @handle: handle returned by corten_lock_range(); invalid afterwards.
+ * @txn: handle returned by corten_lock_range(); invalid afterwards.
  */
-void corten_unlock(struct corten_handle *handle);
+void corten_unlock(struct corten_txn *txn);
 
 /* PT-page lifecycle hooks, called from the pgtable alloc/free funnels. */
 void corten_on_pte_alloc(struct mm_struct *mm, struct page *pte_page);
@@ -309,38 +433,37 @@ static inline void corten_on_pte_free(struct page *pte_page)
 }
 
 static inline int corten_lock_range(struct mm_struct *mm, unsigned long start,
-				    unsigned long end,
-				    struct corten_handle *handle)
+				    unsigned long len, struct corten_txn *txn)
 {
 	return -EOPNOTSUPP;
 }
 
-static inline int corten_query(struct corten_handle *handle, unsigned long addr,
+static inline int corten_query(struct corten_txn *txn, unsigned long addr,
 			       struct corten_pte_meta *out)
 {
 	return -EOPNOTSUPP;
 }
 
-static inline int corten_map(struct corten_handle *handle, unsigned long addr,
-			     struct page *page, u8 perm)
+static inline int corten_map(struct corten_txn *txn, unsigned long addr,
+			     struct page *page, u8 perm, unsigned int flags)
 {
 	return -EOPNOTSUPP;
 }
 
-static inline int corten_mark(struct corten_handle *handle, unsigned long start,
-			      unsigned long end,
+static inline int corten_mark(struct corten_txn *txn, unsigned long start,
+			      unsigned long len,
 			      const struct corten_pte_meta *meta)
 {
 	return -EOPNOTSUPP;
 }
 
-static inline int corten_unmap(struct corten_handle *handle,
-			       unsigned long start, unsigned long end)
+static inline int corten_unmap(struct corten_txn *txn, unsigned long start,
+			       unsigned long len)
 {
 	return -EOPNOTSUPP;
 }
 
-static inline void corten_unlock(struct corten_handle *handle)
+static inline void corten_unlock(struct corten_txn *txn)
 {
 }
 
