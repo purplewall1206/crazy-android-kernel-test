@@ -2,6 +2,7 @@
 #include <linux/mm.h>
 #include <linux/gfp.h>
 #include <linux/hugetlb.h>
+#include <linux/corten.h>
 #include <asm/pgalloc.h>
 #include <asm/tlb.h>
 #include <asm/fixmap.h>
@@ -15,11 +16,33 @@ SYM_PIC_ALIAS(physical_mask);
 
 pgtable_t pte_alloc_one(struct mm_struct *mm)
 {
-	return __pte_alloc_one(mm, GFP_PGTABLE_USER);
+	pgtable_t page = __pte_alloc_one(mm, GFP_PGTABLE_USER);
+
+	/*
+	 * CortenMM hook: attach the page descriptor when the PT page is
+	 * born.  This is the outermost user PTE-page allocator on x86;
+	 * kernel page tables (pte_alloc_one_kernel()) are deliberately not
+	 * tracked.  No-op unless booted with corten=on.
+	 */
+	if (page)
+		corten_on_pte_alloc(mm, page);
+
+	return page;
 }
 
 void ___pte_free_tlb(struct mmu_gather *tlb, struct page *pte)
 {
+	/*
+	 * CortenMM hook: this is the single x86 funnel for every
+	 * TLB-batched PTE-page free (free_pgtables(), zap direct reclaim and
+	 * PT_RECLAIM); the synchronous paths (fault error handling, THP
+	 * collapse/split, khugepaged's deferred free) go through pte_free()
+	 * in asm-generic/pgalloc.h instead.  No mm context is needed: the
+	 * hook only looks up the PFN-keyed descriptor, never sleeps and
+	 * never waits on a lock held by reclaim (see mm/corten.c).  No-op
+	 * unless booted with corten=on.
+	 */
+	corten_on_pte_free(pte);
 	paravirt_release_pte(page_to_pfn(pte));
 	tlb_remove_ptdesc(tlb, page_ptdesc(pte));
 }

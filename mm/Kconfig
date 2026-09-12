@@ -1426,6 +1426,38 @@ config PT_RECLAIM
 
 	  Note: now only empty user PTE page table pages will be reclaimed.
 
+config CORTEN_MM
+	bool "CortenMM: page-descriptor based transactional MM (EXPERIMENTAL)"
+	default n
+	depends on MMU && X86_64
+	help
+	  CortenMM replaces the two-level (VMA + page table) synchronization
+	  of the memory management code with a single-level abstraction: every
+	  user page-table page carries a page descriptor (lock + back-link +
+	  per-PTE metadata array), and memory operations run as transactions
+	  on the covering page-table page.
+
+	  This slice (M2a) only adds the data-structure skeleton, the PT-page
+	  lifecycle hooks and KUnit tests; nothing calls the transaction API
+	  yet.  The code is inert unless the kernel is booted with corten=on
+	  (static branch, default off), so the disabled cost is one nop per
+	  page-table alloc/free.
+
+	  If unsure, say N.
+
+config CORTEN_MM_KUNIT_TEST
+	bool "KUnit test for CortenMM data structure skeleton"
+	default KUNIT_ALL_TESTS
+	depends on CORTEN_MM && KUNIT
+	help
+	  KUnit tests for the CortenMM skeleton: per-PTE metadata array
+	  allocation/free (full 512-entry writeback and re-initialization),
+	  the PFN-keyed page-descriptor index with refcounting, and the pure
+	  covering-page selection helpers.  The tests do not need a real user
+	  address space.
+
+	  If unsure, say N.
+
 config FIND_NORMAL_PAGE
 	def_bool n
 

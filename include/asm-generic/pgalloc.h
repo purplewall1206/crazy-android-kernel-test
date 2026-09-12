@@ -2,6 +2,8 @@
 #ifndef __ASM_GENERIC_PGALLOC_H
 #define __ASM_GENERIC_PGALLOC_H
 
+#include <linux/corten.h>
+
 #ifdef CONFIG_MMU
 
 #define GFP_PGTABLE_KERNEL	(GFP_KERNEL | __GFP_ZERO)
@@ -116,6 +118,13 @@ static inline void pte_free(struct mm_struct *mm, struct page *pte_page)
 {
 	struct ptdesc *ptdesc = page_ptdesc(pte_page);
 
+	/*
+	 * CortenMM hook: covers every synchronous (non-TLB) PTE-page free
+	 * -- fault error handling, THP collapse/split and khugepaged's
+	 * deferred free (pte_free_defer() funnels here).  No-op unless
+	 * booted with corten=on.
+	 */
+	corten_on_pte_free(pte_page);
 	pagetable_dtor_free(ptdesc);
 }
 
