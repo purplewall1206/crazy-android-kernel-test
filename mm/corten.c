@@ -96,6 +96,39 @@ early_initcall(corten_late_init);
 static DEFINE_XARRAY(corten_ptdesc_xa);
 
 /*
+ * One lock class per PT-page level.  The locking protocol descends the
+ * tree with the level strictly decreasing along the held path (an honest
+ * view never nests two descriptors of the same level), which makes the
+ * class-level lock order acyclic by construction:
+ *
+ *   PGD -> P4D -> PUD -> PMD -> PTE   (acquire order, top down)
+ *
+ * without it, every descriptor shares one class and lockdep flags the
+ * protocol's legitimate multi-level walks as "recursive locking" (a
+ * rwlock read side offers no subclass annotation to express this).  Keep
+ * in sync with desc->level through corten_ptdesc_set_level() ONLY.
+ */
+static struct lock_class_key corten_lock_keys[CORTEN_LEVEL_PTE + 1];
+
+/**
+ * corten_ptdesc_set_level - set a descriptor's PT level and lock class.
+ * @desc: descriptor whose lock has not been acquired yet.
+ * @lvl: enum corten_pt_level of the PT page.
+ *
+ * The level fixes the descriptor's position in the protocol's lock-order
+ * graph (see the lock-class comment above), so level and class must be
+ * assigned together, before the first acquisition.  The installer uses
+ * it at birth; views that re-level a descriptor (KUnit synthetic trees,
+ * ensure-alloc) call it instead of writing desc->level directly.
+ */
+void corten_ptdesc_set_level(struct corten_ptdesc *desc,
+			     enum corten_pt_level lvl)
+{
+	desc->level = lvl;
+	lockdep_set_class(&desc->lock, &corten_lock_keys[lvl]);
+}
+
+/*
  * Statistics (debugfs).  These are the only relaxed cross-CPU counters in
  * the file; they are advisory and never used for control flow.
  */
@@ -250,9 +283,9 @@ int corten_meta_ensure(struct corten_ptdesc *desc)
 	if (READ_ONCE(desc->meta))
 		return 0;
 
-	write_lock(&desc->lock);
+	write_lock_bh(&desc->lock);
 	ret = corten_meta_ensure_locked(desc);
-	write_unlock(&desc->lock);
+	write_unlock_bh(&desc->lock);
 
 	return ret;
 }
@@ -295,7 +328,7 @@ int corten_ptdesc_install(struct mm_struct *mm, struct page *pte_page)
 	rwlock_init(&desc->lock);
 	refcount_set(&desc->refs, 1);
 	desc->mm = mm;
-	desc->level = CORTEN_LEVEL_PTE;
+	corten_ptdesc_set_level(desc, CORTEN_LEVEL_PTE);
 	desc->magic = CORTEN_PTDESC_MAGIC;
 
 	/*
@@ -346,9 +379,38 @@ int corten_ptdesc_install(struct mm_struct *mm, struct page *pte_page)
  * reference is dropped; the kfree_rcu() in corten_ptdesc_release() waits
  * out lookups that were in flight.  Staleness is published before the base
  * reference drops so pinned protocol readers re-check it under the
- * descriptor lock and fail with -EAGAIN (paper Figure 7).  M3 owes an
- * interlock making this function wait for in-flight write-lock holders
- * before the PT page memory is reused (see include/linux/corten.h).
+ * descriptor lock and fail with -EAGAIN (paper Figure 7).
+ *
+ * M3a interlock (this closes the 2b review gap "a write-lock holder can
+ * outlive the PT-page reclaim"): the stale flag is published under the
+ * descriptor write lock, so uninstall waits out every transaction holding
+ * this page's write lock -- a transaction body can therefore never observe
+ * the PT-page memory going away (paper Figure 7: mark stale, retire the
+ * PT page only after exclusion).  No uninstall caller holds desc->lock
+ * itself (the free funnels run with the PTE locks already dropped:
+ * zap_pte_range() calls pte_unmap_unlock() before the
+ * free_pte()/try_to_free_pte() funnels, and the fault-error/prealloc and
+ * THP-collapse pte_free() sites hold no spinlocks), so taking the lock
+ * here cannot self-deadlock.
+ *
+ * The lock is taken BH-symmetric (write_lock_bh) and every other
+ * desc->lock acquisition in the protocol is BH-symmetric the same way;
+ * that is what makes the same-CPU softirq case safe.  The deferred free
+ * funnel reaches this function from RCU_SOFTIRQ context (khugepaged:
+ * pte_free_defer() -> call_rcu(pte_free_now) -> pte_free()).  With plain
+ * spin-then-take primitives, a task holding desc->lock on CPU X could be
+ * interrupted by an irq and stop inside irq_exit's do_softirq() at the
+ * very RCU callback that then spins in write_lock_irqsave() for that
+ * same task's lock -- the interrupted holder never resumes and the
+ * softirq spins forever.  With the BH-symmetric scheme a task-side
+ * holder keeps softirqs disabled on its CPU for the whole hold, so that
+ * softirq cannot start under it; an uninstaller running in softirq
+ * context can only be waiting for holders on other CPUs (or other
+ * softirqs), and every holder finishes its hold without sleeping:
+ * covering write-lock holders run metadata operations that use GFP_NOWAIT
+ * only, walk read-lock holders cover one stale check plus one
+ * non-sleeping child lookup.  Every wait this uninstaller does is
+ * therefore bounded.
  */
 void corten_ptdesc_uninstall(struct page *pte_page)
 {
@@ -366,7 +428,10 @@ void corten_ptdesc_uninstall(struct page *pte_page)
 		return;
 	}
 
+	write_lock_bh(&desc->lock);
 	WRITE_ONCE(desc->stale, 1);
+	write_unlock_bh(&desc->lock);
+
 	atomic_long_dec(&corten_nr_ptdescs);
 	corten_ptdesc_put(desc);
 }
@@ -503,11 +568,100 @@ static void corten_txn_release_path(struct corten_txn *txn)
 		struct corten_ptdesc *desc = txn->path[--txn->nr_path];
 
 		/* Reverse acquisition order (paper Figure 5 L13:
-		 * release_locks_in_reverse), deepest first.
+		 * release_locks_in_reverse), deepest first.  Pairs with the
+		 * walk's read_lock_bh().
 		 */
-		read_unlock(&desc->lock);
+		read_unlock_bh(&desc->lock);
 		corten_ptdesc_put(desc);
 	}
+}
+
+/**
+ * corten_txn_fill_hole - ensure-alloc the child PT page missing below @cur
+ *                        (paper Figure 5 L5' + the reference
+ *                        implementation's "alloc_if_none").
+ *
+ * Called with @cur read-locked and stored in txn->path.  Performs the
+ * read->write upgrade (Linux rwlock_t has no upgrade primitive, so
+ * exactly like the L7/L8 covering upgrade: drop the read lock, take the
+ * write lock), then re-checks and allocates under the write lock:
+ *
+ *   - the re-check is mandatory: between read_unlock_bh() and
+ *     write_lock_bh() a competing transaction can run this same branch
+ *     and install the child first.  The paper's "frozen descent" argument
+ *     does not span the upgrade window (only the write lock excludes
+ *     there); skipping the re-check would publish an orphan twin of the
+ *     child page;
+ *   - the write lock also excludes uninstall (the M3 interlock:
+ *     corten_ptdesc_uninstall() publishes staleness under the same lock),
+ *     so the parent PT page cannot be retired under the walk;
+ *   - the view's @ops->alloc() runs with the parent write-locked and
+ *     must therefore not sleep (see mm/corten.h);
+ *   - on return the walk's lock state is restored: @cur read-locked
+ *     again (its txn->path entry stays valid for the generic unwind),
+ *     and the returned child is pinned but NOT locked, so the caller's
+ *     descent loop read-locks and stale-checks it like any other child.
+ *
+ * Returns the pinned child on success, NULL when the view has no
+ * @ops->alloc (caller falls back to the pure-protocol -ENOENT), or
+ * ERR_PTR(): -EAGAIN (raced with uninstall, paper Figure 7 retry),
+ * -ENOMEM (out of memory), -EOPNOTSUPP (view does not allocate outside
+ * the fault path -- the real x86 view until 3b).
+ */
+static struct corten_ptdesc *corten_txn_fill_hole(struct corten_ptdesc *cur,
+						  unsigned long start,
+						  const struct corten_tree_ops *ops,
+						  void *ctx)
+{
+	struct corten_ptdesc *child = NULL;
+	int err = 0;
+
+	/* L5'->L8: exclusive ownership of @cur for the ensure-alloc.
+	 * BH-symmetric on both sides (see corten_ptdesc_uninstall()).
+	 */
+	read_unlock_bh(&cur->lock);
+	write_lock_bh(&cur->lock);
+
+	if (unlikely(READ_ONCE(cur->stale))) {
+		err = -EAGAIN;
+	} else {
+		/* Upgrade-window re-check: the competitor may have filled
+		 * the hole while we held no lock on @cur.  Either way the
+		 * returned child is pinned and published in the view.
+		 */
+		child = ops->child(ctx, cur, start);
+		if (!child)
+			child = ops->alloc(ctx, cur, start);
+		if (!child)
+			/* Defensive: the ops contract says ERR_PTR, treat a
+			 * NULL as an allocation failure rather than a hole
+			 * (we are committed to the write lock here).
+			 */
+			err = -ENOMEM;
+		else if (IS_ERR(child))
+			err = PTR_ERR(child);
+	}
+
+	/* Restore the walk's lock state.  The write->read window is benign:
+	 * a competing transaction that re-fills this slot installs an
+	 * equivalent child.  An uninstaller that slips in here publishes
+	 * staleness on @cur without stopping the walk -- note the asymmetry:
+	 * only a stale COVERING page necessarily fails the transaction with
+	 * -EAGAIN, because the covering page is the only one whose staleness
+	 * is re-checked under the write lock (the L7/L8 re-check, paper
+	 * Figure 7).  An intermediate ancestor going stale while the
+	 * covering page stays fresh may legitimately leave the transaction
+	 * successful: its path pin keeps the walked descriptors alive, and
+	 * M4 retires subtrees descendant-first (paper Figure 6 rev_dfs), so
+	 * a real retirement that would make an ancestor stale marks its
+	 * descendants -- the covering page included -- stale before it.
+	 */
+	write_unlock_bh(&cur->lock);
+	read_lock_bh(&cur->lock);
+
+	if (err)
+		return ERR_PTR(err);
+	return child;
 }
 
 /**
@@ -522,46 +676,53 @@ static void corten_txn_release_path(struct corten_txn *txn)
  *                                           stands on, keeping the whole
  *                                           root->covering path locked;
  *   L5/L6 cur = child_node_of(cur)       -- ops->child(), pinned;
- *   L5'  no child (hole): bail out with -ENOENT.  The paper instead
- *        write-locks the current page after dropping its read lock; the
- *        verified reference allocates the missing child there
- *        (entry.alloc_if_none).  2b is the pure protocol and allocates
- *        nothing; M3 replaces this branch with ensure-alloc under the
- *        write lock.
-	 *   L7/L8 write_lock(covering)           -- Linux rwlock_t has no upgrade,
-	 *                                           so the candidate's read lock is
-	 *                                           dropped and re-taken write side.
-	 *                                           Scope of the paper's "frozen
-	 *                                           descent" argument (the
-	 *                                           full-path read locks keep the
-	 *                                           walk's decision valid because
-	 *                                           no other thread can change the
-	 *                                           child pointers of a read-locked
-	 *                                           page): the real x86 view takes
-	 *                                           at most one read lock (2b
-	 *                                           tracks PTE-level pages only;
-	 *                                           corten_real_child() is
-	 *                                           unreachable), so its descent
-	 *                                           decision cannot be invalidated
-	 *                                           regardless of path locks --
-	 *                                           what keeps the walked
-	 *                                           hierarchy stable there is the
-	 *                                           caller-level contract, i.e.
-	 *                                           mmap_lock held for read (see
-	 *                                           corten_lock_range()).  The
-	 *                                           "path locks freeze structural
-	 *                                           changes" reasoning holds only
-	 *                                           for multi-level tree views
-	 *                                           (the synthetic KUnit views),
-	 *                                           and there it rests on the
-	 *                                           view's own contract that
-	 *                                           read-locked pages have
-	 *                                           immutable child pointers.
-	 *                                           Only staleness has to be
-	 *                                           re-checked under the write
-	 *                                           lock -- stale means raced with
-	 *                                           PT-page removal, paper
-	 *                                           Figure 7;
+ *   L5'  no child (hole): ensure-alloc, paper Figure 5 L5' + the
+ *        reference implementation's alloc_if_none.  When the view
+ *        provides an @ops->alloc callback, the walk upgrades cur to the
+ *        write lock (read_unlock + write_lock -- see corten_txn_fill_hole),
+ *        re-checks the child under the write lock (the upgrade window is
+ *        not covered by the "frozen descent" argument), allocates if
+ *        still missing, and continues the descent; the covering page may
+ *        therefore be a page this transaction allocated.  The paper's
+ *        "lock one implicitly locks all" (L8) maps here to the plain
+ *        rwlock: the freshly allocated child can have no competing
+ *        writer, because every protocol path to it is gated by cur's
+ *        write lock.  Without @ops->alloc the protocol stays pure and
+ *        the hole reports -ENOENT;
+ *   L7/L8 write_lock(covering)           -- Linux rwlock_t has no upgrade,
+ *                                           so the candidate's read lock is
+ *                                           dropped and re-taken write side.
+ *                                           Scope of the paper's "frozen
+ *                                           descent" argument (the
+ *                                           full-path read locks keep the
+ *                                           walk's decision valid because
+ *                                           no other thread can change the
+ *                                           child pointers of a read-locked
+ *                                           page): the real x86 view takes
+ *                                           at most one read lock (2b
+ *                                           tracks PTE-level pages only;
+ *                                           corten_real_child() is
+ *                                           unreachable), so its descent
+ *                                           decision cannot be invalidated
+ *                                           regardless of path locks --
+ *                                           what keeps the walked
+ *                                           hierarchy stable there is the
+ *                                           caller-level contract, i.e.
+ *                                           mmap_lock held for read (see
+ *                                           corten_lock_range()).  The
+ *                                           "path locks freeze structural
+ *                                           changes" reasoning holds only
+ *                                           for multi-level tree views
+ *                                           (the synthetic KUnit views),
+ *                                           and there it rests on the
+ *                                           view's own contract that
+ *                                           read-locked pages have
+ *                                           immutable child pointers.
+ *                                           Only staleness has to be
+ *                                           re-checked under the write
+ *                                           lock -- stale means raced with
+ *                                           PT-page removal, paper
+ *                                           Figure 7;
  *   L13  unlock                          -- the path read locks are
  *                                           released bottom-up as soon as
  *                                           the write lock is secured
@@ -594,8 +755,12 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 	/* L2: root page of the walk (highest tracked PT page). */
 	cur = ops->root(ctx, start);
 	if (!cur)
-		/* Hole: no tracked PT page covers @start at all (M3 adds
-		 * ensure-alloc; the pure protocol does not allocate).
+		/* Hole at the top: no tracked PT page covers @start at
+		 * all.  Unlike the L5' branch there is no parent
+		 * descriptor here to upgrade and allocate under, so this
+		 * stays -ENOENT; the real view wires its root-level
+		 * ensure-alloc from inside the fault path (3b), where the
+		 * upper page-table locks make the allocation exclusive.
 		 */
 		return -ENOENT;
 	if (IS_ERR(cur))
@@ -614,10 +779,14 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 			return -EPROTO;
 		}
 
-		/* L4: read-lock the page the walk stands on. */
-		read_lock(&cur->lock);
+		/* L4: read-lock the page the walk stands on.  BH-symmetric:
+		 * pairs with the uninstaller's write_lock_bh() so a softirq
+		 * free (khugepaged pte_free_defer) cannot run under a same
+		 * CPU holder -- see corten_ptdesc_uninstall().
+		 */
+		read_lock_bh(&cur->lock);
 		if (unlikely(READ_ONCE(cur->stale))) {
-			read_unlock(&cur->lock);
+			read_unlock_bh(&cur->lock);
 			corten_ptdesc_put(cur);
 			corten_txn_release_path(txn);
 			return -EAGAIN;
@@ -630,11 +799,15 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 
 		/* L5/L6: descend to the child containing start. */
 		child = ops->child(ctx, cur, start);
+		if (!child && ops->alloc)
+			/* L5': hole below a tracked page -- ensure-alloc
+			 * (corten_txn_fill_hole above).
+			 */
+			child = corten_txn_fill_hole(cur, start, ops, ctx);
 		if (!child) {
-			/* Hole below a tracked page: 2b does not allocate
-			 * (M3: ensure-alloc under the write lock, see
-			 * above).  Nothing below the hole can hold state,
-			 * so -ENOENT is exact here.
+			/* Hole with no allocation callback: nothing below
+			 * the hole can hold state, so -ENOENT is exact
+			 * here.
 			 */
 			corten_txn_release_path(txn);
 			return -ENOENT;
@@ -645,15 +818,25 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 			corten_txn_release_path(txn);
 			return err;
 		}
+		/* Honest-view guard: the descent's level must strictly move
+		 * toward the leaf (paper Figure 5; see the lock-class comment
+		 * at the top -- an honest view never nests two descriptors of
+		 * the same level).  A view that violates this corrupts the
+		 * lock-order graph and can loop the walk; the
+		 * CORTEN_TXN_PATH_MAX bound above still contains the damage,
+		 * but the violation itself is a view bug worth pinpointing.
+		 */
+		WARN_ON_ONCE(child->level <= cur->level);
+
 		cur = child;
 	}
 
 	/* L7/L8: upgrade the candidate to the covering write lock. */
 	cur = txn->path[--txn->nr_path];
-	read_unlock(&cur->lock);
-	write_lock(&cur->lock);
+	read_unlock_bh(&cur->lock);
+	write_lock_bh(&cur->lock);
 	if (unlikely(READ_ONCE(cur->stale))) {
-		write_unlock(&cur->lock);
+		write_unlock_bh(&cur->lock);
 		corten_ptdesc_put(cur);
 		corten_txn_release_path(txn);
 		return -EAGAIN;
@@ -709,7 +892,7 @@ void corten_txn_finish(struct corten_txn *txn)
 	}
 
 	txn->covering = NULL;
-	write_unlock(&covering->lock);
+	write_unlock_bh(&covering->lock);
 	corten_ptdesc_put(covering);
 	atomic_long_dec(&corten_nr_txns);
 	corten_txn_release_path(txn);
@@ -788,9 +971,33 @@ static struct corten_ptdesc *corten_real_child(void *ctx,
 	return ERR_PTR(-EOPNOTSUPP);
 }
 
+/*
+ * Real-view ensure-alloc junction for 3a: deliberately declining.  3b
+ * wires the real allocation here -- from inside the fault path, where
+ * __pte_alloc()-style allocation is legal:
+ *
+ *   - the fault path already holds the upper page-table locks (or mmap_lock
+ *     for write), which is what makes pte_alloc(mm, pmdp) exclusive -- the
+ *     equivalent of the write lock the synthetic views hold when their
+ *     @alloc callback runs;
+ *   - pte_alloc_one() in this tree takes (struct mm_struct *) only (no VMA
+ *     argument), so no vma is actually needed; but the GFP_KERNEL-page
+ *     allocation and the pmd_populate() it implies must not run under a
+ *     spun-up rwlock in arbitrary (TLB-batch, GFP_NOWAIT) contexts --
+ *     hence fail closed with -EOPNOTSUPP until the only caller is the
+ *     fault path.
+ */
+static struct corten_ptdesc *corten_real_alloc(void *ctx,
+					       struct corten_ptdesc *parent,
+					       unsigned long addr)
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
+
 static const struct corten_tree_ops corten_real_ops = {
 	.root		= corten_real_root,
 	.child		= corten_real_child,
+	.alloc		= corten_real_alloc,
 };
 
 /**
@@ -1136,6 +1343,59 @@ static int corten_txn_show(struct seq_file *m, void *v)
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(corten_txn);
+
+#ifdef CONFIG_CORTEN_MM_KUNIT_TEST
+/*
+ * Drive one of the debugfs seq_show functions against an in-memory
+ * seq_file and return its output as a NUL-terminated, caller-kfree()
+ * buffer (ERR_PTR() on failure).  The builtin KUnit suite runs before any
+ * userspace could mount debugfs, so the content assertions go through the
+ * very renderers the files use instead of through the VFS.  seq_printf()
+ * only touches m->buf/m->size/m->count; the mutex is initialized for
+ * future-proofing and never contended here.
+ */
+char *corten_test_render_dbg(enum corten_dbg_file which)
+{
+	int (*show)(struct seq_file *m, void *v);
+	struct seq_file m = { };
+	char *buf;
+
+	switch (which) {
+	case CORTEN_DBG_STATS:
+		show = corten_stats_show;
+		break;
+	case CORTEN_DBG_DUMP:
+		show = corten_dump_show;
+		break;
+	case CORTEN_DBG_TXN:
+		show = corten_txn_show;
+		break;
+	default:
+		return ERR_PTR(-EINVAL);
+	}
+
+	buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!buf)
+		return ERR_PTR(-ENOMEM);
+
+	m.buf = buf;
+	m.size = PAGE_SIZE - 1;		/* room for the terminator */
+	mutex_init(&m.lock);
+
+	show(&m, NULL);
+
+	if (m.count >= m.size) {
+		/* Overflowed the one-page buffer: reject rather than
+		 * assert against truncated output.
+		 */
+		kfree(buf);
+		return ERR_PTR(-ENOSPC);
+	}
+	buf[m.count] = '\0';
+
+	return buf;
+}
+#endif
 
 static int __init corten_debugfs_init(void)
 {

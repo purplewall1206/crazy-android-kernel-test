@@ -17,9 +17,32 @@ struct page;
  * (corten_on_pte_alloc/free) and directly by the KUnit tests.  They skip the
  * corten_enabled_static() gate so tests can exercise the bookkeeping on a
  * kernel booted with corten=off.
+ *
+ * corten_ptdesc_uninstall() is exclusive against descriptor-lock holders:
+ * it publishes staleness under the descriptor write lock (M3a interlock),
+ * so a transaction holding that write lock always outlives -- never gets
+ * surprised by -- the PT-page teardown.  Every desc->lock taker is
+ * BH-symmetric (_bh rwlock variants on both sides), which is what makes
+ * the uninstaller's waits bounded even when it runs in softirq context
+ * (khugepaged pte_free_defer() -> RCU_SOFTIRQ -> pte_free_now ->
+ * pte_free); see corten_ptdesc_uninstall() in mm/corten.c.  It must
+ * therefore only be called from contexts that do not already hold any
+ * descriptor lock, and only from process or softirq context (the free
+ * funnels qualify: they run with the PTE locks dropped; hardirq is not a
+ * free-funnel context and the _bh unlock asserts !in_hardirq()).
  */
 int corten_ptdesc_install(struct mm_struct *mm, struct page *pte_page);
 void corten_ptdesc_uninstall(struct page *pte_page);
+
+/*
+ * Set a descriptor's PT level and, with it, its per-level lock class
+ * (the level hierarchy is the protocol's lock order: a transaction holds
+ * PGD..PTE locks strictly top-down, so same-level descriptors are never
+ * nested).  Call before the descriptor's lock is first acquired, instead
+ * of writing desc->level directly.
+ */
+void corten_ptdesc_set_level(struct corten_ptdesc *desc,
+			     enum corten_pt_level lvl);
 
 /*
  * PFN-keyed lookup.  corten_ptdesc_get() is safe against concurrent
@@ -135,7 +158,34 @@ struct corten_tree_ops {
 	 * read-locked; a child can therefore not appear or vanish during
 	 * the call in a well-formed tree.
 	 */
-	struct corten_ptdesc *(*child)(void *ctx, struct corten_ptdesc *parent,
+		struct corten_ptdesc *(*child)(void *ctx, struct corten_ptdesc *parent,
+				       unsigned long addr);
+	/**
+	 * @alloc: ensure-alloc (paper Figure 5 L5', reference
+	 * "alloc_if_none"): make the child PT page of @parent that covers
+	 * @addr exist, returning its PINNED descriptor.  Optional (NULL
+	 * views keep the pure no-allocation protocol: holes report
+	 * -ENOENT).
+	 *
+	 * Call contract (corten_txn_begin):
+	 *   - called with @parent write-locked, so the call is exclusive
+	 *     against competing transactions AND against uninstall (the
+	 *     M3 interlock makes uninstall wait for write-lock holders);
+	 *   - must not sleep and must not acquire any descriptor lock it
+	 *     does not already hold: it runs inside the parent's spinlock;
+	 *     memory used to instantiate the child must be obtained with
+	 *     GFP_NOWAIT semantics or pre-allocated;
+	 *   - the core re-checked ops->child() under the write lock before
+	 *     calling, so a non-ERR_PTR return installs a child that was
+	 *     absent at upgrade time (the upgrade-window double-install
+	 *     race is the core's responsibility, not the view's);
+	 *   - the view publishes the child in its own tree and owns the
+	 *     bookkeeping (va_base, level, back-links);
+	 *   - failures are ERR_PTR(): -ENOMEM (out of memory), or
+	 *     -EOPNOTSUPP (this view never allocates outside the fault
+	 *     path -- the real x86 view until 3b).
+	 */
+	struct corten_ptdesc *(*alloc)(void *ctx, struct corten_ptdesc *parent,
 				       unsigned long addr);
 };
 
@@ -161,6 +211,19 @@ void corten_txn_finish(struct corten_txn *txn);
 #ifdef CONFIG_CORTEN_MM_KUNIT_TEST
 void corten_test_inject_alloc_fail(int nr);
 bool corten_alloc_should_fail(void);
+enum corten_dbg_file {
+	CORTEN_DBG_STATS,
+	CORTEN_DBG_DUMP,
+	CORTEN_DBG_TXN,
+};
+/*
+ * Render one of the debugfs seq_show outputs into a NUL-terminated,
+ * caller-kfree() buffer, or ERR_PTR().  Test-only: drives the very same
+ * functions the debugfs files use, without requiring debugfs to be
+ * mounted (builtin KUnit runs happen before any userspace could mount
+ * it).
+ */
+char *corten_test_render_dbg(enum corten_dbg_file which);
 #else
 static inline bool corten_alloc_should_fail(void)
 {

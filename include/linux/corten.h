@@ -51,9 +51,29 @@
  *   (desc->stale != 0) means its PT page is being torn down: transaction
  *   entry re-checks staleness under the descriptor locks and fails with
  *   -EAGAIN so the caller can retry (paper Figure 7 "gets the stale PT page
- *   and then retry").  M3 additionally owes an interlock making
- *   corten_ptdesc_uninstall() wait for in-flight write-lock holders before
- *   the PT page memory itself is handed back.
+ *   and then retry").
+ *
+ *   INVARIANT (M3a interlock, paper Figure 7): uninstall publishes
+ *   staleness UNDER the descriptor write lock, so a PT page cannot be
+ *   retired while any transaction holds that page's write lock.  A
+ *   transaction body therefore owns its covering PT page for the whole
+ *   write-lock hold time: the page's memory cannot be handed back under
+ *   it, and ensure-alloc (paper Figure 5 L5'/L8) can create child pages
+ *   under the parent's write lock with the paper's "lock one implicitly
+ *   locks all" reasoning -- a freshly installed child has no competing
+ *   writer because every protocol path to it is gated by the parent's
+ *   write lock.  Every desc->lock acquisition is BH-symmetric (the _bh
+ *   rwlock variants on both the read and the write side, uninstall
+ *   included), which is what keeps the uninstaller's waits bounded: a
+ *   softirq-context uninstaller (khugepaged pte_free_defer() ->
+ *   RCU_SOFTIRQ -> pte_free_now -> pte_free) never waits for a task that
+ *   is itself stopped in the same CPU's softirq processing, because
+ *   BH-symmetric holders keep softirqs disabled on their CPU for the
+ *   whole hold, so that softirq cannot start under them; and the
+ *   remaining holders (other CPUs, other softirqs) always finish their
+ *   hold without sleeping -- write-lock holders do metadata work with
+ *   GFP_NOWAIT only, walk read locks cover one stale check plus one
+ *   non-sleeping child lookup.
  *
  * Nothing here has any effect unless CONFIG_CORTEN_MM is enabled AND the
  * kernel is booted with corten=on (static branch, default off).
@@ -254,7 +274,10 @@ struct corten_ptdesc {
 	 * Protects this PT page and its metadata array for the transaction
 	 * protocols (paper Sec. 4.1).  rwlock_t is the starting point for the
 	 * CortenMMrw protocol; M4+ may swap in a pfq/BRAVO-based lock, so
-	 * take it only through the protocol helpers.
+	 * take it only through the protocol helpers.  The write side also
+	 * implements the M3a uninstall interlock: corten_ptdesc_uninstall()
+	 * publishes staleness under it, so a write-lock holder owns the PT
+	 * page for its whole hold time.
 	 */
 	rwlock_t		lock;
 	/* Back-link: owning address space (descriptor -> AddrSpace). */
@@ -308,8 +331,13 @@ struct corten_ptdesc {
  *    range must fit into one PMD window (2M); wider ranges return
  *    -EOPNOTSUPP (M4+ turns the cursor into an iterator over per-covering-
  *    page transactions);
- *  - a missing intermediate PT page (hole) reports -ENOENT without
- *    allocating (M3 adds ensure-alloc under the covering write lock);
+ *  - a missing PT page reports -ENOENT when the tree view cannot allocate
+ *    (no @alloc callback, or a root-level hole with no parent page to
+ *    upgrade); ensure-alloc below a tracked page runs under that page's
+ *    write lock (paper Figure 5 L5'/L8 "lock one implicitly locks all")
+ *    and reports the view's error (-ENOMEM, -EOPNOTSUPP) otherwise; the
+ *    real x86 view declines allocation until 3b wires it from the fault
+ *    path;
  *  - the caller must keep the walked page-table hierarchy alive for the
  *    duration of the call (e.g. hold mmap_lock for read or own a private
  *    mm); M3's arena design retires upper-level PT pages only through the
@@ -470,5 +498,28 @@ static inline void corten_unlock(struct corten_txn *txn)
 }
 
 #endif /* CONFIG_CORTEN_MM */
+
+/*
+ * M3b red lines (carried from the M3a review; do not regress):
+ *
+ *  1. desc->lock is a BH-safe lock class: every acquisition and release
+ *     uses the _bh rwlock variants (read_lock_bh/read_unlock_bh,
+ *     write_lock_bh/write_unlock_bh), on both the protocol and the
+ *     uninstall side.  The deferred free funnel reaches
+ *     corten_ptdesc_uninstall() from softirq context (khugepaged:
+ *     pte_free_defer() -> RCU_SOFTIRQ -> pte_free_now -> pte_free), so a
+ *     plain task-side read_lock() holder could deadlock the very softirq
+ *     it is stopped in (same CPU: irq_exit -> do_softirq spins on the
+ *     interrupted holder's lock).  Any new desc->lock taker must stay
+ *     BH-symmetric.
+ *
+ *  2. Before M4 retires a PT-page subtree, staleness must be published
+ *     to the DESCENDANTS first (paper Figure 6: rev_dfs marks the deepest
+ *     pages stale before the ancestors are rcu_delay_free()d).  A
+ *     transaction is only guaranteed to fail with -EAGAIN when its
+ *     covering page is stale, so an "ancestor stale first" retirement
+ *     would let transactions keep running on pages already queued for
+ *     freeing.
+ */
 
 #endif /* _LINUX_CORTEN_H */

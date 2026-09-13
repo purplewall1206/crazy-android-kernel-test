@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * KUnit tests for the CortenMM M2a data-structure skeleton and the M2b
- * CortenMMrw locking protocol and transaction API.
+ * KUnit tests for the CortenMM M2a data-structure skeleton, the M2b
+ * CortenMMrw locking protocol and transaction API, and the M3a protocol
+ * hardening (uninstall/write-lock interlock and hole ensure-alloc).
  *
  * Two test worlds:
  *
  *  - synthetic descriptor trees (corten_test_tree_*): multi-level chains of
  *    real, xarray-indexed descriptors driven through the generic protocol
  *    core (corten_txn_begin), no real process or page table needed -- this
- *    is what exercises the multi-level descent, the hole/stale handling and
- *    the mutual-exclusion properties (paper Figure 5 + Sec. 3.3);
+ *    is what exercises the multi-level descent, the hole/stale handling,
+ *    the ensure-alloc upgrade window, the uninstall interlock and the
+ *    mutual-exclusion properties (paper Figure 5 + Sec. 3.3);
  *
  *  - a real x86 page table under a private mm (mm_alloc), driven through
  *    the public corten_lock_range() glue that navigates the untracked
@@ -23,8 +25,10 @@
 #include <kunit/test.h>
 #include <linux/pgalloc.h>
 #include <linux/atomic.h>
+#include <linux/bottom_half.h>
 #include <linux/completion.h>
 #include <linux/cpumask.h>
+#include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/ktime.h>
@@ -32,6 +36,7 @@
 #include <linux/pgtable.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/timekeeping.h>
 
 #include "corten.h"
@@ -357,7 +362,7 @@ static void corten_test_tree_add(struct kunit *test, struct corten_test_tree *t,
 	KUNIT_ASSERT_NOT_NULL(test, desc);
 
 	desc->va_base = va_base;
-	desc->level = level;
+	corten_ptdesc_set_level(desc, level);
 	t->page[idx] = page;
 	t->desc[idx] = desc;
 	t->va_base[idx] = va_base;
@@ -1184,6 +1189,865 @@ static void corten_test_fail_alloc(struct kunit *test)
 	corten_unlock(&txn);
 }
 
+/* ---- M3a: ensure-alloc (paper Figure 5 L5') -------------------------- */
+
+/*
+ * Synthetic hole context: a parent descriptor with a missing child plus a
+ * pool of PRE-ALLOCATED PT pages that the @alloc callback installs.  All
+ * pool state below is accessed under @parent's descriptor lock (the
+ * read/walk side through corten_test_hole_child(), the write/alloc side
+ * through corten_test_hole_alloc()), which is what makes this safe for the
+ * concurrent test; pre-allocating keeps the callback inside its
+ * no-sleeping contract.
+ */
+#define CORTEN_TEST_HOLE_POOL	2
+
+struct corten_test_hole_ctx {
+	struct corten_test_tree *t;
+	struct corten_ptdesc	*parent;	/* the node with the hole */
+	struct page		*pool[CORTEN_TEST_HOLE_POOL];
+	struct corten_ptdesc	*desc[CORTEN_TEST_HOLE_POOL];
+	int			pool_nr;
+	int			next;		/* handed out so far */
+	int			installed;	/* children actually created */
+};
+
+/* Cleanup action: retire the pool descriptors and return the PT pages. */
+static void corten_test_hole_destroy(void *ctx)
+{
+	struct corten_test_hole_ctx *h = ctx;
+	int i;
+
+	for (i = 0; i < CORTEN_TEST_HOLE_POOL; i++) {
+		if (h->desc[i]) {
+			corten_ptdesc_uninstall(h->pool[i]);
+			corten_ptdesc_put(h->desc[i]);
+			h->desc[i] = NULL;
+		}
+		if (h->pool[i]) {
+			__free_page(h->pool[i]);
+			h->pool[i] = NULL;
+		}
+	}
+}
+
+/*
+ * Wire a hole context for the child slot of tree node @parent below
+ * @pool_nr pre-created PT pages (0 is valid: every allocation fails).
+ * Heap-allocated: kunit cleanup actions outlive this stack frame.
+ */
+static struct corten_test_hole_ctx *
+corten_test_hole_init(struct kunit *test, struct corten_test_tree *t,
+		      int parent, int pool_nr)
+{
+	struct corten_test_hole_ctx *h;
+	int i;
+
+	h = kunit_kzalloc(test, sizeof(*h), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, h);
+	kunit_add_action(test, corten_test_hole_destroy, h);
+
+	h->t = t;
+	h->parent = t->desc[parent];
+	h->pool_nr = pool_nr;
+	KUNIT_ASSERT_LE(test, pool_nr, CORTEN_TEST_HOLE_POOL);
+
+	for (i = 0; i < pool_nr; i++) {
+		struct page *page = alloc_page(GFP_KERNEL);
+
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, page);
+		h->pool[i] = page;
+		KUNIT_ASSERT_EQ(test, 0, corten_ptdesc_install(&init_mm, page));
+		h->desc[i] = corten_ptdesc_get(page_to_pfn(page));
+		KUNIT_ASSERT_NOT_NULL(test, h->desc[i]);
+	}
+
+	return h;
+}
+
+static struct corten_ptdesc *corten_test_hole_root(void *ctx,
+						   unsigned long addr)
+{
+	struct corten_test_hole_ctx *h = ctx;
+
+	return corten_test_tree_root(h->t, addr);
+}
+
+static struct corten_ptdesc *corten_test_hole_child(void *ctx,
+						    struct corten_ptdesc *parent,
+						    unsigned long addr)
+{
+	struct corten_test_hole_ctx *h = ctx;
+	int i, n;
+
+	/* Children installed by ensure-alloc live in the hole pool; both
+	 * this read and the allocator's write are serialized by @parent's
+	 * descriptor lock.
+	 */
+	if (parent == h->parent) {
+		n = READ_ONCE(h->next);
+		for (i = 0; i < n; i++) {
+			if (corten_covering_va_base(addr,
+						   h->desc[i]->level) ==
+			    h->desc[i]->va_base)
+				return corten_ptdesc_get(
+						page_to_pfn(h->pool[i]));
+		}
+		return NULL;
+	}
+
+	return corten_test_tree_child(h->t, parent, addr);
+}
+
+static struct corten_ptdesc *corten_test_hole_alloc(void *ctx,
+						    struct corten_ptdesc *parent,
+						    unsigned long addr)
+{
+	struct corten_test_hole_ctx *h = ctx;
+	struct corten_ptdesc *desc;
+
+	/* Called with @parent write-locked (the ops contract): the pool
+	 * hand-out and bookkeeping below are exclusive.
+	 */
+	if (h->next >= h->pool_nr)
+		return ERR_PTR(-ENOMEM);
+
+	desc = h->desc[h->next];
+	desc->va_base = corten_covering_va_base(addr, CORTEN_LEVEL_PTE);
+	corten_ptdesc_set_level(desc, CORTEN_LEVEL_PTE);
+	h->next++;
+	h->installed++;
+	parent->nr_children++;
+
+	/* Handed out pinned and unlocked: the walk read-locks it (and
+	 * stale-checks it) like any other child.
+	 */
+	return corten_ptdesc_get(page_to_pfn(h->pool[h->next - 1]));
+}
+
+static const struct corten_tree_ops corten_test_hole_ops = {
+	.root	= corten_test_hole_root,
+	.child	= corten_test_hole_child,
+	.alloc	= corten_test_hole_alloc,
+};
+
+/* A view that declines to allocate: the real x86 view's 3a stance (its
+ * ensure-alloc must be wired from inside the fault path, slice 3b).
+ */
+static struct corten_ptdesc *corten_test_alloc_decline(void *ctx,
+						       struct corten_ptdesc *parent,
+						       unsigned long addr)
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
+
+static const struct corten_tree_ops corten_test_noalloc_ops = {
+	.root	= corten_test_tree_root,
+	.child	= corten_test_tree_child,
+	.alloc	= corten_test_alloc_decline,
+};
+
+/* Ensure-alloc success path: the covering page is the freshly created
+ * child, it is fully usable inside the same transaction, the parent's
+ * child accounting moves, and a second descent does not allocate again.
+ */
+static void corten_test_txn_hole_fill(struct kunit *test)
+{
+	struct corten_test_hole_ctx *h, *h_empty;
+	struct corten_test_tree *t;
+	struct corten_txn txn;
+	struct corten_pte_meta m, q;
+	unsigned long start = PUD_SIZE + 4 * PMD_SIZE;
+	int children_before;
+	int ret;
+
+	t = corten_test_tree_std(test);
+	h = corten_test_hole_init(test, t, 2, CORTEN_TEST_HOLE_POOL);
+	/* PMD[2] already has one static PTE child; the fill adds one. */
+	children_before = h->parent->nr_children;
+
+	/* Fill: begin succeeds and the new PTE page is the covering. */
+	KUNIT_ASSERT_EQ(test, 0,
+			corten_txn_begin(&init_mm, start, start + PAGE_SIZE,
+					 &corten_test_hole_ops, h, &txn));
+	KUNIT_EXPECT_PTR_EQ(test, txn.covering, h->desc[0]);
+	KUNIT_EXPECT_EQ(test, txn.level, CORTEN_LEVEL_PTE);
+	KUNIT_EXPECT_EQ(test, txn.covering->va_base, start);
+	KUNIT_EXPECT_EQ(test, h->installed, 1);
+	KUNIT_EXPECT_EQ(test, h->parent->nr_children, children_before + 1);
+
+	/* The freshly allocated child is a fully usable covering page. */
+	memset(&m, 0, sizeof(m));
+	m.state = CORTEN_PRIVATE_ANON;
+	m.perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER;
+	KUNIT_EXPECT_EQ(test, 0, corten_mark(&txn, start, PAGE_SIZE, &m));
+	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, start, &q));
+	KUNIT_EXPECT_EQ(test, q.state, CORTEN_PRIVATE_ANON);
+	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, start, PAGE_SIZE));
+	corten_unlock(&txn);
+
+	/* Second descent over the (now filled) hole must not allocate. */
+	KUNIT_ASSERT_EQ(test, 0,
+			corten_txn_begin(&init_mm, start, start + PAGE_SIZE,
+					 &corten_test_hole_ops, h, &txn));
+	KUNIT_EXPECT_PTR_EQ(test, txn.covering, h->desc[0]);
+	KUNIT_EXPECT_EQ(test, h->installed, 1);
+	corten_unlock(&txn);
+
+	/* Allocating view declines (-EOPNOTSUPP) over a different hole. */
+	ret = corten_txn_begin(&init_mm, 4 * PMD_SIZE,
+			       4 * PMD_SIZE + PAGE_SIZE,
+			       &corten_test_noalloc_ops, t, &txn);
+	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
+	KUNIT_EXPECT_NULL(test, txn.covering);
+
+	/* Allocation failure (-ENOMEM): pool of zero pages. */
+	h_empty = corten_test_hole_init(test, t, 1, 0);
+	ret = corten_txn_begin(&init_mm, 4 * PMD_SIZE,
+			       4 * PMD_SIZE + PAGE_SIZE,
+			       &corten_test_hole_ops, h_empty, &txn);
+	KUNIT_EXPECT_EQ(test, ret, -ENOMEM);
+	KUNIT_EXPECT_NULL(test, txn.covering);
+
+	/* Pure protocol (no @alloc callback): unchanged -ENOENT, and a
+	 * failed walk leaves nothing pinned or locked behind.
+	 */
+	ret = corten_txn_begin(&init_mm, 4 * PMD_SIZE,
+			       4 * PMD_SIZE + PAGE_SIZE,
+			       &corten_test_tree_ops, t, &txn);
+	KUNIT_EXPECT_EQ(test, ret, -ENOENT);
+	KUNIT_EXPECT_EQ(test, txn.nr_path, 0);
+	KUNIT_EXPECT_EQ(test, refcount_read(&t->desc[0]->refs), 2);
+	KUNIT_EXPECT_EQ(test, refcount_read(&t->desc[1]->refs), 2);
+}
+
+/*
+ * Upgrade-window concurrency (review gap: the read_unlock()/write_lock()
+ * gap in the ensure-alloc upgrade must not double-install).  Two kthreads
+ * hammer the same hole; each successful transaction marks and unmaps its
+ * range, so the metadata must also stay consistent.  The decisive
+ * assertion: exactly ONE child is ever installed.
+ */
+struct corten_test_race_ctx {
+	struct corten_test_hole_ctx *h;
+	unsigned long		start;
+	int			iters;
+	atomic_t		begins_ok;
+	atomic_t		begins_err;
+	atomic_t		op_errors;
+	struct completion	done[2];
+};
+
+struct corten_test_race_worker {
+	struct corten_test_race_ctx *c;
+	int			id;
+};
+
+static int corten_test_race_worker(void *data)
+{
+	struct corten_test_race_worker *w = data;
+	struct corten_test_race_ctx *c = w->c;
+	int i;
+
+	for (i = 0; i < c->iters; i++) {
+		struct corten_txn txn;
+		struct corten_pte_meta m = { };
+		int ret;
+
+		ret = corten_txn_begin(&init_mm, c->start,
+				       c->start + 4 * PAGE_SIZE,
+				       &corten_test_hole_ops, c->h, &txn);
+		if (ret) {
+			atomic_inc(&c->begins_err);
+			continue;
+		}
+		atomic_inc(&c->begins_ok);
+
+		m.state = CORTEN_PRIVATE_ANON;
+		m.perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+			 CORTEN_PERM_USER;
+		if (corten_mark(&txn, c->start, 4 * PAGE_SIZE, &m))
+			atomic_inc(&c->op_errors);
+		if (corten_unmap(&txn, c->start, 4 * PAGE_SIZE))
+			atomic_inc(&c->op_errors);
+
+		corten_unlock(&txn);
+	}
+
+	complete(&c->done[w->id]);
+	while (!kthread_should_stop())
+		schedule_timeout_idle(1);
+
+	return 0;
+}
+
+static void corten_test_txn_hole_race(struct kunit *test)
+{
+	struct corten_test_race_ctx *c;
+	struct corten_test_hole_ctx *h;
+	struct corten_test_race_worker w[2];
+	struct corten_test_tree *t;
+	struct task_struct *tsk[2] = { NULL, NULL };
+	unsigned long start = PUD_SIZE + 4 * PMD_SIZE;
+	int children_before;
+	int i;
+
+	if (num_online_cpus() < 3)
+		kunit_skip(test, "need 3 online CPUs for worker placement");
+
+	t = corten_test_tree_std(test);
+	h = corten_test_hole_init(test, t, 2, CORTEN_TEST_HOLE_POOL);
+	children_before = h->parent->nr_children;
+
+	c = kunit_kzalloc(test, sizeof(*c), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, c);
+	c->h = h;
+	c->start = start;
+	c->iters = 200;
+	for (i = 0; i < 2; i++) {
+		w[i].c = c;
+		w[i].id = i;
+		init_completion(&c->done[i]);
+	}
+
+	for (i = 0; i < 2; i++) {
+		tsk[i] = kthread_run(corten_test_race_worker, &w[i],
+				     "corten_race_%d", i);
+		if (IS_ERR(tsk[i])) {
+			if (i == 1)
+				kthread_stop(tsk[0]);
+			KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tsk[i]);
+		}
+	}
+	for (i = 0; i < 2; i++) {
+		if (set_cpus_allowed_ptr(tsk[i], cpumask_of(i + 1))) {
+			kthread_stop(tsk[0]);
+			kthread_stop(tsk[1]);
+			kunit_skip(test, "cannot place workers on CPUs 1,2");
+		}
+	}
+
+	for (i = 0; i < 2; i++) {
+		if (!wait_for_completion_timeout(&c->done[i],
+						 msecs_to_jiffies(60000)))
+			KUNIT_FAIL(test, "race worker %d timed out\n", i);
+	}
+	for (i = 0; i < 2; i++)
+		kthread_stop(tsk[i]);
+
+	KUNIT_EXPECT_EQ(test, atomic_read(&c->begins_err), 0);
+	KUNIT_EXPECT_EQ(test, atomic_read(&c->op_errors), 0);
+	KUNIT_EXPECT_EQ(test, atomic_read(&c->begins_ok), 2 * c->iters);
+	/* Every begin either found the child or filled the hole exactly
+	 * once: the write-lock re-check collapses the upgrade window.
+	 */
+	KUNIT_EXPECT_EQ(test, h->installed, 1);
+	KUNIT_EXPECT_EQ(test, h->parent->nr_children, children_before + 1);
+}
+
+/* ---- M3a: uninstall <-> write-lock interlock ------------------------- */
+
+/*
+ * Regression test for the 2b review gap "a transaction holding the
+ * covering write lock could outlive the PT-page reclaim".  Thread A holds
+ * the covering write lock; thread B runs corten_ptdesc_uninstall() on
+ * that very PT page.  The interlock makes uninstall wait: B must not
+ * complete until A releases the lock, and A's metadata operations must
+ * work for the whole hold.
+ */
+struct corten_test_interlock_ctx {
+	struct corten_test_tree *t;
+	unsigned long		pfn;
+	/* Diagnostics for harness-stall forensics (see the timeout paths). */
+	atomic_t		a_phase;	/* IL_* phase of worker A */
+	atomic_t		a_begin_ret;	/* A's begin() result */
+	atomic_t		a_locked;	/* A holds the covering write */
+	atomic_t		go;		/* release signal for A */
+	atomic_t		b_started;
+	atomic_t		b_done;		/* uninstall returned */
+	atomic_t		violations;	/* uninstall completed too early */
+	atomic_t		a_err;
+	struct completion	a_exited;
+	struct completion	b_exited;
+};
+
+/* corten_test_interlock_ctx::a_phase values. */
+#define CORTEN_TEST_IL_ENTERED		1
+#define CORTEN_TEST_IL_BEGIN_DONE	2
+#define CORTEN_TEST_IL_LOCKED		3
+#define CORTEN_TEST_IL_RELEASED		4
+#define CORTEN_TEST_IL_EXITED		5
+
+/* Bounded spin (no schedule: we are under a spinlock). */
+static int corten_test_interlock_a(void *data)
+{
+	struct corten_test_interlock_ctx *c = data;
+	u64 deadline = ktime_get_mono_fast_ns() + 20 * NSEC_PER_SEC;
+	struct corten_txn txn;
+	struct corten_pte_meta m = { };
+	int ret;
+
+	atomic_set(&c->a_phase, CORTEN_TEST_IL_ENTERED);
+	ret = corten_txn_begin(&init_mm, 8 * PAGE_SIZE, 12 * PAGE_SIZE,
+			       &corten_test_tree_ops, c->t, &txn);
+	atomic_set(&c->a_begin_ret, ret);
+	if (ret) {
+		atomic_inc(&c->a_err);
+		goto out;
+	}
+	atomic_set(&c->a_phase, CORTEN_TEST_IL_BEGIN_DONE);
+
+	atomic_set(&c->a_locked, 1);
+	atomic_set(&c->a_phase, CORTEN_TEST_IL_LOCKED);
+	while (!atomic_read(&c->go)) {
+		if (ktime_get_mono_fast_ns() > deadline) {
+			/* Not a protocol violation, but report that the
+			 * hold could not be released (harness stall).
+			 */
+			atomic_inc(&c->a_err);
+			break;
+		}
+		cpu_relax();
+	}
+
+	/* The PT page stayed exclusively ours: metadata still works. */
+	m.state = CORTEN_PRIVATE_ANON;
+	m.perm = CORTEN_PERM_READ;
+	if (corten_mark(&txn, 8 * PAGE_SIZE, PAGE_SIZE, &m) ||
+	    corten_unmap(&txn, 8 * PAGE_SIZE, PAGE_SIZE))
+		atomic_inc(&c->a_err);
+
+	atomic_set(&c->a_locked, 0);
+	atomic_set(&c->a_phase, CORTEN_TEST_IL_RELEASED);
+	corten_unlock(&txn);
+out:
+	complete(&c->a_exited);
+	atomic_set(&c->a_phase, CORTEN_TEST_IL_EXITED);
+	while (!kthread_should_stop())
+		schedule_timeout_idle(1);
+
+	return 0;
+}
+
+static int corten_test_interlock_b(void *data)
+{
+	struct corten_test_interlock_ctx *c = data;
+
+	atomic_set(&c->b_started, 1);
+	corten_ptdesc_uninstall(pfn_to_page(c->pfn));
+	atomic_set(&c->b_done, 1);
+	complete(&c->b_exited);
+	while (!kthread_should_stop())
+		schedule_timeout_idle(1);
+
+	return 0;
+}
+
+/* Bounded poll of a flag from the (lock-free) main thread. */
+static bool corten_test_wait_flag(atomic_t *flag, unsigned int ms)
+{
+	unsigned long deadline = jiffies + msecs_to_jiffies(ms);
+
+	while (!atomic_read(flag)) {
+		if (time_after(jiffies, deadline))
+			return false;
+		schedule_timeout_uninterruptible(msecs_to_jiffies(10));
+	}
+
+	return true;
+}
+
+static void corten_test_txn_uninstall_interlock(struct kunit *test)
+{
+	struct corten_test_interlock_ctx *c;
+	struct corten_test_tree *t;
+	struct task_struct *tsk_a = NULL, *tsk_b = NULL;
+	unsigned long pfn;
+
+	if (num_online_cpus() < 3)
+		kunit_skip(test, "need 3 online CPUs for worker placement");
+
+	t = corten_test_tree_std(test);
+	c = kunit_kzalloc(test, sizeof(*c), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, c);
+	c->t = t;
+	pfn = page_to_pfn(t->page[3]);
+	c->pfn = pfn;
+	init_completion(&c->a_exited);
+	init_completion(&c->b_exited);
+
+	/* A first: it must HOLD the covering write lock before B starts
+	 * uninstalling, otherwise B's uninstall would legitimately
+	 * complete in the unlocked window and the test would measure
+	 * nothing.
+	 */
+	tsk_a = kthread_run(corten_test_interlock_a, c, "corten_il_a");
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tsk_a);
+	if (set_cpus_allowed_ptr(tsk_a, cpumask_of(1)))
+		goto place_fail_a;
+	if (!corten_test_wait_flag(&c->a_locked, 10000)) {
+		atomic_set(&c->go, 1);
+		kthread_stop(tsk_a);
+		KUNIT_FAIL(test,
+			   "worker A never acquired the lock (phase=%d begin_ret=%d)\n",
+			   atomic_read(&c->a_phase),
+			   atomic_read(&c->a_begin_ret));
+		return;
+	}
+
+	tsk_b = kthread_run(corten_test_interlock_b, c, "corten_il_b");
+	if (IS_ERR(tsk_b)) {
+		atomic_set(&c->go, 1);
+		kthread_stop(tsk_a);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tsk_b);
+	}
+	if (set_cpus_allowed_ptr(tsk_b, cpumask_of(2)))
+		goto place_fail_b;
+
+	/* Give B ample time to finish if the interlock were broken. */
+	if (!corten_test_wait_flag(&c->b_started, 5000)) {
+		atomic_set(&c->go, 1);
+		kthread_stop(tsk_a);
+		kthread_stop(tsk_b);
+		KUNIT_FAIL(test, "worker B never started\n");
+		return;
+	}
+	schedule_timeout_uninterruptible(msecs_to_jiffies(200));
+	if (atomic_read(&c->b_done))
+		atomic_inc(&c->violations);
+	KUNIT_EXPECT_EQ(test, atomic_read(&c->a_locked), 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&c->violations), 0);
+
+	/* Release A: uninstall must now complete. */
+	atomic_set(&c->go, 1);
+	KUNIT_EXPECT_TRUE(test, corten_test_wait_flag(&c->b_done, 5000));
+	wait_for_completion_timeout(&c->a_exited, msecs_to_jiffies(5000));
+	kthread_stop(tsk_a);
+	kthread_stop(tsk_b);
+
+	KUNIT_EXPECT_EQ(test, atomic_read(&c->a_err), 0);
+	KUNIT_EXPECT_EQ(test, atomic_read(&c->violations), 0);
+	/* The descriptor was retired -- but only after A's unlock. */
+	KUNIT_EXPECT_NULL(test, corten_ptdesc_get(pfn));
+	KUNIT_EXPECT_EQ(test, READ_ONCE(t->desc[3]->stale), 1);
+	return;
+
+place_fail_b:
+	atomic_set(&c->go, 1);
+	kthread_stop(tsk_a);
+	kthread_stop(tsk_b);
+	kunit_skip(test, "cannot place workers on CPUs 1,2");
+place_fail_a:
+	kthread_stop(tsk_a);
+	kunit_skip(test, "cannot place workers on CPUs 1,2");
+}
+
+/*
+ * The deferred free funnel reaches corten_ptdesc_uninstall() from softirq
+ * context (khugepaged: pte_free_defer() -> call_rcu(pte_free_now) ->
+ * pte_free -> hook), so the M3a hardening made every desc->lock taker
+ * BH-symmetric.  Drive the uninstall from an explicitly BH-disabled
+ * context to cover exactly that lock-usage class: under PROVE_LOCKING a
+ * non-BH-symmetric scheme (an irqsave write here vs plain task-side read
+ * holders, or the reverse mix) shows up as an inconsistent lock-usage
+ * report; after the hardening this must stay silent and succeed.
+ * (local_bh_disable() reproduces the softirq handler's lockdep context
+ * class; a real tasklet would only add scheduling realism.)
+ */
+static void corten_test_uninstall_bh_ctx(struct kunit *test)
+{
+	struct page *page = corten_test_track_ptpage(test, &init_mm);
+	unsigned long pfn = page_to_pfn(page);
+	struct corten_ptdesc *desc;
+
+	desc = corten_ptdesc_get(pfn);
+	KUNIT_ASSERT_NOT_NULL(test, desc);
+
+	local_bh_disable();
+	corten_ptdesc_uninstall(page);
+	local_bh_enable();
+
+	/* The retirement is complete and observable: the lookup is gone,
+	 * staleness was published under the lock, and our pin keeps the
+	 * descriptor readable until the put().
+	 */
+	KUNIT_EXPECT_NULL(test, corten_ptdesc_get(pfn));
+	KUNIT_EXPECT_EQ(test, READ_ONCE(desc->stale), 1);
+	KUNIT_EXPECT_EQ(test, desc->magic, CORTEN_PTDESC_MAGIC);
+	corten_ptdesc_put(desc);
+}
+
+/* ---- M3a: structural guards ------------------------------------------ */
+
+/*
+ * Corrupt-view guard: a view whose descent never terminates (every node
+ * labeled PUD, chained children) must hit the CORTEN_TXN_PATH_MAX bound
+ * and fail with -EPROTO, releasing every pin it took.  Note: exercising
+ * the guards fires the descent level guard's WARN_ON_ONCE first and the
+ * path bound's WARN_ON_ONCE second -- expected log noise.
+ */
+static struct corten_ptdesc *corten_test_chain_child(void *ctx,
+						     struct corten_ptdesc *parent,
+						     unsigned long addr)
+{
+	struct corten_test_tree *t = ctx;
+	int pn = -1;
+	int i;
+
+	for (i = 0; i < t->nr; i++) {
+		if (t->desc[i] == parent) {
+			pn = i;
+			break;
+		}
+	}
+	if (pn < 0)
+		return ERR_PTR(-EIO);
+	for (i = 0; i < t->nr; i++) {
+		if (t->parent[i] == pn)
+			return corten_ptdesc_get(page_to_pfn(t->page[i]));
+	}
+
+	return NULL;
+}
+
+static const struct corten_tree_ops corten_test_chain_ops = {
+	.root	= corten_test_tree_root,
+	.child	= corten_test_chain_child,
+};
+
+static void corten_test_txn_path_overflow(struct kunit *test)
+{
+	struct corten_test_tree *t;
+	struct corten_txn txn;
+	int i, ret;
+
+	/* A 6-node chain: one deeper than any legal walk.  The chain's
+	 * levels repeat (all nodes labeled PUD), which intentionally
+	 * violates two protocol invariants: the descent's "level strictly
+	 * moves toward the leaf" guard (WARN_ON_ONCE in corten_txn_begin())
+	 * fires on the first same-level hop, and the CORTEN_TXN_PATH_MAX
+	 * bound then stops the walk -- both warnings are expected log
+	 * noise, and the -EPROTO comes from the path bound.
+	 *
+	 * No lockdep_off() bracket: the nested acquisitions are rwlock READ
+	 * sides of one lock class, and recursive read-read nesting is legal
+	 * for lockdep, so the validator is welcome to watch this walk --
+	 * silencing it would only hide regressions.
+	 */
+	t = kunit_kzalloc(test, sizeof(*t), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t);
+	kunit_add_action(test, corten_test_tree_destroy, t);
+	for (i = 0; i < 6; i++)
+		corten_test_tree_add(test, t, 0, CORTEN_LEVEL_PUD,
+				     i - 1);
+
+	ret = corten_txn_begin(&init_mm, 0, PAGE_SIZE,
+			       &corten_test_chain_ops, t, &txn);
+	KUNIT_EXPECT_EQ(test, ret, -EPROTO);
+	KUNIT_EXPECT_NULL(test, txn.covering);
+	KUNIT_EXPECT_EQ(test, txn.nr_path, 0);
+	for (i = 0; i < t->nr; i++)
+		KUNIT_EXPECT_EQ(test, refcount_read(&t->desc[i]->refs), 2);
+}
+
+/* ops->child() reporting an error (ERR_PTR) must fail the begin cleanly. */
+static struct corten_ptdesc *corten_test_child_err(void *ctx,
+						   struct corten_ptdesc *parent,
+						   unsigned long addr)
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
+
+static const struct corten_tree_ops corten_test_child_err_ops = {
+	.root	= corten_test_tree_root,
+	.child	= corten_test_child_err,
+};
+
+static void corten_test_txn_child_err(struct kunit *test)
+{
+	struct corten_test_tree *t;
+	struct corten_txn txn;
+	int ret;
+
+	t = corten_test_tree_std(test);
+
+	ret = corten_txn_begin(&init_mm, PAGE_SIZE, 2 * PAGE_SIZE,
+			       &corten_test_child_err_ops, t, &txn);
+	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
+	KUNIT_EXPECT_NULL(test, txn.covering);
+	KUNIT_EXPECT_EQ(test, txn.nr_path, 0);
+	/* Nothing pinned or locked behind. */
+	KUNIT_EXPECT_EQ(test, refcount_read(&t->desc[0]->refs), 2);
+}
+
+/* Real-view huge leaves (pmd_leaf/pud_leaf) must decline with
+ * -EOPNOTSUPP (the covering PT-page protocol is 4K-page shaped; hugepage
+ * coverage is M4+ scope).
+ */
+static void corten_test_real_huge_leaf(struct kunit *test)
+{
+	unsigned long addr = PAGE_SIZE;
+	struct mm_struct *mm;
+	struct corten_txn txn;
+	pgd_t *pgdp;
+	p4d_t *p4dp;
+	pud_t *pudp;
+	pmd_t *pmdp;
+	int ret;
+
+	mm = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, mm);
+
+	pgdp = pgd_offset(mm, addr);
+	p4dp = p4d_alloc(mm, pgdp, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, p4dp);
+	pudp = pud_alloc(mm, p4dp, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pudp);
+	pmdp = pmd_alloc(mm, pudp, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+
+	/* PMD-level leaf (THP-shaped): present, but not a PT page. */
+	set_pmd(pmdp, __pmd(_PAGE_PSE | _PAGE_PRESENT));
+	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
+	pmd_clear(pmdp);
+
+	/* PUD-level leaf (1G page). */
+	set_pud(pudp, __pud(_PAGE_PSE | _PAGE_PRESENT));
+	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
+	pud_clear(pudp);
+
+	/* Balance the pgtables_bytes accounting that pmd_alloc()/pud_alloc()
+	 * did (same raw teardown as corten_test_real_destroy()).
+	 */
+	mm_dec_nr_pmds(mm);
+	pmd_free(mm, pmdp);
+	mm_dec_nr_puds(mm);
+	pud_free(mm, pudp);
+	mmput(mm);
+}
+
+/* ---- M3a: full-window atomicity + debugfs content --------------------- */
+
+/* A 512-entry (full-window) transaction stays all-or-nothing at the
+ * window's edges: one invalid or conflicting slot anywhere must leave
+ * every one of the 512 entries untouched.
+ */
+static void corten_test_full_window_atomic(struct kunit *test)
+{
+	unsigned long start = 0;
+	unsigned long len = CORTEN_PTES_PER_PT_PAGE * PAGE_SIZE;
+	struct corten_test_tree *t;
+	struct corten_txn txn;
+	struct corten_pte_meta m, q;
+
+	t = corten_test_tree_std(test);
+
+	KUNIT_ASSERT_EQ(test, 0,
+			corten_txn_begin(&init_mm, start, start + len,
+					 &corten_test_tree_ops, t, &txn));
+	KUNIT_EXPECT_PTR_EQ(test, txn.covering, t->desc[3]);
+
+	/* Mark the whole 512-page window in one transaction. */
+	memset(&m, 0, sizeof(m));
+	m.state = CORTEN_PRIVATE_ANON;
+	m.perm = CORTEN_PERM_READ;
+	KUNIT_EXPECT_EQ(test, 0, corten_mark(&txn, start, len, &m));
+
+	/* One Invalid slot: the full-window unmap fails atomically. */
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_unmap(&txn, 256 * PAGE_SIZE, PAGE_SIZE));
+	KUNIT_EXPECT_EQ(test, -ENOENT, corten_unmap(&txn, start, len));
+	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 0, &q));
+	KUNIT_EXPECT_EQ(test, q.state, CORTEN_PRIVATE_ANON);
+	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 511 * PAGE_SIZE, &q));
+	KUNIT_EXPECT_EQ(test, q.state, CORTEN_PRIVATE_ANON);
+
+	/* One conflicting slot (Mapped refuses PrivateAnon): the
+	 * full-window mark fails atomically.
+	 */
+	t->desc[3]->meta[511].state = CORTEN_MAPPED;
+	KUNIT_EXPECT_EQ(test, -EINVAL, corten_mark(&txn, start, len, &m));
+	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 0, &q));
+	KUNIT_EXPECT_EQ(test, q.state, CORTEN_PRIVATE_ANON);
+	t->desc[3]->meta[511].state = CORTEN_PRIVATE_ANON;
+
+	/* Repair the gap, then retire the whole window in one go. */
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_mark(&txn, 256 * PAGE_SIZE, PAGE_SIZE, &m));
+	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, start, len));
+	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 511 * PAGE_SIZE, &q));
+	KUNIT_EXPECT_EQ(test, q.state, CORTEN_INVALID);
+
+	corten_unlock(&txn);
+}
+
+/* Parse the decimal that follows @key in a rendered debugfs section. */
+static bool corten_test_dbg_value(const char *s, const char *key, long *out)
+{
+	const char *p = strstr(s, key);
+	long v = 0;
+	bool neg = false;
+
+	if (!p)
+		return false;
+	p += strlen(key);
+	while (*p == ' ' || *p == '\t')
+		p++;
+	if (*p == '-') {
+		neg = true;
+		p++;
+	}
+	if (*p < '0' || *p > '9')
+		return false;
+	while (*p >= '0' && *p <= '9')
+		v = v * 10 + (*p++ - '0');
+	*out = neg ? -v : v;
+
+	return true;
+}
+
+/* Content assertions for the three debugfs files.  The builtin KUnit run
+ * happens before userspace could mount debugfs, so the assertions drive
+ * the very renderers the files use (corten_test_render_dbg()).
+ */
+static void corten_test_debugfs_content(struct kunit *test)
+{
+	struct page *page = corten_test_track_ptpage(test, &init_mm);
+	unsigned long pfn = page_to_pfn(page);
+	char needle[24];
+	char *s;
+	long v;
+
+	/* stats: gate line, live descriptors, array accounting. */
+	s = corten_test_render_dbg(CORTEN_DBG_STATS);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, s);
+	KUNIT_EXPECT_NOT_NULL(test, strstr(s, "enabled"));
+	KUNIT_EXPECT_TRUE(test, corten_test_dbg_value(s, "ptdescs", &v));
+	KUNIT_EXPECT_GE(test, v, 1);
+	KUNIT_EXPECT_TRUE(test, corten_test_dbg_value(s, "meta_bytes", &v));
+	KUNIT_EXPECT_GE(test, v, CORTEN_META_ARRAY_BYTES);
+	kfree(s);
+
+	/* txn: nothing left running, watermark recorded. */
+	s = corten_test_render_dbg(CORTEN_DBG_TXN);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, s);
+	KUNIT_EXPECT_TRUE(test, corten_test_dbg_value(s, "active", &v));
+	KUNIT_EXPECT_EQ(test, v, 0);
+	KUNIT_EXPECT_TRUE(test, corten_test_dbg_value(s, "active_max", &v));
+	KUNIT_EXPECT_GE(test, v, 1);
+	kfree(s);
+
+	/* dump: header plus one line per live descriptor. */
+	s = corten_test_render_dbg(CORTEN_DBG_DUMP);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, s);
+	KUNIT_EXPECT_NOT_NULL(test, strstr(s, "pfn"));
+	snprintf(needle, sizeof(needle), "%lu ", pfn);
+	KUNIT_EXPECT_NOT_NULL(test, strstr(s, needle));
+	kfree(s);
+}
+
 static struct kunit_case corten_test_cases[] = {
 	KUNIT_CASE(corten_test_layout),
 	KUNIT_CASE(corten_test_ptdesc_get_put),
@@ -1201,6 +2065,15 @@ static struct kunit_case corten_test_cases[] = {
 	KUNIT_CASE(corten_test_txn_mutex_overlap),
 	KUNIT_CASE(corten_test_txn_mutex_disjoint),
 	KUNIT_CASE(corten_test_fail_alloc),
+	KUNIT_CASE(corten_test_txn_hole_fill),
+	KUNIT_CASE(corten_test_txn_hole_race),
+	KUNIT_CASE(corten_test_txn_uninstall_interlock),
+	KUNIT_CASE(corten_test_uninstall_bh_ctx),
+	KUNIT_CASE(corten_test_txn_path_overflow),
+	KUNIT_CASE(corten_test_txn_child_err),
+	KUNIT_CASE(corten_test_real_huge_leaf),
+	KUNIT_CASE(corten_test_full_window_atomic),
+	KUNIT_CASE(corten_test_debugfs_content),
 	{}
 };
 
