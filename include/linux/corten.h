@@ -95,11 +95,13 @@ enum corten_page_state {
  * COW flags for corten_pte_meta.flags (paper Sec. 4.3): the shared bit marks
  * pages that may have more than one sharer after fork(), the writable bit
  * records whether the virtual page was actually writable before the fork
- * read-only protection.  A write fault on (shared && writable) copies the
- * page instead of just re-enabling write access; a write fault on
- * (shared && !writable) only re-enables read-only access (the page was
- * read-only before the fork).  Rule enforced by corten_mark(): a logically
- * writable page marked shared must carry CORTEN_PF_WRITABLE.
+ * read-only protection.  A write fault on (shared && !writable) is a genuine
+ * fault -- the page was read-only before the fork, so the fault handler goes
+ * through the COW copy / FOLL_FORCE branch and must not be short-circuited
+ * into a plain "re-enable write" fast path.  (A write fault on
+ * (shared && writable) takes the ordinary COW copy branch.)  Rule enforced
+ * by corten_mark(): a logically writable page marked shared must carry
+ * CORTEN_PF_WRITABLE.
  */
 #define CORTEN_PF_SHARED	_BITUL(0)
 #define CORTEN_PF_WRITABLE	_BITUL(1)

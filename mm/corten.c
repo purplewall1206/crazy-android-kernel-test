@@ -51,17 +51,44 @@
  */
 DEFINE_STATIC_KEY_FALSE(corten_enabled_key);
 
+/*
+ * The static key must NOT be flipped from the __setup() callback.  The
+ * callback runs from obsolete_checksetup() (init/main.c) during
+ * parse_args("Booting kernel") in start_kernel(), i.e. before mm_core_init()
+ * and poking_init(); jump-label patching at that point goes through the
+ * text-patching machinery before it is usable, which hung every corten=on
+ * boot (results/r01/m2-on-panic.log).  The parameter is therefore only
+ * recorded here and applied by corten_late_init() below: initcalls run from
+ * do_initcalls() via do_basic_setup() (init/main.c), strictly after
+ * jump_label_init() (start_kernel, init/main.c:1057) and long after the
+ * allocator and text-patching are up.  By initcall time no user PT page can
+ * have been allocated yet (userspace starts after every initcall), so
+ * enabling here still covers the hooks completely.
+ */
+static bool corten_param_on;
+
 static int __init corten_setup_param(char *s)
 {
 	if (!s)
 		return 0;
 	if (!strcmp(s, "on")) {
-		static_branch_enable(&corten_enabled_key);
-		pr_info("corten: page descriptors enabled\n");
+		corten_param_on = true;
+		pr_info("corten: requested on, activating at initcall time\n");
 	}
 	return 1;
 }
 __setup("corten=", corten_setup_param);
+
+static int __init corten_late_init(void)
+{
+	if (corten_param_on) {
+		static_branch_enable(&corten_enabled_key);
+		pr_info("corten: page descriptors enabled\n");
+	}
+
+	return 0;
+}
+early_initcall(corten_late_init);
 
 /* PFN -> page descriptor.  The engineering substitute for the paper's
  * boot-time contiguous descriptor array indexed by PFN.
@@ -501,20 +528,40 @@ static void corten_txn_release_path(struct corten_txn *txn)
  *        (entry.alloc_if_none).  2b is the pure protocol and allocates
  *        nothing; M3 replaces this branch with ensure-alloc under the
  *        write lock.
- *   L7/L8 write_lock(covering)           -- Linux rwlock_t has no upgrade,
- *                                           so the candidate's read lock is
- *                                           dropped and re-taken write side
- *                                           (the recommended full-path
- *                                           scheme: the remaining path read
- *                                           locks are still held, freezing
- *                                           the descent decision, since no
- *                                           other thread can change the
- *                                           child pointers of a read-locked
- *                                           page; only staleness has to be
- *                                           re-checked under the write
- *                                           lock -- stale means raced with
- *                                           PT-page removal, paper
- *                                           Figure 7);
+	 *   L7/L8 write_lock(covering)           -- Linux rwlock_t has no upgrade,
+	 *                                           so the candidate's read lock is
+	 *                                           dropped and re-taken write side.
+	 *                                           Scope of the paper's "frozen
+	 *                                           descent" argument (the
+	 *                                           full-path read locks keep the
+	 *                                           walk's decision valid because
+	 *                                           no other thread can change the
+	 *                                           child pointers of a read-locked
+	 *                                           page): the real x86 view takes
+	 *                                           at most one read lock (2b
+	 *                                           tracks PTE-level pages only;
+	 *                                           corten_real_child() is
+	 *                                           unreachable), so its descent
+	 *                                           decision cannot be invalidated
+	 *                                           regardless of path locks --
+	 *                                           what keeps the walked
+	 *                                           hierarchy stable there is the
+	 *                                           caller-level contract, i.e.
+	 *                                           mmap_lock held for read (see
+	 *                                           corten_lock_range()).  The
+	 *                                           "path locks freeze structural
+	 *                                           changes" reasoning holds only
+	 *                                           for multi-level tree views
+	 *                                           (the synthetic KUnit views),
+	 *                                           and there it rests on the
+	 *                                           view's own contract that
+	 *                                           read-locked pages have
+	 *                                           immutable child pointers.
+	 *                                           Only staleness has to be
+	 *                                           re-checked under the write
+	 *                                           lock -- stale means raced with
+	 *                                           PT-page removal, paper
+	 *                                           Figure 7;
  *   L13  unlock                          -- the path read locks are
  *                                           released bottom-up as soon as
  *                                           the write lock is secured
@@ -622,9 +669,13 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 		WRITE_ONCE(cur->va_base,
 			   corten_covering_va_base(start, cur->level));
 
-	/* The path read locks have done their job (the descent decision is
-	 * frozen and the covering lock excludes other transactions); release
-	 * them so the transaction body may sleep/allocate.
+	/* The path read locks have done their job; release them so the
+	 * transaction body may sleep/allocate (the covering write lock alone
+	 * provides the mutual exclusion).  Correctness in the real view does
+	 * not depend on these locks "freezing" the tree: its path is at most
+	 * 1 long and the hierarchy is kept stable by the caller's mmap_lock
+	 * (corten_lock_range() contract) -- see the L7/L8 note above for the
+	 * scope of the freeze argument in multi-level tree views.
 	 */
 	corten_txn_release_path(txn);
 
@@ -928,9 +979,10 @@ int corten_mark(struct corten_txn *txn, unsigned long start, unsigned long len,
 		return -EINVAL;
 	/* Paper Sec. 4.3: the writable bit records the pre-fork writability.
 	 * A logically writable shared page must carry it, otherwise a write
-	 * fault would take the "was read-only, just re-enable" branch and
-	 * wrongly skip the copy.  (The fault-side copy/re-enable logic
-	 * itself is M5.)
+	 * fault would take the FOLL_FORCE COW-copy branch as if the page had
+	 * been read-only before the fork, losing the recorded writability
+	 * (see include/linux/corten.h).  The fault-side copy/re-enable logic
+	 * itself is M5.
 	 */
 	if (unlikely((meta->perm & CORTEN_PERM_WRITE) &&
 		     (meta->flags & CORTEN_PF_SHARED) &&
@@ -1001,11 +1053,15 @@ int corten_unmap(struct corten_txn *txn, unsigned long start,
 			return -ENOMEM;
 		/* Dropping the physical page / swap-slot references
 		 * recorded in the metadata payload is wired in by M3 (page
-		 * refs) and M6 (swap).  2b flips the state back to Invalid.
+		 * refs) and M6 (swap).  2b flips the state back to Invalid
+		 * and scrubs the payload bytes (__resv): the slot may be
+		 * re-marked later and must not resurrect stale payload
+		 * fields that the state machine no longer validates.
 		 */
 		m->state = CORTEN_INVALID;
 		m->perm = 0;
 		m->flags = 0;
+		memset(m->__resv, 0, sizeof(m->__resv));
 	}
 
 	return 0;
@@ -1085,8 +1141,11 @@ static int __init corten_debugfs_init(void)
 {
 	struct dentry *dir;
 
-	/* debugfs core registers before late_initcall, and the debugfs
-	 * helpers degrade to no-ops when CONFIG_DEBUG_FS is off.
+	/* debugfs_init() is a core_initcall (fs/debugfs/inode.c), so by this
+	 * late_initcall the debugfs core is registered; the debugfs helpers
+	 * degrade to no-ops when CONFIG_DEBUG_FS is off.  Nothing here
+	 * touches the corten static key, so there is no early-param-style
+	 * ordering hazard.
 	 */
 	dir = debugfs_create_dir("corten", NULL);
 	debugfs_create_file("stats", 0444, dir, NULL, &corten_stats_fops);

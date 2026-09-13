@@ -991,7 +991,6 @@ static int corten_test_mutex_worker(void *data)
 		if (now > 1 && c->expect_exclusive)
 			atomic_inc(&c->violations);
 		corten_test_hold_room();
-		atomic_dec(&c->in_crit);
 
 		/* Real transaction work under the write lock: mmap-mark,
 		 * fault-map, munmap (all legal transitions).  The struct
@@ -1008,6 +1007,17 @@ static int corten_test_mutex_worker(void *data)
 		if (corten_unmap(&txn, w->start, w->len))
 			atomic_inc(&c->op_errors);
 
+		/* Leave the instrumentation window only after all the
+		 * transaction operations have run, so they are covered by
+		 * the exclusivity check and not just the bare lock hold.
+		 * The decrement must happen while the covering write lock
+		 * is still held: once corten_unlock() releases it the
+		 * successor's begin can complete and increment in_crit
+		 * before this thread's decrement lands, which would count
+		 * as a bogus overlap.
+		 */
+		atomic_dec(&c->in_crit);
+
 		corten_unlock(&txn);
 	}
 
@@ -1018,7 +1028,14 @@ static int corten_test_mutex_worker(void *data)
 	return 0;
 }
 
-static void corten_test_mutex_run(struct kunit *test,
+/*
+ * Runs the two-worker mutual-exclusion scenario.  Returns true when the
+ * environment cannot honour the concurrency placement (fewer than 3 online
+ * CPUs, or the affinity request is refused); the caller kunit_skips in that
+ * case instead of silently measuring a serialized run that would pass
+ * vacuously.
+ */
+static bool corten_test_mutex_run(struct kunit *test,
 				  struct corten_test_mutex_ctx *c,
 				  unsigned long start0, unsigned long start1)
 {
@@ -1026,7 +1043,8 @@ static void corten_test_mutex_run(struct kunit *test,
 	struct task_struct *tsk[2] = { NULL, NULL };
 	int i;
 
-	KUNIT_ASSERT_GE(test, num_online_cpus(), 2);
+	if (num_online_cpus() < 3)
+		return true;
 	c->iters = 200;
 
 	/* The workers live on this stack; corten_test_mutex_run() does not
@@ -1051,11 +1069,17 @@ static void corten_test_mutex_run(struct kunit *test,
 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tsk[1]);
 	}
 
-	/* Spread the workers over two CPUs so disjoint transactions can
-	 * genuinely overlap.
+	/* Spread the workers over two CPUs (1 and 2) so disjoint
+	 * transactions can genuinely overlap; refuse to report a result
+	 * when the placement cannot be established.
 	 */
-	for (i = 0; i < 2; i++)
-		set_cpus_allowed_ptr(tsk[i], cpumask_of(i + 1));
+	for (i = 0; i < 2; i++) {
+		if (set_cpus_allowed_ptr(tsk[i], cpumask_of(i + 1))) {
+			kthread_stop(tsk[0]);
+			kthread_stop(tsk[1]);
+			return true;
+		}
+	}
 
 	for (i = 0; i < 2; i++)
 		wait_for_completion(&c->done[i]);
@@ -1064,6 +1088,8 @@ static void corten_test_mutex_run(struct kunit *test,
 
 	KUNIT_EXPECT_EQ(test, atomic_read(&c->lock_errors), 0);
 	KUNIT_EXPECT_EQ(test, atomic_read(&c->op_errors), 0);
+
+	return false;
 }
 
 static void corten_test_txn_mutex_overlap(struct kunit *test)
@@ -1079,7 +1105,8 @@ static void corten_test_txn_mutex_overlap(struct kunit *test)
 	 * section must never hold both threads.
 	 */
 	c->expect_exclusive = 1;
-	corten_test_mutex_run(test, c, 8 * PAGE_SIZE, 10 * PAGE_SIZE);
+	if (corten_test_mutex_run(test, c, 8 * PAGE_SIZE, 10 * PAGE_SIZE))
+		kunit_skip(test, "need 3 online CPUs for worker placement");
 
 	KUNIT_EXPECT_EQ(test, atomic_read(&c->violations), 0);
 	KUNIT_EXPECT_EQ(test, atomic_read(&c->max_crit), 1);
@@ -1096,8 +1123,9 @@ static void corten_test_txn_mutex_disjoint(struct kunit *test)
 	/* Disjoint 2M windows -> different covering descriptors -> the
 	 * transactions do not contend (the paper's core selling point).
 	 */
-	corten_test_mutex_run(test, c, 8 * PAGE_SIZE,
-			      PMD_SIZE + 8 * PAGE_SIZE);
+	if (corten_test_mutex_run(test, c, 8 * PAGE_SIZE,
+				  PMD_SIZE + 8 * PAGE_SIZE))
+		kunit_skip(test, "need 3 online CPUs for worker placement");
 
 	KUNIT_EXPECT_EQ(test, atomic_read(&c->violations), 0);
 	KUNIT_EXPECT_GE(test, atomic_read(&c->max_crit), 2);

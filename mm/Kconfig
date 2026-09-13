@@ -1437,11 +1437,13 @@ config CORTEN_MM
 	  per-PTE metadata array), and memory operations run as transactions
 	  on the covering page-table page.
 
-	  This slice (M2a) only adds the data-structure skeleton, the PT-page
-	  lifecycle hooks and KUnit tests; nothing calls the transaction API
-	  yet.  The code is inert unless the kernel is booted with corten=on
-	  (static branch, default off), so the disabled cost is one nop per
-	  page-table alloc/free.
+	  This slice (M2b) adds the data-structure skeleton, the PT-page
+	  lifecycle hooks, the CortenMMrw locking protocol and the
+	  transaction API (query/map/mark/unmap) with KUnit tests.  There
+	  are no real in-kernel callers of the transaction API yet; the
+	  fault path learns to use it in M3.  The code is inert unless the
+	  kernel is booted with corten=on (static branch, default off), so
+	  the disabled cost is one nop per page-table alloc/free.
 
 	  If unsure, say N.
 
