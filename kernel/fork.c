@@ -1051,6 +1051,12 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 {
 	mt_init_flags(&mm->mm_mt, MM_MT_FLAGS);
 	mt_set_external_lock(&mm->mm_mt, &mm->mmap_lock);
+#ifdef CONFIG_CORTEN_MM
+	/* After the dup_mm() struct copy: a fork() child must not inherit
+	 * (and later free) its parent's arena registry.
+	 */
+	mm->corten_state = NULL;
+#endif
 	atomic_set(&mm->mm_users, 1);
 	atomic_set(&mm->mm_count, 1);
 	seqcount_init(&mm->write_protect_seq);

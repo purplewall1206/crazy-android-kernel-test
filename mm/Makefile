@@ -155,3 +155,5 @@ obj-$(CONFIG_TMPFS_QUOTA) += shmem_quota.o
 obj-$(CONFIG_PT_RECLAIM) += pt_reclaim.o
 obj-$(CONFIG_CORTEN_MM) += corten.o
 obj-$(CONFIG_CORTEN_MM_KUNIT_TEST) += corten_test.o
+obj-$(CONFIG_CORTEN_MM_ARENA) += corten_arena.o
+obj-$(CONFIG_CORTEN_MM_ARENA_KUNIT_TEST) += corten_arena_test.o

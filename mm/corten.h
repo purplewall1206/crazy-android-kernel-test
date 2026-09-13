@@ -158,7 +158,7 @@ struct corten_tree_ops {
 	 * read-locked; a child can therefore not appear or vanish during
 	 * the call in a well-formed tree.
 	 */
-		struct corten_ptdesc *(*child)(void *ctx, struct corten_ptdesc *parent,
+	struct corten_ptdesc *(*child)(void *ctx, struct corten_ptdesc *parent,
 				       unsigned long addr);
 	/**
 	 * @alloc: ensure-alloc (paper Figure 5 L5', reference

@@ -34,6 +34,7 @@
 struct address_space;
 struct futex_private_hash;
 struct mem_cgroup;
+struct corten_mm_state;
 
 typedef struct {
 	unsigned long f;
@@ -965,6 +966,20 @@ struct mm_struct {
 		} ____cacheline_aligned_in_smp;
 
 		struct maple_tree mm_mt;
+
+#ifdef CONFIG_CORTEN_MM
+		/**
+		 * @corten_state: CortenMM arena registration state (see
+		 * linux/corten_arena.h).  Lazily allocated at the first
+		 * arena DECLARE and freed in exit_mmap(), so once
+		 * non-NULL it stays stable for the whole life of the mm
+		 * (mm_users pins the readers); readers pair
+		 * smp_load_acquire() with the publishing
+		 * smp_store_release().  NULL means "no arenas", which is
+		 * what every process runs with unless it opted in.
+		 */
+		struct corten_mm_state *corten_state;
+#endif
 
 		unsigned long mmap_base;	/* base of mmap area */
 		unsigned long mmap_legacy_base;	/* base of mmap area in bottom-up allocations */

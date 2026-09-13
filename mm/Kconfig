@@ -1460,6 +1460,40 @@ config CORTEN_MM_KUNIT_TEST
 
 	  If unsure, say N.
 
+config CORTEN_MM_ARENA
+	bool "CortenMM arena registration (prctl address-range opt-in)"
+	default CORTEN_MM
+	depends on CORTEN_MM && X86_64
+	help
+	  Adds the CortenMM arena layer: processes holding CAP_SYS_ADMIN can
+	  declare an existing MAP_NORESERVE private anonymous VMA as a
+	  "CortenMM arena" with prctl(PR_CORTEN_ARENA).  The declared VMA is
+	  converted in place into a shadow-VMA (VM_CORTEN|VM_NOHUGEPAGE) and
+	  the address range is published in a per-mm xarray keyed by 2M frame
+	  index, which lets the fault path resolve arena membership without
+	  touching the VMA tree or mmap_lock.
+
+	  The arena layer is inert unless the kernel is booted with corten=on,
+	  and with this option disabled CONFIG_CORTEN_MM alone adds no VMA
+	  semantics.  X86_64 only: the DECLARE contract's granularity is the
+	  x86-64 PMD size.
+
+	  If unsure, say N.
+
+config CORTEN_MM_ARENA_KUNIT_TEST
+	bool "KUnit test for CortenMM arena registration"
+	default KUNIT_ALL_TESTS
+	depends on CORTEN_MM_ARENA && KUNIT
+	help
+	  KUnit tests for the CortenMM arena layer: the DECLARE validation
+	  chain (alignment, single-VMA match, flag whitelist, overlap), the
+	  per-mm 2M-frame xarray indexing, QUERY, RELEASE with its percpu_ref
+	  drain, the shadow-VMA conversion and process-exit cleanup.  The
+	  tests build private mm_structs and drive the gate-free internal
+	  entry points, so they run on corten=off kernels.
+
+	  If unsure, say N.
+
 config FIND_NORMAL_PAGE
 	def_bool n
 

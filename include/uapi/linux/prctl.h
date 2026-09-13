@@ -386,4 +386,16 @@ struct prctl_mm_map {
 # define PR_FUTEX_HASH_SET_SLOTS	1
 # define PR_FUTEX_HASH_GET_SLOTS	2
 
+/*
+ * CortenMM arena management (EXPERIMENTAL, requires CAP_SYS_ADMIN).
+ * arg2 selects the operation, arg3/arg4 carry the address range and arg5
+ * must be 0.  DECLARE turns an existing MAP_NORESERVE private anonymous
+ * VMA into a CortenMM arena backed by a transaction-managed shadow-VMA;
+ * RELEASE tears the arena down again; QUERY reports membership.
+ */
+#define PR_CORTEN_ARENA			79
+# define CORTEN_ARENA_DECLARE		0	/* arg3=addr, arg4=len */
+# define CORTEN_ARENA_RELEASE		1	/* arg3=addr, arg4=len */
+# define CORTEN_ARENA_QUERY		2	/* arg3=addr */
+
 #endif /* _LINUX_PRCTL_H */

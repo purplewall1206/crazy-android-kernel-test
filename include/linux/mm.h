@@ -450,6 +450,26 @@ extern unsigned int kobjsize(const void *objp);
 #define VM_SEALED	VM_NONE
 #endif
 
+#ifdef CONFIG_CORTEN_MM
+#ifdef CONFIG_64BIT
+/*
+ * Marks a CortenMM arena shadow-VMA (M3B_DESIGN.md sec 3): a perfectly
+ * ordinary private anonymous VMA whose address range has additionally been
+ * declared as a CortenMM arena.  Only the arena layer (mm/corten_arena.c)
+ * sets or interprets the bit; every other consumer only sees it through
+ * the generic "vm_flags differ" rules, which is what keeps shadow-VMAs
+ * from merging with their plain neighbors (is_mergeable_vma()).  Follows
+ * the VM_SEALED precedent above; bit 44 is the next free CONFIG_64BIT bit.
+ */
+#define VM_CORTEN_BIT	43
+#define VM_CORTEN	BIT(VM_CORTEN_BIT)
+#else
+#define VM_CORTEN	VM_NONE		/* arenas need 64-bit VA space */
+#endif
+#else /* !CONFIG_CORTEN_MM */
+#define VM_CORTEN	VM_NONE
+#endif
+
 /* Bits set in the VMA until the stack is in its final location */
 #define VM_STACK_INCOMPLETE_SETUP (VM_RAND_READ | VM_SEQ_READ | VM_STACK_EARLY)
 

@@ -100,6 +100,16 @@ static inline bool is_mergeable_vma(struct vma_merge_struct *vmg, bool merge_nex
 	 */
 	if ((vma->vm_flags ^ vmg->vm_flags) & ~VM_SOFTDIRTY)
 		return false;
+	/*
+	 * The flag comparison above is also the CortenMM shadow-VMA
+	 * exclusion (M3B_DESIGN sec 3.3): a shadow-VMA carries VM_CORTEN |
+	 * VM_NOHUGEPAGE, which only the arena layer sets in place
+	 * (mm/corten_arena.c), so a shadow-VMA can never share a flag word
+	 * with a plain neighbour and needs no explicit check here.  Two
+	 * adjacent shadow-VMAs (same flags, same anon_vma_name) do merge,
+	 * which is harmless: arena resolution goes through the per-mm
+	 * xarray, not the VMA tree.
+	 */
 	if (vma->vm_file != vmg->file)
 		return false;
 	if (!is_mergeable_vm_userfaultfd_ctx(vma, vmg->uffd_ctx))

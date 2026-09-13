@@ -1328,6 +1328,15 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 			goto out_unlock;
 
 		/*
+		 * CortenMM arena shadow-VMAs are not compatible: their
+		 * faults are resolved through the arena layer and never
+		 * reach handle_mm_fault, so userfaultfd would never deliver
+		 * an event for them (M3B_DESIGN sec 5.13).
+		 */
+		if (cur->vm_flags & VM_CORTEN)
+			goto out_unlock;
+
+		/*
 		 * UFFDIO_COPY will fill file holes even without
 		 * PROT_WRITE. This check enforces that if this is a
 		 * MAP_SHARED, the process has write permission to the backing

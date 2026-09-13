@@ -48,6 +48,7 @@
 #include <linux/sched/mm.h>
 #include <linux/ksm.h>
 #include <linux/memfd.h>
+#include <linux/corten_arena.h>
 #include <linux/page_size_compat.h>
 
 #include <linux/uaccess.h>
@@ -1278,6 +1279,13 @@ void exit_mmap(struct mm_struct *mm)
 	int count = 0;
 
 	/* mm's last user has gone, and its about to be pulled down */
+	/* Arena teardown first (drain + free the arena descriptors while no
+	 * fault can be in flight); the legacy unmap below then retires the
+	 * shadow-VMAs' page tables through the regular free funnels
+	 * (M3B_DESIGN sec 5.2).
+	 */
+	corten_arena_mm_exit(mm);
+
 	mmu_notifier_release(mm);
 
 	mmap_read_lock(mm);
