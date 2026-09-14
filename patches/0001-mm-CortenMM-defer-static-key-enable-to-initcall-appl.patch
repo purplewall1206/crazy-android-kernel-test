@@ -1,0 +1,400 @@
+From 1284a235f7510df4bdfdad166655dcf5f7a99bba Mon Sep 17 00:00:00 2001
+From: purplewall1206 <purplewall1206@github.com>
+Date: Sun, 13 Sep 2026 08:05:25 +0800
+Subject: [PATCH] mm: CortenMM: defer static key enable to initcall; apply
+ review fixes
+
+The corten=on boot parameter flipped its static branch directly from the
+__setup() callback.  __setup() handlers run from obsolete_checksetup()
+(init/main.c:197, called at :568) during parse_args("Booting kernel") in
+start_kernel() (init/main.c:1071) -- before mm_core_init() (:1094),
+poking_init() (:1096), SMP bring-up and local_irq_enable().  A *runtime*
+static-key enable at that point drives the jump-label patching path
+(text poking / cross-CPU sync) that is only usable once early boot has
+finished, and hung every corten=on boot in a tight loop with zero
+console output (results/r01/m2-on-panic.log).  Note jump_label_init()
+itself (init/main.c:1057) does precede the parameter parsers; the unsafe
+part is the runtime patching path, not the table construction.
+
+The callback now only records a plain bool (corten_param_on) and
+corten_late_init() -- an early_initcall, run from do_initcalls() via
+do_basic_setup() (init/main.c:1471-1505) -- performs the
+static_branch_enable() well after jump_label_init() and the allocator.
+No user PT page can exist before initcalls complete (userspace starts
+after every initcall), so hook coverage is unchanged.  Verified: with
+corten=on the kernel now boots to login 2/2, dmesg shows the two-phase
+enable ("requested on, activating at initcall time" at 0.35s, "page
+descriptors enabled" at 1.9s), debugfs tracks ~340 descriptors, and
+mmbench pf high 4 threads runs to completion.  Diskless KUnit run:
+16/16 pass.
+
+Review fixes from the M2b pass (docs/test hardening, no behavior change):
+
+- mm/corten.c: rewrite the "frozen descent" comments (corten_txn_begin()
+  L7/L8 block and the path release): the real x86 view has a descent
+  path of length <= 1, and its hierarchy stability comes from the
+  caller-level contract (mmap_lock held for read, see
+  corten_lock_range()) rather than from the path read locks; the
+  "path locks freeze structural changes" argument only holds for
+  multi-level tree views and depends on the view's own contract that
+  read-locked pages have immutable child pointers.
+
+- include/linux/corten.h: fix the COW wording: a write fault on
+  (shared && !writable) is a genuine fault and takes the COW copy /
+  FOLL_FORCE branch (the page was read-only before the fork), not a
+  "re-enables read-only" shortcut.
+
+- corten_unmap() (mm/corten.c): scrub the entry's __resv payload bytes
+  back to zero so a stale payload cannot be resurrected when the slot is
+  re-marked.
+
+- mm/Kconfig: the CORTEN_MM help text now describes the M2b slice
+  (CortenMMrw protocol + transaction API present, no real in-kernel
+  callers until M3 wires the fault path).
+
+- mm/corten_test.c: the in_crit instrumentation window now covers the
+  whole transaction body (mark/map/unmap), not just the bare lock hold;
+  the decrement stays under the covering write lock because placing it
+  after corten_unlock() races with the successor's increment through the
+  freshly released lock (observed as a flaky overlap failure).
+  kthread affinity is now checked: with fewer than 3 online CPUs or a
+  refused set_cpus_allowed_ptr() the test kunit_skips instead of
+  silently measuring a serialized run that would pass vacuously.
+  Also annotate that the debugfs late_initcall is safe (debugfs_init()
+  is a core_initcall) and carries no static-key ordering hazard.
+
+Signed-off-by: purplewall1206 <purplewall1206@github.com>
+---
+ include/linux/corten.h |  12 +++--
+ mm/Kconfig             |  12 +++--
+ mm/corten.c            | 109 +++++++++++++++++++++++++++++++----------
+ mm/corten_test.c       |  48 ++++++++++++++----
+ 4 files changed, 136 insertions(+), 45 deletions(-)
+
+diff --git a/include/linux/corten.h b/include/linux/corten.h
+index bd11bf77f3c2..daffee904a82 100644
+--- a/include/linux/corten.h
++++ b/include/linux/corten.h
+@@ -95,11 +95,13 @@ enum corten_page_state {
+  * COW flags for corten_pte_meta.flags (paper Sec. 4.3): the shared bit marks
+  * pages that may have more than one sharer after fork(), the writable bit
+  * records whether the virtual page was actually writable before the fork
+- * read-only protection.  A write fault on (shared && writable) copies the
+- * page instead of just re-enabling write access; a write fault on
+- * (shared && !writable) only re-enables read-only access (the page was
+- * read-only before the fork).  Rule enforced by corten_mark(): a logically
+- * writable page marked shared must carry CORTEN_PF_WRITABLE.
++ * read-only protection.  A write fault on (shared && !writable) is a genuine
++ * fault -- the page was read-only before the fork, so the fault handler goes
++ * through the COW copy / FOLL_FORCE branch and must not be short-circuited
++ * into a plain "re-enable write" fast path.  (A write fault on
++ * (shared && writable) takes the ordinary COW copy branch.)  Rule enforced
++ * by corten_mark(): a logically writable page marked shared must carry
++ * CORTEN_PF_WRITABLE.
+  */
+ #define CORTEN_PF_SHARED	_BITUL(0)
+ #define CORTEN_PF_WRITABLE	_BITUL(1)
+diff --git a/mm/Kconfig b/mm/Kconfig
+index c2847e315be6..4992d6690cf9 100644
+--- a/mm/Kconfig
++++ b/mm/Kconfig
+@@ -1437,11 +1437,13 @@ config CORTEN_MM
+ 	  per-PTE metadata array), and memory operations run as transactions
+ 	  on the covering page-table page.
+ 
+-	  This slice (M2a) only adds the data-structure skeleton, the PT-page
+-	  lifecycle hooks and KUnit tests; nothing calls the transaction API
+-	  yet.  The code is inert unless the kernel is booted with corten=on
+-	  (static branch, default off), so the disabled cost is one nop per
+-	  page-table alloc/free.
++	  This slice (M2b) adds the data-structure skeleton, the PT-page
++	  lifecycle hooks, the CortenMMrw locking protocol and the
++	  transaction API (query/map/mark/unmap) with KUnit tests.  There
++	  are no real in-kernel callers of the transaction API yet; the
++	  fault path learns to use it in M3.  The code is inert unless the
++	  kernel is booted with corten=on (static branch, default off), so
++	  the disabled cost is one nop per page-table alloc/free.
+ 
+ 	  If unsure, say N.
+ 
+diff --git a/mm/corten.c b/mm/corten.c
+index f7a832c8dc0d..bb505c3fa9fb 100644
+--- a/mm/corten.c
++++ b/mm/corten.c
+@@ -51,18 +51,45 @@
+  */
+ DEFINE_STATIC_KEY_FALSE(corten_enabled_key);
+ 
++/*
++ * The static key must NOT be flipped from the __setup() callback.  The
++ * callback runs from obsolete_checksetup() (init/main.c) during
++ * parse_args("Booting kernel") in start_kernel(), i.e. before mm_core_init()
++ * and poking_init(); jump-label patching at that point goes through the
++ * text-patching machinery before it is usable, which hung every corten=on
++ * boot (results/r01/m2-on-panic.log).  The parameter is therefore only
++ * recorded here and applied by corten_late_init() below: initcalls run from
++ * do_initcalls() via do_basic_setup() (init/main.c), strictly after
++ * jump_label_init() (start_kernel, init/main.c:1057) and long after the
++ * allocator and text-patching are up.  By initcall time no user PT page can
++ * have been allocated yet (userspace starts after every initcall), so
++ * enabling here still covers the hooks completely.
++ */
++static bool corten_param_on;
++
+ static int __init corten_setup_param(char *s)
+ {
+ 	if (!s)
+ 		return 0;
+ 	if (!strcmp(s, "on")) {
+-		static_branch_enable(&corten_enabled_key);
+-		pr_info("corten: page descriptors enabled\n");
++		corten_param_on = true;
++		pr_info("corten: requested on, activating at initcall time\n");
+ 	}
+ 	return 1;
+ }
+ __setup("corten=", corten_setup_param);
+ 
++static int __init corten_late_init(void)
++{
++	if (corten_param_on) {
++		static_branch_enable(&corten_enabled_key);
++		pr_info("corten: page descriptors enabled\n");
++	}
++
++	return 0;
++}
++early_initcall(corten_late_init);
++
+ /* PFN -> page descriptor.  The engineering substitute for the paper's
+  * boot-time contiguous descriptor array indexed by PFN.
+  */
+@@ -501,20 +528,40 @@ static void corten_txn_release_path(struct corten_txn *txn)
+  *        (entry.alloc_if_none).  2b is the pure protocol and allocates
+  *        nothing; M3 replaces this branch with ensure-alloc under the
+  *        write lock.
+- *   L7/L8 write_lock(covering)           -- Linux rwlock_t has no upgrade,
+- *                                           so the candidate's read lock is
+- *                                           dropped and re-taken write side
+- *                                           (the recommended full-path
+- *                                           scheme: the remaining path read
+- *                                           locks are still held, freezing
+- *                                           the descent decision, since no
+- *                                           other thread can change the
+- *                                           child pointers of a read-locked
+- *                                           page; only staleness has to be
+- *                                           re-checked under the write
+- *                                           lock -- stale means raced with
+- *                                           PT-page removal, paper
+- *                                           Figure 7);
++	 *   L7/L8 write_lock(covering)           -- Linux rwlock_t has no upgrade,
++	 *                                           so the candidate's read lock is
++	 *                                           dropped and re-taken write side.
++	 *                                           Scope of the paper's "frozen
++	 *                                           descent" argument (the
++	 *                                           full-path read locks keep the
++	 *                                           walk's decision valid because
++	 *                                           no other thread can change the
++	 *                                           child pointers of a read-locked
++	 *                                           page): the real x86 view takes
++	 *                                           at most one read lock (2b
++	 *                                           tracks PTE-level pages only;
++	 *                                           corten_real_child() is
++	 *                                           unreachable), so its descent
++	 *                                           decision cannot be invalidated
++	 *                                           regardless of path locks --
++	 *                                           what keeps the walked
++	 *                                           hierarchy stable there is the
++	 *                                           caller-level contract, i.e.
++	 *                                           mmap_lock held for read (see
++	 *                                           corten_lock_range()).  The
++	 *                                           "path locks freeze structural
++	 *                                           changes" reasoning holds only
++	 *                                           for multi-level tree views
++	 *                                           (the synthetic KUnit views),
++	 *                                           and there it rests on the
++	 *                                           view's own contract that
++	 *                                           read-locked pages have
++	 *                                           immutable child pointers.
++	 *                                           Only staleness has to be
++	 *                                           re-checked under the write
++	 *                                           lock -- stale means raced with
++	 *                                           PT-page removal, paper
++	 *                                           Figure 7;
+  *   L13  unlock                          -- the path read locks are
+  *                                           released bottom-up as soon as
+  *                                           the write lock is secured
+@@ -622,9 +669,13 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
+ 		WRITE_ONCE(cur->va_base,
+ 			   corten_covering_va_base(start, cur->level));
+ 
+-	/* The path read locks have done their job (the descent decision is
+-	 * frozen and the covering lock excludes other transactions); release
+-	 * them so the transaction body may sleep/allocate.
++	/* The path read locks have done their job; release them so the
++	 * transaction body may sleep/allocate (the covering write lock alone
++	 * provides the mutual exclusion).  Correctness in the real view does
++	 * not depend on these locks "freezing" the tree: its path is at most
++	 * 1 long and the hierarchy is kept stable by the caller's mmap_lock
++	 * (corten_lock_range() contract) -- see the L7/L8 note above for the
++	 * scope of the freeze argument in multi-level tree views.
+ 	 */
+ 	corten_txn_release_path(txn);
+ 
+@@ -928,9 +979,10 @@ int corten_mark(struct corten_txn *txn, unsigned long start, unsigned long len,
+ 		return -EINVAL;
+ 	/* Paper Sec. 4.3: the writable bit records the pre-fork writability.
+ 	 * A logically writable shared page must carry it, otherwise a write
+-	 * fault would take the "was read-only, just re-enable" branch and
+-	 * wrongly skip the copy.  (The fault-side copy/re-enable logic
+-	 * itself is M5.)
++	 * fault would take the FOLL_FORCE COW-copy branch as if the page had
++	 * been read-only before the fork, losing the recorded writability
++	 * (see include/linux/corten.h).  The fault-side copy/re-enable logic
++	 * itself is M5.
+ 	 */
+ 	if (unlikely((meta->perm & CORTEN_PERM_WRITE) &&
+ 		     (meta->flags & CORTEN_PF_SHARED) &&
+@@ -1001,11 +1053,15 @@ int corten_unmap(struct corten_txn *txn, unsigned long start,
+ 			return -ENOMEM;
+ 		/* Dropping the physical page / swap-slot references
+ 		 * recorded in the metadata payload is wired in by M3 (page
+-		 * refs) and M6 (swap).  2b flips the state back to Invalid.
++		 * refs) and M6 (swap).  2b flips the state back to Invalid
++		 * and scrubs the payload bytes (__resv): the slot may be
++		 * re-marked later and must not resurrect stale payload
++		 * fields that the state machine no longer validates.
+ 		 */
+ 		m->state = CORTEN_INVALID;
+ 		m->perm = 0;
+ 		m->flags = 0;
++		memset(m->__resv, 0, sizeof(m->__resv));
+ 	}
+ 
+ 	return 0;
+@@ -1085,8 +1141,11 @@ static int __init corten_debugfs_init(void)
+ {
+ 	struct dentry *dir;
+ 
+-	/* debugfs core registers before late_initcall, and the debugfs
+-	 * helpers degrade to no-ops when CONFIG_DEBUG_FS is off.
++	/* debugfs_init() is a core_initcall (fs/debugfs/inode.c), so by this
++	 * late_initcall the debugfs core is registered; the debugfs helpers
++	 * degrade to no-ops when CONFIG_DEBUG_FS is off.  Nothing here
++	 * touches the corten static key, so there is no early-param-style
++	 * ordering hazard.
+ 	 */
+ 	dir = debugfs_create_dir("corten", NULL);
+ 	debugfs_create_file("stats", 0444, dir, NULL, &corten_stats_fops);
+diff --git a/mm/corten_test.c b/mm/corten_test.c
+index b0168ad46e4a..5b2c77be107e 100644
+--- a/mm/corten_test.c
++++ b/mm/corten_test.c
+@@ -991,7 +991,6 @@ static int corten_test_mutex_worker(void *data)
+ 		if (now > 1 && c->expect_exclusive)
+ 			atomic_inc(&c->violations);
+ 		corten_test_hold_room();
+-		atomic_dec(&c->in_crit);
+ 
+ 		/* Real transaction work under the write lock: mmap-mark,
+ 		 * fault-map, munmap (all legal transitions).  The struct
+@@ -1008,6 +1007,17 @@ static int corten_test_mutex_worker(void *data)
+ 		if (corten_unmap(&txn, w->start, w->len))
+ 			atomic_inc(&c->op_errors);
+ 
++		/* Leave the instrumentation window only after all the
++		 * transaction operations have run, so they are covered by
++		 * the exclusivity check and not just the bare lock hold.
++		 * The decrement must happen while the covering write lock
++		 * is still held: once corten_unlock() releases it the
++		 * successor's begin can complete and increment in_crit
++		 * before this thread's decrement lands, which would count
++		 * as a bogus overlap.
++		 */
++		atomic_dec(&c->in_crit);
++
+ 		corten_unlock(&txn);
+ 	}
+ 
+@@ -1018,7 +1028,14 @@ static int corten_test_mutex_worker(void *data)
+ 	return 0;
+ }
+ 
+-static void corten_test_mutex_run(struct kunit *test,
++/*
++ * Runs the two-worker mutual-exclusion scenario.  Returns true when the
++ * environment cannot honour the concurrency placement (fewer than 3 online
++ * CPUs, or the affinity request is refused); the caller kunit_skips in that
++ * case instead of silently measuring a serialized run that would pass
++ * vacuously.
++ */
++static bool corten_test_mutex_run(struct kunit *test,
+ 				  struct corten_test_mutex_ctx *c,
+ 				  unsigned long start0, unsigned long start1)
+ {
+@@ -1026,7 +1043,8 @@ static void corten_test_mutex_run(struct kunit *test,
+ 	struct task_struct *tsk[2] = { NULL, NULL };
+ 	int i;
+ 
+-	KUNIT_ASSERT_GE(test, num_online_cpus(), 2);
++	if (num_online_cpus() < 3)
++		return true;
+ 	c->iters = 200;
+ 
+ 	/* The workers live on this stack; corten_test_mutex_run() does not
+@@ -1051,11 +1069,17 @@ static void corten_test_mutex_run(struct kunit *test,
+ 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tsk[1]);
+ 	}
+ 
+-	/* Spread the workers over two CPUs so disjoint transactions can
+-	 * genuinely overlap.
++	/* Spread the workers over two CPUs (1 and 2) so disjoint
++	 * transactions can genuinely overlap; refuse to report a result
++	 * when the placement cannot be established.
+ 	 */
+-	for (i = 0; i < 2; i++)
+-		set_cpus_allowed_ptr(tsk[i], cpumask_of(i + 1));
++	for (i = 0; i < 2; i++) {
++		if (set_cpus_allowed_ptr(tsk[i], cpumask_of(i + 1))) {
++			kthread_stop(tsk[0]);
++			kthread_stop(tsk[1]);
++			return true;
++		}
++	}
+ 
+ 	for (i = 0; i < 2; i++)
+ 		wait_for_completion(&c->done[i]);
+@@ -1064,6 +1088,8 @@ static void corten_test_mutex_run(struct kunit *test,
+ 
+ 	KUNIT_EXPECT_EQ(test, atomic_read(&c->lock_errors), 0);
+ 	KUNIT_EXPECT_EQ(test, atomic_read(&c->op_errors), 0);
++
++	return false;
+ }
+ 
+ static void corten_test_txn_mutex_overlap(struct kunit *test)
+@@ -1079,7 +1105,8 @@ static void corten_test_txn_mutex_overlap(struct kunit *test)
+ 	 * section must never hold both threads.
+ 	 */
+ 	c->expect_exclusive = 1;
+-	corten_test_mutex_run(test, c, 8 * PAGE_SIZE, 10 * PAGE_SIZE);
++	if (corten_test_mutex_run(test, c, 8 * PAGE_SIZE, 10 * PAGE_SIZE))
++		kunit_skip(test, "need 3 online CPUs for worker placement");
+ 
+ 	KUNIT_EXPECT_EQ(test, atomic_read(&c->violations), 0);
+ 	KUNIT_EXPECT_EQ(test, atomic_read(&c->max_crit), 1);
+@@ -1096,8 +1123,9 @@ static void corten_test_txn_mutex_disjoint(struct kunit *test)
+ 	/* Disjoint 2M windows -> different covering descriptors -> the
+ 	 * transactions do not contend (the paper's core selling point).
+ 	 */
+-	corten_test_mutex_run(test, c, 8 * PAGE_SIZE,
+-			      PMD_SIZE + 8 * PAGE_SIZE);
++	if (corten_test_mutex_run(test, c, 8 * PAGE_SIZE,
++				  PMD_SIZE + 8 * PAGE_SIZE))
++		kunit_skip(test, "need 3 online CPUs for worker placement");
+ 
+ 	KUNIT_EXPECT_EQ(test, atomic_read(&c->violations), 0);
+ 	KUNIT_EXPECT_GE(test, atomic_read(&c->max_crit), 2);
+-- 
+2.34.1
+

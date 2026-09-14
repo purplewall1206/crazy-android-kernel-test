@@ -1,0 +1,1429 @@
+From b8386e4e2467d95b428d05c64323604a386b14cf Mon Sep 17 00:00:00 2001
+From: purplewall1206 <purplewall1206@github.com>
+Date: Sun, 13 Sep 2026 05:00:10 +0800
+Subject: [PATCH] mm: introduce CortenMM skeleton: PT-page descriptors, per-PTE
+ metadata, KUnit
+
+CortenMM (SOSP'25) replaces the two-level (VMA + page table)
+synchronization of memory management with a single-level abstraction:
+every user page-table page ("PT page") carries a page descriptor and
+memory operations run as transactions on the covering PT page.  This
+commit lands the porting groundwork: the data structures, the PT-page
+lifecycle hooks, and the tests.  Nothing calls into it yet -- the
+protocol/transaction API (M2b) and the fault-path integration (M3)
+follow in later commits, so the new code has no in-tree callers for
+now.
+
+The core objects are struct corten_ptdesc, a per-PT-page descriptor
+holding the PT-page lock (rwlock_t for now), a back-link to the owning
+mm, the VA window the page covers and a refcount; and struct
+corten_pte_meta, an on-demand per-PTE metadata array carrying the
+state that does not fit in the MMU.  Descriptors are indexed by PFN in
+a global xarray.  The paper reserves one contiguous descriptor array
+at boot and indexes it directly by PFN; a general-purpose kernel
+cannot reserve that up front, so the xarray keeps the same O(1) PFN
+lookup while allocating descriptors dynamically.  The lookup cost is
+paid only on the transaction entry path, never on the fault fast path.
+
+Design notes, documented for reviewers:
+
+  - The per-PT-page lock starts as rwlock_t, matching the CortenMMrw
+    protocol shape (paper Fig. 5).  The paper's production locks
+    (BRAVO-pfqlock / MCS) are an M4+ optimization; the field is only
+    reached through protocol helpers so it can be swapped without
+    touching callers.
+
+  - All descriptor and metadata allocations use GFP_NOWAIT with
+    __GFP_NOWARN: the hooks run from PT-page alloc/free paths where
+    sleeping or triggering reclaim could recurse into page table
+    teardown.  Allocation failures are tolerated on purpose -- they
+    are counted, and an untracked PT page only means "transactions on
+    this page must fall back"; they never break the allocator caller.
+
+  - The free side is covered by both PTE-page free funnels:
+    ___pte_free_tlb() (TLB-batched: free_pgtables(), zap and
+    PT_RECLAIM) in arch/x86/mm/pgtable.c, and pte_free() in
+    include/asm-generic/pgalloc.h (synchronous: fault error handling,
+    THP collapse/split, khugepaged's pte_free_defer()).  A PT page
+    therefore cannot escape uninstall regardless of how it dies.
+    Uninstall follows the RCU remove-before-reclaim rule: the xarray
+    entry is erased first, then the base reference is dropped, and
+    kfree_rcu() waits out in-flight lookups.  The allocation hook
+    into pte_alloc_one() runs before the page becomes reachable
+    through the page table; kernel page tables (pte_alloc_one_kernel())
+    are deliberately not tracked.
+
+Everything sits behind CONFIG_CORTEN_MM (bool, default n, depends on
+MMU && X86_64) plus a static branch enabled only by the corten=on boot
+parameter, so the disabled cost is one nop per PT-page alloc/free.
+/sys/kernel/debug/corten/stats exposes allocation/free counters.
+
+Six KUnit tests (CONFIG_CORTEN_MM_KUNIT_TEST) cover the metadata array
+layout with full 512-entry writeback and re-initialization, the
+PFN-keyed descriptor index with refcounting including double-uninstall
+tolerance, and the pure covering-page selection helpers for both 4-
+and 5-level paging.
+
+Signed-off-by: purplewall1206 <purplewall1206@github.com>
+---
+ arch/x86/mm/pgtable.c         |  25 +-
+ include/asm-generic/pgalloc.h |   9 +
+ include/linux/corten.h        | 349 +++++++++++++++++++++++++++
+ mm/Kconfig                    |  32 +++
+ mm/Makefile                   |   2 +
+ mm/corten.c                   | 441 ++++++++++++++++++++++++++++++++++
+ mm/corten.h                   |  94 ++++++++
+ mm/corten_test.c              | 309 ++++++++++++++++++++++++
+ 8 files changed, 1260 insertions(+), 1 deletion(-)
+ create mode 100644 include/linux/corten.h
+ create mode 100644 mm/corten.c
+ create mode 100644 mm/corten.h
+ create mode 100644 mm/corten_test.c
+
+diff --git a/arch/x86/mm/pgtable.c b/arch/x86/mm/pgtable.c
+index 2e5ecfdce73c..403c8e1020e8 100644
+--- a/arch/x86/mm/pgtable.c
++++ b/arch/x86/mm/pgtable.c
+@@ -2,6 +2,7 @@
+ #include <linux/mm.h>
+ #include <linux/gfp.h>
+ #include <linux/hugetlb.h>
++#include <linux/corten.h>
+ #include <asm/pgalloc.h>
+ #include <asm/tlb.h>
+ #include <asm/fixmap.h>
+@@ -15,11 +16,33 @@ SYM_PIC_ALIAS(physical_mask);
+ 
+ pgtable_t pte_alloc_one(struct mm_struct *mm)
+ {
+-	return __pte_alloc_one(mm, GFP_PGTABLE_USER);
++	pgtable_t page = __pte_alloc_one(mm, GFP_PGTABLE_USER);
++
++	/*
++	 * CortenMM hook: attach the page descriptor when the PT page is
++	 * born.  This is the outermost user PTE-page allocator on x86;
++	 * kernel page tables (pte_alloc_one_kernel()) are deliberately not
++	 * tracked.  No-op unless booted with corten=on.
++	 */
++	if (page)
++		corten_on_pte_alloc(mm, page);
++
++	return page;
+ }
+ 
+ void ___pte_free_tlb(struct mmu_gather *tlb, struct page *pte)
+ {
++	/*
++	 * CortenMM hook: this is the single x86 funnel for every
++	 * TLB-batched PTE-page free (free_pgtables(), zap direct reclaim and
++	 * PT_RECLAIM); the synchronous paths (fault error handling, THP
++	 * collapse/split, khugepaged's deferred free) go through pte_free()
++	 * in asm-generic/pgalloc.h instead.  No mm context is needed: the
++	 * hook only looks up the PFN-keyed descriptor, never sleeps and
++	 * never waits on a lock held by reclaim (see mm/corten.c).  No-op
++	 * unless booted with corten=on.
++	 */
++	corten_on_pte_free(pte);
+ 	paravirt_release_pte(page_to_pfn(pte));
+ 	tlb_remove_ptdesc(tlb, page_ptdesc(pte));
+ }
+diff --git a/include/asm-generic/pgalloc.h b/include/asm-generic/pgalloc.h
+index b9d2a7c79b93..76f05dfe2f37 100644
+--- a/include/asm-generic/pgalloc.h
++++ b/include/asm-generic/pgalloc.h
+@@ -2,6 +2,8 @@
+ #ifndef __ASM_GENERIC_PGALLOC_H
+ #define __ASM_GENERIC_PGALLOC_H
+ 
++#include <linux/corten.h>
++
+ #ifdef CONFIG_MMU
+ 
+ #define GFP_PGTABLE_KERNEL	(GFP_KERNEL | __GFP_ZERO)
+@@ -116,6 +118,13 @@ static inline void pte_free(struct mm_struct *mm, struct page *pte_page)
+ {
+ 	struct ptdesc *ptdesc = page_ptdesc(pte_page);
+ 
++	/*
++	 * CortenMM hook: covers every synchronous (non-TLB) PTE-page free
++	 * -- fault error handling, THP collapse/split and khugepaged's
++	 * deferred free (pte_free_defer() funnels here).  No-op unless
++	 * booted with corten=on.
++	 */
++	corten_on_pte_free(pte_page);
+ 	pagetable_dtor_free(ptdesc);
+ }
+ 
+diff --git a/include/linux/corten.h b/include/linux/corten.h
+new file mode 100644
+index 000000000000..4325a12cdbe4
+--- /dev/null
++++ b/include/linux/corten.h
+@@ -0,0 +1,349 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * CortenMM - page-descriptor based transactional memory management.
++ *
++ * Linux port of the CortenMM design (Sec. 3.3/Sec. 4 of the CortenMM paper): every
++ * user page-table page ("PT page") is associated with a page descriptor
++ * (struct corten_ptdesc) holding the PT-page lock, a back-link to the owning
++ * address space and the VA window it covers, plus an on-demand per-PTE
++ * metadata array (struct corten_pte_meta) that carries the state which does
++ * not fit in the MMU (paper Figure 3).  All memory operations on an address
++ * space run as transactions on the "covering" PT page (paper Sec. 4.1).
++ *
++ * Engineering adaptations w.r.t. the paper (documented for reviewers):
++ *
++ *  - The paper allocates all page descriptors from one contiguous region at
++ *    boot and indexes them directly by PFN.  A general-purpose kernel cannot
++ *    reserve that array up front, so we use an xarray keyed by PFN
++ *    (PFN -> struct corten_ptdesc) which gives the same O(1) PFN lookup
++ *    while allocating descriptors dynamically.  The lookup cost is paid only
++ *    on the transaction entry path, never on the page-fault fast path.
++ *
++ *  - The per-PT-page lock starts as rwlock_t, matching the CortenMMrw
++ *    protocol shape (paper Figure 5 uses a readers-writer lock).  The paper's
++ *    production locks (BRAVO-pfqlock for CortenMMrw, MCS for CortenMMadv)
++ *    are an M4+ optimization; access the field only through the protocol
++ *    helpers so the lock type can be swapped without touching callers.
++ *
++ * Nothing here has any effect unless CONFIG_CORTEN_MM is enabled AND the
++ * kernel is booted with corten=on (static branch, default off).
++ */
++
++#ifndef _LINUX_CORTEN_H
++#define _LINUX_CORTEN_H
++
++#include <linux/bits.h>
++#include <linux/errno.h>
++#include <linux/types.h>
++
++struct mm_struct;
++struct page;
++
++/*
++ * State of one virtual page as stored in the per-PTE metadata array.
++ * Mirrors the paper's Status enum (Figure 4).  This slice only defines the
++ * state space; the fault/mmap paths that produce these states arrive with
++ * slice 2b.
++ */
++enum corten_page_state {
++	CORTEN_INVALID = 0,	/* paper: Invalid -- page not allocated */
++	CORTEN_MAPPED,		/* paper: Mapped(PhysPage, Perm) */
++	CORTEN_PRIVATE_ANON,	/* paper: PrivateAnon(Perm), virtually alloc'd */
++	CORTEN_FILE_MAPPED,	/* paper: PrivateFileMapped(File, Offset, Perm) */
++	CORTEN_SWAPPED,		/* paper: Swapped(BlockDev, BlockNum, Perm) */
++	CORTEN_SHARED_ANON,	/* paper: shared anonymous */
++};
++
++/* Permission bits for corten_pte_meta.perm (paper: Perm). */
++#define CORTEN_PERM_READ	_BITUL(0)
++#define CORTEN_PERM_WRITE	_BITUL(1)
++#define CORTEN_PERM_EXEC	_BITUL(2)
++#define CORTEN_PERM_USER	_BITUL(3)
++
++/*
++ * COW flags for corten_pte_meta.flags (paper Sec. 4.3): the shared bit marks
++ * pages that may have more than one sharer after fork(), the writable bit
++ * records whether the virtual page was actually writable before the fork
++ * read-only protection.  A write fault on (shared && writable) copies the
++ * page instead of just re-enabling write access.
++ */
++#define CORTEN_PF_SHARED	_BITUL(0)
++#define CORTEN_PF_WRITABLE	_BITUL(1)
++
++/*
++ * Entries per PTE page on x86-64.  Kept as a literal so this header stays
++ * architecture-independent; mm/corten.c BUILD_BUG_ONs it against
++ * PTRS_PER_PTE.
++ */
++#define CORTEN_PTES_PER_PT_PAGE	512
++
++#define CORTEN_META_ARRAY_BYTES	\
++	(CORTEN_PTES_PER_PT_PAGE * sizeof(struct corten_pte_meta))
++
++/*
++ * Per-PTE metadata, one entry per virtual 4K page (paper Figure 3 ".aux").
++ * Deliberately 8 bytes so the whole array for one PT page is exactly 4K and
++ * comes from the order-0 kmalloc caches.
++ *
++ * The 5 reserved bytes are where the payloads of the non-resident states
++ * will live (slice 2b+): the backing file reference for CORTEN_FILE_MAPPED,
++ * and the (device, block) pair plus on-disk offset for CORTEN_SWAPPED.
++ * Whether those stay inline (compact IDs) or become indices into an
++ * out-of-line table is decided in slice 2b; the struct size is not expected
++ * to grow.
++ */
++struct corten_pte_meta {
++	/* enum corten_page_state */
++	u8	state;
++	/* CORTEN_PERM_* */
++	u8	perm;
++	/* CORTEN_PF_* (COW shared/writable, paper Sec. 4.3) */
++	u8	flags;
++	/* reserved: file ref / swap (dev, blk, off) payload, see above */
++	u8	__resv[5];
++} __packed;
++
++/* PT-page levels, root first (matches the x86-64 descent order). */
++enum corten_pt_level {
++	CORTEN_LEVEL_PGD = 0,
++	CORTEN_LEVEL_P4D,
++	CORTEN_LEVEL_PUD,
++	CORTEN_LEVEL_PMD,
++	CORTEN_LEVEL_PTE,
++};
++
++/* Slots for the PT pages pinned by one transaction (slice 2b placeholder). */
++#define CORTEN_HANDLE_MAX_PAGES	9
++
++/**
++ * struct corten_handle - transaction cursor over a locked VA range.
++ *
++ * Paper analogue: RCursor (paper Figure 4).  Produced by corten_lock_range(),
++ * consumed by corten_query()/corten_map()/corten_mark()/corten_unmap(), and
++ * released by corten_unlock() (the paper releases on RCursor scope exit; the
++ * C port makes the release explicit).  Every operation on the handle is
++ * atomic w.r.t. other transactions overlapping the range; transactions on
++ * disjoint ranges do not contend (paper Sec. 3.3 concurrency semantics).
++ */
++struct corten_handle {
++	/** @mm: address space the range belongs to. */
++	struct mm_struct	*mm;
++	/** @start: first VA of the locked range. */
++	unsigned long		start;
++	/** @end: first VA past the locked range. */
++	unsigned long		end;
++	/**
++	 * @pages: PT pages pinned by the locking protocol -- the covering PT
++	 * page first, then (advanced protocol, slice 2b) its locked
++	 * descendants in DFS order.  Fixed-size placeholder; sized for one
++	 * root-to-leaf path of a 5-level x86-64 table plus margin.
++	 */
++	struct corten_ptdesc	*pages[CORTEN_HANDLE_MAX_PAGES];
++	/** @nr_pages: number of valid entries in @pages. */
++	u8			nr_pages;
++};
++
++#ifdef CONFIG_CORTEN_MM
++
++#include <linux/jump_label.h>
++#include <linux/rcupdate.h>
++#include <linux/refcount.h>
++#include <linux/spinlock.h>
++
++DECLARE_STATIC_KEY_FALSE(corten_enabled_key);
++
++/**
++ * corten_enabled_static - fast runtime gate for the CortenMM hooks.
++ *
++ * Backed by a static branch enabled by the corten=on boot parameter
++ * (default off), so an un-instrumented kernel pays only a nop.
++ */
++static inline bool corten_enabled_static(void)
++{
++	return static_branch_unlikely(&corten_enabled_key);
++}
++
++#define CORTEN_PTDESC_MAGIC	0xc077e57d
++
++/*
++ * Per-PT-page descriptor (paper Figure 3; reference implementation's
++ * PageTablePageMeta).  One per user PTE-level page, indexed by the PT
++ * page's PFN in a global xarray.  The descriptor is created in the
++ * pte_alloc_one() hook and destroyed in the pte_free()/pte_free_tlb()
++ * hooks, i.e. it lives exactly as long as the PT page.
++ *
++ * Note: the kernel's struct ptdesc is the kernel's own page-table
++ * descriptor and is unrelated to this struct despite the name.
++ */
++struct corten_ptdesc {
++	/*
++	 * Protects this PT page and its metadata array for the transaction
++	 * protocols (paper Sec. 4.1).  rwlock_t is the starting point for the
++	 * CortenMMrw protocol; M4+ may swap in a pfq/BRAVO-based lock, so
++	 * take it only through the protocol helpers (slice 2b).
++	 */
++	rwlock_t		lock;
++	/* Back-link: owning address space (descriptor -> AddrSpace). */
++	struct mm_struct	*mm;
++	/*
++	 * Base VA of the window this PT page covers once installed
++	 * (PMD_SIZE-aligned for a PTE-level page).  pte_alloc_one() runs
++	 * before the page is placed in the tree, so the installer fills
++	 * this in during slice 2b; it is 0 until then.
++	 */
++	unsigned long		va_base;
++	/* Per-PTE metadata array, on demand, freed with the descriptor. */
++	struct corten_pte_meta	*meta;
++	/* Lookup/transaction pins on top of the xarray's base reference. */
++	refcount_t		refs;
++	/* Paper Figure 6 L32: set when the PT page is being torn down. */
++	u8			stale;
++	/* enum corten_pt_level of the page this descriptor is attached to. */
++	u8			level;
++	/* Populated child entries; slice 2b DFS locking / unmap pruning. */
++	u16			nr_children;
++	/* Debug: always CORTEN_PTDESC_MAGIC while alive. */
++	u32			magic;
++	/* Deferred free of the descriptor itself (kfree_rcu). */
++	struct rcu_head		rcu;
++};
++
++/**
++ * corten_lock_range - lock a VA range for a transaction (paper:
++ *                     AddrSpace::lock, Figure 5).
++ * @mm: address space to operate on.
++ * @start: first VA of the range.
++ * @end: first VA past the range.
++ * @handle: uninitialized handle receiving the transaction cursor.
++ *
++ * Walks the page table from the root while a single child PT page covers
++ * the whole range, then takes the covering PT page's write lock (rw
++ * protocol; the advanced protocol additionally locks descendants, slice
++ * 2b).  On success all operations through @handle are atomic w.r.t. other
++ * transactions overlapping [@start, @end); transactions on disjoint ranges
++ * proceed in parallel.  The caller must balance with corten_unlock().
++ *
++ * Return: 0 on success, negative error otherwise.  On error @handle is not
++ * locked and must not be used.
++ */
++int corten_lock_range(struct mm_struct *mm, unsigned long start,
++		      unsigned long end, struct corten_handle *handle);
++
++/**
++ * corten_query - read the state of one virtual page in a transaction
++ *                (paper: RCursor::query).
++ * @handle: locked transaction handle.
++ * @addr: virtual address to query, inside the locked range.
++ * @out: receives the page state (state, perm, COW flags).
++ *
++ * Return: 0 on success, negative error otherwise.
++ */
++int corten_query(struct corten_handle *handle, unsigned long addr,
++		 struct corten_pte_meta *out);
++
++/**
++ * corten_map - program the MMU mapping for one virtual page in a
++ *              transaction (paper: RCursor::map).
++ * @handle: locked transaction handle.
++ * @addr: virtual address to map, inside the locked range.
++ * @page: physical page to map.
++ * @perm: CORTEN_PERM_* for the mapping.
++ *
++ * Return: 0 on success, negative error otherwise.
++ */
++int corten_map(struct corten_handle *handle, unsigned long addr,
++	       struct page *page, u8 perm);
++
++/**
++ * corten_mark - change the recorded state of a VA range in a transaction
++ *               (paper: RCursor::mark, e.g. virtually-allocate an anonymous
++ *               range on mmap()).
++ * @handle: locked transaction handle.
++ * @start: first VA of the sub-range, inside the locked range.
++ * @end: first VA past the sub-range.
++ * @meta: the state to record for every page in the sub-range.
++ *
++ * Return: 0 on success, negative error otherwise.
++ */
++int corten_mark(struct corten_handle *handle, unsigned long start,
++		unsigned long end, const struct corten_pte_meta *meta);
++
++/**
++ * corten_unmap - remove the mapping of a VA range in a transaction
++ *                (paper: RCursor::unmap; also retires PT pages that become
++ *                empty, marking them stale per paper Figure 6).
++ * @handle: locked transaction handle.
++ * @start: first VA of the sub-range, inside the locked range.
++ * @end: first VA past the sub-range.
++ *
++ * Return: 0 on success, negative error otherwise.
++ */
++int corten_unmap(struct corten_handle *handle, unsigned long start,
++		 unsigned long end);
++
++/**
++ * corten_unlock - release a transaction (paper: AddrSpace::unlock; releases
++ *                 the acquired locks in reverse acquisition order).
++ * @handle: handle returned by corten_lock_range(); invalid afterwards.
++ */
++void corten_unlock(struct corten_handle *handle);
++
++/* PT-page lifecycle hooks, called from the pgtable alloc/free funnels. */
++void corten_on_pte_alloc(struct mm_struct *mm, struct page *pte_page);
++void corten_on_pte_free(struct page *pte_page);
++
++#else /* !CONFIG_CORTEN_MM */
++
++static inline bool corten_enabled_static(void)
++{
++	return false;
++}
++
++static inline void corten_on_pte_alloc(struct mm_struct *mm,
++				       struct page *pte_page)
++{
++}
++
++static inline void corten_on_pte_free(struct page *pte_page)
++{
++}
++
++static inline int corten_lock_range(struct mm_struct *mm, unsigned long start,
++				    unsigned long end,
++				    struct corten_handle *handle)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline int corten_query(struct corten_handle *handle, unsigned long addr,
++			       struct corten_pte_meta *out)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline int corten_map(struct corten_handle *handle, unsigned long addr,
++			     struct page *page, u8 perm)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline int corten_mark(struct corten_handle *handle, unsigned long start,
++			      unsigned long end,
++			      const struct corten_pte_meta *meta)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline int corten_unmap(struct corten_handle *handle,
++			       unsigned long start, unsigned long end)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline void corten_unlock(struct corten_handle *handle)
++{
++}
++
++#endif /* CONFIG_CORTEN_MM */
++
++#endif /* _LINUX_CORTEN_H */
+diff --git a/mm/Kconfig b/mm/Kconfig
+index 69fd6fc840a7..c2847e315be6 100644
+--- a/mm/Kconfig
++++ b/mm/Kconfig
+@@ -1426,6 +1426,38 @@ config PT_RECLAIM
+ 
+ 	  Note: now only empty user PTE page table pages will be reclaimed.
+ 
++config CORTEN_MM
++	bool "CortenMM: page-descriptor based transactional MM (EXPERIMENTAL)"
++	default n
++	depends on MMU && X86_64
++	help
++	  CortenMM replaces the two-level (VMA + page table) synchronization
++	  of the memory management code with a single-level abstraction: every
++	  user page-table page carries a page descriptor (lock + back-link +
++	  per-PTE metadata array), and memory operations run as transactions
++	  on the covering page-table page.
++
++	  This slice (M2a) only adds the data-structure skeleton, the PT-page
++	  lifecycle hooks and KUnit tests; nothing calls the transaction API
++	  yet.  The code is inert unless the kernel is booted with corten=on
++	  (static branch, default off), so the disabled cost is one nop per
++	  page-table alloc/free.
++
++	  If unsure, say N.
++
++config CORTEN_MM_KUNIT_TEST
++	bool "KUnit test for CortenMM data structure skeleton"
++	default KUNIT_ALL_TESTS
++	depends on CORTEN_MM && KUNIT
++	help
++	  KUnit tests for the CortenMM skeleton: per-PTE metadata array
++	  allocation/free (full 512-entry writeback and re-initialization),
++	  the PFN-keyed page-descriptor index with refcounting, and the pure
++	  covering-page selection helpers.  The tests do not need a real user
++	  address space.
++
++	  If unsure, say N.
++
+ config FIND_NORMAL_PAGE
+ 	def_bool n
+ 
+diff --git a/mm/Makefile b/mm/Makefile
+index f4e428e0b361..5f9bbbba2397 100644
+--- a/mm/Makefile
++++ b/mm/Makefile
+@@ -153,3 +153,5 @@ obj-$(CONFIG_SHRINKER_DEBUG) += shrinker_debug.o
+ obj-$(CONFIG_EXECMEM) += execmem.o
+ obj-$(CONFIG_TMPFS_QUOTA) += shmem_quota.o
+ obj-$(CONFIG_PT_RECLAIM) += pt_reclaim.o
++obj-$(CONFIG_CORTEN_MM) += corten.o
++obj-$(CONFIG_CORTEN_MM_KUNIT_TEST) += corten_test.o
+diff --git a/mm/corten.c b/mm/corten.c
+new file mode 100644
+index 000000000000..5e7f6c9c2c14
+--- /dev/null
++++ b/mm/corten.c
+@@ -0,0 +1,441 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * CortenMM - page-descriptor based transactional memory management.
++ *
++ * This file implements the M2a data-structure skeleton:
++ *
++ *   - the PFN-keyed xarray of page descriptors (engineering adaptation of
++ *     the paper's boot-time contiguous descriptor array, see
++ *     include/linux/corten.h),
++ *   - the PT-page lifecycle hooks wired into the x86 pte_alloc_one() and
++ *     the two PTE-page free funnels,
++ *   - the on-demand per-PTE metadata arrays,
++ *   - the pure covering-page selection helpers used by the locking
++ *     protocols (slice 2b) and by the KUnit tests,
++ *   - the debugfs statistics under /sys/kernel/debug/corten/.
++ *
++ * All of it is inert unless the kernel is booted with corten=on; the hooks
++ * cost one not-taken static branch in that state.
++ */
++
++#include <linux/atomic.h>
++#include <linux/corten.h>
++#include <linux/debugfs.h>
++#include <linux/gfp.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/mm.h>
++#include <linux/pgtable.h>
++#include <linux/rcupdate.h>
++#include <linux/seq_file.h>
++#include <linux/slab.h>
++#include <linux/static_key.h>
++#include <linux/string.h>
++#include <linux/xarray.h>
++
++#include "corten.h"
++
++/*
++ * corten=on enables the hooks at boot (default off).  There is deliberately
++ * no runtime off switch: descriptors are created and destroyed in strictly
++ * paired hooks, and a mid-boot disable would leave pages allocated while
++ * enabled with no free-side event to retire them.  Unknown values are
++ * ignored (and consumed so they do not leak into init's environment).
++ */
++DEFINE_STATIC_KEY_FALSE(corten_enabled_key);
++
++static int __init corten_setup_param(char *s)
++{
++	if (!s)
++		return 0;
++	if (!strcmp(s, "on")) {
++		static_branch_enable(&corten_enabled_key);
++		pr_info("corten: page descriptors enabled\n");
++	}
++	return 1;
++}
++__setup("corten=", corten_setup_param);
++
++/* PFN -> page descriptor.  The engineering substitute for the paper's
++ * boot-time contiguous descriptor array indexed by PFN.
++ */
++static DEFINE_XARRAY(corten_ptdesc_xa);
++
++/*
++ * Statistics (debugfs).  These are the only relaxed cross-CPU counters in
++ * the file; they are advisory and never used for control flow.
++ */
++static atomic_long_t corten_nr_ptdescs;
++static atomic_long_t corten_nr_meta_arrays;
++static atomic_long_t corten_nr_desc_alloc_fail;
++static atomic_long_t corten_nr_meta_alloc_fail;
++static atomic_long_t corten_nr_free_untracked;
++
++static void corten_meta_free(struct corten_ptdesc *desc)
++{
++	if (desc->meta) {
++		atomic_long_dec(&corten_nr_meta_arrays);
++		kfree(desc->meta);
++		desc->meta = NULL;
++	}
++}
++
++/*
++ * Descriptor release, reached exactly when the last reference drops.  The
++ * xarray entry has already been erased by the uninstaller (remove before
++ * reclaim), so lockless lookup can no longer find us; kfree_rcu() only has
++ * to cover lookups that were in flight between xa_load() and the pin.
++ */
++static void corten_ptdesc_release(struct corten_ptdesc *desc)
++{
++	corten_meta_free(desc);
++	kfree_rcu(desc, rcu);
++}
++
++/**
++ * corten_ptdesc_get - pin the page descriptor of PT page @pfn.
++ * @pfn: PFN of a user PTE-level page.
++ *
++ * Safe against concurrent uninstall; see mm/corten.h.  Returns the pinned
++ * descriptor or NULL if the PT page is not (or no longer) tracked.
++ */
++struct corten_ptdesc *corten_ptdesc_get(unsigned long pfn)
++{
++	struct corten_ptdesc *desc;
++
++	rcu_read_lock();
++	desc = xa_load(&corten_ptdesc_xa, pfn);
++	/*
++	 * refs >= 1 while the entry is indexed (the uninstaller drops the
++	 * base reference only after xa_erase), so the inc_not_zero cannot
++	 * fail for an entry seen in the xarray; the check keeps the pin
++	 * protocol well-formed under any future indexing change.
++	 */
++	if (desc && !refcount_inc_not_zero(&desc->refs))
++		desc = NULL;
++	rcu_read_unlock();
++
++	return desc;
++}
++
++/**
++ * corten_ptdesc_put - drop a pin taken by corten_ptdesc_get().
++ * @desc: descriptor returned by corten_ptdesc_get().
++ */
++void corten_ptdesc_put(struct corten_ptdesc *desc)
++{
++	if (refcount_dec_and_test(&desc->refs))
++		corten_ptdesc_release(desc);
++}
++
++/**
++ * corten_meta_ensure - allocate the per-PTE metadata array on demand.
++ * @desc: descriptor of the PT page, pinned by the caller.
++ *
++ * The array is 512 x 8B = 4K per PT page and is freed together with the
++ * descriptor.  Allocation uses GFP_NOWAIT|__GFP_NOWARN: PT-page allocation
++ * runs deep inside the fault path where sleeping on reclaim would risk the
++ * reclaim-recursion deadlock, so callers must tolerate -ENOMEM and retry
++ * where a failure is recoverable.
++ */
++int corten_meta_ensure(struct corten_ptdesc *desc)
++{
++	struct corten_pte_meta *meta;
++
++	if (READ_ONCE(desc->meta))
++		return 0;
++
++	meta = kmalloc(CORTEN_META_ARRAY_BYTES,
++		       GFP_NOWAIT | __GFP_NOWARN | __GFP_ZERO);
++	if (!meta) {
++		atomic_long_inc(&corten_nr_meta_alloc_fail);
++		return -ENOMEM;
++	}
++
++	/* Publish under the descriptor lock so pinned readers see either
++	 * NULL or a fully formed array.
++	 */
++	write_lock(&desc->lock);
++	if (!desc->meta) {
++		desc->meta = meta;
++		meta = NULL;
++		atomic_long_inc(&corten_nr_meta_arrays);
++	}
++	write_unlock(&desc->lock);
++
++	/* The loser of the publish race drops its spare array (kfree(NULL)
++	 * on the winner is a no-op).
++	 */
++	kfree(meta);
++
++	return 0;
++}
++
++/**
++ * corten_ptdesc_install - attach a page descriptor to a fresh PTE-level page.
++ * @mm: owning address space (back-link; may be NULL for mock contexts).
++ * @pte_page: the PT page being born.
++ *
++ * Called from the pte_alloc_one() funnel.  Failures are tolerated on
++ * purpose: the PT page is already allocated and cannot be rolled back from
++ * here, so an untracked PT page only means "CortenMM transactions on this
++ * page must fall back" (slice 2b); it must never break the caller.  The
++ * descriptor stays reachable until the paired corten_ptdesc_uninstall().
++ *
++ * Returns 0 or a negative error (informational; callers ignore it).
++ */
++int corten_ptdesc_install(struct mm_struct *mm, struct page *pte_page)
++{
++	unsigned long pfn = page_to_pfn(pte_page);
++	struct corten_ptdesc *desc;
++	void *old;
++	int ret;
++
++	BUILD_BUG_ON(CORTEN_PTES_PER_PT_PAGE != PTRS_PER_PTE);
++	BUILD_BUG_ON(sizeof(struct corten_pte_meta) != 8);
++
++	desc = kmalloc(sizeof(*desc), GFP_NOWAIT | __GFP_NOWARN | __GFP_ZERO);
++	if (!desc) {
++		atomic_long_inc(&corten_nr_desc_alloc_fail);
++		return -ENOMEM;
++	}
++
++	rwlock_init(&desc->lock);
++	refcount_set(&desc->refs, 1);
++	desc->mm = mm;
++	desc->level = CORTEN_LEVEL_PTE;
++	desc->magic = CORTEN_PTDESC_MAGIC;
++
++	/*
++	 * Insert before the page becomes reachable through the page table
++	 * (pmd_install() happens after pte_alloc_one() returns), so no RCU
++	 * period is needed on the insert side.
++	 */
++	old = xa_store(&corten_ptdesc_xa, pfn, desc, GFP_NOWAIT);
++	if (xa_is_err(old)) {
++		kfree(desc);
++		atomic_long_inc(&corten_nr_desc_alloc_fail);
++		return xa_err(old);
++	}
++	/*
++	 * A PT page must be born and die exactly once between its paired
++	 * hooks; seeing a stale entry here would mean the free funnel missed
++	 * a page (reported loudly -- this is an invariant of slice 2b).  The
++	 * stale descriptor loses its base reference; outstanding pins keep
++	 * it alive until their put().
++	 */
++	if (WARN_ON_ONCE(old)) {
++		/* The replaced descriptor was never retired by its free
++		 * funnel; drop its base reference and its counter entry.
++		 */
++		atomic_long_dec(&corten_nr_ptdescs);
++		corten_ptdesc_put(old);
++	}
++
++	atomic_long_inc(&corten_nr_ptdescs);
++
++	/* Best effort: slice 2b retries at first transaction use. */
++	ret = corten_meta_ensure(desc);
++	if (ret)
++		pr_debug("corten: pfn %lu metadata deferred (%d)\n", pfn, ret);
++
++	return 0;
++}
++
++/**
++ * corten_ptdesc_uninstall - retire the descriptor of a dying PTE-level page.
++ * @pte_page: the PT page being freed.
++ *
++ * Called from the two PTE-page free funnels (pte_free_tlb()/pte_free()).
++ * Order follows the RCU remove-before-reclaim rule: the xarray entry is
++ * erased first so no new lookup can find the descriptor, then the base
++ * reference is dropped; the kfree_rcu() in corten_ptdesc_release() waits
++ * out lookups that were in flight.
++ */
++void corten_ptdesc_uninstall(struct page *pte_page)
++{
++	unsigned long pfn = page_to_pfn(pte_page);
++	struct corten_ptdesc *desc;
++
++	desc = xa_erase(&corten_ptdesc_xa, pfn);
++	if (!desc) {
++		/*
++		 * Untracked page: only possible for pages allocated before
++		 * corten=on took effect (or KUnit double-uninstalls).  Not
++		 * an error, but worth counting.
++		 */
++		atomic_long_inc(&corten_nr_free_untracked);
++		return;
++	}
++
++	WRITE_ONCE(desc->stale, 1);
++	atomic_long_dec(&corten_nr_ptdescs);
++	corten_ptdesc_put(desc);
++}
++
++/*
++ * PT-page lifecycle hooks.  Called unconditionally from the alloc/free
++ * funnels; the static branch keeps the disabled cost at one nop.
++ */
++void corten_on_pte_alloc(struct mm_struct *mm, struct page *pte_page)
++{
++	if (!corten_enabled_static())
++		return;
++	/* Informational only; see corten_ptdesc_install(). */
++	corten_ptdesc_install(mm, pte_page);
++}
++
++void corten_on_pte_free(struct page *pte_page)
++{
++	if (!corten_enabled_static())
++		return;
++	corten_ptdesc_uninstall(pte_page);
++}
++
++/*
++ * Covering-page selection (paper Figure 5 L3-L8).  Pure arithmetic on the
++ * x86-64 window masks, valid for both 4- and 5-level configurations: the
++ * P4D window equals the PGD window when 5-level paging is inactive
++ * (p4d folded), and the cascade then naturally stops at CORTEN_LEVEL_PGD.
++ */
++
++static unsigned long corten_level_window_mask(enum corten_pt_level lvl)
++{
++	switch (lvl) {
++	case CORTEN_LEVEL_PTE:
++		return PMD_MASK;
++	case CORTEN_LEVEL_PMD:
++		return PUD_MASK;
++	case CORTEN_LEVEL_PUD:
++		return P4D_MASK;
++	case CORTEN_LEVEL_P4D:
++		return PGDIR_MASK;
++	case CORTEN_LEVEL_PGD:
++	default:
++		return 0;	/* root page covers everything */
++	}
++}
++
++/**
++ * corten_child_covers_range - would one child PT page cover [start, end)?
++ *
++ * The child window of a page at @lvl is the slot size of its entries
++ * (PMD-level page: one PTE child spans PMD_SIZE, etc.).
++ */
++bool corten_child_covers_range(unsigned long start, unsigned long end,
++			       enum corten_pt_level lvl)
++{
++	unsigned long last = end - 1;
++	unsigned long mask;
++
++	switch (lvl) {
++	case CORTEN_LEVEL_PGD:
++		mask = PGDIR_MASK;
++		break;
++	case CORTEN_LEVEL_P4D:
++		mask = P4D_MASK;
++		break;
++	case CORTEN_LEVEL_PUD:
++		mask = PUD_MASK;
++		break;
++	case CORTEN_LEVEL_PMD:
++		mask = PMD_MASK;
++		break;
++	case CORTEN_LEVEL_PTE:
++	default:
++		return false;	/* leaf pages have no children */
++	}
++
++	return (start & mask) == (last & mask);
++}
++
++/**
++ * corten_covering_level - lowest PT level whose page spans [start, end).
++ *
++ * Mirrors the CortenMMrw descent: descend while a child covers, and the
++ * level at which the descent stops is the covering page's level.
++ */
++enum corten_pt_level corten_covering_level(unsigned long start,
++					   unsigned long end)
++{
++	unsigned long last = end - 1;
++
++	if ((start & PMD_MASK) == (last & PMD_MASK))
++		return CORTEN_LEVEL_PTE;
++	if ((start & PUD_MASK) == (last & PUD_MASK))
++		return CORTEN_LEVEL_PMD;
++	if ((start & P4D_MASK) == (last & P4D_MASK))
++		return CORTEN_LEVEL_PUD;
++	if ((start & PGDIR_MASK) == (last & PGDIR_MASK))
++		return CORTEN_LEVEL_P4D;
++
++	return CORTEN_LEVEL_PGD;
++}
++
++/**
++ * corten_covering_va_base - base VA of the window covered by the PT page at
++ *                           @lvl containing @addr.
++ */
++unsigned long corten_covering_va_base(unsigned long addr,
++				      enum corten_pt_level lvl)
++{
++	return addr & corten_level_window_mask(lvl);
++}
++
++/**
++ * corten_slot_index - index of @addr's slot within a PT page at @lvl.
++ */
++unsigned int corten_slot_index(unsigned long addr, enum corten_pt_level lvl)
++{
++	switch (lvl) {
++	case CORTEN_LEVEL_PGD:
++		return pgd_index(addr);
++	case CORTEN_LEVEL_P4D:
++		return (addr >> P4D_SHIFT) & (PTRS_PER_P4D - 1);
++	case CORTEN_LEVEL_PUD:
++		return (addr >> PUD_SHIFT) & (PTRS_PER_PUD - 1);
++	case CORTEN_LEVEL_PMD:
++		return (addr >> PMD_SHIFT) & (PTRS_PER_PMD - 1);
++	case CORTEN_LEVEL_PTE:
++	default:
++		return (addr >> PAGE_SHIFT) & (PTRS_PER_PTE - 1);
++	}
++}
++
++/* ---- debugfs statistics -------------------------------------------- */
++
++static int corten_stats_show(struct seq_file *m, void *v)
++{
++	long arrays = atomic_long_read(&corten_nr_meta_arrays);
++
++	seq_printf(m, "enabled             %d\n",
++		   static_key_enabled(&corten_enabled_key));
++	seq_printf(m, "ptdescs             %ld\n",
++		   atomic_long_read(&corten_nr_ptdescs));
++	seq_printf(m, "meta_arrays         %ld\n", arrays);
++	seq_printf(m, "meta_bytes          %ld\n",
++		   arrays * CORTEN_META_ARRAY_BYTES);
++	seq_printf(m, "desc_alloc_fail     %ld\n",
++		   atomic_long_read(&corten_nr_desc_alloc_fail));
++	seq_printf(m, "meta_alloc_fail     %ld\n",
++		   atomic_long_read(&corten_nr_meta_alloc_fail));
++	seq_printf(m, "free_untracked      %ld\n",
++		   atomic_long_read(&corten_nr_free_untracked));
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(corten_stats);
++
++static int __init corten_debugfs_init(void)
++{
++	struct dentry *dir;
++
++	/* debugfs core registers before late_initcall, and the debugfs
++	 * helpers degrade to no-ops when CONFIG_DEBUG_FS is off.
++	 */
++	dir = debugfs_create_dir("corten", NULL);
++	debugfs_create_file("stats", 0444, dir, NULL, &corten_stats_fops);
++
++	return 0;
++}
++late_initcall(corten_debugfs_init);
+diff --git a/mm/corten.h b/mm/corten.h
+new file mode 100644
+index 000000000000..c7ef1dba98d6
+--- /dev/null
++++ b/mm/corten.h
+@@ -0,0 +1,94 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * CortenMM internal interfaces, shared between mm/corten.c and
++ * mm/corten_test.c.  Not exported to the rest of the kernel; the public
++ * surface lives in include/linux/corten.h.
++ */
++#ifndef _MM_CORTEN_H
++#define _MM_CORTEN_H
++
++#include <linux/corten.h>
++#include <linux/types.h>
++
++struct page;
++
++/*
++ * Descriptor install/uninstall, called by the PT-page lifecycle hooks
++ * (corten_on_pte_alloc/free) and directly by the KUnit tests.  They skip the
++ * corten_enabled_static() gate so tests can exercise the bookkeeping on a
++ * kernel booted with corten=off.
++ */
++int corten_ptdesc_install(struct mm_struct *mm, struct page *pte_page);
++void corten_ptdesc_uninstall(struct page *pte_page);
++
++/*
++ * PFN-keyed lookup.  corten_ptdesc_get() is safe against concurrent
++ * uninstall: the load+pin runs under rcu_read_lock() and the descriptor is
++ * freed via kfree_rcu() only after the xarray entry is erased and the last
++ * reference dropped.  corten_ptdesc_put() must be called for every
++ * successful get().
++ */
++struct corten_ptdesc *corten_ptdesc_get(unsigned long pfn);
++void corten_ptdesc_put(struct corten_ptdesc *desc);
++
++/*
++ * Per-PTE metadata array, allocated on demand with GFP_NOWAIT|__GFP_NOWARN
++ * (reclaim-recursion red line): callers must tolerate -ENOMEM and retry at a
++ * point where a failure is recoverable.
++ */
++int corten_meta_ensure(struct corten_ptdesc *desc);
++
++/*
++ * Pure covering-page selection helpers (paper Figure 5 L3-L8:
++ * child_pt_page_should_cover() and the covering-page search, assuming 4K
++ * base pages -- hugepage leaves are a slice-2b concern).
++ *
++ * The child window of a PT page at level @lvl is the VA window covered by
++ * one PT page one level below (@lvl == PGD: the top-level child page, ...
++ * @lvl == PMD: a PTE-level page, window PMD_SIZE).
++ */
++
++/**
++ * corten_child_covers_range - would a single child PT page cover [start,end)?
++ * @start: first VA of the range
++ * @end: first VA past the range (must be > @start)
++ * @lvl: level of the PT page whose children are examined
++ *
++ * Paper analogue: child_pt_page_should_cover(cur_pt_page, range).  True iff
++ * the range fits into one child slot of a PT page at @lvl, i.e. the locking
++ * protocol would descend to the child instead of writing-locking the page
++ * at @lvl.
++ */
++bool corten_child_covers_range(unsigned long start, unsigned long end,
++			       enum corten_pt_level lvl);
++
++/**
++ * corten_covering_level - lowest PT level whose page covers [start,end)
++ * @start: first VA of the range
++ * @end: first VA past the range (must be > @start)
++ *
++ * Returns the level of the covering PT page: the deepest PT page that spans
++ * the whole range (PTE-level page if the range fits in one PMD window, its
++ * parent PMD page if it crosses a 2M boundary but fits in one 1G window,
++ * and so on up to the root page itself).
++ */
++enum corten_pt_level corten_covering_level(unsigned long start,
++					   unsigned long end);
++
++/**
++ * corten_covering_va_base - base VA of the window covered by the PT page at
++ *                           @lvl that contains @addr
++ * @addr: virtual address inside the window
++ * @lvl: level of the PT page (PTE-level page: PMD_SIZE-aligned base, ...)
++ */
++unsigned long corten_covering_va_base(unsigned long addr,
++				      enum corten_pt_level lvl);
++
++/**
++ * corten_slot_index - index of @addr's slot within a PT page at @lvl
++ * @addr: virtual address
++ * @lvl: level of the PT page (PTE-level: pte_offset index, ...)
++ */
++unsigned int corten_slot_index(unsigned long addr, enum corten_pt_level lvl);
++
++#endif /* _MM_CORTEN_H */
+diff --git a/mm/corten_test.c b/mm/corten_test.c
+new file mode 100644
+index 000000000000..c1d867ce6342
+--- /dev/null
++++ b/mm/corten_test.c
+@@ -0,0 +1,309 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * KUnit tests for the CortenMM M2a data-structure skeleton.
++ *
++ * These tests exercise the internal bookkeeping directly (mm/corten.h) and
++ * do not depend on a real user address space: PT pages come from the page
++ * allocator and the owning mm is only stored as a back-link, so any mm
++ * pointer (init_mm here) works.  The corten_enabled_static() gate is
++ * deliberately not touched: tests run fine on kernels booted with
++ * corten=off because they call corten_ptdesc_install()/uninstall(), the
++ * functions below the gate.
++ *
++ * Slice 2b owns the protocol-level tests (lock_range/query/map/mark/unmap
++ * atomicity); this file only covers descriptor indexing, refcounting,
++ * metadata arrays and the pure covering-page helpers.
++ */
++#include <kunit/test.h>
++#include <linux/kernel.h>
++#include <linux/mm.h>
++#include <linux/pgtable.h>
++
++#include "corten.h"
++
++/* Exit action: retire the descriptor (if any) and return the PT page. */
++static void corten_test_uninstall_free(void *ctx)
++{
++	struct page *page = ctx;
++
++	corten_ptdesc_uninstall(page);
++	__free_page(page);
++}
++
++/*
++ * Allocate a PT page and install a descriptor for it, registered for
++ * cleanup so assertions cannot leak either side.
++ */
++static struct page *corten_test_track_ptpage(struct kunit *test,
++					     struct mm_struct *mm)
++{
++	struct page *page;
++
++	page = alloc_page(GFP_KERNEL);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, page);
++	kunit_add_action(test, corten_test_uninstall_free, page);
++
++	KUNIT_ASSERT_EQ(test, 0, corten_ptdesc_install(mm, page));
++
++	return page;
++}
++
++/* Fill every metadata entry with a state-dependent pattern. */
++static void corten_test_fill_meta(struct corten_ptdesc *desc)
++{
++	int i;
++
++	for (i = 0; i < CORTEN_PTES_PER_PT_PAGE; i++) {
++		struct corten_pte_meta *m = &desc->meta[i];
++
++		m->state = (i % 2) ? CORTEN_PRIVATE_ANON : CORTEN_MAPPED;
++		m->perm = CORTEN_PERM_READ | (i % 2 ? CORTEN_PERM_WRITE :
++						      CORTEN_PERM_EXEC);
++		m->flags = (i % 3) ? CORTEN_PF_SHARED : CORTEN_PF_WRITABLE;
++	}
++}
++
++/* Verify every metadata entry is back to the freshly-zeroed state. */
++static void corten_test_expect_meta_cleared(struct kunit *test,
++					    struct corten_ptdesc *desc)
++{
++	int i;
++
++	for (i = 0; i < CORTEN_PTES_PER_PT_PAGE; i++) {
++		const struct corten_pte_meta *m = &desc->meta[i];
++
++		KUNIT_EXPECT_EQ(test, m->state, CORTEN_INVALID);
++		KUNIT_EXPECT_EQ(test, m->perm, 0);
++		KUNIT_EXPECT_EQ(test, m->flags, 0);
++	}
++}
++
++static void corten_test_layout(struct kunit *test)
++{
++	/* The metadata array is exactly one page: 512 entries of 8B. */
++	KUNIT_EXPECT_EQ(test, sizeof(struct corten_pte_meta), 8);
++	KUNIT_EXPECT_EQ(test, CORTEN_PTES_PER_PT_PAGE, PTRS_PER_PTE);
++	KUNIT_EXPECT_EQ(test, CORTEN_META_ARRAY_BYTES, PAGE_SIZE);
++
++	/* The gate is expected to be off (default); skip rather than fail
++	 * when the kernel was booted with corten=on -- slice 2b protocol
++	 * tests legitimately run with the gate enabled.
++	 */
++	if (corten_enabled_static())
++		kunit_skip(test, "corten=on boot");
++}
++
++static void corten_test_ptdesc_get_put(struct kunit *test)
++{
++	struct page *page = corten_test_track_ptpage(test, &init_mm);
++	unsigned long pfn = page_to_pfn(page);
++	struct corten_ptdesc *desc;
++	struct corten_ptdesc *pin1;
++	struct corten_ptdesc *pin2;
++
++	desc = corten_ptdesc_get(pfn);
++	KUNIT_ASSERT_NOT_NULL(test, desc);
++	KUNIT_EXPECT_EQ(test, desc->magic, CORTEN_PTDESC_MAGIC);
++	KUNIT_EXPECT_EQ(test, desc->level, CORTEN_LEVEL_PTE);
++	KUNIT_EXPECT_PTR_EQ(test, desc->mm, &init_mm);
++	/* 1 base reference (the xarray entry) + this lookup pin. */
++	KUNIT_EXPECT_EQ(test, refcount_read(&desc->refs), 2);
++
++	/* Overlapping pins stack. */
++	pin1 = corten_ptdesc_get(pfn);
++	KUNIT_ASSERT_NOT_NULL(test, pin1);
++	KUNIT_EXPECT_PTR_EQ(test, pin1, desc);
++	pin2 = corten_ptdesc_get(pfn);
++	KUNIT_ASSERT_NOT_NULL(test, pin2);
++	KUNIT_EXPECT_EQ(test, refcount_read(&desc->refs), 4);
++	corten_ptdesc_put(pin1);
++	corten_ptdesc_put(pin2);
++	KUNIT_EXPECT_EQ(test, refcount_read(&desc->refs), 2);
++
++	/* Unknown PFNs do not resolve. */
++	KUNIT_EXPECT_NULL(test, corten_ptdesc_get(pfn + 1));
++
++	/*
++	 * Uninstall while pinned: the lookup index is gone immediately but
++	 * the pin keeps the descriptor readable until our put().
++	 */
++	corten_ptdesc_uninstall(page);
++	KUNIT_EXPECT_NULL(test, corten_ptdesc_get(pfn));
++	KUNIT_EXPECT_EQ(test, READ_ONCE(desc->stale), 1);
++	KUNIT_EXPECT_EQ(test, desc->magic, CORTEN_PTDESC_MAGIC);
++	corten_ptdesc_put(desc);
++}
++
++static void corten_test_meta_roundtrip(struct kunit *test)
++{
++	struct page *page = corten_test_track_ptpage(test, &init_mm);
++	unsigned long pfn = page_to_pfn(page);
++	struct corten_ptdesc *desc;
++	int i;
++
++	desc = corten_ptdesc_get(pfn);
++	KUNIT_ASSERT_NOT_NULL(test, desc);
++	/* install() allocates the array eagerly; ensure() must accept it. */
++	KUNIT_ASSERT_NOT_NULL(test, desc->meta);
++	KUNIT_ASSERT_EQ(test, corten_meta_ensure(desc), 0);
++
++	corten_test_fill_meta(desc);
++	for (i = 0; i < CORTEN_PTES_PER_PT_PAGE; i++) {
++		const struct corten_pte_meta *m = &desc->meta[i];
++
++		KUNIT_EXPECT_EQ(test, m->state,
++				(i % 2) ? CORTEN_PRIVATE_ANON : CORTEN_MAPPED);
++		KUNIT_EXPECT_EQ(test, m->perm,
++				CORTEN_PERM_READ | (i % 2 ? CORTEN_PERM_WRITE :
++							   CORTEN_PERM_EXEC));
++		KUNIT_EXPECT_EQ(test, m->flags,
++				(i % 3) ? CORTEN_PF_SHARED :
++					  CORTEN_PF_WRITABLE);
++	}
++
++	corten_ptdesc_put(desc);
++}
++
++static void corten_test_meta_reinit_cleared(struct kunit *test)
++{
++	struct page *page = alloc_page(GFP_KERNEL);
++	unsigned long pfn;
++	struct corten_ptdesc *desc;
++
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, page);
++	kunit_add_action(test, corten_test_uninstall_free, page);
++	pfn = page_to_pfn(page);
++
++	/* First lifetime: dirty every entry, then retire the descriptor. */
++	KUNIT_ASSERT_EQ(test, 0, corten_ptdesc_install(&init_mm, page));
++	desc = corten_ptdesc_get(pfn);
++	KUNIT_ASSERT_NOT_NULL(test, desc);
++	KUNIT_ASSERT_NOT_NULL(test, desc->meta);
++	corten_test_fill_meta(desc);
++	corten_ptdesc_put(desc);
++	corten_ptdesc_uninstall(page);
++	KUNIT_EXPECT_NULL(test, corten_ptdesc_get(pfn));
++
++	/*
++	 * Second lifetime on the same PT page: a fresh descriptor with a
++	 * freshly allocated (zeroed) metadata array -- no state may leak
++	 * across the free.
++	 */
++	KUNIT_ASSERT_EQ(test, 0, corten_ptdesc_install(&init_mm, page));
++	desc = corten_ptdesc_get(pfn);
++	KUNIT_ASSERT_NOT_NULL(test, desc);
++	KUNIT_EXPECT_EQ(test, desc->magic, CORTEN_PTDESC_MAGIC);
++	KUNIT_EXPECT_EQ(test, READ_ONCE(desc->va_base), 0UL);
++	KUNIT_EXPECT_EQ(test, desc->nr_children, 0);
++	KUNIT_EXPECT_EQ(test, READ_ONCE(desc->stale), 0);
++	KUNIT_ASSERT_NOT_NULL(test, desc->meta);
++	corten_test_expect_meta_cleared(test, desc);
++	corten_ptdesc_put(desc);
++}
++
++/*
++ * Covering-page selection (paper Figure 5 L3-L8) on synthetic addresses.
++ * All constants come from the kernel's own PMD/PUD/P4D/PGDIR macros, so the
++ * expectations hold under both 4- and 5-level configurations.
++ */
++static void corten_test_covering_level(struct kunit *test)
++{
++	unsigned long a, b;
++
++	/* Range inside one 4K page: a PTE-level page covers it. */
++	a = PMD_SIZE + PAGE_SIZE;
++	KUNIT_EXPECT_EQ(test, corten_covering_level(a, a + PAGE_SIZE),
++			CORTEN_LEVEL_PTE);
++	/* Two 4K pages, still inside one 2M window: PTE-level. */
++	KUNIT_EXPECT_EQ(test,
++			corten_covering_level(a, a + 2 * PAGE_SIZE),
++			CORTEN_LEVEL_PTE);
++
++	/* Range crossing a 2M boundary inside one 1G window: the covering
++	 * page is the PMD-level page holding both PTE pages.
++	 */
++	a = PMD_SIZE - PAGE_SIZE;
++	b = PMD_SIZE + PAGE_SIZE;
++	KUNIT_EXPECT_EQ(test, corten_covering_level(a, b), CORTEN_LEVEL_PMD);
++
++	/* Range crossing a 1G boundary inside one P4D window: PUD-level. */
++	a = PUD_SIZE - PAGE_SIZE;
++	b = PUD_SIZE + PAGE_SIZE;
++	KUNIT_EXPECT_EQ(test, corten_covering_level(a, b), CORTEN_LEVEL_PUD);
++
++	/* Range crossing a P4D entry boundary: with 5-level paging the range
++	 * stays inside one root window and the covering page is the
++	 * P4D-level page; with 4-level paging the P4D window equals the
++	 * root window, so the descent stops at the root itself.
++	 */
++	a = P4D_SIZE - PAGE_SIZE;
++	b = P4D_SIZE + PAGE_SIZE;
++	if ((a & PGDIR_MASK) == (b & PGDIR_MASK))
++		KUNIT_EXPECT_EQ(test, corten_covering_level(a, b),
++				CORTEN_LEVEL_P4D);
++	else
++		KUNIT_EXPECT_EQ(test, corten_covering_level(a, b),
++				CORTEN_LEVEL_PGD);
++
++	/* child_covers_range agrees with the descent at each level. */
++	KUNIT_EXPECT_TRUE(test, corten_child_covers_range(a, a + PAGE_SIZE,
++							  CORTEN_LEVEL_PMD));
++	KUNIT_EXPECT_FALSE(test, corten_child_covers_range(PMD_SIZE - PAGE_SIZE,
++							   PMD_SIZE + PAGE_SIZE,
++							   CORTEN_LEVEL_PMD));
++	KUNIT_EXPECT_TRUE(test, corten_child_covers_range(PMD_SIZE - PAGE_SIZE,
++							  PMD_SIZE + PAGE_SIZE,
++							  CORTEN_LEVEL_PUD));
++	KUNIT_EXPECT_FALSE(test, corten_child_covers_range(a, a + PAGE_SIZE,
++							   CORTEN_LEVEL_PTE));
++}
++
++static void corten_test_covering_base_index(struct kunit *test)
++{
++	unsigned long addr = PMD_SIZE + 5 * PAGE_SIZE + 123;
++
++	/* A PTE-level page covers a PMD_SIZE-aligned window. */
++	KUNIT_EXPECT_EQ(test, corten_covering_va_base(addr, CORTEN_LEVEL_PTE),
++			addr & PMD_MASK);
++	KUNIT_EXPECT_EQ(test, corten_covering_va_base(addr, CORTEN_LEVEL_PTE),
++			PMD_SIZE);
++	KUNIT_EXPECT_EQ(test, corten_covering_va_base(addr, CORTEN_LEVEL_PMD),
++			addr & PUD_MASK);
++
++	/* Slot indices match the hardware page-table offsets. */
++	KUNIT_EXPECT_EQ(test, corten_slot_index(addr, CORTEN_LEVEL_PTE),
++			(addr >> PAGE_SHIFT) & (PTRS_PER_PTE - 1));
++	KUNIT_EXPECT_EQ(test, corten_slot_index(addr, CORTEN_LEVEL_PMD),
++			(addr >> PMD_SHIFT) & (PTRS_PER_PMD - 1));
++	KUNIT_EXPECT_EQ(test, corten_slot_index(addr, CORTEN_LEVEL_PUD),
++			(addr >> PUD_SHIFT) & (PTRS_PER_PUD - 1));
++	KUNIT_EXPECT_EQ(test, corten_slot_index(addr, CORTEN_LEVEL_PGD),
++			pgd_index(addr));
++
++	/* A PT page's base is the start of its own window. */
++	KUNIT_EXPECT_EQ(test,
++			corten_covering_va_base(
++				corten_covering_va_base(addr, CORTEN_LEVEL_PTE),
++				CORTEN_LEVEL_PTE),
++			corten_covering_va_base(addr, CORTEN_LEVEL_PTE));
++}
++
++static struct kunit_case corten_test_cases[] = {
++	KUNIT_CASE(corten_test_layout),
++	KUNIT_CASE(corten_test_ptdesc_get_put),
++	KUNIT_CASE(corten_test_meta_roundtrip),
++	KUNIT_CASE(corten_test_meta_reinit_cleared),
++	KUNIT_CASE(corten_test_covering_level),
++	KUNIT_CASE(corten_test_covering_base_index),
++	{}
++};
++
++static struct kunit_suite corten_test_suite = {
++	.name = "corten",
++	.test_cases = corten_test_cases,
++};
++
++kunit_test_suite(corten_test_suite);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("KUnit test for the CortenMM data structure skeleton");
+-- 
+2.34.1
+
