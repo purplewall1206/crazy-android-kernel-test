@@ -1,0 +1,547 @@
+From ae236ee077ace7779ff577ff2297b77ff8d2a05c Mon Sep 17 00:00:00 2001
+From: purplewall1206 <purplewall1206@github.com>
+Date: Wed, 16 Sep 2026 07:21:51 +0800
+Subject: [PATCH] mm: CortenMM arena: debugfs observability (arenas ledger,
+ arena_stats)
+
+S8 (M3b): pure-observability slice, debugfs + shell + KUnit only, zero
+hot-path changes.
+
+- Global arena ledger: every live arena of every mm registered via
+  list_add_rcu() as the last DECLARE publishing step (after all failure
+  paths, so no half-registered entry), unlinked with list_del_rcu() at
+  RELEASE/mm_exit after the arena is gone from its registry (RELEASE
+  erases the per-mm xarray frames first); the descriptor is freed with
+  kfree_rcu() on a dedicated rcu_head, so RCU readers never touch freed
+  memory.  debugfs cannot enumerate mm_structs, hence this second,
+  purely observational bookkeeping -- the per-mm xarrays remain the
+  source of truth and the fault path never touches the list.
+- debugfs "arenas" file: one line per live arena (mm, cached shadow-VMA,
+  range, prot, active/dying), walked under rcu_read_lock() with no new
+  lock contention: readers take neither ctl_lock nor the ledger
+  spinlock, and writers touch the ledger only on cold paths.
+- debugfs "arena_stats" file: the protocol-layer lines (corten_stats_
+  lines(), factored out of corten_stats_show so both files share one
+  source, no drift) plus the arena aggregate: live arena count and a
+  global drain_timeout mirror of the per-mm CORTEN_ARENA_STAT_DRAIN_
+  TIMEOUTS counters, which are not reachable from debugfs (r03
+  final-smoke legacy item 1).
+- KUnit: obs-ledger declare/RELEASE visibility and the drain-timeout
+  aggregate wiring (injected; a real timeout requires a kernel bug).
+
+Fold-in review (night-end compression, by maintainer):
+- RCU discipline: registration after all DECLARE failure paths, so no
+  half-registered entry; deregistration after the arena left its
+  registry; kfree_rcu() pairing with the RCU ledger walk is correct.
+- Read side: rcu_read_lock() walk only, no ctl_lock/ledger lock/mmap
+  lock -- no new contention anywhere.
+- Rendering: arena_stats reuses the factored-out protocol lines; two
+  comment inaccuracies fixed (ctl_lock claim did not cover the mm_exit
+  unlink; "dying" is effectively unobservable since RELEASE
+  deregisters before the drain kill).
+
+Verification: KUnit off 25+10+3 / on 24+11+13 all green; guest arena
+ledger live-checked (declare shows the range active, RELEASE removes
+it); checkpatch.pl 0 errors / 0 warnings / 0 checks.
+
+Signed-off-by: purplewall1206 <purplewall1206@github.com>
+---
+ include/linux/corten_arena.h |  36 ++++++++
+ mm/corten.c                  |  45 +++++++++-
+ mm/corten.h                  |   2 +
+ mm/corten_arena.c            | 154 +++++++++++++++++++++++++++++++++--
+ mm/corten_arena_test.c       |  72 ++++++++++++++++
+ 5 files changed, 302 insertions(+), 7 deletions(-)
+
+diff --git a/include/linux/corten_arena.h b/include/linux/corten_arena.h
+index 6117742222a4..7bfaebed3277 100644
+--- a/include/linux/corten_arena.h
++++ b/include/linux/corten_arena.h
+@@ -28,14 +28,17 @@
+ 
+ #include <linux/completion.h>
+ #include <linux/corten.h>
++#include <linux/list.h>
+ #include <linux/mutex.h>
+ #include <linux/percpu-refcount.h>
+ #include <linux/refcount.h>
++#include <linux/seq_file.h>
+ #include <linux/types.h>
+ #include <linux/xarray.h>
+ 
+ struct mm_struct;
+ struct pt_regs;
++struct seq_file;
+ struct vm_area_struct;
+ 
+ /*
+@@ -127,6 +130,14 @@ struct corten_arena {
+ 	 * is held -- zero maple-tree walks on the hot path (M3 DoD).
+ 	 */
+ 	struct vm_area_struct	*vma;
++	/* S8 observability ledger node (debugfs arenas).  Linked at the
++	 * end of a successful DECLARE and unlinked at deregistration,
++	 * both under the global corten_arena_list_lock; readers walk it
++	 * under RCU (the descriptor itself is freed by kfree_rcu()).
++	 * Purely observational -- the per-mm xarray remains the only
++	 * lookup structure and the fault path never touches this list.
++	 */
++	struct list_head	obs;
+ 	struct rcu_head		rcu;
+ };
+ 
+@@ -231,6 +242,22 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
+ int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,
+ 		       unsigned long arg5);
+ 
++/*
++ * S8 observability renderers, called by the debugfs files in mm/corten.c
++ * (mm/corten_arena.c owns the arena data, corten.c owns the directory).
++ */
++void corten_arena_arenas_report(struct seq_file *m);
++void corten_arena_stats_report(struct seq_file *m);
++
++#ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
++/* Test hooks for the drain-timeout aggregate wiring: force one timeout
++ * record (per-mm half skipped by passing no state) and read the global
++ * mirror back.
++ */
++void corten_arena_test_inject_drain_timeout(void);
++long corten_arena_test_drain_timeouts(void);
++#endif
++
+ #else /* !CONFIG_CORTEN_MM_ARENA */
+ 
+ /*
+@@ -280,6 +307,15 @@ static inline int corten_prctl_arena(unsigned int op, unsigned long addr,
+ 	return -EOPNOTSUPP;
+ }
+ 
++static inline void corten_arena_arenas_report(struct seq_file *m)
++{
++	seq_puts(m, "arena layer disabled (CONFIG_CORTEN_MM_ARENA=n)\n");
++}
++
++static inline void corten_arena_stats_report(struct seq_file *m)
++{
++}
++
+ #endif /* CONFIG_CORTEN_MM_ARENA */
+ 
+ #endif /* _LINUX_CORTEN_ARENA_H */
+diff --git a/mm/corten.c b/mm/corten.c
+index 1faece831653..2aa403e7bed3 100644
+--- a/mm/corten.c
++++ b/mm/corten.c
+@@ -26,6 +26,7 @@
+ 
+ #include <linux/atomic.h>
+ #include <linux/corten.h>
++#include <linux/corten_arena.h>	/* S8: arena observability renderers */
+ #include <linux/debugfs.h>
+ #include <linux/gfp.h>
+ #include <linux/init.h>
+@@ -1318,7 +1319,11 @@ void corten_unlock(struct corten_txn *txn)
+ 
+ /* ---- debugfs introspection ------------------------------------------ */
+ 
+-static int corten_stats_show(struct seq_file *m, void *v)
++/* The protocol-layer lines shared by the stats and arena_stats files
++ * (the arena_stats aggregate shows them so that one file gives the full
++ * observability picture, M3B_DESIGN.md sec 7.4).
++ */
++static void corten_stats_lines(struct seq_file *m)
+ {
+ 	long arrays = atomic_long_read(&corten_nr_meta_arrays);
+ 
+@@ -1339,6 +1344,11 @@ static int corten_stats_show(struct seq_file *m, void *v)
+ 		   atomic_long_read(&corten_nr_ptdesc_reinstalled));
+ 	seq_printf(m, "legacy_drift        %ld\n",
+ 		   atomic_long_read(&corten_nr_legacy_drift));
++}
++
++static int corten_stats_show(struct seq_file *m, void *v)
++{
++	corten_stats_lines(m);
+ 
+ 	return 0;
+ }
+@@ -1382,6 +1392,30 @@ static int corten_txn_show(struct seq_file *m, void *v)
+ }
+ DEFINE_SHOW_ATTRIBUTE(corten_txn);
+ 
++/*
++ * S8: the arena-layer observability files.  The data lives in
++ * mm/corten_arena.c (which owns the global arena ledger and the
++ * drain-timeout aggregate); this file only owns the debugfs directory
++ * and drives the renderers, exactly like the stats/dump/txn files own
++ * their protocol-layer data.
++ */
++static int corten_arenas_show(struct seq_file *m, void *v)
++{
++	corten_arena_arenas_report(m);
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(corten_arenas);
++
++static int corten_arena_stats_show(struct seq_file *m, void *v)
++{
++	corten_stats_lines(m);
++	corten_arena_stats_report(m);
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(corten_arena_stats);
++
+ #ifdef CONFIG_CORTEN_MM_KUNIT_TEST
+ /*
+  * Drive one of the debugfs seq_show functions against an in-memory
+@@ -1408,6 +1442,12 @@ char *corten_test_render_dbg(enum corten_dbg_file which)
+ 	case CORTEN_DBG_TXN:
+ 		show = corten_txn_show;
+ 		break;
++	case CORTEN_DBG_ARENAS:
++		show = corten_arenas_show;
++		break;
++	case CORTEN_DBG_ARENA_STATS:
++		show = corten_arena_stats_show;
++		break;
+ 	default:
+ 		return ERR_PTR(-EINVAL);
+ 	}
+@@ -1449,6 +1489,9 @@ static int __init corten_debugfs_init(void)
+ 	debugfs_create_file("stats", 0444, dir, NULL, &corten_stats_fops);
+ 	debugfs_create_file("dump", 0444, dir, NULL, &corten_dump_fops);
+ 	debugfs_create_file("txn", 0444, dir, NULL, &corten_txn_fops);
++	debugfs_create_file("arenas", 0444, dir, NULL, &corten_arenas_fops);
++	debugfs_create_file("arena_stats", 0444, dir, NULL,
++			    &corten_arena_stats_fops);
+ 
+ 	return 0;
+ }
+diff --git a/mm/corten.h b/mm/corten.h
+index 0d2d40dc9ecd..75adcf7ed081 100644
+--- a/mm/corten.h
++++ b/mm/corten.h
+@@ -239,6 +239,8 @@ enum corten_dbg_file {
+ 	CORTEN_DBG_STATS,
+ 	CORTEN_DBG_DUMP,
+ 	CORTEN_DBG_TXN,
++	CORTEN_DBG_ARENAS,
++	CORTEN_DBG_ARENA_STATS,
+ };
+ /*
+  * Render one of the debugfs seq_show outputs into a NUL-terminated,
+diff --git a/mm/corten_arena.c b/mm/corten_arena.c
+index 35ff99394f77..258d7141f99e 100644
+--- a/mm/corten_arena.c
++++ b/mm/corten_arena.c
+@@ -56,6 +56,7 @@
+ #include <linux/rmap.h>
+ #include <linux/rcupdate.h>
+ #include <linux/sched.h>
++#include <linux/seq_file.h>
+ #include <linux/slab.h>
+ #include <linux/swap.h>
+ #include <linux/uaccess.h>
+@@ -85,6 +86,66 @@ static void corten_arena_stat_add(struct corten_mm_state *state,
+ 	this_cpu_add(state->stats[which], val);
+ }
+ 
++/*
++ * S8 observability ledger: every live arena of every mm, registered at
++ * the end of a successful DECLARE and unlinked at deregistration.  This
++ * is deliberately a second bookkeeping of the per-mm xarrays: debugfs
++ * cannot enumerate mm_structs, so a global list is the only way to show
++ * the cross-process arena population.  Writers (DECLARE/RELEASE/exit)
++ * are cold paths serialized by @corten_arena_list_lock; readers walk it
++ * under RCU and never block or contend anything on the hot path (the
++ * fault path does not know this list exists).  The list is observational
++ * only -- correctness lives in the per-mm xarrays.
++ */
++static LIST_HEAD(corten_arena_list);
++static DEFINE_SPINLOCK(corten_arena_list_lock);
++
++/*
++ * Global mirror of CORTEN_ARENA_STAT_DRAIN_TIMEOUTS (r03 final-smoke
++ * legacy item 1): the per-mm counters are not reachable from debugfs
++ * (states are not enumerable either), so the drain-timeout recording
++ * keeps this aggregate in step.  Only ever touched on the timeout path,
++ * which by definition is a cold kernel-bug path -- no hot-path cost.
++ */
++static atomic_long_t corten_arena_nr_drain_timeouts;
++
++/* Link @arena into the observability ledger.  Called with state->ctl_lock
++ * held, after the arena is fully published in its per-mm xarray; the
++ * caller's failure paths all precede this point, so no unlinked arena is
++ * ever left dangling behind.
++ */
++static void corten_arena_obs_add(struct corten_arena *arena)
++{
++	spin_lock(&corten_arena_list_lock);
++	list_add_rcu(&arena->obs, &corten_arena_list);
++	spin_unlock(&corten_arena_list_lock);
++}
++
++/* Unlink @arena from the observability ledger.  Called at deregistration
++ * (under state->ctl_lock from RELEASE; from mm_exit with mm_users already
++ * 0 -- only the list lock itself is required for list consistency): after
++ * this an RCU reader can no longer find the arena, and the kfree_rcu() in
++ * the (successful) teardown keeps even an in-flight walk safe.
++ */
++static void corten_arena_obs_remove(struct corten_arena *arena)
++{
++	spin_lock(&corten_arena_list_lock);
++	list_del_rcu(&arena->obs);
++	spin_unlock(&corten_arena_list_lock);
++}
++
++/* Record one drain timeout (leaked transaction reference -- a kernel
++ * bug): the per-mm counter when @state is available, always the global
++ * aggregate the arena_stats file shows.
++ */
++static void corten_arena_note_drain_timeout(struct corten_mm_state *state)
++{
++	if (state)
++		corten_arena_stat_add(state, CORTEN_ARENA_STAT_DRAIN_TIMEOUTS,
++				      1);
++	atomic_long_inc(&corten_arena_nr_drain_timeouts);
++}
++
+ static void corten_arena_state_free(struct corten_mm_state *state)
+ {
+ 	xa_destroy(&state->arenas);
+@@ -501,6 +562,13 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
+ 	 */
+ 	refcount_set(&state->nr, refcount_read(&state->nr) + 1);
+ 	corten_arena_stat_add(state, CORTEN_ARENA_STAT_DECLARES, 1);
++
++	/* Last publishing step: the observability ledger (S8).  All
++	 * failure paths are behind us, so the ledger only ever contains
++	 * fully registered arenas.
++	 */
++	corten_arena_obs_add(arena);
++
+ 	mmap_write_unlock(mm);
+ 	mutex_unlock(&state->ctl_lock);
+ 
+@@ -559,6 +627,13 @@ int corten_arena_release(struct mm_struct *mm, unsigned long addr,
+ 	refcount_set(&state->nr, refcount_read(&state->nr) - 1);
+ 	corten_arena_stat_add(state, CORTEN_ARENA_STAT_RELEASES, 1);
+ 
++	/* Deregister from the observability ledger before the drain: a
++	 * RELEASE that has made the arena unreachable in its own registry
++	 * must not stay visible to debugfs either (the drain can wait up
++	 * to CORTEN_ARENA_DRAIN_TIMEOUT on a broken kernel).
++	 */
++	corten_arena_obs_remove(arena);
++
+ 	/* Drain in-flight transactions, then tear the shadow-VMA down with
+ 	 * the plain legacy munmap: pages are zapped and the PT pages travel
+ 	 * through the regular free funnels (M2a uninstall).  The mmap lock
+@@ -568,11 +643,11 @@ int corten_arena_release(struct mm_struct *mm, unsigned long addr,
+ 	 * still runs: a runnable process with a counted leak beats an
+ 	 * unkillable D-state zombie; the in-flight-transaction safety
+ 	 * argument above is void in that case, which is why the leak is
+-	 * counted loudly (CORTEN_ARENA_STAT_DRAIN_TIMEOUTS).
++	 * counted loudly (CORTEN_ARENA_STAT_DRAIN_TIMEOUTS + the global
++	 * arena_stats aggregate).
+ 	 */
+ 	if (!corten_arena_drain(arena)) {
+-		corten_arena_stat_add(state, CORTEN_ARENA_STAT_DRAIN_TIMEOUTS,
+-				      1);
++		corten_arena_note_drain_timeout(state);
+ 		drained = false;
+ 	} else {
+ 		drained = true;
+@@ -645,6 +720,74 @@ int corten_arena_query(struct mm_struct *mm, unsigned long addr)
+ 	return arena ? 1 : 0;
+ }
+ 
++/* ------------------------------------------------------------------ *
++ * S8 observability renderers (debugfs, M3B_DESIGN.md sec 7.4)
++ * ------------------------------------------------------------------
++ */
++
++/*
++ * One line per live arena across every mm: owning mm, cached shadow-VMA,
++ * range, recorded prot and the liveness of the transaction refcount
++ * (active: transactions may enter; dying: kill issued, draining).  In
++ * practice RELEASE deregisters before the drain's kill, so entries are
++ * normally observed active -- the dying branch is defensive.  The
++ * percpu transaction count itself has no race-free reader by design, so
++ * the observable liveness states are what the file reports.  RCU walk:
++ * arenas unlinked concurrently simply do not show up.
++ */
++void corten_arena_arenas_report(struct seq_file *m)
++{
++	struct corten_arena *ar;
++
++	seq_puts(m, "              mm              vma [start,end)                prot status\n");
++
++	rcu_read_lock();
++	list_for_each_entry_rcu(ar, &corten_arena_list, obs) {
++		seq_printf(m, "%016lx %016lx [%lx,%lx)           %02x %s\n",
++			   (unsigned long)READ_ONCE(ar->mm),
++			   (unsigned long)READ_ONCE(ar->vma),
++			   ar->start, ar->end, ar->prot,
++			   percpu_ref_is_dying(&ar->active) ?
++					"dying" : "active");
++	}
++	rcu_read_unlock();
++}
++
++/*
++ * Arena-layer aggregate: number of live arenas plus the drain-timeout
++ * total (the global mirror of the per-mm CORTEN_ARENA_STAT_DRAIN_TIMEOUTS
++ * counters, which are not reachable from debugfs -- r03 final-smoke
++ * legacy item 1).  Callers prepend the protocol-layer lines
++ * (corten_stats_lines() in mm/corten.c), so this file alone gives the
++ * full picture.
++ */
++void corten_arena_stats_report(struct seq_file *m)
++{
++	struct corten_arena *ar;
++	int nr = 0;
++
++	rcu_read_lock();
++	list_for_each_entry_rcu(ar, &corten_arena_list, obs)
++		nr++;
++	rcu_read_unlock();
++
++	seq_printf(m, "arenas              %d\n", nr);
++	seq_printf(m, "drain_timeout       %ld\n",
++		   atomic_long_read(&corten_arena_nr_drain_timeouts));
++}
++
++#ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
++void corten_arena_test_inject_drain_timeout(void)
++{
++	corten_arena_note_drain_timeout(NULL);
++}
++
++long corten_arena_test_drain_timeouts(void)
++{
++	return atomic_long_read(&corten_arena_nr_drain_timeouts);
++}
++#endif
++
+ /* ------------------------------------------------------------------ *
+  * process exit (sec 5.2)
+  * ------------------------------------------------------------------
+@@ -684,12 +827,11 @@ void corten_arena_mm_exit(struct mm_struct *mm)
+ 			continue;
+ 
+ 		drained_until = arena->end >> PMD_SHIFT;
++		corten_arena_obs_remove(arena);
+ 		if (corten_arena_drain(arena))
+ 			corten_arena_free(arena);
+ 		else
+-			corten_arena_stat_add(state,
+-					      CORTEN_ARENA_STAT_DRAIN_TIMEOUTS,
+-					      1);
++			corten_arena_note_drain_timeout(state);
+ 	}
+ 
+ 	corten_arena_state_free(state);
+diff --git a/mm/corten_arena_test.c b/mm/corten_arena_test.c
+index 8d6ec3a89ab3..3454a0890d3d 100644
+--- a/mm/corten_arena_test.c
++++ b/mm/corten_arena_test.c
+@@ -27,6 +27,7 @@
+ #include <linux/string.h>
+ #include <uapi/linux/prctl.h>
+ 
++#include "corten.h"		/* corten_test_render_dbg() (S8 assertions) */
+ #include "corten_arena.h"	/* corten_arena_range_overlaps() (gate-free) */
+ #include "internal.h"
+ #include "vma.h"
+@@ -903,6 +904,75 @@ static void corten_arena_test_concurrent(struct kunit *test)
+ 	KUNIT_EXPECT_EQ(test, corten_arena_query(c->mm, c->start), 0);
+ }
+ 
++/* ------------------------------------------------------------------ *
++ * S8 observability (debugfs arenas ledger + drain-timeout aggregate)
++ * ------------------------------------------------------------------
++ */
++
++/* DECLARE must make the arena visible to the debugfs renderer with its
++ * range and liveness status, RELEASE must make it disappear again: the
++ * global ledger tracks the per-mm xarray faithfully (M3B_DESIGN.md
++ * sec 7.4).
++ */
++static void corten_arena_test_obs_ledger(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	char expect[64];
++	char *dbg;
++
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
++					     CORTEN_ARENA_TEST_LEN),
++			0);
++
++	dbg = corten_test_render_dbg(CORTEN_DBG_ARENAS);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
++	snprintf(expect, sizeof(expect), "[%lx,%lx)",
++		 CORTEN_ARENA_TEST_BASE,
++		 CORTEN_ARENA_TEST_BASE + CORTEN_ARENA_TEST_LEN);
++	KUNIT_EXPECT_NOT_NULL(test, strstr(dbg, expect));
++	KUNIT_EXPECT_NOT_NULL(test, strstr(dbg, "active"));
++	kfree(dbg);
++
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_release,
++						 CORTEN_ARENA_TEST_BASE,
++						 CORTEN_ARENA_TEST_LEN),
++			0);
++
++	dbg = corten_test_render_dbg(CORTEN_DBG_ARENAS);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
++	KUNIT_EXPECT_NULL(test, strstr(dbg, expect));
++	kfree(dbg);
++}
++
++/* The drain-timeout aggregate wiring (r03 final-smoke legacy item 1):
++ * one recorded timeout moves the global mirror by exactly one and the
++ * arena_stats renderer surfaces the new value.  The record is injected
++ * directly (a real timeout needs a leaked transaction reference, i.e. a
++ * kernel bug), so this asserts the debugfs aggregation path, not the
++ * drain itself.
++ */
++static void corten_arena_test_drain_timeout_stat(struct kunit *test)
++{
++	long before = corten_arena_test_drain_timeouts();
++	char expect[64];
++	char *dbg;
++
++	corten_arena_test_inject_drain_timeout();
++	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(),
++			before + 1);
++
++	dbg = corten_test_render_dbg(CORTEN_DBG_ARENA_STATS);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
++	snprintf(expect, sizeof(expect), "drain_timeout       %ld",
++		 before + 1);
++	KUNIT_EXPECT_NOT_NULL(test, strstr(dbg, expect));
++	kfree(dbg);
++}
++
+ static struct kunit_case corten_arena_test_cases[] = {
+ 	KUNIT_CASE(corten_arena_test_declare_reject),
+ 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
+@@ -913,6 +983,8 @@ static struct kunit_case corten_arena_test_cases[] = {
+ 	KUNIT_CASE(corten_arena_test_exit),
+ 	KUNIT_CASE(corten_arena_test_prctl),
+ 	KUNIT_CASE(corten_arena_test_concurrent),
++	KUNIT_CASE(corten_arena_test_obs_ledger),
++	KUNIT_CASE(corten_arena_test_drain_timeout_stat),
+ 	{}
+ };
+ 
+-- 
+2.34.1
+
