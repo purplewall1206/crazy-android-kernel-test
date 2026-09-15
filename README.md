@@ -20,4 +20,4 @@ SOSP'25 CortenMM（消除 VMA 软件层抽象，页表页级事务接口）移�
 | corten-r02-m3a-f1 | e911b31adb9c | BH 对称页表页锁（softirq 死锁修复） |
 | corten-r02-m3b-s123 | d040b61051af | arena: prctl 注册 + frame xarray + shadow-VMA |
 
-当前进度: M0 ✓ M1 ✓ M2 ✓ M3a ✓ M3b(80%) · M4-M8 未开始 · M9 设计完成+arm64 corten.o 交叉编译零错误
+当前进度: M0 ✓ M1 ✓ M2 ✓ M3a ✓ M3b.S1-S3 ✓ M3b.S4-S7 断点(1 个遗留) · M9-P1 ✓(arm64 defconfig Image 40MiB + corten.o 零错) · syzkaller 构建就绪 · M4.T0 规格完成(见 M4T0_SPEC.md)
