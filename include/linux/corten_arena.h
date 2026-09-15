@@ -28,14 +28,17 @@
 
 #include <linux/completion.h>
 #include <linux/corten.h>
+#include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/percpu-refcount.h>
 #include <linux/refcount.h>
+#include <linux/seq_file.h>
 #include <linux/types.h>
 #include <linux/xarray.h>
 
 struct mm_struct;
 struct pt_regs;
+struct seq_file;
 struct vm_area_struct;
 
 /*
@@ -127,6 +130,14 @@ struct corten_arena {
 	 * is held -- zero maple-tree walks on the hot path (M3 DoD).
 	 */
 	struct vm_area_struct	*vma;
+	/* S8 observability ledger node (debugfs arenas).  Linked at the
+	 * end of a successful DECLARE and unlinked at deregistration,
+	 * both under the global corten_arena_list_lock; readers walk it
+	 * under RCU (the descriptor itself is freed by kfree_rcu()).
+	 * Purely observational -- the per-mm xarray remains the only
+	 * lookup structure and the fault path never touches this list.
+	 */
+	struct list_head	obs;
 	struct rcu_head		rcu;
 };
 
@@ -231,6 +242,22 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
 int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,
 		       unsigned long arg5);
 
+/*
+ * S8 observability renderers, called by the debugfs files in mm/corten.c
+ * (mm/corten_arena.c owns the arena data, corten.c owns the directory).
+ */
+void corten_arena_arenas_report(struct seq_file *m);
+void corten_arena_stats_report(struct seq_file *m);
+
+#ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
+/* Test hooks for the drain-timeout aggregate wiring: force one timeout
+ * record (per-mm half skipped by passing no state) and read the global
+ * mirror back.
+ */
+void corten_arena_test_inject_drain_timeout(void);
+long corten_arena_test_drain_timeouts(void);
+#endif
+
 #else /* !CONFIG_CORTEN_MM_ARENA */
 
 /*
@@ -278,6 +305,15 @@ static inline int corten_prctl_arena(unsigned int op, unsigned long addr,
 				     unsigned long len, unsigned long arg5)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline void corten_arena_arenas_report(struct seq_file *m)
+{
+	seq_puts(m, "arena layer disabled (CONFIG_CORTEN_MM_ARENA=n)\n");
+}
+
+static inline void corten_arena_stats_report(struct seq_file *m)
+{
 }
 
 #endif /* CONFIG_CORTEN_MM_ARENA */

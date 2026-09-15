@@ -26,6 +26,7 @@
 
 #include <linux/atomic.h>
 #include <linux/corten.h>
+#include <linux/corten_arena.h>	/* S8: arena observability renderers */
 #include <linux/debugfs.h>
 #include <linux/gfp.h>
 #include <linux/init.h>
@@ -1318,7 +1319,11 @@ void corten_unlock(struct corten_txn *txn)
 
 /* ---- debugfs introspection ------------------------------------------ */
 
-static int corten_stats_show(struct seq_file *m, void *v)
+/* The protocol-layer lines shared by the stats and arena_stats files
+ * (the arena_stats aggregate shows them so that one file gives the full
+ * observability picture, M3B_DESIGN.md sec 7.4).
+ */
+static void corten_stats_lines(struct seq_file *m)
 {
 	long arrays = atomic_long_read(&corten_nr_meta_arrays);
 
@@ -1339,6 +1344,11 @@ static int corten_stats_show(struct seq_file *m, void *v)
 		   atomic_long_read(&corten_nr_ptdesc_reinstalled));
 	seq_printf(m, "legacy_drift        %ld\n",
 		   atomic_long_read(&corten_nr_legacy_drift));
+}
+
+static int corten_stats_show(struct seq_file *m, void *v)
+{
+	corten_stats_lines(m);
 
 	return 0;
 }
@@ -1382,6 +1392,30 @@ static int corten_txn_show(struct seq_file *m, void *v)
 }
 DEFINE_SHOW_ATTRIBUTE(corten_txn);
 
+/*
+ * S8: the arena-layer observability files.  The data lives in
+ * mm/corten_arena.c (which owns the global arena ledger and the
+ * drain-timeout aggregate); this file only owns the debugfs directory
+ * and drives the renderers, exactly like the stats/dump/txn files own
+ * their protocol-layer data.
+ */
+static int corten_arenas_show(struct seq_file *m, void *v)
+{
+	corten_arena_arenas_report(m);
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(corten_arenas);
+
+static int corten_arena_stats_show(struct seq_file *m, void *v)
+{
+	corten_stats_lines(m);
+	corten_arena_stats_report(m);
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(corten_arena_stats);
+
 #ifdef CONFIG_CORTEN_MM_KUNIT_TEST
 /*
  * Drive one of the debugfs seq_show functions against an in-memory
@@ -1407,6 +1441,12 @@ char *corten_test_render_dbg(enum corten_dbg_file which)
 		break;
 	case CORTEN_DBG_TXN:
 		show = corten_txn_show;
+		break;
+	case CORTEN_DBG_ARENAS:
+		show = corten_arenas_show;
+		break;
+	case CORTEN_DBG_ARENA_STATS:
+		show = corten_arena_stats_show;
 		break;
 	default:
 		return ERR_PTR(-EINVAL);
@@ -1449,6 +1489,9 @@ static int __init corten_debugfs_init(void)
 	debugfs_create_file("stats", 0444, dir, NULL, &corten_stats_fops);
 	debugfs_create_file("dump", 0444, dir, NULL, &corten_dump_fops);
 	debugfs_create_file("txn", 0444, dir, NULL, &corten_txn_fops);
+	debugfs_create_file("arenas", 0444, dir, NULL, &corten_arenas_fops);
+	debugfs_create_file("arena_stats", 0444, dir, NULL,
+			    &corten_arena_stats_fops);
 
 	return 0;
 }

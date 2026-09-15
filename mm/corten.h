@@ -239,6 +239,8 @@ enum corten_dbg_file {
 	CORTEN_DBG_STATS,
 	CORTEN_DBG_DUMP,
 	CORTEN_DBG_TXN,
+	CORTEN_DBG_ARENAS,
+	CORTEN_DBG_ARENA_STATS,
 };
 /*
  * Render one of the debugfs seq_show outputs into a NUL-terminated,

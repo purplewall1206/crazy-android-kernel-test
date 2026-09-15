@@ -27,6 +27,7 @@
 #include <linux/string.h>
 #include <uapi/linux/prctl.h>
 
+#include "corten.h"		/* corten_test_render_dbg() (S8 assertions) */
 #include "corten_arena.h"	/* corten_arena_range_overlaps() (gate-free) */
 #include "internal.h"
 #include "vma.h"
@@ -903,6 +904,75 @@ static void corten_arena_test_concurrent(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, corten_arena_query(c->mm, c->start), 0);
 }
 
+/* ------------------------------------------------------------------ *
+ * S8 observability (debugfs arenas ledger + drain-timeout aggregate)
+ * ------------------------------------------------------------------
+ */
+
+/* DECLARE must make the arena visible to the debugfs renderer with its
+ * range and liveness status, RELEASE must make it disappear again: the
+ * global ledger tracks the per-mm xarray faithfully (M3B_DESIGN.md
+ * sec 7.4).
+ */
+static void corten_arena_test_obs_ledger(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	char expect[64];
+	char *dbg;
+
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+
+	dbg = corten_test_render_dbg(CORTEN_DBG_ARENAS);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
+	snprintf(expect, sizeof(expect), "[%lx,%lx)",
+		 CORTEN_ARENA_TEST_BASE,
+		 CORTEN_ARENA_TEST_BASE + CORTEN_ARENA_TEST_LEN);
+	KUNIT_EXPECT_NOT_NULL(test, strstr(dbg, expect));
+	KUNIT_EXPECT_NOT_NULL(test, strstr(dbg, "active"));
+	kfree(dbg);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_release,
+						 CORTEN_ARENA_TEST_BASE,
+						 CORTEN_ARENA_TEST_LEN),
+			0);
+
+	dbg = corten_test_render_dbg(CORTEN_DBG_ARENAS);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
+	KUNIT_EXPECT_NULL(test, strstr(dbg, expect));
+	kfree(dbg);
+}
+
+/* The drain-timeout aggregate wiring (r03 final-smoke legacy item 1):
+ * one recorded timeout moves the global mirror by exactly one and the
+ * arena_stats renderer surfaces the new value.  The record is injected
+ * directly (a real timeout needs a leaked transaction reference, i.e. a
+ * kernel bug), so this asserts the debugfs aggregation path, not the
+ * drain itself.
+ */
+static void corten_arena_test_drain_timeout_stat(struct kunit *test)
+{
+	long before = corten_arena_test_drain_timeouts();
+	char expect[64];
+	char *dbg;
+
+	corten_arena_test_inject_drain_timeout();
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(),
+			before + 1);
+
+	dbg = corten_test_render_dbg(CORTEN_DBG_ARENA_STATS);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
+	snprintf(expect, sizeof(expect), "drain_timeout       %ld",
+		 before + 1);
+	KUNIT_EXPECT_NOT_NULL(test, strstr(dbg, expect));
+	kfree(dbg);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
@@ -913,6 +983,8 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_exit),
 	KUNIT_CASE(corten_arena_test_prctl),
 	KUNIT_CASE(corten_arena_test_concurrent),
+	KUNIT_CASE(corten_arena_test_obs_ledger),
+	KUNIT_CASE(corten_arena_test_drain_timeout_stat),
 	{}
 };
 
