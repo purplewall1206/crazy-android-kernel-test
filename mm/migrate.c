@@ -53,6 +53,7 @@
 #include <trace/hooks/vmscan.h>
 
 #include "internal.h"
+#include "corten_arena.h"	/* CortenMM arena reject hooks */
 #include "swap.h"
 
 static const struct movable_operations *offline_movable_ops;
@@ -2633,6 +2634,24 @@ static int kernel_move_pages(pid_t pid, unsigned long nr_pages,
 	mm = find_mm_struct(pid, &task_nodes);
 	if (IS_ERR(mm))
 		return PTR_ERR(mm);
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena reject hook (M4T0_SPEC.md entry audit #9): the
+	 * move leg migrates pages through the rmap path, which rewrites
+	 * arena PTEs with no covering descriptor write lock and no
+	 * transaction (sec 6.1 rule R2 violation); M3 has no migration
+	 * interop, so it is refused for any target process that has an
+	 * arena.  The read-only status leg (do_pages_stat()) stays
+	 * reachable.  KUnit anchor: the overlap decision is
+	 * corten_arena_range_overlaps(), driven by
+	 * corten_arena_test_range_overlaps in mm/corten_arena_test.c.
+	 */
+	if (nodes && corten_arena_range_overlaps(mm, 0, TASK_SIZE)) {
+		mmput(mm);
+		return -EOPNOTSUPP;
+	}
+#endif
 
 	if (nodes)
 		err = do_pages_move(mm, task_nodes, nr_pages, pages,

@@ -35,6 +35,8 @@
 #include <linux/xarray.h>
 
 struct mm_struct;
+struct pt_regs;
+struct vm_area_struct;
 
 /*
  * prctl interface (include/uapi/linux/prctl.h):
@@ -56,6 +58,19 @@ struct mm_struct;
 enum corten_arena_stat {
 	CORTEN_ARENA_STAT_DECLARES = 0,
 	CORTEN_ARENA_STAT_RELEASES,
+	/* S4/S5 fault-path counters (M3B_DESIGN.md sec 7.4). */
+	CORTEN_ARENA_STAT_FAULTS,	/* faults that entered an arena txn */
+	CORTEN_ARENA_STAT_MAPPED,	/* anon pages mapped by arena faults */
+	CORTEN_ARENA_STAT_ZERO_PAGES,	/* shared-zero-page read installs */
+	CORTEN_ARENA_STAT_RESTORES,	/* CORTEN_MAPPED PTE rebuilds */
+	CORTEN_ARENA_STAT_ACCERR,	/* permission SIGSEGVs */
+	CORTEN_ARENA_STAT_MAPERR,	/* undeclared-address SIGSEGVs */
+	CORTEN_ARENA_STAT_FILLS,	/* fill_upper() that allocated */
+	CORTEN_ARENA_STAT_FALLBACKS,	/* fallbacks to the legacy path */
+	/* S6 space-operation counters. */
+	CORTEN_ARENA_STAT_UNMAP_PAGES,	/* pages zapped by arena munmap */
+	CORTEN_ARENA_STAT_MUNMAP_TXNS,
+	CORTEN_ARENA_STAT_MMAP_MARK_TXNS,
 	CORTEN_ARENA_NR_STATS,
 };
 
@@ -77,6 +92,14 @@ enum corten_arena_stat {
  * @fill_lock: serializes upper-page-table ensure-alloc for this arena
  *             (used by the S5 fault path; declared here because it must
  *             not nest inside any descriptor lock).
+ * @vma: the arena's shadow-VMA, cached at DECLARE under mmap_write_lock
+ *       (right after the in-place conversion) and cleared again under
+ *       mmap_write_lock in RELEASE after the drain.  The fault path reads
+ *       it without touching the VMA tree: while any transaction holds an
+ *       @active reference, RELEASE is parked in its drain (sec 6.3) and
+ *       cannot reach the mmap_write_lock that removes the VMA, so the
+ *       pointer is stable for as long as the reference is held.  This is
+ *       what keeps the hot path at zero maple-tree walks (M3 DoD).
  * @rcu: kfree_rcu() deferral so that an RCU-protected lookup can still
  *       read @start/@end while a concurrent RELEASE unregisters.
  */
@@ -91,6 +114,14 @@ struct corten_arena {
 	 * a descriptor lock).
 	 */
 	struct mutex		fill_lock;
+	/* The arena's shadow-VMA, cached at DECLARE under mmap_write_lock
+	 * and cleared under it in RELEASE after the drain.  The fault path
+	 * reads it without touching the VMA tree: while any transaction
+	 * holds an @active reference, RELEASE is parked in its drain
+	 * (sec 6.3), so the pointer is stable for as long as the reference
+	 * is held -- zero maple-tree walks on the hot path (M3 DoD).
+	 */
+	struct vm_area_struct	*vma;
 	struct rcu_head		rcu;
 };
 
@@ -121,7 +152,30 @@ struct corten_mm_state {
 	unsigned long __percpu	*stats;
 };
 
+/*
+ * S4 hot-path fault hook result (M3B_DESIGN.md sec 4.1).  The arch hook
+ * (arch/x86/mm/fault.c) translates these into the x86 delivery exits.
+ */
+enum corten_fault_action {
+	CORTEN_FAULT_FALLBACK = 0,	/* not ours / legacy must run */
+	CORTEN_FAULT_HANDLED,		/* transaction completed the fault */
+	CORTEN_FAULT_ACCERR,		/* SEGV_ACCERR delivery */
+	CORTEN_FAULT_MAPERR,		/* SEGV_MAPERR delivery */
+	CORTEN_FAULT_OOM,		/* pagefault_out_of_memory() */
+};
+
 #ifdef CONFIG_CORTEN_MM_ARENA
+
+/*
+ * Hot path: called from do_user_addr_fault() for user-mode faults only,
+ * before any VMA/mmap_lock action.  Gate contract: corten=off or an mm
+ * without arenas returns CORTEN_FAULT_FALLBACK at O(1).
+ */
+enum corten_fault_action corten_arena_user_fault(struct mm_struct *mm,
+						 unsigned long address,
+						 unsigned long error_code,
+						 struct pt_regs *regs,
+						 unsigned int *flags);
 
 /*
  * Gate-free internal entry points.  They apply no capability check and no
@@ -174,23 +228,51 @@ int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,
 
 #else /* !CONFIG_CORTEN_MM_ARENA */
 
+/*
+ * With the arena layer disabled, exit_mmap() still calls
+ * corten_arena_mm_exit() (a no-op: there is nothing to drain) and the
+ * prctl dispatcher collapses to -EOPNOTSUPP; declare/release/query have
+ * no reachable caller but are stubbed to keep the surface total.
+ */
+static inline void corten_arena_mm_exit(struct mm_struct *mm)
+{
+}
+
+static inline int corten_arena_declare(struct mm_struct *mm,
+				       unsigned long addr, unsigned long len)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int corten_arena_release(struct mm_struct *mm,
+				       unsigned long addr, unsigned long len)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int corten_arena_query(struct mm_struct *mm, unsigned long addr)
+{
+	return -ENOENT;
+}
+
 static inline struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
 						       unsigned long addr)
 {
 	return NULL;
 }
 
+static inline enum corten_fault_action
+corten_arena_user_fault(struct mm_struct *mm, unsigned long address,
+			unsigned long error_code, struct pt_regs *regs,
+			unsigned int *flags)
+{
+	return CORTEN_FAULT_FALLBACK;
+}
+
 static inline int corten_prctl_arena(unsigned int op, unsigned long addr,
 				     unsigned long len, unsigned long arg5)
 {
 	return -EOPNOTSUPP;
-}
-
-/* exit_mmap() calls this unconditionally; with the arena layer disabled
- * there is nothing to drain.
- */
-static inline void corten_arena_mm_exit(struct mm_struct *mm)
-{
 }
 
 #endif /* CONFIG_CORTEN_MM_ARENA */

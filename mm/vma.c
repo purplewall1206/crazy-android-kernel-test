@@ -12,6 +12,14 @@
 #include <linux/page_size_compat.h>
 
 #include "vma.h"
+#ifdef CONFIG_CORTEN_MM_ARENA
+/*
+ * Included only for kernel builds: tools/testing/vma compiles this file
+ * in userspace against vma_internal.h, where the arena layer does not
+ * exist.  Every arena use site below sits inside the same ifdef.
+ */
+#include "corten_arena.h"
+#endif
 #undef CREATE_TRACE_POINTS
 #include <trace/hooks/mm.h>
 
@@ -1594,6 +1602,22 @@ int do_vmi_align_munmap(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	mt_on_stack(mt_detach);
 	struct vma_munmap_struct vms;
 	int error;
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena guard (M3B_DESIGN.md sec 5.5/5.10): this is the
+	 * deepest legacy zap funnel, so it is the last line of defence
+	 * behind the sys_munmap()/__vm_munmap() routing -- brk shrink,
+	 * mremap's internal unmaps and the MAP_FIXED overlap removal in
+	 * mmap_region() all arrive here.  zap_pte_range() writes PTEs
+	 * without the arena covering write lock, so any range that still
+	 * overlaps a shadow-VMA must be rejected (arena chunks were
+	 * already routed above us and RELEASE clears the flag before its
+	 * own do_munmap()).  corten=off / no arenas: one load.
+	 */
+	if (corten_arena_munmap_vma_guard(mm, start, end))
+		return -EOPNOTSUPP;
+#endif
 
 	init_vma_munmap(&vms, vmi, vma, start, end, uf, unlock);
 	error = vms_gather_munmap_vmas(&vms, &mas_detach);
@@ -3237,6 +3261,27 @@ int __vm_munmap(unsigned long start, size_t len, bool unlock)
 
 	if (mmap_write_lock_killable(mm))
 		return -EINTR;
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * Arena routing for non-syscall munmap callers (M3B_DESIGN.md
+	 * sec 5.5): kernel-internal vm_munmap() users that hit a declared
+	 * arena chunk get the transactional zap as well (under the write
+	 * lock we already hold); exact/partial arena ranges are rejected.
+	 */
+	{
+		int cret = corten_arena_munmap_guard(mm, start, len);
+
+		if (cret < 0) {
+			mmap_write_unlock(mm);
+			return cret;
+		}
+		if (cret == 1) {
+			mmap_write_unlock(mm);
+			return 0;
+		}
+	}
+#endif
 
 	ret = do_vmi_munmap(&vmi, mm, start, len, &uf, unlock);
 	if (ret || !unlock)

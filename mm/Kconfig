@@ -1494,6 +1494,22 @@ config CORTEN_MM_ARENA_KUNIT_TEST
 
 	  If unsure, say N.
 
+config CORTEN_MM_ARENA_FAULT_KUNIT_TEST
+	bool "KUnit test for CortenMM arena fault path and space-op routing"
+	default KUNIT_ALL_TESTS
+	depends on CORTEN_MM_ARENA && KUNIT
+	help
+	  KUnit tests for the CortenMM arena fault path (M3b slices S4-S7):
+	  the dispatch state machine and the space-operation routing
+	  classifiers as pure table-driven tests, plus the fill_upper
+	  double-install race, the map race with its pte_none re-check and
+	  retry, the zero-page read/write-upgrade sequence, the MAPPED
+	  restore path and the transactional chunk unmap, all on a real
+	  mm_alloc()'ed address space.  The tests drive gate-free internal
+	  entry points and run on corten=off kernels.
+
+	  If unsure, say N.
+
 config FIND_NORMAL_PAGE
 	def_bool n
 

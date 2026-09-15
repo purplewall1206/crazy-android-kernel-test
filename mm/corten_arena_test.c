@@ -27,6 +27,7 @@
 #include <linux/string.h>
 #include <uapi/linux/prctl.h>
 
+#include "corten_arena.h"	/* corten_arena_range_overlaps() (gate-free) */
 #include "internal.h"
 #include "vma.h"
 
@@ -473,6 +474,79 @@ static void corten_arena_test_declare_query(struct kunit *test)
 }
 
 /* ------------------------------------------------------------------ *
+ * Overlap decision: the entry-reject anchor for the space-operation
+ * hooks and the move_pages()/migrate_pages() audit (M4T0_SPEC.md #9)
+ * ------------------------------------------------------------------
+ */
+
+static void corten_arena_test_range_overlaps(struct kunit *test)
+{
+	/*
+	 * The decision gates on corten_enabled_static() (one static-branch
+	 * read before the xarray walk), so on a corten=off boot every
+	 * answer would be a constant false and there is nothing to
+	 * observe (same degraded contract as the real-chain cases in
+	 * mm/corten_fault_test.c).
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "overlap gate requires corten=on");
+	{
+		struct corten_arena_test_mm *t =
+			corten_arena_test_mm_setup(test);
+		struct mm_struct *mm = t->mm;
+
+		/* No arena yet: even the whole-mm sweep is false. */
+		KUNIT_EXPECT_FALSE(test,
+				   corten_arena_range_overlaps(mm, 0,
+							       TASK_SIZE));
+
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+						     CORTEN_ARENA_TEST_LEN),
+				0);
+
+		/* Inside: first page, last page, a straddling chunk and
+		 * the whole-mm sweep the migrate entry hooks use.
+		 */
+		KUNIT_EXPECT_TRUE(test,
+				  corten_arena_range_overlaps(mm,
+						CORTEN_ARENA_TEST_BASE,
+						PAGE_SIZE));
+		KUNIT_EXPECT_TRUE(test,
+				  corten_arena_range_overlaps(mm,
+						CORTEN_ARENA_TEST_BASE +
+						CORTEN_ARENA_TEST_LEN -
+						PAGE_SIZE, PAGE_SIZE));
+		KUNIT_EXPECT_TRUE(test,
+				  corten_arena_range_overlaps(mm,
+						CORTEN_ARENA_TEST_BASE +
+						3 * PMD_SIZE, 2 * PAGE_SIZE));
+		KUNIT_EXPECT_TRUE(test,
+				  corten_arena_range_overlaps(mm, 0,
+							      TASK_SIZE));
+
+		/* Outside: the page before, the page after, a disjoint
+		 * range, and the zero-length query.
+		 */
+		KUNIT_EXPECT_FALSE(test,
+				   corten_arena_range_overlaps(mm,
+					CORTEN_ARENA_TEST_BASE - PAGE_SIZE,
+					PAGE_SIZE));
+		KUNIT_EXPECT_FALSE(test,
+				   corten_arena_range_overlaps(mm,
+					CORTEN_ARENA_TEST_BASE +
+					CORTEN_ARENA_TEST_LEN, PAGE_SIZE));
+		KUNIT_EXPECT_FALSE(test,
+				   corten_arena_range_overlaps(mm,
+					CORTEN_ARENA_TEST_NOWHERE,
+					PMD_SIZE));
+		KUNIT_EXPECT_FALSE(test,
+				   corten_arena_range_overlaps(mm,
+					CORTEN_ARENA_TEST_BASE, 0));
+	}
+}
+
+/* ------------------------------------------------------------------ *
  * RELEASE: exact-match contract, drain and teardown
  * ------------------------------------------------------------------
  */
@@ -833,6 +907,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
 	KUNIT_CASE(corten_arena_test_declare_query),
+	KUNIT_CASE(corten_arena_test_range_overlaps),
 	KUNIT_CASE(corten_arena_test_release),
 	KUNIT_CASE(corten_arena_test_shadow_vma),
 	KUNIT_CASE(corten_arena_test_exit),

@@ -49,6 +49,7 @@
 #include <linux/ksm.h>
 #include <linux/memfd.h>
 #include <linux/corten_arena.h>
+#include "corten_arena.h"
 #include <linux/page_size_compat.h>
 
 #include <linux/uaccess.h>
@@ -419,6 +420,30 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 		if (find_vma_intersection(mm, addr, addr + len))
 			return -EEXIST;
 	}
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * Arena MAP_FIXED routing gate (M3B_DESIGN.md sec 5.6, [P1-4]):
+	 * a MAP_FIXED private-anonymous mapping fully inside one arena is
+	 * executed as a corten_mark() transaction (paper Fig.8 L1-7) --
+	 * no VMA change, no zap of the shadow-VMA, no vm_stat_account().
+	 * MAP_FIXED_NOREPLACE intersecting an arena already returned
+	 * -EEXIST above (the shadow-VMA occupies the range); everything
+	 * else stays with the legacy mmap_region() flow, whose
+	 * overlap-removal munmap is guarded by
+	 * corten_arena_munmap_vma_guard().  corten=off / no arenas makes
+	 * the call a two-load no-op.
+	 */
+	{
+		int cret = corten_arena_mmap_route(mm, addr, len, prot,
+						   flags, file);
+
+		if (cret < 0)
+			return cret;
+		if (cret == 1)
+			return addr;
+	}
+#endif
 
 	if (flags & MAP_LOCKED)
 		if (!can_do_mlock())
@@ -1094,6 +1119,32 @@ SYSCALL_DEFINE2(munmap, unsigned long, addr, size_t, len)
 		return -EINVAL;
 
 	len = __PAGE_ALIGN(len);
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * Arena munmap routing (M3B_DESIGN.md sec 5.5): a range strictly
+	 * inside one arena is dropped through corten transactions -- PTEs
+	 * cleared under the covering desc write lock, TLB-batched, folios
+	 * released after the flush -- while the shadow-VMA and its VA
+	 * reservation stay untouched (paper Fig.8 L9-13: unmap clears
+	 * content, keeps VA).  The exact arena range is RELEASE semantics.
+	 * Legacy callers (vm_munmap(), brk shrink, ...) are still guarded
+	 * at the do_vmi_align_munmap() level.
+	 *
+	 * Observation-scope note ([C3d]): routed arena munmaps return
+	 * before profile_munmap(), so the profile notifier does not see
+	 * them -- documented deviation, revisit together with the sec 5.6
+	 * design text (MAP_POPULATE/MAP_LOCKED exclusion) in M4.
+	 */
+	{
+		int cret = corten_arena_munmap_route(current->mm, addr, len);
+
+		if (cret < 0)
+			return cret;
+		if (cret == 1)
+			return 0;
+	}
+#endif
 
 	profile_munmap(addr);
 	return __vm_munmap(addr, len, true);
@@ -1779,6 +1830,21 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 		struct file *file;
 
 		vma_start_write(mpnt);
+#ifdef CONFIG_CORTEN_MM_ARENA
+		/*
+		 * Arena fork fail-fast (M3B_DESIGN.md sec 5.1): copying an
+		 * arena's page tables or metadata needs the transaction
+		 * protocol (M5).  Refuse cleanly -- the parent is
+		 * unaffected (dup_mmap() only mutates @mm, the child, on
+		 * this path) and the whole fork fails with -EOPNOTSUPP
+		 * here; note dup_mm() collapses all dup_mmap() errors to
+		 * -ENOMEM at the fork() syscall boundary.
+		 */
+		if (mpnt->vm_flags & VM_CORTEN) {
+			retval = -EOPNOTSUPP;
+			goto loop_out;
+		}
+#endif
 		if (mpnt->vm_flags & VM_DONTCOPY) {
 			retval = vma_iter_clear_gfp(&vmi, mpnt->vm_start,
 						    mpnt->vm_end, GFP_KERNEL);

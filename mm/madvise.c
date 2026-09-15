@@ -41,6 +41,7 @@
 #include <asm/tlb.h>
 
 #include "internal.h"
+#include "corten_arena.h"	/* CortenMM arena routing/reject hooks */
 #include "swap.h"
 
 #define __MADV_SET_ANON_VMA_NAME (-1)
@@ -1375,6 +1376,24 @@ static int madvise_vma_behavior(struct madvise_behavior *madv_behavior)
 	struct madvise_behavior_range *range = &madv_behavior->range;
 	int error;
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena reject hook (M3B_DESIGN.md sec 5.8/5.18): every
+	 * behaviour that reaches a shadow-VMA is refused -- MADV_HUGEPAGE/
+	 * NOHUGEPAGE would wash out VM_NOHUGEPAGE and let khugepaged
+	 * collapse (and free!) the tracked PT page (khugepaged.c:354),
+	 * COLD/PAGEOUT/FREE write PTE state outside the transaction, and
+	 * PR_SET_VMA_ANON_NAME (via __MADV_SET_ANON_VMA_NAME) would split
+	 * or rename the shadow-VMA.  MADV_DONTNEED chunks were already
+	 * routed above (corten_arena_madvise_route()); a DONTNEED that
+	 * only partially overlaps an arena lands here and fails without
+	 * the atomicity the arena contract wants.  KUnit anchor: the
+	 * routing decision table lives in corten_arena_madvise_route().
+	 */
+	if (vma->vm_flags & VM_CORTEN)
+		return -EOPNOTSUPP;
+#endif
+
 	if (unlikely(!can_madvise_modify(madv_behavior)))
 		return -EPERM;
 
@@ -1910,8 +1929,41 @@ static int madvise_do_behavior(unsigned long start, size_t len_in,
 	if (is_memory_failure(madv_behavior)) {
 		range->start = start;
 		range->end = start + len_in;
+#ifdef CONFIG_CORTEN_MM_ARENA
+		/*
+		 * [C2] MADV_HWPOISON on an arena page is covered by the
+		 * WARN anchor in hwpoison_user_mappings() (sec 5.20), but
+		 * MADV_SOFT_OFFLINE would rework PTEs/GRUs silently --
+		 * refuse arena ranges here (sec 5.20, M3).
+		 */
+		if (madv_behavior->behavior == MADV_SOFT_OFFLINE &&
+		    corten_arena_range_overlaps(madv_behavior->mm, start,
+						len_in))
+			return -EOPNOTSUPP;
+#endif
 		return madvise_inject_error(madv_behavior);
 	}
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena routing (M3B_DESIGN.md sec 5.8): MADV_DONTNEED
+	 * fully inside one arena drops the contents transactionally
+	 * (shadow-VMA kept); every other behaviour on a shadow-VMA is
+	 * rejected by the per-VMA check in madvise_vma_behavior() below.
+	 * Runs under whatever madvise_lock() provides; the decision is
+	 * xarray-only, no VMA dereference.
+	 */
+	{
+		int cret = corten_arena_madvise_route(madv_behavior->mm,
+						      madv_behavior->behavior,
+						      start, len_in);
+
+		if (cret < 0)
+			return cret;
+		if (cret == 1)
+			return 0;
+	}
+#endif
 
 	range->start = get_untagged_addr(madv_behavior->mm, start);
 	range->end = range->start + len_in;

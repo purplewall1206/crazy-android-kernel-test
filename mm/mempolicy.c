@@ -109,6 +109,7 @@
 #include <linux/mmu_notifier.h>
 #include <linux/printk.h>
 #include <linux/swapops.h>
+#include "corten_arena.h"
 #include <linux/gcd.h>
 
 #include <asm/tlbflush.h>
@@ -1447,6 +1448,18 @@ static long do_mbind(unsigned long start, unsigned long len,
 	if (end == start)
 		return 0;
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena reject hook (M3B_DESIGN.md sec 5.19): do_mbind
+	 * holds mmap_write_lock while it rewrites VMA policies and
+	 * migrates pages (vma_start_write + PTE rewrites), none of it
+	 * under the arena covering write locks -- refuse ranges that
+	 * intersect an arena.
+	 */
+	if (corten_arena_range_overlaps(mm, start, len))
+		return -EOPNOTSUPP;
+#endif
+
 	new = mpol_new(mode, mode_flags, nmask);
 	if (IS_ERR(new))
 		return PTR_ERR(new);
@@ -1860,6 +1873,24 @@ static int kernel_migrate_pages(pid_t pid, unsigned long maxnode,
 		err = -EINVAL;
 		goto out;
 	}
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena reject hook (M4T0_SPEC.md entry audit #9):
+	 * do_migrate_pages() reworks PTEs of every candidate page through
+	 * the rmap migration path with no covering descriptor write lock
+	 * and no transaction (sec 6.1 rule R2 violation); M3 has no
+	 * migration interop, so it is refused for any process that has an
+	 * arena.  KUnit anchor: the overlap decision is
+	 * corten_arena_range_overlaps(), driven by
+	 * corten_arena_test_range_overlaps in mm/corten_arena_test.c.
+	 */
+	if (corten_arena_range_overlaps(mm, 0, TASK_SIZE)) {
+		mmput(mm);
+		err = -EOPNOTSUPP;
+		goto out;
+	}
+#endif
 
 	err = do_migrate_pages(mm, old, new,
 		capable(CAP_SYS_NICE) ? MPOL_MF_MOVE_ALL : MPOL_MF_MOVE);

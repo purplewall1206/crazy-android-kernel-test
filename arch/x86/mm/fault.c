@@ -19,6 +19,8 @@
 #include <linux/mm_types.h>
 #include <linux/mm.h>			/* find_and_lock_vma() */
 #include <linux/vmalloc.h>
+#include <linux/corten.h>		/* corten_enabled_static() */
+#include <linux/corten_arena.h>		/* CortenMM arena hot hook */
 
 #include <asm/cpufeature.h>		/* boot_cpu_has, ...		*/
 #include <asm/traps.h>			/* dotraplinkage, ...		*/
@@ -1319,6 +1321,45 @@ void do_user_addr_fault(struct pt_regs *regs,
 	}
 #endif
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena hot hook (M3B_DESIGN.md sec 4.1): user faults on
+	 * declared arena ranges are resolved by the transaction layer with
+	 * zero VMA-tree / maple-tree / mmap_lock / per-VMA-lock traffic;
+	 * everything else returns CORTEN_FAULT_FALLBACK and the legacy path
+	 * below runs unchanged.  Double gate: the static branch (corten=on,
+	 * a nop otherwise) plus the per-mm arena registry, both pure reads.
+	 * Protection-key faults bypass the arena: the shadow-VMA carries no
+	 * pkey, so a PK fault can only come from the PKRU and delivery must
+	 * keep the x86 access_error() semantics.
+	 *
+	 * CONFIG_CORTEN_MM=n compiles the whole block out (binary-path
+	 * zero change); no lock is held here, so the SIGSEGV deliveries
+	 * must not use the x86 bad_area*() helpers, which all release a
+	 * lock -- force_sig_fault() and bad_area_nosemaphore() (the no-lock
+	 * variant) are the exits matching the legacy si_codes.
+	 */
+	if (static_branch_unlikely(&corten_enabled_key) &&
+	    user_mode(regs) && !(error_code & X86_PF_PK)) {
+		switch (corten_arena_user_fault(mm, address, error_code,
+						regs, &flags)) {
+		case CORTEN_FAULT_HANDLED:
+			return;
+		case CORTEN_FAULT_ACCERR:
+			force_sig_fault(SIGSEGV, SEGV_ACCERR,
+					(void __user *)address);
+			return;
+		case CORTEN_FAULT_MAPERR:
+			bad_area_nosemaphore(regs, error_code, address);
+			return;
+		case CORTEN_FAULT_OOM:
+			pagefault_out_of_memory();
+			return;
+		default:
+			break;	/* CORTEN_FAULT_FALLBACK: run legacy */
+		}
+	}
+#endif
 	if (!(flags & FAULT_FLAG_USER))
 		goto lock_mmap;
 

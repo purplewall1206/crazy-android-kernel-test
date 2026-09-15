@@ -10,6 +10,7 @@
 #include <linux/mempolicy.h>
 #include <linux/mman.h>
 #include <linux/mm.h>
+#include "corten_arena.h"
 #include <linux/mm_inline.h>
 #include <linux/page_size_compat.h>
 #include <linux/syscalls.h>
@@ -165,6 +166,19 @@ int do_mseal(unsigned long start, size_t len_in, unsigned long flags)
 
 	if (mmap_write_lock_killable(mm))
 		return -EINTR;
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena reject hook (M3B_DESIGN.md sec 5.15): msealing
+	 * freezes VMA-level attributes over a range, which conflicts with
+	 * the arena's transactional space operations (an interaction
+	 * deliberately not evaluated for M3 -- fail closed).
+	 */
+	if (corten_arena_range_overlaps(mm, start, len)) {
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+#endif
 
 	if (range_contains_unmapped(mm, start, end)) {
 		ret = -ENOMEM;

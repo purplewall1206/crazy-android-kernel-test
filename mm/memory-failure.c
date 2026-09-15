@@ -62,6 +62,7 @@
 #include <linux/sysctl.h>
 #include "swap.h"
 #include "internal.h"
+#include "corten_arena.h"
 #include "ras/ras_event.h"
 
 static int sysctl_memory_failure_early_kill __read_mostly;
@@ -1583,6 +1584,16 @@ static bool hwpoison_user_mappings(struct folio *folio, struct page *p,
 	if (folio_test_reserved(folio) || folio_test_slab(folio) ||
 	    folio_test_pgtable(folio) || folio_test_offline(folio))
 		return true;
+
+	/*
+	 * CortenMM arena anchor (M3B_DESIGN.md sec 5.20): M3 neither
+	 * implements the hwpoison interop nor stays silent.  Arena pages
+	 * are off-LRU, so the check below already skips their unmap (the
+	 * mapping stays, no kill); this WARNs once so the case is visible
+	 * and counted for the M6 design.
+	 */
+	corten_arena_hwpoison_check(folio);
+
 	if (!(folio_test_lru(folio) || folio_test_hugetlb(folio)))
 		return true;
 

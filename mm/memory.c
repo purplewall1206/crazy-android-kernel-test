@@ -67,6 +67,8 @@
 #include <linux/migrate.h>
 #include <linux/string.h>
 #include <linux/shmem_fs.h>
+#include <linux/corten.h>
+#include "corten_arena.h"
 #include <linux/memory-tiers.h>
 #include <linux/debugfs.h>
 #include <linux/userfaultfd_k.h>
@@ -6532,6 +6534,42 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 
 	__set_current_state(TASK_RUNNING);
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena slow-path hook (M3B_DESIGN.md sec 4.2): one hook
+	 * covers every non-arch caller of handle_mm_fault() -- GUP slow
+	 * (faultin_page/fixup_user_fault), ptrace, get_user and friends --
+	 * whose faults the arch hot hook (do_user_addr_fault) never sees.
+	 *
+	 * [P2-6] Callers holding a per-VMA lock (the user fault path is
+	 * already diverted by the arch hook) or running in atomic context
+	 * must not enter a transaction: VM_FAULT_RETRY sends them through
+	 * the caller's retry machinery, which re-enters here with
+	 * mmap_lock held.  The arena path never returns VM_FAULT_RETRY or
+	 * VM_FAULT_COMPLETED and never drops mmap_lock, so the caller's
+	 * lock state is preserved either way.
+	 */
+	if (corten_enabled_static() && (vma->vm_flags & VM_CORTEN)) {
+		vm_fault_t cret;
+
+		if ((flags & FAULT_FLAG_VMA_LOCK) || in_atomic())
+			return VM_FAULT_RETRY;
+
+		cret = corten_arena_handle_mm_fault(vma, address, flags,
+						    regs);
+		if (!(cret & CORTEN_FAULT_FALLBACK_BIT))
+			return cret;
+		/*
+		 * CORTEN_FAULT_FALLBACK_BIT = the transaction layer cannot
+		 * own this fault (untracked PT page / exhausted retries):
+		 * continue into the legacy body, because the shadow-VMA is
+		 * a perfectly ordinary anonymous VMA and the standard path
+		 * is fully consistent (sec 4.2).  Fatal stub conditions
+		 * (e.g. the M5 FOLL_FORCE COW case) return
+		 * VM_FAULT_SIGSEGV directly instead.
+		 */
+	}
+#endif
 	ret = sanitize_fault_flags(vma, &flags);
 	if (ret)
 		goto out;

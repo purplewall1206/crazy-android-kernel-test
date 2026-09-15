@@ -30,6 +30,7 @@
 #include <linux/ksm.h>
 #include <linux/uaccess.h>
 #include <linux/mm_inline.h>
+#include "corten_arena.h"
 #include <linux/pgtable.h>
 #include <linux/sched/sysctl.h>
 #include <linux/userfaultfd_k.h>
@@ -893,6 +894,22 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 
 	if (mmap_write_lock_killable(current->mm))
 		return -EINTR;
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena reject hook (M3B_DESIGN.md sec 5.7): mprotect()
+	 * would split the shadow-VMA and rewrite PTE permissions without
+	 * the covering desc write lock (R2).  In arena semantics a
+	 * permission change is a corten_mark() transaction -- M4 turns
+	 * this hook into the routing call.  KUnit anchor: the overlap
+	 * decision is corten_arena_range_overlaps() (table-driven in
+	 * mm/corten_fault_test.c via the classify helpers).
+	 */
+	if (corten_arena_range_overlaps(current->mm, start, len)) {
+		error = -EOPNOTSUPP;
+		goto out;
+	}
+#endif
 
 	/*
 	 * If userspace did not allocate the pkey, do not let

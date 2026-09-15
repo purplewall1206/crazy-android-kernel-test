@@ -25,6 +25,7 @@
 #include <linux/hugetlb.h>
 #include <linux/memcontrol.h>
 #include <linux/mm_inline.h>
+#include "corten_arena.h"
 #include <linux/secretmem.h>
 #include <linux/page_size_compat.h>
 
@@ -634,6 +635,19 @@ static __must_check int do_mlock(unsigned long start, size_t len, vm_flags_t fla
 	if (mmap_write_lock_killable(current->mm))
 		return -EINTR;
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena reject hook (M3B_DESIGN.md sec 5.14): mlock and
+	 * munlock would set/clear VM_LOCKED via vma flag changes that
+	 * split the shadow-VMA and populate through GUP; M3 keeps the
+	 * matrix minimal and refuses.  Covers sys_mlock/munlock/mlock2.
+	 */
+	if (corten_arena_range_overlaps(current->mm, start, len)) {
+		mmap_write_unlock(current->mm);
+		return -EOPNOTSUPP;
+	}
+#endif
+
 	locked += current->mm->locked_vm;
 	if ((locked > lock_limit) && (!capable(CAP_IPC_LOCK))) {
 		/*
@@ -763,6 +777,19 @@ SYSCALL_DEFINE1(mlockall, int, flags)
 
 	if (mmap_write_lock_killable(current->mm))
 		return -EINTR;
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena reject hook for mlockall/munlockall (M3B_DESIGN.md
+	 * sec 5.14): MCL_CURRENT would flag every VMA including shadow-VMAs
+	 * and populate them through GUP; M3 refuses whenever the process
+	 * has any arena at all.
+	 */
+	if (corten_arena_range_overlaps(current->mm, 0, TASK_SIZE)) {
+		mmap_write_unlock(current->mm);
+		return -EOPNOTSUPP;
+	}
+#endif
 
 	ret = -ENOMEM;
 	if (!(flags & MCL_CURRENT) || (current->mm->total_vm <= lock_limit) ||

@@ -10,6 +10,7 @@
 
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
+#include "corten_arena.h"
 #include <linux/hugetlb.h>
 #include <linux/shm.h>
 #include <linux/ksm.h>
@@ -1990,6 +1991,24 @@ SYSCALL_DEFINE5(mremap, unsigned long, addr, unsigned long, old_len,
 
 		.remap_type = MREMAP_INVALID, /* We set later. */
 	};
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * CortenMM arena reject hook (M3B_DESIGN.md sec 5.9): mremap on
+	 * an arena range needs move_ptes() under the covering desc write
+	 * locks plus a legal shadow-VMA split -- prerequisites M3 does
+	 * not have (MASTER M4 turns this into a drain + legacy
+	 * fallback).  Both the old range and, for MREMAP_FIXED, the
+	 * destination are checked; the do_vmi_align_munmap() guard is
+	 * the backstop for any race window.
+	 */
+	if (corten_arena_range_overlaps(current->mm, vrm.addr, vrm.old_len))
+		return -EOPNOTSUPP;
+	if ((vrm.flags & MREMAP_FIXED) &&
+	    corten_arena_range_overlaps(current->mm, vrm.new_addr,
+					vrm.new_len))
+		return -EOPNOTSUPP;
+#endif
 
 	return do_mremap(&vrm);
 }

@@ -157,3 +157,4 @@ obj-$(CONFIG_CORTEN_MM) += corten.o
 obj-$(CONFIG_CORTEN_MM_KUNIT_TEST) += corten_test.o
 obj-$(CONFIG_CORTEN_MM_ARENA) += corten_arena.o
 obj-$(CONFIG_CORTEN_MM_ARENA_KUNIT_TEST) += corten_arena_test.o
+obj-$(CONFIG_CORTEN_MM_ARENA_FAULT_KUNIT_TEST) += corten_fault_test.o
