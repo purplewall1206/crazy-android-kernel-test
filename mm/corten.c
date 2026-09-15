@@ -137,6 +137,8 @@ static atomic_long_t corten_nr_meta_arrays;
 static atomic_long_t corten_nr_desc_alloc_fail;
 static atomic_long_t corten_nr_meta_alloc_fail;
 static atomic_long_t corten_nr_free_untracked;
+static atomic_long_t corten_nr_ptdesc_reinstalled;
+static atomic_long_t corten_nr_legacy_drift;
 /* Active transactions (entered/exited through the protocol below). */
 static atomic_long_t corten_nr_txns = ATOMIC_LONG_INIT(0);
 static atomic_long_t corten_nr_txns_max;
@@ -453,6 +455,38 @@ void corten_on_pte_free(struct page *pte_page)
 	if (!corten_enabled_static())
 		return;
 	corten_ptdesc_uninstall(pte_page);
+}
+
+bool corten_ptdesc_rearm(struct mm_struct *mm, struct page *pte_page)
+{
+	if (!corten_enabled_static())
+		return false;
+	if (xa_load(&corten_ptdesc_xa, page_to_pfn(pte_page)))
+		return true;	/* already tracked; never re-install */
+
+	if (corten_ptdesc_install(mm, pte_page))
+		return false;	/* still untracked (allocation failed) */
+
+	atomic_long_inc(&corten_nr_ptdesc_reinstalled);
+	return true;
+}
+
+void corten_legacy_drift_inc(void)
+{
+	atomic_long_inc(&corten_nr_legacy_drift);
+}
+
+/* KUnit-visible snapshots of the drift counters (debugfs shows the same
+ * numbers between runs).
+ */
+long corten_ptdesc_reinstalled_count(void)
+{
+	return atomic_long_read(&corten_nr_ptdesc_reinstalled);
+}
+
+long corten_legacy_drift_count(void)
+{
+	return atomic_long_read(&corten_nr_legacy_drift);
 }
 
 /* ---- covering-page selection (pure arithmetic) ---------------------- */
@@ -1301,6 +1335,10 @@ static int corten_stats_show(struct seq_file *m, void *v)
 		   atomic_long_read(&corten_nr_meta_alloc_fail));
 	seq_printf(m, "free_untracked      %ld\n",
 		   atomic_long_read(&corten_nr_free_untracked));
+	seq_printf(m, "reinstalled         %ld\n",
+		   atomic_long_read(&corten_nr_ptdesc_reinstalled));
+	seq_printf(m, "legacy_drift        %ld\n",
+		   atomic_long_read(&corten_nr_legacy_drift));
 
 	return 0;
 }

@@ -35,6 +35,30 @@ int corten_ptdesc_install(struct mm_struct *mm, struct page *pte_page);
 void corten_ptdesc_uninstall(struct page *pte_page);
 
 /*
+ * Idempotent tracking re-arm (r03 defect C root fix): if @pte_page has no
+ * descriptor (its M2a install at pte_alloc time failed, leaving the window
+ * untracked so transactions fall back to the legacy body), attach one now.
+ * A page that is already tracked is left untouched -- the fresh-descriptor
+ * WARN_ON(old) contract of corten_ptdesc_install() must never fire here.
+ * The arena's fill_upper() calls this on every fill, so a window whose
+ * install once failed becomes transactional again at the next touch.
+ * Return: true when the page is tracked (pre-existing or re-armed).
+ */
+bool corten_ptdesc_rearm(struct mm_struct *mm, struct page *pte_page);
+
+/*
+ * Drift observability (debugfs stats, next to free_untracked): a nonzero
+ * count means legacy-written PTEs were found and cleaned on an untracked
+ * window (r03 defect C).  reinstalled -- the successful re-arm counter --
+ * is maintained inside corten_ptdesc_rearm().
+ */
+void corten_legacy_drift_inc(void);
+
+/* KUnit-visible snapshots of the drift counters. */
+long corten_ptdesc_reinstalled_count(void);
+long corten_legacy_drift_count(void);
+
+/*
  * Set a descriptor's PT level and, with it, its per-level lock class
  * (the level hierarchy is the protocol's lock order: a transaction holds
  * PGD..PTE locks strictly top-down, so same-level descriptors are never

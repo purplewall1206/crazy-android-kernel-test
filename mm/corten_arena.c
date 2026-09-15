@@ -140,6 +140,15 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
  * atomic switch (or from the final put).  It runs in atomic context and
  * must only complete().
  */
+/* Bound on the drain wait (sec 6.3): a healthy transaction is bounded by
+ * the descriptor locks, so completion is immediate; the timeout only
+ * fires when an active percpu_ref leaked (a pairing bug).  A leaked
+ * reference must degrade to a counted, diagnosed leak -- a hang would
+ * turn the process into an unkillable D-state zombie (r03 DoD failure
+ * B), which is strictly worse than leaking one ~150-byte descriptor.
+ */
+#define CORTEN_ARENA_DRAIN_TIMEOUT	(10 * HZ)
+
 static void corten_arena_active_release(struct percpu_ref *ref)
 {
 	struct corten_arena *arena =
@@ -148,14 +157,28 @@ static void corten_arena_active_release(struct percpu_ref *ref)
 	complete(&arena->drained);
 }
 
-/* Wait until no transaction can still hold a reference on @arena (sec 6.3).
- * Called with state->ctl_lock held, which is safe because the fault path
- * never takes that lock.
+/* Kill @arena and wait until no transaction can still hold a reference
+ * on it (sec 6.3).  Called with state->ctl_lock held, which is safe
+ * because the fault path never takes that lock.
+ *
+ * Return: true when the drain completed (the caller must free the
+ * descriptor), false on timeout (the reference is leaked: the caller
+ * must NOT percpu_ref_exit()/free -- a straggler put would UAF -- and
+ * proceeds with the legacy teardown so the process stays runnable).
  */
-static void corten_arena_drain(struct corten_arena *arena)
+static bool corten_arena_drain(struct corten_arena *arena)
 {
 	percpu_ref_kill_and_confirm(&arena->active, NULL);
-	wait_for_completion(&arena->drained);
+
+	if (!wait_for_completion_timeout(&arena->drained,
+					 CORTEN_ARENA_DRAIN_TIMEOUT)) {
+		WARN_ONCE(1,
+			  "corten: arena [%lx,%lx) drain timed out: leaked transaction reference, leaking the descriptor\n",
+			  arena->start, arena->end);
+		return false;
+	}
+
+	return true;
 }
 
 static void corten_arena_free(struct corten_arena *arena)
@@ -503,6 +526,7 @@ int corten_arena_release(struct mm_struct *mm, unsigned long addr,
 	unsigned long frame, first_frame, last_frame;
 	struct corten_mm_state *state;
 	struct corten_arena *arena;
+	bool drained;
 	int ret;
 
 	if (!mm)
@@ -540,8 +564,19 @@ int corten_arena_release(struct mm_struct *mm, unsigned long addr,
 	 * through the regular free funnels (M2a uninstall).  The mmap lock
 	 * is taken only after the drain, when no transaction exists any
 	 * more, so it never forms a wait cycle with a transaction (sec 6.3).
+	 * On a drain timeout (leaked reference, a kernel bug) the teardown
+	 * still runs: a runnable process with a counted leak beats an
+	 * unkillable D-state zombie; the in-flight-transaction safety
+	 * argument above is void in that case, which is why the leak is
+	 * counted loudly (CORTEN_ARENA_STAT_DRAIN_TIMEOUTS).
 	 */
-	corten_arena_drain(arena);
+	if (!corten_arena_drain(arena)) {
+		corten_arena_stat_add(state, CORTEN_ARENA_STAT_DRAIN_TIMEOUTS,
+				      1);
+		drained = false;
+	} else {
+		drained = true;
+	}
 
 	mmap_write_lock(mm);
 	{
@@ -579,9 +614,12 @@ int corten_arena_release(struct mm_struct *mm, unsigned long addr,
 	 * before the kfree_rcu() it is embedded in (sec 2.1).  On the
 	 * (memory-pressure) do_munmap() error path the arena is already
 	 * deregistered and the stale shadow-VMA simply behaves as a plain
-	 * anonymous VMA.
+	 * anonymous VMA.  On a drain timeout the descriptor is
+	 * deliberately leaked instead: percpu_ref_exit() with references
+	 * outstanding would turn the straggler put into a UAF.
 	 */
-	corten_arena_free(arena);
+	if (drained)
+		corten_arena_free(arena);
 	mutex_unlock(&state->ctl_lock);
 
 	return ret;
@@ -634,14 +672,24 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 
 	xa_for_each(&state->arenas, frame, arena) {
 		/* Every frame of an arena holds the same descriptor; drain
-		 * each one once, at its first frame.
+		 * each one once, at its first frame.  A drain timeout (a
+		 * leaked reference -- mm_users is 0 here, so only a kernel
+		 * bug can cause it) must not hang exit_mmap: count the
+		 * leak, keep the descriptor alive (a straggler put would
+		 * otherwise UAF), and let the teardown finish.  A leaked
+		 * ~150-byte descriptor on a broken kernel beats an
+		 * unkillable dying process.
 		 */
 		if (frame < drained_until)
 			continue;
 
 		drained_until = arena->end >> PMD_SHIFT;
-		corten_arena_drain(arena);
-		corten_arena_free(arena);
+		if (corten_arena_drain(arena))
+			corten_arena_free(arena);
+		else
+			corten_arena_stat_add(state,
+					      CORTEN_ARENA_STAT_DRAIN_TIMEOUTS,
+					      1);
 	}
 
 	corten_arena_state_free(state);
@@ -829,6 +877,16 @@ enum corten_disp corten_arena_dispatch(const struct corten_pte_meta *m,
 		 */
 		return CORTEN_DISP_STUB;
 	case CORTEN_INVALID:
+		/* An unmarked page inside a declared arena is the paper's
+		 * "virtual allocation on first access" (Fig.8 L26-38), not
+		 * a mapping error -- faults outside any arena never reach
+		 * this classifier (the xarray lookup gates them).  The
+		 * caller synthesizes the PrivateAnon allocation and
+		 * re-dispatches: the permission gate must run against the
+		 * arena's prot, which this pure function cannot see (the
+		 * zeroed metadata carries no permission bits).
+		 */
+		return CORTEN_DISP_FRESH;
 	default:
 		return CORTEN_DISP_MAPERR;
 	}
@@ -935,6 +993,17 @@ int corten_arena_fill_upper(struct corten_arena *ar, unsigned long addr)
 	}
 	if (pte_alloc(mm, pmdp))
 		goto out;
+
+	/* Root fix for the untracked-window drift (r03 defect C): the M2a
+	 * descriptor install inside pte_alloc_one() can fail (GFP_NOWAIT),
+	 * and it never retried -- the window stayed untracked forever, its
+	 * faults fell back to the legacy body, and legacy-written PTEs had
+	 * no metadata behind them.  Every fill now re-arms an untracked PT
+	 * page (idempotent: a tracked page is left untouched, so the
+	 * fresh-install WARN_ON(old) contract cannot fire), which makes
+	 * the window transactional again at the next touch.
+	 */
+	corten_ptdesc_rearm(mm, pmd_pgtable(*pmdp));
 
 	corten_arena_fault_stat(READ_ONCE(ar->mm->corten_state),
 				CORTEN_ARENA_STAT_FILLS);
@@ -1290,8 +1359,13 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		/* PT page not tracked (descriptor install failed at
 		 * pte_alloc time) or a huge leaf: the shadow-VMA keeps
 		 * the legacy path self-consistent, so hand the fault
-		 * over (sec 4.3 err_legacy_fallback).
+		 * over (sec 4.3 err_legacy_fallback).  Count the
+		 * untracked-window drift for both codes -- the next
+		 * fill_upper() re-arms the descriptor, and the
+		 * space-operation funnels zap untracked windows by PTE
+		 * content (r03 defect C).
 		 */
+		corten_legacy_drift_inc();
 		return CORTEN_F_FALLBACK;
 	default:
 		WARN_ON_ONCE(1);
@@ -1302,6 +1376,49 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		corten_unlock(&txn);
 		WARN_ON_ONCE(1);
 		return CORTEN_F_FALLBACK;
+	}
+
+	/* CORTEN_DISP_FRESH (Fig.8 L26-38, the missing-page body of the
+	 * arena fault cycle): a page inside a declared arena that no
+	 * producer ever recorded is a fresh PrivateAnon virtual
+	 * allocation.  Gate the access on the arena contract first (the
+	 * metadata is zeroed, so dispatch's own permission check cannot
+	 * run), then record the allocation -- from here on the fault is
+	 * indistinguishable from an mmap-marked one, which keeps the
+	 * map/zero-page/upgrade machinery single-sourced.  This was the
+	 * guest-smoke MAPERR: the churn mark path bypassed the synthesis,
+	 * and the KUnit cases seeded their metadata, so both the review
+	 * and the suite sailed past it (r03 DoD lesson: every real-chain
+	 * test must cover at least one unseeded page).
+	 */
+	if (m.state == CORTEN_INVALID) {
+		struct corten_pte_meta gate = {
+			.state = CORTEN_PRIVATE_ANON,
+			.perm = ctx->ar->prot,
+		};
+		struct corten_pte_meta fresh = gate;
+
+		if (!corten_arena_perm_ok(&gate, ctx->write,
+					  ctx->instruction)) {
+			corten_unlock(&txn);
+			return CORTEN_F_ACCERR;
+		}
+		ret = corten_mark(&txn, ctx->addr, PAGE_SIZE, &fresh);
+		switch (ret) {
+		case 0:
+			break;
+		case -ENOMEM:
+			corten_unlock(&txn);
+			return CORTEN_F_OOM;
+		case -EAGAIN:
+			corten_unlock(&txn);
+			return CORTEN_F_RETRY;
+		default:
+			WARN_ON_ONCE(1);
+			corten_unlock(&txn);
+			return CORTEN_F_FALLBACK;
+		}
+		m = fresh;
 	}
 
 	disp = corten_arena_dispatch(&m, ctx->write, ctx->instruction);
@@ -1615,52 +1732,96 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 				   struct mmu_gather *tlb)
 {
 	unsigned long addr;
+	unsigned long flush_start = 0, flush_end = 0;
+	bool flushed = false;
 	pmd_t *pmdp;
+	int ret = 0;
 
 	pmdp = corten_arena_pmd(mm, start);
 	if (WARN_ON_ONCE(!pmdp))
 		return -EAGAIN;
 
+	/*
+	 * Drive the walk by PTE content, not metadata: the metadata only
+	 * decides whether a corten_unmap() reset is needed.  A page can
+	 * have a PTE with no (or INVALID) metadata behind it -- the legacy
+	 * fallback body writes PTEs on a shadow-VMA when the transaction
+	 * layer hands a fault over -- and trusting the metadata there
+	 * leaves the old translation live through the munmap (r03 defect
+	 * C: the arena_stress zerocheck read the previous cycle's magic).
+	 * Every producer of an in-arena PTE (arena map/zero page, legacy
+	 * fault, GUP) attaches a private anonymous page with rmap, so the
+	 * present-and-not-special release below is correct for all of
+	 * them; the shared zero page is pte_special()d and owns nothing.
+	 *
+	 * The mmu_gather session here is range-based (tlb_gather_mmu(),
+	 * not _fullmm) and this walk bypasses tlb_start_vma(); the
+	 * tlb_remove_tlb_entry() calls below are what feed the gather's
+	 * flush range, so both tlb_finish_mmu() and any mid-batch
+	 * tlb_flush_mmu() (page-batch overflow, discontiguous spans)
+	 * invalidate exactly the cleared span.  The explicit
+	 * flush_tlb_range() on every exit -- error paths included -- keeps
+	 * the guarantee local to this walk.
+	 */
 	for (addr = start; addr < end; addr += PAGE_SIZE) {
 		struct corten_pte_meta m;
 		struct folio *folio;
 		struct page *page;
 		pte_t *ptep;
 		pte_t oldpte;
+		bool recorded;
 		spinlock_t *ptl;
-		int ret;
 
-		if (corten_query(txn, addr, &m) || m.state == CORTEN_INVALID)
-			continue;
+		recorded = corten_query(txn, addr, &m) == 0 &&
+			   m.state != CORTEN_INVALID;
 
 		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
-		if (!ptep)
-			return -EAGAIN;
-
-		oldpte = ptep_get_and_clear(mm, addr, ptep);
-		pte_unmap_unlock(ptep, ptl);
-
-		/* Zero-page entries are pte_special()d and not ours to
-		 * release; swap entries cannot exist in M3.
-		 */
-		if (pte_present(oldpte) && !pte_special(oldpte)) {
-			page = pte_page(oldpte);
-			folio = page_folio(page);
-
-			folio_remove_rmap_pte(folio, page, vma);
-			add_mm_counter(mm, MM_ANONPAGES, -1);
-			tlb_remove_page(tlb, page);
+		if (!ptep) {
+			ret = -EAGAIN;
+			goto out_flush;
 		}
 
-		ret = corten_unmap(txn, addr, PAGE_SIZE);
-		if (WARN_ON_ONCE(ret))
-			return ret;
+		oldpte = ptep_get_and_clear(mm, addr, ptep);
+		if (!pte_none(oldpte))
+			tlb_remove_tlb_entry(tlb, ptep, addr);
+		pte_unmap_unlock(ptep, ptl);
 
-		this_cpu_inc(READ_ONCE(mm->corten_state)->stats[
-				CORTEN_ARENA_STAT_UNMAP_PAGES]);
+		if (!pte_none(oldpte)) {
+			if (!flushed) {
+				flush_start = addr;
+				flushed = true;
+			}
+			flush_end = addr + PAGE_SIZE;
+
+			/* Zero-page entries are pte_special()d and not
+			 * ours to release; swap entries cannot exist in
+			 * M3.
+			 */
+			if (pte_present(oldpte) && !pte_special(oldpte)) {
+				page = pte_page(oldpte);
+				folio = page_folio(page);
+
+				folio_remove_rmap_pte(folio, page, vma);
+				add_mm_counter(mm, MM_ANONPAGES, -1);
+				tlb_remove_page(tlb, page);
+			}
+		}
+
+		if (recorded) {
+			ret = corten_unmap(txn, addr, PAGE_SIZE);
+			if (WARN_ON_ONCE(ret))
+				goto out_flush;
+
+			this_cpu_inc(READ_ONCE(mm->corten_state)->stats[
+					CORTEN_ARENA_STAT_UNMAP_PAGES]);
+		}
 	}
 
-	return 0;
+out_flush:
+	if (flushed)
+		flush_tlb_range(vma, flush_start, flush_end);
+
+	return ret;
 }
 
 /*
@@ -1671,6 +1832,80 @@ static int corten_arena_zap_window(struct mm_struct *mm,
  * covering-write-lock transaction each; folio_put()s are TLB-ordered by
  * the mmu_gather.  @ar must be pinned by the caller (active reference).
  */
+/*
+ * Content-driven zap of a window whose PT page has no descriptor (the
+ * M2a install failed at pte_alloc time, or the fault path handed the
+ * window to the legacy body).  The old assumption -- "no tracked PT
+ * page: no page of it can be mapped" -- is false for exactly those
+ * windows: the legacy fault funnel writes plain PTEs on the shadow-VMA.
+ * Skipping the window would leave the previous cycle's translations and
+ * pages alive through the munmap, so zap whatever is actually there.
+ * No transaction and no metadata exist; every present non-special PTE
+ * is a private anonymous page with rmap (see corten_arena_zap_window()).
+ */
+static int corten_arena_zap_untracked_window(struct mm_struct *mm,
+					     struct vm_area_struct *vma,
+					     unsigned long start,
+					     unsigned long end,
+					     struct mmu_gather *tlb)
+{
+	unsigned long addr;
+	unsigned long flush_start = 0, flush_end = 0;
+	bool flushed = false;
+	pmd_t *pmdp;
+	int ret = 0;
+
+	pmdp = corten_arena_pmd(mm, start);
+	if (!pmdp || !pmd_present(READ_ONCE(*pmdp)))
+		return 0;		/* nothing was ever mapped here */
+	if (pmd_leaf(READ_ONCE(*pmdp)))
+		return -EOPNOTSUPP;	/* THP: not ours in M3 */
+
+	for (addr = start; addr < end; addr += PAGE_SIZE) {
+		struct folio *folio;
+		struct page *page;
+		pte_t *ptep;
+		pte_t oldpte;
+		spinlock_t *ptl;
+
+		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+		if (!ptep) {
+			ret = -EAGAIN;
+			goto out_flush;
+		}
+
+		oldpte = ptep_get_and_clear(mm, addr, ptep);
+		if (!pte_none(oldpte))
+			tlb_remove_tlb_entry(tlb, ptep, addr);
+		pte_unmap_unlock(ptep, ptl);
+
+		if (!pte_none(oldpte)) {
+			if (!flushed) {
+				flush_start = addr;
+				flushed = true;
+			}
+			flush_end = addr + PAGE_SIZE;
+
+			if (pte_present(oldpte) && !pte_special(oldpte)) {
+				page = pte_page(oldpte);
+				folio = page_folio(page);
+
+				folio_remove_rmap_pte(folio, page, vma);
+				add_mm_counter(mm, MM_ANONPAGES, -1);
+				tlb_remove_page(tlb, page);
+			}
+		}
+	}
+
+out_flush:
+	if (flushed) {
+		corten_legacy_drift_inc();
+		flush_tlb_range(vma, flush_start, flush_end);
+	}
+
+	return ret;
+}
+
 /* Non-static: mm/corten_fault_test.c drives the chunk zap directly. */
 int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
 			     unsigned long start, unsigned long len)
@@ -1709,9 +1944,23 @@ int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
 					CORTEN_ARENA_STAT_MUNMAP_TXNS]);
 			break;
 		case -ENOENT:
-			/* No tracked PT page in this window: no page of it
-			 * can be mapped or recorded.
+		case -EOPNOTSUPP:
+			/* No tracked PT page in this window.  Both codes
+			 * mean "nothing transactional here": -ENOENT is a
+			 * hole, -EOPNOTSUPP a PT page whose descriptor
+			 * install failed (or a huge leaf).  The old
+			 * assumption -- "nothing tracked: nothing mapped"
+			 * -- is false for the first two: the legacy fault
+			 * fallback writes plain PTEs on untracked windows
+			 * (r03 defect C).  Zap by PTE content so the
+			 * munmap drops whatever is actually there; the
+			 * helper re-checks the huge-leaf case itself.
 			 */
+			ret = corten_arena_zap_untracked_window(mm, vma,
+								start, win_end,
+								&tlb);
+			if (ret)
+				goto out;
 			ret = 0;
 			break;
 		case -EAGAIN:
@@ -1767,12 +2016,17 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
 		case CORTEN_UNMAP_EXACT:
 			/* The exact arena range: identical to prctl
 			 * RELEASE (drain + legacy teardown removes the
-			 * shadow-VMA).  Drop our active reference first:
-			 * the drain inside RELEASE must reach zero.
+			 * shadow-VMA).  Drop our active references
+			 * first: the drain inside RELEASE must reach
+			 * zero.  Both lookups pinned the same descriptor
+			 * when start and end fall in one arena, so each
+			 * pointer is put (the old "!= ar_start" guard
+			 * leaked one reference per call and RELEASE's
+			 * drain hung forever -- r03 DoD failure B).
 			 */
 			if (ar_start)
 				percpu_ref_put(&ar_start->active);
-			if (ar_end && ar_end != ar_start)
+			if (ar_end)
 				percpu_ref_put(&ar_end->active);
 			ret = corten_arena_release(mm, start, len);
 			return ret < 0 ? ret : 1;
@@ -1786,9 +2040,13 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
 		}
 	}
 
+	/* One put per lookup: when start and end-1 resolve to the same
+	 * arena (the common in-arena chunk), both pointers are equal and
+	 * each holds one of the two references taken above.
+	 */
 	if (ar_start)
 		percpu_ref_put(&ar_start->active);
-	if (ar_end && ar_end != ar_start)
+	if (ar_end)
 		percpu_ref_put(&ar_end->active);
 
 	return ret;

@@ -71,6 +71,11 @@ enum corten_arena_stat {
 	CORTEN_ARENA_STAT_UNMAP_PAGES,	/* pages zapped by arena munmap */
 	CORTEN_ARENA_STAT_MUNMAP_TXNS,
 	CORTEN_ARENA_STAT_MMAP_MARK_TXNS,
+	/* Lifecycle health: a non-zero value means an active percpu_ref
+	 * leaked (pairing bug) -- the descriptor was deliberately not
+	 * freed to keep the process/exit path moving (r03 DoD failure B).
+	 */
+	CORTEN_ARENA_STAT_DRAIN_TIMEOUTS,
 	CORTEN_ARENA_NR_STATS,
 };
 

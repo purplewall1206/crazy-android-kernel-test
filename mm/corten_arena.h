@@ -36,9 +36,16 @@ enum corten_disp {
 	CORTEN_DISP_MAP_ANON,	/* map a fresh anonymous page (S5) */
 	CORTEN_DISP_ZERO_PAGE,	/* read fault: install the shared zero page */
 	CORTEN_DISP_RESTORE,	/* CORTEN_MAPPED: rebuild PTE from metadata */
+	CORTEN_DISP_FRESH,	/* CORTEN_INVALID: synthesize the PrivateAnon
+				 * virtual allocation (Fig.8 L26-38).  The
+				 * permission gate needs the arena prot (the
+				 * zeroed metadata carries none), so the
+				 * caller completes the dispatch after the
+				 * corten_mark() synthesis
+				 */
 	CORTEN_DISP_ACCERR,	/* permission mismatch -> SEGV_ACCERR */
 	CORTEN_DISP_STUB,	/* M5/M6/M4+ state -> WARN + SIGSEGV */
-	CORTEN_DISP_MAPERR,	/* CORTEN_INVALID -> SEGV_MAPERR */
+	CORTEN_DISP_MAPERR,	/* undecodable state -> SEGV_MAPERR */
 };
 
 enum corten_disp corten_arena_dispatch(const struct corten_pte_meta *m,

@@ -21,6 +21,7 @@
 #include <linux/corten.h>
 #include <linux/corten_arena.h>
 #include <linux/cpumask.h>
+#include <linux/highmem.h>
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
@@ -29,6 +30,7 @@
 #include <linux/pgtable.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 
 #include "corten_arena.h"
 #include "corten.h"		/* corten_ptdesc_install() (gate-free) */
@@ -201,11 +203,17 @@ static void corten_fault_test_dispatch(struct kunit *test)
 		bool write, instr;
 		enum corten_disp expect;
 	} cases[] = {
-		/* CORTEN_INVALID: never marked -> undeclared access. */
+		/* CORTEN_INVALID: an unmarked page inside a declared arena
+		 * is the fresh-allocation fault (Fig.8 L26-38), not a
+		 * mapping error -- faults outside any arena never reach
+		 * this classifier.  The permission gate runs at the
+		 * caller against the arena prot (the zeroed metadata
+		 * carries none); this was r03 DoD failure mode A.
+		 */
 		{ "invalid-read", { CORTEN_INVALID, CORTEN_PERM_ALL, 0, { 0 } },
-		  false, false, CORTEN_DISP_MAPERR },
+		  false, false, CORTEN_DISP_FRESH },
 		{ "invalid-write", { CORTEN_INVALID, CORTEN_PERM_ALL, 0, { 0 } },
-		  true, false, CORTEN_DISP_MAPERR },
+		  true, false, CORTEN_DISP_FRESH },
 		/* PRIVATE_ANON: the virtual allocation from the mmap mark. */
 		{ "anon-read", { CORTEN_PRIVATE_ANON, CORTEN_PERM_READ |
 				 CORTEN_PERM_WRITE | CORTEN_PERM_USER, 0, { 0 } },
@@ -478,18 +486,13 @@ static void corten_fault_test_sigsegv(struct kunit *test)
 		.perm = CORTEN_PERM_READ | CORTEN_PERM_USER,
 		.flags = 0,
 	};
-	unsigned long unmarked = FT_BASE + 2 * PAGE_SIZE;
 	unsigned long ro_addr = FT_BASE + 3 * PAGE_SIZE;
 	int ret;
 
-	/* Never marked: SEGV_MAPERR semantics. */
-	KUNIT_EXPECT_EQ(test, ft_write_fault(t, unmarked), VM_FAULT_SIGSEGV);
-	KUNIT_EXPECT_EQ(test, corten_arena_handle_mm_fault(t->vma, unmarked,
-							   0, NULL),
-			VM_FAULT_SIGSEGV);
-
 	/* Read-only chunk: write is SEGV_ACCERR (same vm_fault_t), read
-	 * goes to the zero page.
+	 * goes to the zero page.  An instruction fault on an execute-
+	 * never arena is likewise ACCERR, including on a never-seeded
+	 * page (the fresh-allocation gate runs against the arena prot).
 	 */
 	ret = corten_lock_range(t->mm, ro_addr, PAGE_SIZE, &txn);
 	KUNIT_ASSERT_EQ(test, ret, 0);
@@ -500,6 +503,109 @@ static void corten_fault_test_sigsegv(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, ft_write_fault(t, ro_addr), VM_FAULT_SIGSEGV);
 	KUNIT_EXPECT_EQ(test, corten_arena_handle_mm_fault(t->vma, ro_addr, 0,
 							   NULL), 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_handle_mm_fault(t->vma,
+					FT_BASE + 2 * PAGE_SIZE,
+					FAULT_FLAG_INSTRUCTION, NULL),
+			VM_FAULT_SIGSEGV);
+}
+
+/*
+ * The first touch of a page the suite never seeded metadata for is the
+ * paper's Fig.8 L26-38 fresh-allocation fault -- the synthesizing body
+ * of the arena fault cycle.  The original suite missed it entirely: every
+ * real-chain case pre-marked its pages, and both review and KUnit sailed
+ * through while the guest deterministicly died with SEGV_MAPERR on the
+ * first touch (r03 DoD failure mode A).  Lesson recorded here: every
+ * real-chain case must cover at least one unseeded page.
+ */
+static void corten_fault_test_fresh_fault(struct kunit *test)
+{
+	/*
+	 * The real fault chain needs the M2a descriptor-install hook,
+	 * which is gated on corten_enabled_static(): on a corten=off boot
+	 * every arena fault correctly falls back to the legacy path and
+	 * there is nothing for these cases to observe.  They run in the
+	 * corten=on verification boot; the pure dispatch/classifier cases
+	 * above cover the corten=off contract (S4 degraded scope).
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+	struct ft_mm *t = ft_setup(test);
+	struct corten_pte_meta m;
+	struct folio *folio;
+	pte_t *ptep, pte;
+	void *kvaddr;
+	unsigned long waddr = FT_BASE + 6 * PAGE_SIZE;
+	unsigned long raddr = FT_BASE + 7 * PAGE_SIZE;
+
+	/* Write fault: synthesize the PrivateAnon allocation and install
+	 * a real zeroed page; the metadata lands on MAPPED with the
+	 * arena's permissions (not the zeroed junk the query saw).
+	 */
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, waddr), 0);
+
+	KUNIT_EXPECT_EQ(test, ft_meta(t, waddr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm,
+			CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+			CORTEN_PERM_USER);
+
+	ptep = ft_pte(t, waddr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_TRUE(test, pte_write(pte));
+	KUNIT_EXPECT_FALSE(test, pte_special(pte));
+
+	folio = page_folio(pte_page(pte));
+	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1);	/* PTE ref */
+	KUNIT_EXPECT_EQ(test, folio_mapped(folio), 1);
+	KUNIT_EXPECT_TRUE(test, folio_test_anon(folio));
+	KUNIT_EXPECT_FALSE(test, folio_test_lru(folio));
+
+	/* The synthesized page is usable memory, zeroed at allocation
+	 * (P1-2): write a pattern from the kernel side (the KUnit thread
+	 * cannot fault its own user memory) and read it back.
+	 */
+	kvaddr = kmap_local_page(folio_page(folio, 0));
+	KUNIT_EXPECT_EQ(test, ((u32 *)kvaddr)[0], 0);
+	memset(kvaddr, 0x5a, sizeof(u32));
+	KUNIT_EXPECT_EQ(test, ((u32 *)kvaddr)[0], 0x5a5a5a5a);
+	kunmap_local(kvaddr);
+
+	KUNIT_EXPECT_EQ(test, get_mm_counter_sum(t->mm, MM_ANONPAGES), 1);
+
+	/* Read fault on another never-seeded page: shared zero page, no
+	 * anon accounting, metadata stays PRIVATE_ANON with the arena
+	 * permissions recorded.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_handle_mm_fault(t->vma, raddr, 0,
+							   NULL), 0);
+
+	ptep = ft_pte(t, raddr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_TRUE(test, pte_special(pte));
+	KUNIT_EXPECT_EQ(test, pte_pfn(pte), my_zero_pfn(raddr));
+	KUNIT_EXPECT_EQ(test, get_mm_counter_sum(t->mm, MM_ANONPAGES), 1);
+
+	KUNIT_EXPECT_EQ(test, ft_meta(t, raddr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_PRIVATE_ANON);
+	KUNIT_EXPECT_EQ(test, m.perm,
+			CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+			CORTEN_PERM_USER);
+
+	/* Its write upgrade re-dispatches into the regular MAPPED
+	 * machinery through the fresh path's second look.
+	 */
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, raddr), 0);
+	KUNIT_EXPECT_EQ(test, get_mm_counter_sum(t->mm, MM_ANONPAGES), 2);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, raddr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
 }
 
 static void corten_fault_test_restore(struct kunit *test)
@@ -640,6 +746,241 @@ static void corten_fault_test_fill_upper_race(struct kunit *test)
 				      FT_PERM_RW), 0);
 	KUNIT_EXPECT_EQ(test, ft_write_fault(t, FT_BASE + PAGE_SIZE), 0);
 }
+
+/*
+ * Churn-content repro (r03 defect C): random 16K..2M chunks at 4K-grid
+ * offsets inside the arena, driven through the exact gate-free funnel the
+ * arena_stress syscalls take -- corten_arena_mmap_route() (the MAP_FIXED
+ * mark), real write faults, in-place content readback, then
+ * corten_arena_munmap_route() (the transactional chunk zap) -- followed by
+ * the post-unmap zerocheck: a fresh remap must present no PTE at all
+ * until a fault installs one, so a read can never see the previous
+ * cycle's content.
+ */
+static void corten_fault_test_churn_repro(struct kunit *test)
+{
+	/*
+	 * The real fault chain needs the M2a descriptor-install hook,
+	 * which is gated on corten_enabled_static(): on a corten=off boot
+	 * every arena fault correctly falls back to the legacy path and
+	 * there is nothing for these cases to observe.  They run in the
+	 * corten=on verification boot; the pure dispatch/classifier cases
+	 * above cover the corten=off contract (S4 degraded scope).
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+	struct ft_mm *t = ft_setup(test);
+	unsigned long seed = 12345;
+	unsigned int inplace_fails = 0, stale_fails = 0;
+	int c;
+
+	for (c = 0; c < 150; c++) {
+		size_t len = 16384UL << ((seed >> 33) & 7);
+		unsigned long off, base, n, i;
+
+		seed = seed * 6364136223846793005ULL +
+		       1442695040888963407ULL;
+		off = ((seed >> 20) %
+		       ((FT_ARENA_LEN - len) / 16384UL + 1)) * 16384UL;
+		base = FT_BASE + off;
+		n = len / PAGE_SIZE;
+
+		/* chunk_map: the mark transaction of mmap(MAP_FIXED). */
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_mmap_route(t->mm, base, len,
+					PROT_READ | PROT_WRITE,
+					MAP_FIXED | MAP_PRIVATE |
+					MAP_ANONYMOUS | MAP_NORESERVE,
+					false),
+				1);
+
+		/* touch + in-place readback: the write fault installs a
+		 * private zeroed page (the kernel-side kmap store stands
+		 * in for the user store -- the KUnit thread cannot fault
+		 * its own user memory); the readback must return exactly
+		 * what was stored, on the same translation.
+		 */
+		for (i = 0; i < n; i++) {
+			unsigned long addr = base + i * PAGE_SIZE;
+			pte_t *ptep;
+			pte_t pte;
+			uint64_t exp = 0x5a5a000000000000ULL ^
+				       ((uint64_t)(c + 1) << 32) ^ i;
+			uint64_t got = 0;
+			void *kv;
+
+			KUNIT_ASSERT_EQ(test, ft_write_fault(t, addr), 0);
+			ptep = ft_pte(t, addr);
+			KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+			pte = ptep_get(ptep);
+			pte_unmap(ptep);
+			KUNIT_ASSERT_TRUE(test, pte_present(pte));
+			KUNIT_ASSERT_FALSE(test, pte_special(pte));
+			kv = kmap_local_page(pte_page(pte));
+			*(uint64_t *)kv = exp;
+			got = *(uint64_t *)kv;
+			kunmap_local(kv);
+			if (got != exp)
+				inplace_fails++;
+		}
+
+		/* munmap: the chunk-zap funnel of munmap(2). */
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_munmap_route(t->mm, base, len),
+				1);
+
+		/* zerocheck: remap, then scan BEFORE any fault -- a
+		 * present PTE here is the previous cycle's content
+		 * surviving the munmap (the guest ZFAIL).
+		 */
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_mmap_route(t->mm, base, len,
+					PROT_READ | PROT_WRITE,
+					MAP_FIXED | MAP_PRIVATE |
+					MAP_ANONYMOUS | MAP_NORESERVE,
+					false),
+				1);
+		for (i = 0; i < n; i++) {
+			pte_t *ptep = ft_pte(t, base + i * PAGE_SIZE);
+
+			if (ptep && !pte_none(ptep_get(ptep)))
+				stale_fails++;
+			if (ptep)
+				pte_unmap(ptep);
+		}
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_munmap_route(t->mm, base, len),
+				1);
+	}
+
+	KUNIT_EXPECT_EQ(test, inplace_fails, 0);
+	KUNIT_EXPECT_EQ(test, stale_fails, 0);
+	if (inplace_fails || stale_fails)
+		kunit_info(test, "churn repro: inplace=%u stale=%u\n",
+			   inplace_fails, stale_fails);
+}
+
+static void corten_fault_test_free_page(void *ctx)
+{
+	put_page(ctx);
+}
+
+/*
+ * Untracked-window behavior under a descriptor-install failure (r03
+ * defect C, review follow-up): arm the allocator injection so the M2a
+ * install inside pte_alloc_one() fails for both the fresh install and
+ * the re-arm within the same fill_upper() -- the PT page comes to exist
+ * but the window stays untracked.  Assert the whole contract: the
+ * transaction layer reports -ENOENT; a legacy-written plain PTE (a
+ * manually installed private page stands in for what the legacy fault
+ * body writes) is still dropped by the munmap funnel -- content must
+ * not survive an untracked munmap; the next fill_upper() re-arms the
+ * descriptor (reinstalled counter) and the window becomes transactional
+ * again; legacy_drift moves when drifted content is cleaned up.
+ */
+#ifdef CONFIG_CORTEN_MM_KUNIT_TEST
+static void corten_fault_test_untracked_drift(struct kunit *test)
+{
+	/*
+	 * The real fault chain needs the M2a descriptor-install hook,
+	 * which is gated on corten_enabled_static(): on a corten=off boot
+	 * every arena fault correctly falls back to the legacy path and
+	 * there is nothing for these cases to observe.  They run in the
+	 * corten=on verification boot; the pure dispatch/classifier cases
+	 * above cover the corten=off contract (S4 degraded scope).
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+	struct ft_mm *t = ft_setup(test);
+	unsigned long win = FT_BASE + PMD_SIZE;
+	unsigned long baseline_anon;
+	long rein0, drift0;
+	struct vm_area_struct *vma = t->vma;
+	struct page *page;
+	struct corten_txn txn;
+	struct folio *folio;
+	pmd_t *pmdp;
+	pte_t *ptep;
+	pte_t entry;
+	spinlock_t *ptl;
+
+	rein0 = corten_ptdesc_reinstalled_count();
+	drift0 = corten_legacy_drift_count();
+	baseline_anon = get_mm_counter_sum(t->mm, MM_ANONPAGES);
+
+	/* ① fill with both installs failing: PT page exists, window
+	 * untracked (two failures: the fresh install inside pte_alloc
+	 * and the re-arm at the end of the same fill_upper()).
+	 */
+	corten_test_inject_alloc_fail(2);
+	{
+		struct corten_arena *ar = corten_arena_lookup_get(t->mm, win);
+
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+		KUNIT_ASSERT_EQ(test, corten_arena_fill_upper(ar, win), 0);
+		percpu_ref_put(&ar->active);
+	}
+	corten_test_inject_alloc_fail(0);
+
+	/* (a) the transaction layer reports the window untracked: the PT
+	 * page exists but has no descriptor, which lock_range reports as
+	 * -EOPNOTSUPP (a plain hole is -ENOENT).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_lock_range(t->mm, win, PAGE_SIZE, &txn),
+			-EOPNOTSUPP);
+
+	/* (b) simulate the legacy fallback's PTE: a plain private page
+	 * with rmap and accounting, no metadata behind it.
+	 */
+	page = alloc_page(GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, page);
+	kunit_add_action(test, corten_fault_test_free_page, page);
+	folio = page_folio(page);
+	add_mm_counter(t->mm, MM_ANONPAGES, 1);
+	folio_add_new_anon_rmap(folio, vma, win, RMAP_EXCLUSIVE);
+	entry = mk_pte(page, vma->vm_page_prot);
+	entry = pte_sw_mkyoung(entry);
+	entry = pte_mkwrite(pte_mkdirty(entry), vma);
+
+	pmdp = pmd_offset(pud_offset(p4d_offset(pgd_offset(t->mm, win),
+						win), win), win);
+	ptep = pte_offset_map_lock(t->mm, pmdp, win, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	set_ptes(t->mm, win, ptep, entry, 1);
+	pte_unmap_unlock(ptep, ptl);
+
+	/* munmap on the untracked window: the chunk funnel takes the
+	 * -ENOENT branch and must zap by content -- the page is released
+	 * and the drift counter moves.
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_munmap_route(t->mm, win,
+							PAGE_SIZE), 1);
+	kunit_release_action(test, corten_fault_test_free_page, page);
+
+	ptep = ft_pte(t, win);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	KUNIT_EXPECT_TRUE(test, pte_none(ptep_get(ptep)));
+	pte_unmap(ptep);
+	KUNIT_EXPECT_EQ(test, get_mm_counter_sum(t->mm, MM_ANONPAGES),
+			baseline_anon);
+	KUNIT_EXPECT_GT(test, corten_legacy_drift_count(), drift0);
+
+	/* (c) heal: the next fill re-arms the descriptor (reinstalled
+	 * counter) and the window becomes transactional again.
+	 */
+	{
+		struct corten_arena *ar = corten_arena_lookup_get(t->mm, win);
+
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+		KUNIT_ASSERT_EQ(test, corten_arena_fill_upper(ar, win), 0);
+		percpu_ref_put(&ar->active);
+	}
+	KUNIT_EXPECT_GT(test, corten_ptdesc_reinstalled_count(), rein0);
+
+	KUNIT_ASSERT_EQ(test, ft_mark(t, win, PAGE_SIZE, FT_PERM_RW), 0);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, win), 0);
+}
+#endif /* CONFIG_CORTEN_MM_KUNIT_TEST */
 
 static int corten_fault_test_map_worker(void *data)
 {
@@ -784,6 +1125,11 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_map_anon),
 	KUNIT_CASE(corten_fault_test_zero_page),
 	KUNIT_CASE(corten_fault_test_sigsegv),
+	KUNIT_CASE(corten_fault_test_fresh_fault),
+	KUNIT_CASE(corten_fault_test_churn_repro),
+#ifdef CONFIG_CORTEN_MM_KUNIT_TEST
+	KUNIT_CASE(corten_fault_test_untracked_drift),
+#endif
 	KUNIT_CASE(corten_fault_test_restore),
 	KUNIT_CASE(corten_fault_test_fill_upper_race),
 	KUNIT_CASE(corten_fault_test_map_race),
