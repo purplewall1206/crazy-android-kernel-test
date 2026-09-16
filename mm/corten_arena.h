@@ -267,6 +267,29 @@ int corten_arena_dontneed_route(struct mm_struct *mm, unsigned long start,
 int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 			       unsigned long start, unsigned long len);
 
+/*
+ * T0b: do_mprotect_pkey() routing gate (M4T0_SPEC.md sec 3.3).  Runs
+ * with this mm's mmap_write lock held.  0 = no arena in range (legacy),
+ * 1 = routed (permission transaction + TLB flush done), -errno =
+ * reject (boundary crossing, pkey/PROT_GROWS* combinations, or a
+ * MODE-targeted arena keeping the S6 verdict).
+ */
+int corten_arena_mprotect_route(struct mm_struct *mm, unsigned long start,
+				unsigned long len, unsigned long prot,
+				int pkey);
+
+/*
+ * T0b: sys_mremap() routing gate (sec 8 T0-R1 / D12).  Runs with no
+ * locks held, before do_mremap() and its prechecks -- questionable
+ * requests return 0 for the legacy funnel's documented errno.  0 =
+ * legacy, >0 = routed (the new address; the old arena is retired),
+ * -errno = counted reject (MREMAP_FIXED/DONTUNMAP, boundary crossing,
+ * no-MAYMOVE grow, window exhaustion).
+ */
+long corten_arena_mremap_route(struct mm_struct *mm, unsigned long addr,
+			       unsigned long old_len, unsigned long new_len,
+			       unsigned long flags, unsigned long new_addr);
+
 /* hwpoison anchor (sec 5.20): WARN_ONCE + count when @folio maps into a
  * shadow-VMA.  Legacy-invisible (one static-branch read on the common
  * path).  Called from hwpoison_user_mappings().
@@ -334,6 +357,24 @@ static inline int corten_arena_madvise_route(struct mm_struct *mm,
 					     int behavior,
 					     unsigned long start,
 					     unsigned long len)
+{
+	return 0;
+}
+
+static inline int corten_arena_mprotect_route(struct mm_struct *mm,
+					      unsigned long start,
+					      unsigned long len,
+					      unsigned long prot, int pkey)
+{
+	return 0;
+}
+
+static inline long corten_arena_mremap_route(struct mm_struct *mm,
+					     unsigned long addr,
+					     unsigned long old_len,
+					     unsigned long new_len,
+					     unsigned long flags,
+					     unsigned long new_addr)
 {
 	return 0;
 }

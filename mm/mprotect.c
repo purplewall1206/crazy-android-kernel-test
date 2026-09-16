@@ -897,15 +897,35 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 
 #ifdef CONFIG_CORTEN_MM_ARENA
 	/*
-	 * CortenMM arena reject hook (M3B_DESIGN.md sec 5.7): mprotect()
-	 * would split the shadow-VMA and rewrite PTE permissions without
-	 * the covering desc write lock (R2).  In arena semantics a
-	 * permission change is a corten_mark() transaction -- M4 turns
-	 * this hook into the routing call.  KUnit anchor: the overlap
-	 * decision is corten_arena_range_overlaps() (table-driven in
-	 * mm/corten_fault_test.c via the classify helpers).
+	 * CortenMM arena routing (M4T0_SPEC.md sec 3.3, T0b): a
+	 * permission change inside one arena is a corten_mark()
+	 * transaction under the covering desc write lock -- the JVM's
+	 * PROT_NONE reserve + mprotect commit pattern depends on it.
+	 * Return: <0 = reject (boundary crossing, out-of-scope
+	 * combination, or a MODE-targeted arena keeping the S6 verdict),
+	 * 1 = routed (permission transaction done, TLB flushed),
+	 * 0 = no arena in range -- run the legacy body unchanged.
+	 * The route nests the desc locks inside the write lock we hold
+	 * (DEV-13 order).
+	 *
+	 * PROT_GROWSDOWN/GROWSUP clamping and the READ_IMPLIES_EXEC
+	 * personality are legacy-chain semantics (applied below); a range
+	 * asking for them keeps the S6 overlap reject so no arena PTE is
+	 * ever rewritten outside a transaction.
 	 */
-	if (corten_arena_range_overlaps(current->mm, start, len)) {
+	if (!grows && !rier) {
+		int cret = corten_arena_mprotect_route(current->mm, start,
+						       len, prot, pkey);
+
+		if (cret < 0) {
+			error = cret;
+			goto out;
+		}
+		if (cret == 1) {
+			error = 0;
+			goto out;
+		}
+	} else if (corten_arena_range_overlaps(current->mm, start, len)) {
 		error = -EOPNOTSUPP;
 		goto out;
 	}

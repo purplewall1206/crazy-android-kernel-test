@@ -13,8 +13,8 @@
  * through a per-mm xarray keyed by 2M frame index without ever touching
  * the VMA tree.
  *
- * Lock order (DESIGN.md sec 7 INV2 as amended by DEV-13, registered
- * as STATE.md D13, outermost first):
+ * Lock order (DESIGN.md sec 7 INV2 as amended by DEV-13, outermost
+ * first):
  *
  *	mmap_lock (W or R) -> ctl_lock (per-mm state mutex) -> vma write
  *	marks -> percpu_ref(active) [drain barrier] -> fill_lock ->
@@ -260,10 +260,9 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
  * @len: arg4, the range length (QUERY: ignored; the uapi contract passes 0).
  * @arg5: raw prctl arg5, must be 0.
  *
- * Applies the CAP_SYS_ADMIN and corten=on gates; with the arena layer
- * (CONFIG_CORTEN_MM_ARENA) disabled the stub below keeps the case label
- * compiled in but reduces it to a single -EOPNOTSUPP return, identical
- * to an unknown prctl.
+ * Applies the CAP_SYS_ADMIN and corten=on gates; with CONFIG_CORTEN_MM
+ * disabled the stub below keeps the case label compiled in but reduces it
+ * to a single -EOPNOTSUPP return, identical to an unknown prctl.
  *
  * Return: 0/1 on success (QUERY), negative errno otherwise.
  */
@@ -278,10 +277,9 @@ int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,
  * @arg5: raw prctl arg5, must be 0.
  *
  * ENTER needs CAP_SYS_ADMIN and corten=on (same posture as
- * PR_CORTEN_ARENA); EXIT/GET need corten=on.  With the arena layer
- * (CONFIG_CORTEN_MM_ARENA) disabled the stub below keeps the case label
- * compiled in but reduces it to a single -EOPNOTSUPP return, identical
- * to an unknown prctl.
+ * PR_CORTEN_ARENA); EXIT/GET need corten=on.  With CONFIG_CORTEN_MM
+ * disabled the stub below keeps the case label compiled in but reduces
+ * it to a single -EOPNOTSUPP return, identical to an unknown prctl.
  *
  * EXIT tears every arena of the current mm down (RELEASE semantics,
  * one by one) and clears the mode -- M4T0_SPEC.md sec 1.1; the older

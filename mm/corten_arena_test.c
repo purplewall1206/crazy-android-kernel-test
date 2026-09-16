@@ -26,6 +26,7 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/uaccess.h>
 #include <uapi/linux/mman.h>
 #include <uapi/linux/prctl.h>
 
@@ -173,6 +174,12 @@ struct corten_arena_test_op {
 	int ret;
 	unsigned long addr;
 	unsigned long len;
+	/* T0b mremap-route arguments and results. */
+	unsigned long len2;
+	unsigned long flags;
+	unsigned long new_addr;
+	long retl;
+	char *buf;		/* pattern in/out for copy_to_user checks */
 	struct completion done;
 };
 
@@ -795,7 +802,7 @@ struct corten_arena_test_conc {
 	unsigned long len;
 	int iters;
 	/* T0a: churn the same slot in the auto-arena window through
-	 * corten_arena_test_auto_attach_locked()/release instead of the low base
+	 * corten_arena_auto_attach()/release instead of the low base
 	 * range through declare()/release() -- the DEV-13 lock-order
 	 * regression must cover the do_mmap-shaped path too.
 	 */
@@ -977,7 +984,7 @@ static void corten_arena_test_concurrent(struct kunit *test)
 }
 
 /* The DEV-13 lock-order regression for the T0a window path: the same
- * race as above, driven through corten_arena_test_auto_attach_locked() (the body
+ * race as above, driven through corten_arena_auto_attach() (the body
  * do_mmap runs under its write lock) with the fault-style reader
  * hammering lookup+tryget on the window slot.  A deadlock or a
  * lock-order violation in the inverted nesting shows up here.
@@ -1657,6 +1664,479 @@ static void corten_arena_test_fork_demote(struct kunit *test)
 	mmput(child);
 }
 
+/* ------------------------------------------------------------------ *
+ * T0b: mprotect / madvise / mremap routing (M4T0_SPEC.md sec 3.3/3.4,
+ * STATE D12).  Decision tables on a real declared arena, the MODE
+ * full-on state machine, and the named arena_stats counters.
+ * ------------------------------------------------------------------
+ */
+
+#define CORTEN_ARENA_TEST_PERM_RW	(CORTEN_PERM_READ | CORTEN_PERM_WRITE | \
+					 CORTEN_PERM_USER)
+
+/* Metadata of @addr through the transaction API (the arena-side twin
+ * of the fault test's ft_meta()).
+ */
+static int corten_arena_test_meta(struct mm_struct *mm, unsigned long addr,
+				  struct corten_pte_meta *out)
+{
+	struct corten_txn txn;
+	int ret;
+
+	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+	if (ret)
+		return ret;
+	ret = corten_query(&txn, addr, out);
+	corten_unlock(&txn);
+
+	return ret;
+}
+
+/* Record a PrivateAnon virtual allocation with @perm -- fill_upper()
+ * first, exactly like the mark route (corten_arena_mmap_route) does.
+ */
+static int corten_arena_test_mark(struct mm_struct *mm, unsigned long addr,
+				  u8 perm)
+{
+	struct corten_arena *ar;
+	struct corten_txn txn;
+	struct corten_pte_meta m = { };
+	int ret;
+
+	ar = corten_arena_lookup_get(mm, addr);
+	if (!ar)
+		return -ENOENT;
+	ret = corten_arena_fill_upper(ar, addr);
+	if (ret)
+		goto out;
+	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+	if (ret)
+		goto out;
+	m.state = CORTEN_PRIVATE_ANON;
+	m.perm = perm;
+	ret = corten_mark(&txn, addr, PAGE_SIZE, &m);
+	corten_unlock(&txn);
+out:
+	percpu_ref_put(&ar->active);
+
+	return ret;
+}
+
+/* Read one named counter out of the arena_stats debugfs render (the
+ * very lines the DoD evidence greps).
+ */
+static long corten_arena_test_named_counter(struct kunit *test,
+					    const char *name)
+{
+	char *dbg = corten_test_render_dbg(CORTEN_DBG_ARENA_STATS);
+	char *val, *end;
+	long n = -1;
+
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
+	val = strstr(dbg, name);
+	if (val) {
+		val += strlen(name);
+		while (*val == ' ' || *val == '\t')
+			val++;
+		/* kstrtol() wants the whole string: end the line before
+		 * parsing (the render continues past this counter).
+		 */
+		end = strchr(val, '\n');
+		if (end)
+			*end = '\0';
+		if (kstrtol(val, 10, &n))
+			n = -1;
+	}
+	kfree(dbg);
+
+	return n;
+}
+
+static void corten_arena_test_mprotect_route(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_pte_meta m;
+	struct corten_arena *ar;
+	struct vm_area_struct *vma;
+	u8 prot;
+	long r0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "mprotect route requires corten=on");
+
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_mark(mm, CORTEN_ARENA_TEST_BASE,
+					       CORTEN_ARENA_TEST_PERM_RW), 0);
+
+	/* MODE matrix: a MODE-targeted arena (mode=0) keeps the S6
+	 * verdict -- permission changes are not routed without MODE.
+	 */
+	mmap_write_lock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mprotect_route(mm, CORTEN_ARENA_TEST_BASE,
+						    2 * PMD_SIZE,
+						    PROT_READ | PROT_WRITE,
+						    -1), -EOPNOTSUPP);
+	mmap_write_unlock(mm);
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* Out-of-scope combinations: pkey and non-RWX prot bits. */
+	mmap_write_lock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mprotect_route(mm, CORTEN_ARENA_TEST_BASE,
+						    PMD_SIZE, PROT_READ, 0),
+			-EOPNOTSUPP);
+	mmap_write_unlock(mm);
+	mmap_write_lock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mprotect_route(mm, CORTEN_ARENA_TEST_BASE,
+						    PMD_SIZE,
+						    PROT_READ | PROT_GROWSDOWN,
+						    -1), -EOPNOTSUPP);
+	mmap_write_unlock(mm);
+
+	/* PARTIAL: the range reaches past the arena boundary. */
+	mmap_write_lock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mprotect_route(mm,
+						    CORTEN_ARENA_TEST_BASE +
+						    3 * PMD_SIZE,
+						    2 * PMD_SIZE, PROT_READ,
+						    -1), -EOPNOTSUPP);
+	mmap_write_unlock(mm);
+
+	/* In-arena CHUNK: routed, recorded perm moves with it. */
+	r0 = corten_arena_test_named_counter(test, "mprotect_routes");
+	mmap_write_lock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mprotect_route(mm, CORTEN_ARENA_TEST_BASE,
+						    2 * PMD_SIZE, PROT_READ,
+						    -1), 1);
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_BASE,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_PRIVATE_ANON);
+	KUNIT_EXPECT_EQ(test, m.perm,
+			CORTEN_PERM_READ | CORTEN_PERM_USER);
+	KUNIT_EXPECT_GT(test,
+			corten_arena_test_named_counter(test,
+							"mprotect_routes"),
+			r0);
+
+	/* Whole arena to PROT_NONE: the FRESH gate's upper bound and the
+	 * shadow-VMA flags follow, so a never-faulted page cannot
+	 * resurrect the old permissions.
+	 */
+	mmap_write_lock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mprotect_route(mm, CORTEN_ARENA_TEST_BASE,
+						    CORTEN_ARENA_TEST_LEN,
+						    PROT_NONE, -1), 1);
+	mmap_write_unlock(mm);
+	rcu_read_lock();
+	ar = corten_arena_lookup(mm, CORTEN_ARENA_TEST_BASE);
+	if (ar)
+		prot = READ_ONCE(ar->prot);
+	else
+		prot = CORTEN_PERM_ALL;
+	rcu_read_unlock();
+	KUNIT_EXPECT_EQ(test, prot, CORTEN_PERM_USER);
+	vma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_EXPECT_FALSE(test, vma->vm_flags &
+			   (VM_READ | VM_WRITE | VM_EXEC));
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_BASE,
+					       &m), 0);
+	/* PROT_NONE: the R/W/E bits drop, the USER valid bit stays -- the
+	 * same USER-only encoding the ar->prot check above read back.
+	 */
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_USER);
+
+	/* And back up: the chunk perm transaction is reversible. */
+	mmap_write_lock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mprotect_route(mm, CORTEN_ARENA_TEST_BASE,
+						    CORTEN_ARENA_TEST_LEN,
+						    PROT_READ | PROT_WRITE,
+						    -1), 1);
+	mmap_write_unlock(mm);
+	vma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_EXPECT_TRUE(test, vma->vm_flags & VM_READ);
+	KUNIT_EXPECT_TRUE(test, vma->vm_flags & VM_WRITE);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_BASE,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_ARENA_TEST_PERM_RW);
+}
+
+static void corten_arena_test_madvise_route(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_pte_meta m;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "madvise route requires corten=on");
+
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_mark(mm, CORTEN_ARENA_TEST_BASE,
+					       CORTEN_ARENA_TEST_PERM_RW), 0);
+
+	/* MODE matrix: a MODE-targeted arena (mode=0) keeps the S6
+	 * behaviour -- FREE and hints reject on it.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_FREE,
+						   CORTEN_ARENA_TEST_BASE,
+						   PAGE_SIZE), -EOPNOTSUPP);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_NORMAL,
+						   CORTEN_ARENA_TEST_BASE,
+						   PAGE_SIZE), -EOPNOTSUPP);
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* MADV_FREE folded into the DONTNEED transaction: the content is
+	 * dropped (an eager drop is a compliance superset of lazy-free),
+	 * the shadow-VMA and its VA stay.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_FREE,
+						   CORTEN_ARENA_TEST_BASE,
+						   PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_BASE,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_BASE));
+
+	/* Pure hints: counted no-op successes inside the arena. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_NORMAL,
+						   CORTEN_ARENA_TEST_BASE,
+						   PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_SEQUENTIAL,
+						   CORTEN_ARENA_TEST_BASE +
+						   PMD_SIZE, PMD_SIZE), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_RANDOM,
+						   CORTEN_ARENA_TEST_BASE,
+						   CORTEN_ARENA_TEST_LEN), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_COLD,
+						   CORTEN_ARENA_TEST_BASE,
+						   PAGE_SIZE), 1);
+
+	/* WILLNEED stays rejected (sec 3.4 matrix). */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_WILLNEED,
+						   CORTEN_ARENA_TEST_BASE,
+						   PAGE_SIZE), -EOPNOTSUPP);
+
+	/* A hint fully outside any arena: legacy (0). */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_NORMAL,
+						   CORTEN_ARENA_TEST_NOWHERE,
+						   PAGE_SIZE), 0);
+
+	/* A hint crossing the arena boundary: reject. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_NORMAL,
+						   CORTEN_ARENA_TEST_BASE +
+						   3 * PMD_SIZE, 2 * PMD_SIZE),
+			-EOPNOTSUPP);
+
+	/* DONTNEED keeps its S6 routing. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_DONTNEED,
+						   CORTEN_ARENA_TEST_BASE,
+						   PAGE_SIZE), 1);
+}
+
+/* mremap routing needs the calling task's mm attached (the move path
+ * copies through the user addresses), so the seed/move/verify steps run
+ * on the dedicated op thread like the RELEASE cases do.
+ */
+static void corten_arena_test_op_mremap(struct corten_arena_test_op *o)
+{
+	o->retl = corten_arena_mremap_route(o->mm, o->addr, o->len, o->len2,
+					    o->flags, o->new_addr);
+}
+
+/* Seed/verify the payload through the arena's own fault paths. */
+static void corten_arena_test_op_copy_out(struct corten_arena_test_op *o)
+{
+	o->ret = copy_to_user((void __user *)o->addr, o->buf, 8) ? -EIO : 0;
+}
+
+static void corten_arena_test_op_copy_in(struct corten_arena_test_op *o)
+{
+	o->ret = copy_from_user(o->buf, (void __user *)o->addr, 8) ? -EIO : 0;
+}
+
+/* run_op variant carrying the full T0b argument block. */
+static int corten_arena_test_run_op_full(struct kunit *test,
+					 struct corten_arena_test_op *o)
+{
+	struct task_struct *tsk;
+
+	init_completion(&o->done);
+	tsk = kthread_run(corten_arena_test_op_thread, o, "corten_arena_op");
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tsk);
+	wait_for_completion(&o->done);
+
+	return o->ret;
+}
+
+static void corten_arena_test_mremap_route(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_pte_meta m;
+	struct vm_area_struct *vma;
+	char pattern[9] = "T0BMOVE1";
+	char back[9] = { 0 };
+	struct corten_arena_test_op o;
+	long new_addr, r0;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "mremap route requires corten=on");
+
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* Decision table (no user memory touched; the direct call is the
+	 * same context the syscall hook runs in).  Explicit target onto
+	 * the arena, VA donation, a no-MAYMOVE grow and a boundary-
+	 * crossing old range are all counted rejects.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mremap_route(mm, CORTEN_ARENA_TEST_BASE,
+						  2 * PMD_SIZE, 4 * PMD_SIZE,
+						  MREMAP_FIXED | MREMAP_MAYMOVE,
+						  CORTEN_ARENA_TEST_BASE +
+						  PMD_SIZE), -EOPNOTSUPP);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mremap_route(mm, CORTEN_ARENA_TEST_BASE,
+						  2 * PMD_SIZE, 4 * PMD_SIZE,
+						  MREMAP_DONTUNMAP |
+						  MREMAP_MAYMOVE, 0),
+			-EOPNOTSUPP);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mremap_route(mm, CORTEN_ARENA_TEST_BASE,
+						  2 * PMD_SIZE, 4 * PMD_SIZE,
+						  0, 0), -EOPNOTSUPP);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mremap_route(mm,
+						  CORTEN_ARENA_TEST_BASE +
+						  3 * PMD_SIZE, 2 * PMD_SIZE,
+						  6 * PMD_SIZE,
+						  MREMAP_MAYMOVE, 0),
+			-EOPNOTSUPP);
+	KUNIT_EXPECT_GT(test,
+			corten_arena_test_named_counter(test,
+							"mremap_rejects"), 0);
+
+	/* In-place shrink: same address back, tail content dropped
+	 * through the chunk-zap transaction.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_mark(mm, CORTEN_ARENA_TEST_BASE,
+					       CORTEN_ARENA_TEST_PERM_RW), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_mark(mm, CORTEN_ARENA_TEST_BASE +
+					       PMD_SIZE,
+					       CORTEN_ARENA_TEST_PERM_RW), 0);
+	r0 = corten_arena_test_named_counter(test, "mremap_routes");
+	new_addr = corten_arena_mremap_route(mm, CORTEN_ARENA_TEST_BASE,
+					     2 * PMD_SIZE, PMD_SIZE, 0, 0);
+	KUNIT_EXPECT_EQ(test, new_addr, (long)CORTEN_ARENA_TEST_BASE);
+	KUNIT_EXPECT_GT(test,
+			corten_arena_test_named_counter(test, "mremap_routes"),
+			r0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_BASE,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_PRIVATE_ANON);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_BASE +
+					       PMD_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+
+	/* Grow: kernel-copy into a fresh window arena, the old arena is
+	 * retired.  The content must survive the move.
+	 */
+	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
+				     CORTEN_ARENA_TEST_WIN +
+				     CORTEN_ARENA_TEST_WIN_LEN,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	/* auto_attach() is the do_mmap() tail hook: DECLARE's locked body
+	 * runs under the caller's mmap_write (mmap_region()'s contract).
+	 */
+	mmap_write_lock(mm);
+	ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_WIN,
+				       CORTEN_ARENA_TEST_WIN_LEN);
+	mmap_write_unlock(mm);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+
+	o = (struct corten_arena_test_op) {
+		.mm = mm,
+		.fn = corten_arena_test_op_copy_out,
+		.addr = CORTEN_ARENA_TEST_WIN,
+		.buf = pattern,
+	};
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
+
+	o = (struct corten_arena_test_op) {
+		.mm = mm,
+		.fn = corten_arena_test_op_mremap,
+		.addr = CORTEN_ARENA_TEST_WIN,
+		.len = CORTEN_ARENA_TEST_WIN_LEN,
+		.len2 = 2 * CORTEN_ARENA_TEST_WIN_LEN,
+		.flags = MREMAP_MAYMOVE,
+	};
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
+	new_addr = o.retl;
+	/* The cursor placement skipped the WIN arena obstacle. */
+	KUNIT_EXPECT_GE(test, new_addr,
+			(long)(CORTEN_ARENA_TEST_WIN +
+			       CORTEN_ARENA_TEST_WIN_LEN));
+	KUNIT_EXPECT_EQ(test, new_addr & (PMD_SIZE - 1), 0);
+
+	/* The content survived the kernel copy. */
+	o = (struct corten_arena_test_op) {
+		.mm = mm,
+		.fn = corten_arena_test_op_copy_in,
+		.addr = new_addr,
+		.buf = back,
+	};
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
+	KUNIT_EXPECT_EQ(test, memcmp(back, pattern, 8), 0);
+
+	/* The old arena is retired, the new one is a live arena. */
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, new_addr), 1);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, new_addr));
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
@@ -1672,6 +2152,9 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_auto_place),
 	KUNIT_CASE(corten_arena_test_auto_route),
 	KUNIT_CASE(corten_arena_test_auto_attach_release),
+	KUNIT_CASE(corten_arena_test_mprotect_route),
+	KUNIT_CASE(corten_arena_test_madvise_route),
+	KUNIT_CASE(corten_arena_test_mremap_route),
 	KUNIT_CASE(corten_arena_test_fork_demote),
 	KUNIT_CASE(corten_arena_test_concurrent),
 	KUNIT_CASE(corten_arena_test_concurrent_window),

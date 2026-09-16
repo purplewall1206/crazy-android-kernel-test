@@ -1946,9 +1946,13 @@ static int madvise_do_behavior(unsigned long start, size_t len_in,
 
 #ifdef CONFIG_CORTEN_MM_ARENA
 	/*
-	 * CortenMM arena routing (M3B_DESIGN.md sec 5.8): MADV_DONTNEED
-	 * fully inside one arena drops the contents transactionally
-	 * (shadow-VMA kept); every other behaviour on a shadow-VMA is
+	 * CortenMM arena routing (M3B_DESIGN.md sec 5.8, T0b extends the
+	 * decision table per M4T0_SPEC.md sec 3.4): MADV_DONTNEED fully
+	 * inside one arena drops the contents transactionally (shadow-VMA
+	 * kept); MADV_FREE is folded into the same transaction (an eager
+	 * content drop is a compliance superset of lazy-free, counted);
+	 * the pure hints (NORMAL/SEQUENTIAL/RANDOM/COLD) are no-op
+	 * successes in-arena.  Every other behaviour on a shadow-VMA is
 	 * rejected by the per-VMA check in madvise_vma_behavior() below.
 	 * Runs under whatever madvise_lock() provides; the decision is
 	 * xarray-only, no VMA dereference.

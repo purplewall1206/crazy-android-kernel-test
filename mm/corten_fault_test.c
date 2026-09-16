@@ -1118,6 +1118,199 @@ static void corten_fault_test_chunk_unmap(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, get_mm_counter_sum(t->mm, MM_ANONPAGES), 0);
 }
 
+/*
+ * T0b (M4T0_SPEC.md sec 3.3): routed mprotect on a live arena page.
+ * The recorded perm moves in the same transaction and the already
+ * installed PTE is rewritten to the matching encoding (TLB flushed) --
+ * a downgrade must deny the next write with SEGV_ACCERR from the
+ * metadata gate, an upgrade must let it through again.
+ */
+static void corten_fault_test_mprotect_pte(struct kunit *test)
+{
+	/*
+	 * The route is gated on corten_enabled_static() and the desc
+	 * locks only exist on a corten=on boot (same scope note as the
+	 * other real-chain cases above).
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+	struct ft_mm *t = ft_setup(test);
+	unsigned long addr = FT_BASE + 5 * PAGE_SIZE;
+	struct corten_pte_meta m;
+	pte_t *ptep, pte;
+
+	/* The route serves MODE-process takeover; mode_enter is the
+	 * gate-free internal step (the registry exists after DECLARE).
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(t->mm), 0);
+
+	KUNIT_ASSERT_EQ(test, ft_mark(t, addr, PAGE_SIZE, FT_PERM_RW), 0);
+	KUNIT_ASSERT_EQ(test, ft_write_fault(t, addr), 0);
+
+	/* Downgrade to read-only: metadata and live PTE move together. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_mprotect_route(t->mm, addr, PAGE_SIZE,
+						    PROT_READ, -1), 1);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_USER);
+
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_FALSE(test, pte_write(pte));
+
+	/* The next write is denied by the metadata gate (ACCERR). */
+	KUNIT_EXPECT_NE(test, ft_write_fault(t, addr), 0);
+
+	/* Upgrade back: the fault path rebuilds the writable PTE. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_mprotect_route(t->mm, addr, PAGE_SIZE,
+						    PROT_READ | PROT_WRITE,
+						    -1), 1);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+}
+
+/* The JVM reserve+commit shape (D-G regression anchor): a PROT_NONE
+ * reservation declares the arena -- the FRESH gate's upper bound
+ * (ar->prot) carries no R/W and no window has a tracked PT page yet --
+ * and then mprotect() commits a prefix.  The commit must be visible to
+ * the first fault inside the prefix (pending perm), while the rest of
+ * the reservation keeps the inaccessible contract (first write ACCERRs
+ * instead of installing a page behind the stale bound).
+ */
+static void corten_fault_test_mprotect_fresh(struct kunit *test)
+{
+	struct ft_mm *t;
+	unsigned long addr;
+	struct corten_pte_meta m;
+	pte_t *ptep, pte;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+
+	t = kunit_kzalloc(test, sizeof(*t), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t);
+	kunit_add_action(test, ft_mm_destroy, t);
+
+	t->mm = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t->mm);
+
+	/* The reservation: PROT_NONE (no VM_READ/VM_WRITE), so DECLARE
+	 * records an arena upper bound without R/W.
+	 */
+	t->vma = ft_mkvm(t->mm, FT_BASE, FT_BASE + FT_ARENA_LEN,
+			 FT_FLAGS_OK & ~(VM_READ | VM_WRITE));
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t->vma);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(t->mm, FT_BASE, FT_ARENA_LEN), 0);
+	t->ar_start = FT_BASE;
+	t->ar_end = FT_BASE + FT_ARENA_LEN;
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(t->mm), 0);
+
+	/* Commit a 33-page prefix through the route: no window of the
+	 * arena has a tracked PT page, so this exercises the fill +
+	 * pending-perm path, not the live-PTE rewrite.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_mprotect_route(t->mm, FT_BASE,
+						    33 * PAGE_SIZE,
+						    PROT_READ | PROT_WRITE,
+						    -1), 1);
+
+	/* First touch in the committed prefix: gated by the pending perm
+	 * (not the stale bound), and the install is writable.
+	 */
+	addr = FT_BASE + PAGE_SIZE;
+	KUNIT_ASSERT_EQ(test, ft_write_fault(t, addr), 0);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte) && pte_write(pte));
+
+	/* Outside the prefix the reservation is still PROT_NONE: the
+	 * first write must be denied, not installed behind the commit.
+	 */
+	KUNIT_EXPECT_NE(test,
+			ft_write_fault(t, FT_BASE + 96 * PAGE_SIZE), 0);
+}
+
+/* The "pmd present, descriptor missing" shape (D-G' regression anchor):
+ * the window's PT page exists but its descriptor install failed
+ * (GFP_NOWAIT) or the descriptor was dropped, so the window is
+ * untracked even though the upper tables exist.  The mprotect route and
+ * the fault path must re-arm the descriptor and recover the transaction
+ * instead of silently degrading to the legacy body.
+ */
+static void corten_fault_test_untracked_rearm(struct kunit *test)
+{
+	struct ft_mm *t = ft_setup(test);
+	unsigned long win = FT_BASE + PMD_SIZE;
+	unsigned long addr = win + PAGE_SIZE;
+	long rein0;
+	struct corten_pte_meta m;
+	struct corten_txn txn_;
+	pte_t *ptep, pte;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+
+	/* Window 1 is untouched by ft_setup (only window 0 is filled):
+	 * fill it with both installs failing (the fresh install inside
+	 * pte_alloc_one and the re-arm at the end of fill_upper) -- the
+	 * pmd stays populated but the window is untracked, and
+	 * lock_range() reports -EOPNOTSUPP for it (a plain hole is
+	 * -ENOENT).  The failed begin holds no locks, so the probe leaks
+	 * nothing on the expected-failure path.
+	 */
+	rein0 = corten_ptdesc_reinstalled_count();
+
+	corten_test_inject_alloc_fail(2);
+	{
+		struct corten_arena *ar = corten_arena_lookup_get(t->mm, win);
+
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+		KUNIT_ASSERT_EQ(test, corten_arena_fill_upper(ar, win), 0);
+		percpu_ref_put(&ar->active);
+	}
+	corten_test_inject_alloc_fail(0);
+	KUNIT_EXPECT_EQ(test, corten_lock_range(t->mm, win, PAGE_SIZE, &txn_),
+			-EOPNOTSUPP);
+
+	/* The mprotect route recovers the window: its -EOPNOTSUPP arm
+	 * re-arms the descriptor (install succeeds with injection off),
+	 * locks, and records the pending perm like a tracked window.
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(t->mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_mprotect_route(t->mm, win, 33 * PAGE_SIZE,
+						    PROT_READ | PROT_WRITE,
+						    -1), 1);
+	KUNIT_EXPECT_GT(test, corten_ptdesc_reinstalled_count(), rein0);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, win, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_PRIVATE_ANON);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+
+	/* The recovered window is transactional: the first fault installs
+	 * a writable page instead of falling back to the legacy body.
+	 */
+	KUNIT_ASSERT_EQ(test, ft_write_fault(t, addr), 0);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte) && pte_write(pte));
+}
+
 static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_dispatch),
 	KUNIT_CASE(corten_fault_test_unmap_classify),
@@ -1131,6 +1324,9 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_untracked_drift),
 #endif
 	KUNIT_CASE(corten_fault_test_restore),
+	KUNIT_CASE(corten_fault_test_mprotect_pte),
+	KUNIT_CASE(corten_fault_test_mprotect_fresh),
+	KUNIT_CASE(corten_fault_test_untracked_rearm),
 	KUNIT_CASE(corten_fault_test_fill_upper_race),
 	KUNIT_CASE(corten_fault_test_map_race),
 	KUNIT_CASE(corten_fault_test_chunk_unmap),

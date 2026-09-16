@@ -1994,20 +1994,29 @@ SYSCALL_DEFINE5(mremap, unsigned long, addr, unsigned long, old_len,
 
 #ifdef CONFIG_CORTEN_MM_ARENA
 	/*
-	 * CortenMM arena reject hook (M3B_DESIGN.md sec 5.9): mremap on
-	 * an arena range needs move_ptes() under the covering desc write
-	 * locks plus a legal shadow-VMA split -- prerequisites M3 does
-	 * not have (MASTER M4 turns this into a drain + legacy
-	 * fallback).  Both the old range and, for MREMAP_FIXED, the
-	 * destination are checked; the do_vmi_align_munmap() guard is
-	 * the backstop for any race window.
+	 * CortenMM arena routing (M4T0_SPEC.md sec 8 T0-R1, STATE D12):
+	 * in-arena mremap is routed, not rejected -- glibc's mmrealloc
+	 * drives large reallocs through this syscall and a plain
+	 * -EOPNOTSUPP would break every compiled program.  The route
+	 * answers shrink (in place, tail content dropped) and grow
+	 * (kernel copy into a fresh window arena + RELEASE of the old
+	 * one) shapes; explicit-target moves (MREMAP_FIXED),
+	 * MREMAP_DONTUNMAP and boundary crossings stay counted rejects
+	 * (see corten_arena_mremap_route()).
+	 * Return: 0 = run the legacy do_mremap (no arena in range),
+	 * >0 = routed, the new address; <0 = counted reject.  The
+	 * do_vmi_align_munmap() guard remains the backstop for ranges
+	 * that race past the route.
 	 */
-	if (corten_arena_range_overlaps(current->mm, vrm.addr, vrm.old_len))
-		return -EOPNOTSUPP;
-	if ((vrm.flags & MREMAP_FIXED) &&
-	    corten_arena_range_overlaps(current->mm, vrm.new_addr,
-					vrm.new_len))
-		return -EOPNOTSUPP;
+	{
+		long cret = corten_arena_mremap_route(current->mm, vrm.addr,
+						      vrm.old_len,
+						      vrm.new_len, vrm.flags,
+						      vrm.new_addr);
+
+		if (cret)
+			return cret;
+	}
 #endif
 
 	return do_mremap(&vrm);
