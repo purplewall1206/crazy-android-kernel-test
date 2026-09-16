@@ -1056,6 +1056,10 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	 * (and later free) its parent's arena registry.
 	 */
 	mm->corten_state = NULL;
+	/* A fresh mm starts out of auto-arena mode; dup_mmap() copies the
+	 * parent's MODE bit explicitly (M4T0_SPEC.md sec 5.2).
+	 */
+	mm->corten_mode = false;
 #endif
 	atomic_set(&mm->mm_users, 1);
 	atomic_set(&mm->mm_count, 1);

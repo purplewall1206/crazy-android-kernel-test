@@ -2886,6 +2886,9 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 	case PR_CORTEN_ARENA:
 		error = corten_prctl_arena(arg2, arg3, arg4, arg5);
 		break;
+	case PR_CORTEN_MODE:
+		error = corten_prctl_mode(arg2, arg3, arg4, arg5);
+		break;
 	default:
 		trace_task_prctl_unknown(option, arg2, arg3, arg4, arg5);
 		error = -EINVAL;

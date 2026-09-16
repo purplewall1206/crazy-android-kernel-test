@@ -979,6 +979,17 @@ struct mm_struct {
 		 * what every process runs with unless it opted in.
 		 */
 		struct corten_mm_state *corten_state;
+		/**
+		 * @corten_mode: MODE-process auto-arena switch
+		 * (prctl(PR_CORTEN_MODE), M4T0_SPEC.md sec 1.2).  Kept in
+		 * the mm_struct rather than in @corten_state so that the
+		 * mode gate can fire while no arena -- and therefore no
+		 * registry -- exists yet; the hot-path check is a single
+		 * byte load behind the corten=on static branch.  Writers
+		 * are prctl ENTER/EXIT and fork (all holding this mm's
+		 * mmap_lock for writing); readers use READ_ONCE().
+		 */
+		bool corten_mode;
 #endif
 
 		unsigned long mmap_base;	/* base of mmap area */

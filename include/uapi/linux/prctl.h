@@ -398,4 +398,20 @@ struct prctl_mm_map {
 # define CORTEN_ARENA_RELEASE		1	/* arg3=addr, arg4=len */
 # define CORTEN_ARENA_QUERY		2	/* arg3=addr */
 
+/*
+ * CortenMM MODE-process takeover (EXPERIMENTAL, ENTER requires
+ * CAP_SYS_ADMIN).  arg2 selects the operation and arg3..arg5 must be 0.
+ * ENTER switches this address space to auto-arena mode: anonymous
+ * MAP_PRIVATE mmap(NULL, ...) calls are transparently served from the
+ * kernel-managed arena window (M4T0_SPEC.md sec 3.1).  EXIT tears every
+ * arena of this address space down (RELEASE semantics, one by one) and
+ * clears the mode; GET reports 0/1.  The mode is inherited across fork()
+ * together with a full arena teardown on both sides (M4T0_SPEC.md sec 5,
+ * DEV-11).
+ */
+#define PR_CORTEN_MODE			80
+# define CORTEN_MODE_ENTER		1
+# define CORTEN_MODE_EXIT		2
+# define CORTEN_MODE_GET		3
+
 #endif /* _LINUX_PRCTL_H */

@@ -13,15 +13,25 @@
  * through a per-mm xarray keyed by 2M frame index without ever touching
  * the VMA tree.
  *
- * Lock order (M3B_DESIGN.md sec 6.1, outermost first):
+ * Lock order (DESIGN.md sec 7 INV2 as amended by DEV-13, registered
+ * as STATE.md D13, outermost first):
  *
- *	ctl_lock (per-mm state mutex) -> mmap_lock (W or R) -> vma write
+ *	mmap_lock (W or R) -> ctl_lock (per-mm state mutex) -> vma write
  *	marks -> percpu_ref(active) [drain barrier] -> fill_lock ->
  *	desc->lock (write, BH-symmetric) -> PTE lock.
  *
- * The fault path (S4) only takes percpu_ref tryget/put and never any of
- * the above locks, which is what makes waiting for a drain under
- * ctl_lock deadlock-free.
+ * DECLARE/RELEASE/fork-demote acquire mmap_lock(W) first and nest
+ * ctl_lock inside it; the do_mmap auto-attach runs with the write lock
+ * already held and takes only ctl_lock.  Waiting for a drain under both
+ * locks stays deadlock-free: a transaction (fault path, arch/x86/mm/
+ * fault.c:1344 fast hook, mm/memory.c:6558 slow gate) pins the arena
+ * with percpu_ref tryget/put and never takes mmap_lock for writing nor
+ * ctl_lock, and the percpu_ref release callback runs from RCU softirq
+ * context and only does complete().  The only waiters a drain can block
+ * behind its held mmap_write are legacy space operations, for the
+ * remaining lifetime of the in-flight transactions (microseconds).
+ * corten_arena_mm_exit() drains with mm_users already 0 and takes only
+ * the lower ctl_lock, which cannot form a cycle by itself.
  */
 #ifndef _LINUX_CORTEN_ARENA_H
 #define _LINUX_CORTEN_ARENA_H
@@ -141,6 +151,16 @@ struct corten_arena {
 	struct rcu_head		rcu;
 };
 
+/*
+ * MODE-process auto-arena window (DESIGN.md sec 2, M4T0_SPEC.md sec 1.3):
+ * a fixed span inside x86_64 TASK_SIZE (128T), disjoint from the legacy
+ * mmap_base / brk / vdso areas.  The per-mm cursor hands out PMD-aligned
+ * ranges from it; T0 never recycles them (window exhaustion degrades to
+ * the legacy mmap path, counted).
+ */
+#define CORTEN_MODE_WINDOW_START	0x100000000000UL	/* 16T */
+#define CORTEN_MODE_WINDOW_END		0x400000000000UL	/* 64T */
+
 /**
  * struct corten_mm_state - per-mm arena registry, lazily allocated.
  * @arenas: 2M frame index (addr >> PMD_SHIFT) -> struct corten_arena *.
@@ -150,6 +170,12 @@ struct corten_arena {
  * @ctl_lock: serializes DECLARE/RELEASE (including the drain wait) so
  *            that arena registration is atomic w.r.t. itself.  The fault
  *            path never takes it.
+ * @next_va: the MODE-process auto-arena allocation cursor
+ *           (M4T0_SPEC.md sec 1.3): the next candidate base address in
+ *           the [CORTEN_MODE_WINDOW_START, CORTEN_MODE_WINDOW_END)
+ *           window.  Written only under this mm's mmap_lock for writing
+ *           (do_mmap auto-attach route / ENTER); read with the same lock
+ *           held.
  * @stats: percpu counters, indexed by enum corten_arena_stat.  Relaxed;
  *         the debugfs readers land with the observability slice (S8,
  *         M3B_DESIGN.md sec 7.4).
@@ -165,6 +191,7 @@ struct corten_mm_state {
 	 * taken by the fault path.
 	 */
 	struct mutex		ctl_lock;
+	unsigned long		next_va;
 	unsigned long __percpu	*stats;
 };
 
@@ -233,14 +260,38 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
  * @len: arg4, the range length (QUERY: ignored; the uapi contract passes 0).
  * @arg5: raw prctl arg5, must be 0.
  *
- * Applies the CAP_SYS_ADMIN and corten=on gates; with CONFIG_CORTEN_MM
- * disabled the stub below keeps the case label compiled in but reduces it
- * to a single -EOPNOTSUPP return, identical to an unknown prctl.
+ * Applies the CAP_SYS_ADMIN and corten=on gates; with the arena layer
+ * (CONFIG_CORTEN_MM_ARENA) disabled the stub below keeps the case label
+ * compiled in but reduces it to a single -EOPNOTSUPP return, identical
+ * to an unknown prctl.
  *
  * Return: 0/1 on success (QUERY), negative errno otherwise.
  */
 int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,
 		       unsigned long arg5);
+
+/**
+ * corten_prctl_mode - prctl(PR_CORTEN_MODE) dispatcher.
+ * @op: CORTEN_MODE_ENTER/_EXIT/_GET.
+ * @arg3: raw prctl arg3, must be 0.
+ * @arg4: raw prctl arg4, must be 0.
+ * @arg5: raw prctl arg5, must be 0.
+ *
+ * ENTER needs CAP_SYS_ADMIN and corten=on (same posture as
+ * PR_CORTEN_ARENA); EXIT/GET need corten=on.  With the arena layer
+ * (CONFIG_CORTEN_MM_ARENA) disabled the stub below keeps the case label
+ * compiled in but reduces it to a single -EOPNOTSUPP return, identical
+ * to an unknown prctl.
+ *
+ * EXIT tears every arena of the current mm down (RELEASE semantics,
+ * one by one) and clears the mode -- M4T0_SPEC.md sec 1.1; the older
+ * "-EBUSY while arenas alive" sketch in the spec was superseded when
+ * fork adopted the same teardown-on-transition policy (DEV-11).
+ *
+ * Return: 0/1 on success (GET), negative errno otherwise.
+ */
+int corten_prctl_mode(unsigned int op, unsigned long arg3,
+		      unsigned long arg4, unsigned long arg5);
 
 /*
  * S8 observability renderers, called by the debugfs files in mm/corten.c
@@ -303,6 +354,12 @@ corten_arena_user_fault(struct mm_struct *mm, unsigned long address,
 
 static inline int corten_prctl_arena(unsigned int op, unsigned long addr,
 				     unsigned long len, unsigned long arg5)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int corten_prctl_mode(unsigned int op, unsigned long arg3,
+				    unsigned long arg4, unsigned long arg5)
 {
 	return -EOPNOTSUPP;
 }

@@ -347,6 +347,10 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 {
 	struct mm_struct *mm = current->mm;
 	int pkey = 0;
+#ifdef CONFIG_CORTEN_MM_ARENA
+	bool corten_auto_arena = false;
+	unsigned long corten_auto_len = 0;
+#endif
 
 	*populate = 0;
 
@@ -408,6 +412,33 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	 */
 	vm_flags |= calc_vm_prot_bits(prot, pkey) | calc_vm_flag_bits(file, flags) |
 			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * MODE-process transparent takeover (M4T0_SPEC.md sec 3.1): an
+	 * addr==0 anonymous private mapping of a MODE process is served
+	 * from the auto-arena window instead of the legacy mmap_base
+	 * area.  Placed after round_hint_to_min()/len alignment (the
+	 * decision sees the final length) and before __get_unmapped_area()
+	 * (the takeover rewrites addr/len/flags onto a fixed window
+	 * segment).  corten=off / non-MODE processes pay one static-branch
+	 * read plus one byte load and are otherwise untouched.
+	 */
+	if (!file && addr == 0) {
+		int cret = corten_arena_auto_mmap_route(mm, len, prot, &addr,
+							&len, &flags);
+
+		if (cret < 0)
+			return cret;	/* internal error only */
+		if (cret == 1) {
+			/* Takeover: addr/len/flags were rewritten onto the
+			 * window; attach the VMA after mmap_region().
+			 */
+			corten_auto_arena = true;
+			corten_auto_len = len;
+		}
+	}
+#endif
 
 	/* Obtain the address to map to. we verify (or select) it and ensure
 	 * that it represents a valid section of the address space.
@@ -591,6 +622,22 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	pgoff = __bpf_pgoff_fixup(file, pgoff);
 
 	addr = mmap_region(file, addr, len, vm_flags, pgoff, uf);
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * Auto-arena attach (M4T0_SPEC.md sec 3.1): the takeover VMA was
+	 * created by the MAP_FIXED flow above -- DECLARE its arena now,
+	 * under the write lock do_mmap holds for its whole body.  A
+	 * failure here is a graceful degradation, not an mmap error: the
+	 * mapping stays a plain anonymous VMA at a window address and
+	 * every lookup on it resolves no arena (the residual race window
+	 * to khugepaged collapse noted in the spec is closed the same way
+	 * -- legacy fallback, T1 removes the window).
+	 */
+	if (corten_auto_arena && !IS_ERR_VALUE(addr))
+		corten_arena_auto_attach(mm, addr, corten_auto_len);
+#endif
+
 	if (!IS_ERR_VALUE(addr) &&
 	    ((vm_flags & VM_LOCKED) ||
 	     (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE))
@@ -1812,6 +1859,26 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 	 */
 	mmap_write_lock_nested(mm, SINGLE_DEPTH_NESTING);
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * Arena fork transition (M4T0_SPEC.md sec 5, DEV-11): before any
+	 * VMA is copied, retire every arena of @oldmm -- drain the
+	 * transactions, scrub the metadata, restore the shadow-VMAs to
+	 * plain anonymous VMAs -- so that copy_page_range() below sees an
+	 * all-legacy address space (its COW copies are exact for plain
+	 * anonymous memory).  The child inherits the MODE bit: its new
+	 * mmap(NULL) mappings re-enter the arena.  The demotion cost is
+	 * charged to the fork once; M5 replaces this with the paper-faithful
+	 * traversal (wrprotect + shared + metadata deep copy).  Failure
+	 * aborts the fork (dup_mm() collapses all dup_mmap() errors to
+	 * -ENOMEM at the syscall boundary); the parent keeps running with
+	 * the arenas demoted so far -- both are consistent states.
+	 */
+	retval = corten_arena_fork_demote(mm, oldmm);
+	if (retval)
+		goto loop_out;
+#endif
+
 	/* No ordering required: file already has been exposed. */
 	dup_mm_exe_file(mm, oldmm);
 
@@ -1830,21 +1897,6 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 		struct file *file;
 
 		vma_start_write(mpnt);
-#ifdef CONFIG_CORTEN_MM_ARENA
-		/*
-		 * Arena fork fail-fast (M3B_DESIGN.md sec 5.1): copying an
-		 * arena's page tables or metadata needs the transaction
-		 * protocol (M5).  Refuse cleanly -- the parent is
-		 * unaffected (dup_mmap() only mutates @mm, the child, on
-		 * this path) and the whole fork fails with -EOPNOTSUPP
-		 * here; note dup_mm() collapses all dup_mmap() errors to
-		 * -ENOMEM at the fork() syscall boundary.
-		 */
-		if (mpnt->vm_flags & VM_CORTEN) {
-			retval = -EOPNOTSUPP;
-			goto loop_out;
-		}
-#endif
 		if (mpnt->vm_flags & VM_DONTCOPY) {
 			retval = vma_iter_clear_gfp(&vmi, mpnt->vm_start,
 						    mpnt->vm_end, GFP_KERNEL);
