@@ -1,11 +1,22 @@
 # CortenMM → ARM64: Porting Design Notes (M9)
 
-Status: design document (M9 deliverable). No code in this document has been
-cross-compiled yet; that is the second half of M9 (bootlin aarch64 toolchain +
-`qemu-system-aarch64` smoke, run separately). All line references are against
-this tree (`/home/ppw/linux-6.18`, android17-6.18 @ 68974e235117 + CortenMM
-M2a/M2b/M2c-fix1: b8386e4e2467, 2fd4070e745c, 1284a235f751) and against the
-paper text (`/home/ppw/paper/corte/paper.txt`, CortenMM SOSP'25).
+Revisions: r1 (2026-09-14, initial design). **r2 (2026-09-16, 实证回填)** —
+2026-09-15 aarch64 cross-compile results folded in: §8 P1 status note, §10
+OQ4/OQ5 conclusions, new §11 (Round A/B evidence; logs under
+`/home/ppw/cortenmm/results/r02/`).
+
+Status: design document (M9 deliverable). At r1 no code had been
+cross-compiled; r2 supersedes that: the arm64 defconfig baseline `Image` and
+`mm/corten.o` (Kconfig `depends` released in a throwaway worktree) now build
+green on aarch64 (§11). The remaining second half of M9 — bootlin aarch64
+toolchain cross-check + `qemu-system-aarch64` smoke — is still open. All line
+references are against this tree (`/home/ppw/linux-6.18`, android17-6.18 @
+68974e235117 + CortenMM M2a/M2b/M2c-fix1: b8386e4e2467, 2fd4070e745c,
+1284a235f751) and against the paper text (`/home/ppw/paper/corte/paper.txt`,
+CortenMM SOSP'25). The empirical evidence in §11 comes from the m9 worktree
+`/home/ppw/linux-6.18-m9` (branch `m9-arm64`, HEAD `e911b31adb9c` = the three
+M2 commits + M3a.F1, BH-symmetric locking); the Round B trial ran in a
+since-removed throwaway worktree pinned at the same commit.
 
 ## 中文摘要
 
@@ -423,10 +434,32 @@ Aggregating §3.1/§4; what actually changes:
 
 | Phase | Scope | Est. LoC | Risk | Exit criterion |
 |---|---|---|---|---|
-| P1 compile-level | Relax `CORTEN_MM` `depends on MMU && X86_64` → `(X86_64 \|\| ARM64)` (mm/Kconfig:1429-1432); kill the `512` literal (corten.h:138, corten.c:314); `#if`/table-drive the geometry helpers (corten.c:449-550) for folded levels; fix 64K-page breakage | 60-150 | low — compiler finds everything | `make ARCH=arm64 LLVM=1 defconfig+corten` builds; KUnit passes under qemu -M virt |
+| P1 compile-level **(r2: core proven green, scope shrunk — status note below)** | Relax `CORTEN_MM` `depends on MMU && X86_64` → `(X86_64 \|\| ARM64)` (mm/Kconfig:1429-1432); kill the `512` literal (corten.h:138, corten.c:314); `#if`/table-drive the geometry helpers (corten.c:449-550) for folded levels; fix 64K-page breakage | 60-150 | low — compiler finds everything | `make ARCH=arm64 LLVM=1 defconfig+corten` builds; KUnit passes under qemu -M virt |
 | P2 hook landing | asm-generic `pte_alloc_one` placement decision (OQ4) + `__pte_free_tlb` one-liner (asm/tlb.h:75-81); debugfs counters sanity on arm64 | 20-50 | low | boot with `corten=on`, ptdesc counter tracks PT pages across exec/exit stress |
 | P3 semantic adaptation | Real view on arm64: `pud_leaf/pmd_leaf` (incl. `pmd_cont`) → `-EOPNOTSUPP`; runtime l4/l5 folding in geometry; **contpte interop decision (OQ1, Option A: PTL nesting)**; map/mark sync-point uses gathered `ptep_get` + BBM-safe sequence (§5) | 250-500 | **high** — correctness core | KUnit + arena smoke: fault-populate, mprotect, munmap, fork-COW on arm64; lockdep clean incl. desc→PTL order |
 | P4 validation | arm64 KUnit suite run (synthetic-tree tests reused unchanged), bootlin aarch64 cross-build of android17 config + corten, qemu-system-aarch64 boot matrix (4K defconfig mandatory; 16K config as capability), document results | 100-300 (mostly test glue) | medium | M9 DoD: defconfig cross-compile green + boot smoke report |
+
+**P1 r2 status (2026-09-16, evidence in §11)** — *empirically de-risked, scope
+shrunk, not yet landed*:
+
+- **Done / proven** (Round B, throwaway worktree, sed-released depends):
+  `mm/corten.o` compiles on arm64 with **zero errors** at
+  `CONFIG_PAGE_SHIFT=12` (115,304-byte object) — the compile-level workload
+  the 60-150 LoC band predicted for the core **measured zero**; the only real
+  failures are 2 x86 bit macros in the KUnit file (§11.2). The `depends`
+  relaxation itself is *validated but not committed*: the tree still says
+  `depends on MMU && X86_64` (mm/Kconfig:1432, both trees).
+- **Remaining P1**: ① neutralize `mm/corten_test.c:1910/:1916`
+  (`_PAGE_PSE|_PAGE_PRESENT`, test-only, ~5-15 LoC); ② land the Kconfig
+  `depends` change per OQ5's r2 recommendation (~2-5 LoC). The `512`-literal
+  replacement and folded-level `#if` guards are **not needed on 4K**
+  (BUILD_BUG_ON passes at PTRS_PER_PTE=512); they are 16K/64K predictions and
+  move with §7/R5 to a future 16K/64K compile pass — out of the 4K critical
+  path.
+- Net: P1 compile-level delta on the defconfig slice is **~10-25 LoC**, not
+  60-150; the exit criterion "`defconfig+corten` builds" is half-met at
+  object level, with the full `CONFIG_CORTEN_MM=y` Image + qemu KUnit run
+  belonging to P4.
 
 Comparison to paper §6.7 for the report table: our "RISC-V-equivalent" number
 (P1+P2, the pure port) is ~100-200 LoC — consistent with the paper's 252
@@ -469,13 +502,138 @@ not as our baseline.
   (one hook for all inheriting arches) vs per-arch override; the former is
   cleaner for multi-arch but changes a shared header for an X86+ARM64-only
   feature.
+  **r2 conclusion (§11.1)**: the asm-generic placement is compile-proven
+  harmless on arm64 — `include/asm-generic/pgalloc.h` unconditionally
+  includes `<linux/corten.h>` (:5) and already carries the free-side hook in
+  `pte_free()` (:127); arm64 inherits that header unconditionally via
+  `arch/arm64/include/asm/pgalloc.h:17` (zero arm64-side corten references),
+  and the full Round A defconfig build came out 0E/0W through exactly this
+  include chain. **Recommendation: take option (a)** — put
+  `corten_on_pte_alloc()` inside asm-generic `__pte_alloc_one_noprof()`
+  (pgalloc.h:75), symmetric with the shipped `pte_free` hook. The only
+  residual concern is upstream reviewability of touching a shared header,
+  not mechanics; on the compile-safety axis the question is closed.
 - **OQ5**: folded-level handling in `enum corten_pt_level` for 2/3-level
   configs (16K+36, 64K+42/48/52, 4K+39): compile-time `#if` remap vs runtime
   table; decide in P1 with the actual defconfig matrix (android17 arm64
   defaults to 4K pages, 48-bit VA? confirm CONFIG_ARM64_VA_BITS for the GKI
   config we cross-compile in M9).
+  **r2 answer (§11)**: the crossed config is arm64 defconfig = 4K pages +
+  **52-bit VA / 5 levels** (`CONFIG_ARM64_VA_BITS=52`, `CONFIG_PGTABLE_LEVELS=5`,
+  `CONFIG_PAGE_SHIFT=12`; m9-baseline-config.log) — not the 48-bit guess
+  above. The `depends on X86_64` gate (mm/Kconfig:1432) still blocks arm64 at
+  config level: Round A shows `CONFIG_CORTEN_MM= <absent>`, and Round B could
+  only proceed via a temporary sed. But Round B found **zero
+  hierarchy-assumption errors** on this config, so the folded-level remap is
+  **no longer urgent**: decouple it from P1 and revisit only when a 16K/64K
+  compile matrix is actually run (§7, R5 — those granules remain
+  compile-time-unverified predictions). Interim honest gating suggestion:
+  `depends on MMU && (X86_64 || (ARM64 && ARM64_4K_PAGES))` — scopes the
+  arm64 enablement to exactly what Round B proved, keeps the level-remap
+  question out of the critical path.
 - **OQ6**: qemu -M virt highmem/VA-bits settings for the 5-level smoke test
   (4K+52-bit requires HW LVA support in the model; optional for M9).
+
+---
+
+## 11. 实证结果（2026-09-15 交叉编译，r2 回填）
+
+证据树: `/home/ppw/linux-6.18-m9`（分支 `m9-arm64`，HEAD `e911b31adb9c` =
+M2a `b8386e4e2467` + M2b `2fd4070e745c` + M2c-fix1 `1284a235f751` 三提交 +
+M3a.F1）。原始材料: `results/r02/m9-baseline-config.log`、
+`m9-baseline-build.log`、`m9-trial-Kconfig.bak`、`m9-trial-config.log`、
+`m9-trial-build.log`；汇总 `results/r02/infra-report.md`。工具链
+`/home/ppw/tools/aarch64-toolchain/bin/aarch64-linux-`，`make -j6`。
+两轮口径: **Round A = 基线（CORTEN_MM 被 depends 裁掉）全量 defconfig 构建；
+Round B = throwaway worktree 内放开 depends 后只编 corten 两个对象**。
+
+### 11.1 Round A — arm64 defconfig 基线: PASS
+
+- **判定 PASS**: 2026-09-15 00:24:45 CST 产出 `arch/arm64/boot/Image` —
+  42,031,616 B（≈40.1 MiB），sha256
+  `24f8f716726556d9dfda886f2636cb3fd0b73a075fc4c7c8ac26dc361d8f6204`（r2 时在
+  m9 worktree 复核一致），make 退出码 0，全日志 **0 错误 / 0 警告**
+  （14,921 行，`results/r02/m9-baseline-build.log`）。构建跨中断续传完成
+  （make 幂等零重编），累计 ≈**6h50m** wall。
+- **配置口径**: arm64 defconfig + MGLRU/zram(lz4)。关键符号
+  （m9-baseline-config.log 末段）: `CONFIG_ARM64_4K_PAGES=y` /
+  `CONFIG_ARM64_VA_BITS=52` / `CONFIG_PGTABLE_LEVELS=5` /
+  **`CONFIG_PAGE_SHIFT=12`** — 即 §3.1 表中**与 x86 几何完全一致的 4K 基**
+  （`PTRS_PER_PTE=512`、4KB 元数据数组），但落在 5 级（52-bit VA）配置上；
+  这同时回答了 OQ5 里 "confirm CONFIG_ARM64_VA_BITS" 的子问题（52，非 48）。
+- **CORTEN_MM 被 depends 裁掉的取证**: 同 config 日志末行
+  `CONFIG_CORTEN_MM= <absent>`；原因即 `mm/Kconfig:1432`
+  `depends on MMU && X86_64`（两棵树该行号一致）在 arm64 上不满足，于是
+  `mm/Makefile:156-157` 的 `obj-$(CONFIG_CORTEN_MM)` 两行不展开，
+  corten.o / corten_test.o 根本不进构建 → Round A 同时证明: **基线构建的
+  0E/0W 与 corten 代码无关**，corten 的 arm64 编译证据只能来自 Round B。
+- **对 OQ4 的旁证（见 §10）**: 这是一次穿过 `arch/arm64/include/asm/pgalloc.h:17`
+  → `include/asm-generic/pgalloc.h`（:5 无条件 `#include <linux/corten.h>`、
+  :127 `pte_free()` 内已有 `corten_on_pte_free()` 钩子；arm64 侧 asm 头对
+  corten 零引用）的全量构建，0E/0W ⇒ **corten.h + 共享头钩子模式在 arm64
+  编译无害，实证成立**。
+
+### 11.2 Round B — 放开 depends 后: 核心零错误，阻塞仅 test 文件 2 处
+
+执行方式（如实记录，`results/r02/infra-report.md` §2）: 因 Round A 的 make
+正在 m9 树上运行，就地改 Kconfig 会触发 syncconfig 污染，故用一次性
+throwaway worktree `/home/ppw/linux-6.18-m9-trial`（分支
+`m9-arm64-corten-trial` @ e911b31，零提交，事后已 `worktree remove --force`
++ 删分支，m9 树零扰动）。步骤: sed `mm/Kconfig:1432` `depends on MMU && X86_64`
+→ `depends on MMU`（备份 `results/r02/m9-trial-Kconfig.bak`）；克隆 m9
+.config 并追加 `CONFIG_CORTEN_MM=y` 后 `olddefconfig`；
+`make -k ARCH=arm64 CROSS_COMPILE=… mm/corten.o mm/corten_test.o`。
+
+**核心结论: `mm/corten.o` 在 arm64 零错误编译通过**（115,304 B 对象）——
+协议核心（covering-PT-page 锁、事务 API、xarray PFN 索引、钩子调用点）在
+`CONFIG_PAGE_SHIFT=12` 下**原样可编译**。§1 表中 "Protocol core 0 LoC" 与
+"Data structures 0 LoC" 两行由设计论证升级为**编译实证**；§3.1 所述 "只有 4K
+配置与 x86 几何同一" 的可编译面也一并验证。
+
+失败归类表（两轮证据 `results/r02/m9-trial-build.log`，以
+`=== ROUND2 08:12:39 KUNIT=y rerun ===` 分隔；第一轮 7 错 → 第二轮 2 错）:
+
+| 类别 | 现象 | 位置 | 判定 |
+|---|---|---|---|
+| x86 头依赖（页表位宏） | `_PAGE_PSE` / `_PAGE_PRESENT` undeclared（第二轮仅存的 2 个错误） | `mm/corten_test.c:1910` `set_pmd(pmdp, __pmd(_PAGE_PSE \| _PAGE_PRESENT))`；同函数 `:1916` 同款 `set_pud` 用法（编译器每函数每标识符只报一次） | **真实阻塞，共 2 处，全部 test-only**: x86 `pgtable_types.h` 位宏，arm64 头文件无此符号（已 grep `arch/arm64/include/asm/pgtable*.h` 确认）。修复方向: 大页 leaf 构造改架构中立 helper（走 `pmd_mkinvalid`/prot 类 API）或该测试段按 `CONFIG_X86_64` 门控；约 5-15 LoC |
+| 层级假设 | — | — | **0 个**。核心事务/锁/几何/视图代码在 4K+5 级配置上无任何 arch 层级假设泄漏 |
+| 门控伪影（方法论记录，非移植失败） | 第一轮 5 个 implicit-declaration: `corten_test_inject_alloc_fail` :1154，`corten_test_render_dbg` :2024，`CORTEN_DBG_STATS/TXN/DUMP` :2024/:2034/:2043 | 这些声明在 `mm/corten.h:211-227` 的 `#ifdef CONFIG_CORTEN_MM_KUNIT_TEST` 内；该 Kconfig 符号 `depends on CORTEN_MM && KUNIT`、`default KUNIT_ALL_TESTS`，defconfig 无 KUNIT → 符号被裁；单目标 `make mm/corten_test.o` 绕过 `obj-$(…)` 门控强编译才触发 | **非真实错误**: 第二轮补 `CONFIG_KUNIT=y` + `CONFIG_CORTEN_MM_KUNIT_TEST=y` 后全部消失。**勿计入移植工作量**（P1 估算修正见 §11.3） |
+
+### 11.3 对 §8 P1 工作量估算的修正
+
+原文 P1 估 60-150 LoC（Kconfig 放开 + 512 字面量 + 几何 `#if` 化 + 64K 修复），
+风险栏写 "compiler finds everything"。实证: **编译器几乎没找到东西**——
+4K/52-bit defconfig 切片上核心 0 错误，全部真实阻塞集中在 test 文件的
+2 个位宏。据此修正:
+
+1. **协议核心跨架构可编译直接成立**。原 P1 的核心假设（"纯编译级工作"）
+   被实证反转为好消息: 核心不需要任何编译级改动。§1 总估算 450-1000 LoC 中
+   属于 P1 的 60-150 行在 4K 主线上收敛为 **~10-25 LoC**
+   （test 位宏 5-15 + Kconfig depends 2-5）。
+2. **P1 剩余项收窄**（与 §8 状态段一致）: ① `corten_test.c:1910/:1916`
+   位宏中立化（test-only）；② `depends` 放开落地（语义按 OQ5 r2 建议，
+   先 `ARM64 && ARM64_4K_PAGES` 试点或直接 `|| ARM64`）。512 字面量与折叠
+   层级改写在 4K 配置下**无需**（`BUILD_BUG_ON` 在 `PTRS_PER_PTE=512` 下自然
+   通过），随 §7/R5 移交 16K/64K 编译矩阵，不阻塞 4K 主线。
+3. **风险表影响**: R5（64K/16K 几何）与 R4（5 级/52-bit）维持原判——Round B
+   只覆盖了 5 级配置的**编译**面，运行时折叠（`pgtable_l4/l5_enabled`）与
+   16K/64K 粒度仍是未验证预测；P3 的 contpte/BBM 语义工作（R1/R2）完全未被
+   本轮触及，仍是 450-1000 估算的主体与最大风险。
+
+### 11.4 M9 剩余工作排序（r2 视角）
+
+1. **P1 收尾（最小改动量大）**: test 位宏中立化 + Kconfig depends 落地
+   （含 OQ4 的 asm-generic alloc 钩子落点——其编译风险已被 Round A 实证排除）→
+   在 m9 树重跑 `mm/corten.o`/`mm/corten_test.o`（KUNIT=y）双绿即闭环。
+2. **P4 前半（M9 gate 主线）**: `CONFIG_CORTEN_MM=y` 全量 arm64 Image +
+   `qemu-system-aarch64 -M virt` 启动 smoke（Round A 已给基线 Image 与
+   构建管线，增量成本≈一次增量构建）。
+3. **P2 钩子**: `__pte_free_tlb` 一行 + alloc 落点（OQ4 已定推荐项），
+   debugfs 计数器 sanity。
+4. **P3 语义适配（最大风险主体，未被本轮降低）**: contpte PTL 嵌套（OQ1）、
+   BBM 映射序（§5）、gathered `ptep_get` 同步点；本轮唯一相关输入是
+   "0 个层级假设错误" 免除了几何重写的编译层恐慌。
+5. **16K/64K 编译矩阵**: §7/R5/OQ5 的遗留验证面，按需排期。
 
 ---
 
