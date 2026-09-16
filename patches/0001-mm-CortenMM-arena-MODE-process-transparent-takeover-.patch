@@ -1,0 +1,2333 @@
+From 5aef23c4aee9eaf87e1ac50a329e71b247f537e5 Mon Sep 17 00:00:00 2001
+From: purplewall1206 <purplewall1206@github.com>
+Date: Thu, 17 Sep 2026 04:45:07 +0800
+Subject: [PATCH] mm: CortenMM arena: MODE-process transparent takeover
+ (lock-order refactor, auto-attach, fork demote)
+
+M4.T0a, six items:
+
+1. P0 lock-order inversion (DEV-13, registered as STATE.md D13):
+   DECLARE/RELEASE take mmap_lock for writing outermost and nest the
+   per-mm ctl_lock inside it (corten_arena_declare_locked() /
+   corten_arena_release_locked()); the drain waits under both locks.
+   Deadlock-free: transactions pin the arena via percpu_ref
+   tryget/put only (fault fast hook arch/x86/mm/fault.c, slow gate
+   mm/memory.c) and never take mmap_lock for writing nor ctl_lock,
+   and the percpu_ref release callback only complete()s from RCU
+   softirq.  mm_exit() drains with mm_users==0 under the lower
+   ctl_lock alone.  The INV2 amendment supersedes the DESIGN.md
+   sec 7 lock-order text; the DESIGN.md wording update is left to
+   the planning pass (STATE.md D13 is the authoritative record;
+   include/linux/corten_arena.h cites it).
+
+2. PR_CORTEN_MODE=80 (uapi numbering continues 78/79): ENTER
+   (CAP_SYS_ADMIN + corten=on) sets the per-mm MODE bit and eagerly
+   creates the window-cursor registry (idempotent); EXIT tears every
+   arena of the mm down under the write lock and clears the bit;
+   GET returns 0/1.  Deviation from the SPEC sec 1.1 sketch
+   ("-EBUSY while arenas alive"): EXIT performs the full teardown,
+   consistent with the fork transition policy (DEV-11); disclosed
+   in STATE.md D13.
+
+3. Auto-mmap transparent takeover (SPEC sec 3.1): a do_mmap hook,
+   after round_hint_to_min()/len alignment and before
+   __get_unmapped_area().  Whitelist MAP_PRIVATE|MAP_ANONYMOUS|
+   MAP_NORESERVE only; the request is rewritten MAP_FIXED onto a
+   2M-rounded window range and the VMA is DECLAREd by the tail hook
+   under the write lock already held.  The route skips past any
+   obstacle (MODE arena or plain legacy VMA) so the rewrite can
+   never destroy existing mappings; window exhaustion and rounding
+   degeneration degrade gracefully to the legacy mmap path, counted
+   in the per-mm fallback bucket (review C3: the OVERCOMMIT_NEVER
+   whole-takeover degradation now counts through the same bucket --
+   MODE implies the registry exists, mode_enter() creates it before
+   publishing the bit).  Named debugfs counters land with T0b.
+   OVERCOMMIT_NEVER degrades the takeover up front (DEV-12).
+
+4. munmap release-on-full-coverage (SPEC sec 3.2): a chunk from the
+   arena base with a sub-2M tail (the glibc free() shape) RELEASEs
+   the arena whole; without it allocator churn leaks one VMA and 2M
+   of window VA per cycle.  Mid-arena chunks pass through.
+
+5. fork transition (SPEC sec 5, DEV-11): dup_mmap() calls
+   corten_arena_fork_demote() right after mmap_write_lock_nested():
+   the child inherits the MODE bit, every parent arena is drained,
+   scrubbed and restored to a plain anonymous VMA, the registry is
+   erased.  clone(CLONE_VM) never runs dup_mmap and is untouched.
+   On scrub/drain errors the demotion still completes (counted) and
+   the fork aborts.  M5 replaces this with the paper-faithful
+   traversal.
+
+6. KUnit (suite corten_arena): mode prctl gates, auto-mmap
+   whitelist truth table, window cursor arithmetic, release-rule
+   classification, route decisions incl. obstacle skipping and
+   counted exhaustion fallback, attach + debugfs ledger end to end,
+   fork demotion, and the dual-kthread DECLARE/RELEASE vs
+   fault-reader race reused as the DEV-13 regression.
+
+Review condition C2 is closed via the equivalent form: the prctl
+case labels stay compiled in with the -EOPNOTSUPP stubs, which hang
+on !CONFIG_CORTEN_MM_ARENA in include/linux/corten_arena.h (their
+doc comments wrongly claimed a CONFIG_CORTEN_MM guard and were
+corrected); CONFIG_CORTEN_MM=y + CORTEN_MM_ARENA=n is regression
+tested through a full vmlinux build.
+
+Known boundary: T0a alone does not make a MODE process JVM-ready --
+mprotect() inside an arena still returns -EOPNOTSUPP (the S6 reject
+hook is unchanged), so the JVM's PROT_NONE reserve + mprotect
+commit needs the T0b mprotect routing (next commit).
+
+Verification: nine-item matrix green (r05 night re-verification):
+=y full build zero new warnings; KUnit on 20/0/5 + 19/0/0 + 13/0/0,
+off 21/0/4 + 16/0/3 + 3/0/10; KUNIT=y corten=on boot reaches login;
+guest run_mode_smoke 26/26 PASS with the arena ledger back to
+baseline; =n seven objects zero symbols; checkpatch --strict
+0E/0W/0C.  C2 combination (=y, ARENA=n) full build links clean.
+
+Signed-off-by: purplewall1206 <purplewall1206@github.com>
+---
+ include/linux/corten_arena.h |  73 +++-
+ include/linux/mm_types.h     |  11 +
+ include/uapi/linux/prctl.h   |  16 +
+ kernel/fork.c                |   4 +
+ kernel/sys.c                 |   3 +
+ mm/corten_arena.c            | 751 +++++++++++++++++++++++++++++++----
+ mm/corten_arena.h            | 137 ++++++-
+ mm/corten_arena_test.c       | 700 +++++++++++++++++++++++++++++++-
+ mm/mmap.c                    |  82 +++-
+ 9 files changed, 1675 insertions(+), 102 deletions(-)
+
+diff --git a/include/linux/corten_arena.h b/include/linux/corten_arena.h
+index 7bfaebed3277..df0244d8a0f9 100644
+--- a/include/linux/corten_arena.h
++++ b/include/linux/corten_arena.h
+@@ -13,15 +13,25 @@
+  * through a per-mm xarray keyed by 2M frame index without ever touching
+  * the VMA tree.
+  *
+- * Lock order (M3B_DESIGN.md sec 6.1, outermost first):
++ * Lock order (DESIGN.md sec 7 INV2 as amended by DEV-13, registered
++ * as STATE.md D13, outermost first):
+  *
+- *	ctl_lock (per-mm state mutex) -> mmap_lock (W or R) -> vma write
++ *	mmap_lock (W or R) -> ctl_lock (per-mm state mutex) -> vma write
+  *	marks -> percpu_ref(active) [drain barrier] -> fill_lock ->
+  *	desc->lock (write, BH-symmetric) -> PTE lock.
+  *
+- * The fault path (S4) only takes percpu_ref tryget/put and never any of
+- * the above locks, which is what makes waiting for a drain under
+- * ctl_lock deadlock-free.
++ * DECLARE/RELEASE/fork-demote acquire mmap_lock(W) first and nest
++ * ctl_lock inside it; the do_mmap auto-attach runs with the write lock
++ * already held and takes only ctl_lock.  Waiting for a drain under both
++ * locks stays deadlock-free: a transaction (fault path, arch/x86/mm/
++ * fault.c:1344 fast hook, mm/memory.c:6558 slow gate) pins the arena
++ * with percpu_ref tryget/put and never takes mmap_lock for writing nor
++ * ctl_lock, and the percpu_ref release callback runs from RCU softirq
++ * context and only does complete().  The only waiters a drain can block
++ * behind its held mmap_write are legacy space operations, for the
++ * remaining lifetime of the in-flight transactions (microseconds).
++ * corten_arena_mm_exit() drains with mm_users already 0 and takes only
++ * the lower ctl_lock, which cannot form a cycle by itself.
+  */
+ #ifndef _LINUX_CORTEN_ARENA_H
+ #define _LINUX_CORTEN_ARENA_H
+@@ -141,6 +151,16 @@ struct corten_arena {
+ 	struct rcu_head		rcu;
+ };
+ 
++/*
++ * MODE-process auto-arena window (DESIGN.md sec 2, M4T0_SPEC.md sec 1.3):
++ * a fixed span inside x86_64 TASK_SIZE (128T), disjoint from the legacy
++ * mmap_base / brk / vdso areas.  The per-mm cursor hands out PMD-aligned
++ * ranges from it; T0 never recycles them (window exhaustion degrades to
++ * the legacy mmap path, counted).
++ */
++#define CORTEN_MODE_WINDOW_START	0x100000000000UL	/* 16T */
++#define CORTEN_MODE_WINDOW_END		0x400000000000UL	/* 64T */
++
+ /**
+  * struct corten_mm_state - per-mm arena registry, lazily allocated.
+  * @arenas: 2M frame index (addr >> PMD_SHIFT) -> struct corten_arena *.
+@@ -150,6 +170,12 @@ struct corten_arena {
+  * @ctl_lock: serializes DECLARE/RELEASE (including the drain wait) so
+  *            that arena registration is atomic w.r.t. itself.  The fault
+  *            path never takes it.
++ * @next_va: the MODE-process auto-arena allocation cursor
++ *           (M4T0_SPEC.md sec 1.3): the next candidate base address in
++ *           the [CORTEN_MODE_WINDOW_START, CORTEN_MODE_WINDOW_END)
++ *           window.  Written only under this mm's mmap_lock for writing
++ *           (do_mmap auto-attach route / ENTER); read with the same lock
++ *           held.
+  * @stats: percpu counters, indexed by enum corten_arena_stat.  Relaxed;
+  *         the debugfs readers land with the observability slice (S8,
+  *         M3B_DESIGN.md sec 7.4).
+@@ -165,6 +191,7 @@ struct corten_mm_state {
+ 	 * taken by the fault path.
+ 	 */
+ 	struct mutex		ctl_lock;
++	unsigned long		next_va;
+ 	unsigned long __percpu	*stats;
+ };
+ 
+@@ -233,15 +260,39 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
+  * @len: arg4, the range length (QUERY: ignored; the uapi contract passes 0).
+  * @arg5: raw prctl arg5, must be 0.
+  *
+- * Applies the CAP_SYS_ADMIN and corten=on gates; with CONFIG_CORTEN_MM
+- * disabled the stub below keeps the case label compiled in but reduces it
+- * to a single -EOPNOTSUPP return, identical to an unknown prctl.
++ * Applies the CAP_SYS_ADMIN and corten=on gates; with the arena layer
++ * (CONFIG_CORTEN_MM_ARENA) disabled the stub below keeps the case label
++ * compiled in but reduces it to a single -EOPNOTSUPP return, identical
++ * to an unknown prctl.
+  *
+  * Return: 0/1 on success (QUERY), negative errno otherwise.
+  */
+ int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,
+ 		       unsigned long arg5);
+ 
++/**
++ * corten_prctl_mode - prctl(PR_CORTEN_MODE) dispatcher.
++ * @op: CORTEN_MODE_ENTER/_EXIT/_GET.
++ * @arg3: raw prctl arg3, must be 0.
++ * @arg4: raw prctl arg4, must be 0.
++ * @arg5: raw prctl arg5, must be 0.
++ *
++ * ENTER needs CAP_SYS_ADMIN and corten=on (same posture as
++ * PR_CORTEN_ARENA); EXIT/GET need corten=on.  With the arena layer
++ * (CONFIG_CORTEN_MM_ARENA) disabled the stub below keeps the case label
++ * compiled in but reduces it to a single -EOPNOTSUPP return, identical
++ * to an unknown prctl.
++ *
++ * EXIT tears every arena of the current mm down (RELEASE semantics,
++ * one by one) and clears the mode -- M4T0_SPEC.md sec 1.1; the older
++ * "-EBUSY while arenas alive" sketch in the spec was superseded when
++ * fork adopted the same teardown-on-transition policy (DEV-11).
++ *
++ * Return: 0/1 on success (GET), negative errno otherwise.
++ */
++int corten_prctl_mode(unsigned int op, unsigned long arg3,
++		      unsigned long arg4, unsigned long arg5);
++
+ /*
+  * S8 observability renderers, called by the debugfs files in mm/corten.c
+  * (mm/corten_arena.c owns the arena data, corten.c owns the directory).
+@@ -307,6 +358,12 @@ static inline int corten_prctl_arena(unsigned int op, unsigned long addr,
+ 	return -EOPNOTSUPP;
+ }
+ 
++static inline int corten_prctl_mode(unsigned int op, unsigned long arg3,
++				    unsigned long arg4, unsigned long arg5)
++{
++	return -EOPNOTSUPP;
++}
++
+ static inline void corten_arena_arenas_report(struct seq_file *m)
+ {
+ 	seq_puts(m, "arena layer disabled (CONFIG_CORTEN_MM_ARENA=n)\n");
+diff --git a/include/linux/mm_types.h b/include/linux/mm_types.h
+index cccb1802785b..1161350986dc 100644
+--- a/include/linux/mm_types.h
++++ b/include/linux/mm_types.h
+@@ -979,6 +979,17 @@ struct mm_struct {
+ 		 * what every process runs with unless it opted in.
+ 		 */
+ 		struct corten_mm_state *corten_state;
++		/**
++		 * @corten_mode: MODE-process auto-arena switch
++		 * (prctl(PR_CORTEN_MODE), M4T0_SPEC.md sec 1.2).  Kept in
++		 * the mm_struct rather than in @corten_state so that the
++		 * mode gate can fire while no arena -- and therefore no
++		 * registry -- exists yet; the hot-path check is a single
++		 * byte load behind the corten=on static branch.  Writers
++		 * are prctl ENTER/EXIT and fork (all holding this mm's
++		 * mmap_lock for writing); readers use READ_ONCE().
++		 */
++		bool corten_mode;
+ #endif
+ 
+ 		unsigned long mmap_base;	/* base of mmap area */
+diff --git a/include/uapi/linux/prctl.h b/include/uapi/linux/prctl.h
+index 03c8a62b9444..72bc82f38b08 100644
+--- a/include/uapi/linux/prctl.h
++++ b/include/uapi/linux/prctl.h
+@@ -398,4 +398,20 @@ struct prctl_mm_map {
+ # define CORTEN_ARENA_RELEASE		1	/* arg3=addr, arg4=len */
+ # define CORTEN_ARENA_QUERY		2	/* arg3=addr */
+ 
++/*
++ * CortenMM MODE-process takeover (EXPERIMENTAL, ENTER requires
++ * CAP_SYS_ADMIN).  arg2 selects the operation and arg3..arg5 must be 0.
++ * ENTER switches this address space to auto-arena mode: anonymous
++ * MAP_PRIVATE mmap(NULL, ...) calls are transparently served from the
++ * kernel-managed arena window (M4T0_SPEC.md sec 3.1).  EXIT tears every
++ * arena of this address space down (RELEASE semantics, one by one) and
++ * clears the mode; GET reports 0/1.  The mode is inherited across fork()
++ * together with a full arena teardown on both sides (M4T0_SPEC.md sec 5,
++ * DEV-11).
++ */
++#define PR_CORTEN_MODE			80
++# define CORTEN_MODE_ENTER		1
++# define CORTEN_MODE_EXIT		2
++# define CORTEN_MODE_GET		3
++
+ #endif /* _LINUX_PRCTL_H */
+diff --git a/kernel/fork.c b/kernel/fork.c
+index b98a04647010..da783def7108 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -1056,6 +1056,10 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
+ 	 * (and later free) its parent's arena registry.
+ 	 */
+ 	mm->corten_state = NULL;
++	/* A fresh mm starts out of auto-arena mode; dup_mmap() copies the
++	 * parent's MODE bit explicitly (M4T0_SPEC.md sec 5.2).
++	 */
++	mm->corten_mode = false;
+ #endif
+ 	atomic_set(&mm->mm_users, 1);
+ 	atomic_set(&mm->mm_count, 1);
+diff --git a/kernel/sys.c b/kernel/sys.c
+index 3499d1d3ea16..13ba625513ba 100644
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -2886,6 +2886,9 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
+ 	case PR_CORTEN_ARENA:
+ 		error = corten_prctl_arena(arg2, arg3, arg4, arg5);
+ 		break;
++	case PR_CORTEN_MODE:
++		error = corten_prctl_mode(arg2, arg3, arg4, arg5);
++		break;
+ 	default:
+ 		trace_task_prctl_unknown(option, arg2, arg3, arg4, arg5);
+ 		error = -EINVAL;
+diff --git a/mm/corten_arena.c b/mm/corten_arena.c
+index 258d7141f99e..058321ad82bd 100644
+--- a/mm/corten_arena.c
++++ b/mm/corten_arena.c
+@@ -12,13 +12,20 @@
+  * legacy munmap, so page-table teardown flows through the regular
+  * pte_free funnels and the M2a uninstall hooks.
+  *
+- * Concurrency contract (sec 6.1/6.3):
++ * Concurrency contract (sec 6.1/6.3, order amended by DEV-13):
+  *
+  *   - DECLARE/RELEASE serialize on state->ctl_lock; the fault path only
+  *     touches the xarray (RCU) and the arena percpu_ref, never ctl_lock,
+- *     which is what makes the drain wait under ctl_lock deadlock-free.
+- *   - Lock order: ctl_lock -> mmap_lock -> vma write marks.  Neither
+- *     desc->lock nor the PTE lock is ever taken here in this slice.
++ *     which is what makes the drain wait deadlock-free.
++ *   - Lock order: mmap_lock (W) -> ctl_lock -> vma write marks.  DECLARE
++ *     and RELEASE take the write lock first and nest ctl_lock inside it
++ *     (corten_arena_declare_locked()/corten_arena_release_locked()); the
++ *     do_mmap auto-attach runs with the write lock already held.  The
++ *     drain waits under both locks -- deadlock-free because a
++ *     transaction only tryget/puts the percpu_ref and never acquires
++ *     either lock.  Neither desc->lock nor the PTE lock is ever taken
++ *     directly in this file (the transaction layer owns them, nested
++ *     below).
+  *   - An arena descriptor is reachable through the xarray until the last
+  *     frame is erased (under ctl_lock) and is then freed with kfree_rcu()
+  *     after its refcount drained, so an RCU lookup racing RELEASE either
+@@ -46,6 +53,7 @@
+ #include <linux/memcontrol.h>
+ #include <linux/mm.h>
+ #include <linux/mm_inline.h>
++#include <linux/mman.h>
+ #include <linux/mmap_lock.h>
+ #include <linux/mutex.h>
+ #include <linux/oom.h>
+@@ -172,8 +180,12 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
+ 	xa_init(&state->arenas);
+ 	refcount_set(&state->nr, 0);
+ 	mutex_init(&state->ctl_lock);
++	/* The MODE auto-arena cursor starts at the window base regardless
++	 * of which entry point created the registry (M4T0_SPEC.md 1.3).
++	 */
++	state->next_va = CORTEN_MODE_WINDOW_START;
+ 	state->stats = __alloc_percpu(sizeof(unsigned long) *
+-					      CORTEN_ARENA_NR_STATS,
++				      CORTEN_ARENA_NR_STATS,
+ 				      __alignof__(unsigned long));
+ 	if (!state->stats) {
+ 		corten_arena_state_free(state);
+@@ -463,30 +475,23 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
+  * ------------------------------------------------------------------
+  */
+ 
+-int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
+-			 unsigned long len)
++/*
++ * The DECLARE body proper (P0, DEV-13).  The caller holds @mm's mmap_lock
++ * for writing; this nests state->ctl_lock inside it -- the inversion of
++ * the M3b order, so that the do_mmap auto-attach (which runs with the
++ * write lock already held) can drive the very same body without forming
++ * the reverse edge against a concurrent DECLARE.  Allocates the
++ * descriptor; on error the caller's range is untouched.
++ */
++static int corten_arena_declare_locked(struct mm_struct *mm,
++				       struct corten_mm_state *state,
++				       unsigned long addr, unsigned long len)
+ {
+ 	unsigned long frame, first_frame, last_frame;
+-	struct corten_mm_state *state;
+-	struct vm_area_struct *vma;
+ 	struct corten_arena *arena;
++	struct vm_area_struct *vma;
+ 	int ret;
+ 
+-	if (!mm)
+-		return -EINVAL;
+-	if (addr & (PMD_SIZE - 1))
+-		return -EINVAL;
+-	if (!len || (len & (PMD_SIZE - 1)) || len > TASK_SIZE - addr)
+-		return -EINVAL;
+-
+-	/* Pairs with the store in corten_arena_state_create(). */
+-	state = smp_load_acquire(&mm->corten_state);
+-	if (!state) {
+-		state = corten_arena_state_create(mm);
+-		if (!state)
+-			return -ENOMEM;
+-	}
+-
+ 	arena = kzalloc(sizeof(*arena), GFP_KERNEL_ACCOUNT);
+ 	if (!arena)
+ 		return -ENOMEM;
+@@ -514,30 +519,30 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
+ 		goto out_free_arena;
+ 	}
+ 
+-	/* Validation and conversion happen together under the write lock:
+-	 * the VMA must survive as one piece up to the flag flip anyway, so
+-	 * a separate read-lock pre-pass would only duplicate the check.
+-	 * Publish with the shadow-VMA in place before the xarray entries,
+-	 * so a concurrent S4 lookup never resolves an arena whose VMA is
+-	 * not yet converted ("arena addresses always have their shadow-VMA",
+-	 * sec 2.3/4.3).  Nothing can fault through the arena path yet: the
+-	 * frames only become visible to lookup after the stores below.
++	/* Validation and conversion happen together under the write lock
++	 * (held by the caller): the VMA must survive as one piece up to
++	 * the flag flip anyway, so a separate read-lock pre-pass would
++	 * only duplicate the check.  Publish with the shadow-VMA in place
++	 * before the xarray entries, so a concurrent S4 lookup never
++	 * resolves an arena whose VMA is not yet converted ("arena
++	 * addresses always have their shadow-VMA", sec 2.3/4.3).  Nothing
++	 * can fault through the arena path yet: the frames only become
++	 * visible to lookup after the stores below.
+ 	 */
+-	mmap_write_lock(mm);
+ 	vma = vma_lookup(mm, addr);
+ 	ret = corten_arena_validate_vma(vma, addr, len);
+ 	if (ret)
+-		goto out_write_unlock;
++		goto out_free_arena;
+ 
+ 	/* [C1] the range must be empty (see the checker's comment). */
+ 	ret = corten_arena_check_empty_locked(mm, addr, addr + len);
+ 	if (ret)
+-		goto out_write_unlock;
++		goto out_free_arena;
+ 
+ 	arena->prot = corten_arena_prot_from_vma(vma);
+ 	ret = corten_arena_shadowize(vma);
+ 	if (ret)
+-		goto out_write_unlock;
++		goto out_free_arena;
+ 
+ 	/* Publish the cached shadow-VMA before the arena becomes visible
+ 	 * in the xarray below ([FAIL-2]): every reader that resolves the
+@@ -569,7 +574,6 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
+ 	 */
+ 	corten_arena_obs_add(arena);
+ 
+-	mmap_write_unlock(mm);
+ 	mutex_unlock(&state->ctl_lock);
+ 
+ 	return 0;
+@@ -578,8 +582,6 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
+ 	while (frame > first_frame)
+ 		xa_erase(&state->arenas, --frame);
+ 	corten_arena_unshadow(arena, vma);
+-out_write_unlock:
+-	mmap_write_unlock(mm);
+ out_free_arena:
+ 	mutex_unlock(&state->ctl_lock);
+ 	percpu_ref_exit(&arena->active);
+@@ -588,26 +590,64 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
+ 	return ret;
+ }
+ 
+-int corten_arena_release(struct mm_struct *mm, unsigned long addr,
++int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
+ 			 unsigned long len)
+ {
+-	unsigned long frame, first_frame, last_frame;
+ 	struct corten_mm_state *state;
+-	struct corten_arena *arena;
+-	bool drained;
+ 	int ret;
+ 
+ 	if (!mm)
+ 		return -EINVAL;
+ 	if (addr & (PMD_SIZE - 1))
+ 		return -EINVAL;
+-	if (!len || (len & (PMD_SIZE - 1)))
++	if (!len || (len & (PMD_SIZE - 1)) || len > TASK_SIZE - addr)
+ 		return -EINVAL;
+ 
+ 	/* Pairs with the store in corten_arena_state_create(). */
+ 	state = smp_load_acquire(&mm->corten_state);
+-	if (!state)
+-		return -ENOENT;
++	if (!state) {
++		state = corten_arena_state_create(mm);
++		if (!state)
++			return -ENOMEM;
++	}
++
++	/* P0 (DEV-13): mmap_write is the outermost lock, ctl_lock nests
++	 * inside it.
++	 */
++	mmap_write_lock(mm);
++	ret = corten_arena_declare_locked(mm, state, addr, len);
++	mmap_write_unlock(mm);
++
++	return ret;
++}
++
++/*
++ * The RELEASE body proper (P0, DEV-13).  The caller holds @mm's mmap_lock
++ * for writing; this nests state->ctl_lock inside it.
++ *
++ * The drain now waits under BOTH locks and is still deadlock-free
++ * (see the lock-order contract in include/linux/corten_arena.h): a
++ * transaction pins the arena with percpu_ref tryget/put only -- the S4
++ * fast hook (arch/x86/mm/fault.c) runs before any mmap_lock action and
++ * the S4 slow gate (mm/memory.c handle_mm_fault) may hold the read lock
++ * or a per-VMA lock, but a reader holding mmap_lock(R) cannot exist while
++ * we hold it for writing, and neither variant ever waits for mmap_write
++ * or ctl_lock -- so the drain converges.  The percpu_ref release callback
++ * fires from RCU softirq context and only completes().  Holding
++ * mmap_write across the wait merely delays legacy space operations for
++ * the remaining lifetime of the in-flight transactions (microseconds)
++ * and guarantees the teardown below sees a quiesced range.  (The M3b
++ * order -- drain under ctl_lock, then take mmap_write -- formed exactly
++ * that reverse edge against the do_mmap auto-attach and was inverted.)
++ */
++static int corten_arena_release_locked(struct mm_struct *mm,
++				       struct corten_mm_state *state,
++				       unsigned long addr, unsigned long len)
++{
++	unsigned long frame, first_frame, last_frame;
++	struct corten_arena *arena;
++	bool drained;
++	int ret;
+ 
+ 	mutex_lock(&state->ctl_lock);
+ 
+@@ -634,17 +674,16 @@ int corten_arena_release(struct mm_struct *mm, unsigned long addr,
+ 	 */
+ 	corten_arena_obs_remove(arena);
+ 
+-	/* Drain in-flight transactions, then tear the shadow-VMA down with
+-	 * the plain legacy munmap: pages are zapped and the PT pages travel
+-	 * through the regular free funnels (M2a uninstall).  The mmap lock
+-	 * is taken only after the drain, when no transaction exists any
+-	 * more, so it never forms a wait cycle with a transaction (sec 6.3).
+-	 * On a drain timeout (leaked reference, a kernel bug) the teardown
+-	 * still runs: a runnable process with a counted leak beats an
+-	 * unkillable D-state zombie; the in-flight-transaction safety
+-	 * argument above is void in that case, which is why the leak is
+-	 * counted loudly (CORTEN_ARENA_STAT_DRAIN_TIMEOUTS + the global
+-	 * arena_stats aggregate).
++	/* Drain in-flight transactions (see the locking argument above),
++	 * then tear the shadow-VMA down with the plain legacy munmap:
++	 * pages are zapped and the PT pages travel through the regular
++	 * free funnels (M2a uninstall).  On a drain timeout (leaked
++	 * reference, a kernel bug) the teardown still runs: a runnable
++	 * process with a counted leak beats an unkillable D-state zombie;
++	 * the in-flight-transaction safety argument above is void in that
++	 * case, which is why the leak is counted loudly
++	 * (CORTEN_ARENA_STAT_DRAIN_TIMEOUTS + the global arena_stats
++	 * aggregate).
+ 	 */
+ 	if (!corten_arena_drain(arena)) {
+ 		corten_arena_note_drain_timeout(state);
+@@ -653,16 +692,16 @@ int corten_arena_release(struct mm_struct *mm, unsigned long addr,
+ 		drained = true;
+ 	}
+ 
+-	mmap_write_lock(mm);
+ 	{
+-		/* [M3b S6 transition] Strip the shadow decoration before the
+-		 * legacy teardown: the do_vmi_align_munmap() arena guard
+-		 * (corten_arena_munmap_vma_guard()) rejects every range that
+-		 * still overlaps a VM_CORTEN vma, and RELEASE's own munmap
+-		 * must go through the regular funnel.  Clearing the cached
+-		 * shadow-VMA is safe here: the arena is drained, so no
+-		 * transaction can be reading arena->vma ([FAIL-2]).  The
+-		 * error path below re-strips idempotently.
++		/* [M3b S6 transition] Strip the shadow decoration before
++		 * the legacy teardown: the do_vmi_align_munmap() arena
++		 * guard (corten_arena_munmap_vma_guard()) rejects every
++		 * range that still overlaps a VM_CORTEN vma, and RELEASE's
++		 * own munmap must go through the regular funnel.  Clearing
++		 * the cached shadow-VMA is safe here: the arena is
++		 * drained, so no transaction can be reading arena->vma
++		 * ([FAIL-2]).  The error path below re-strips
++		 * idempotently.
+ 		 */
+ 		VMA_ITERATOR(vmi, mm, arena->start);
+ 		struct vm_area_struct *vma;
+@@ -683,7 +722,6 @@ int corten_arena_release(struct mm_struct *mm, unsigned long addr,
+ 		for_each_vma_range(vmi, vma, arena->end)
+ 			corten_arena_unshadow(arena, vma);
+ 	}
+-	mmap_write_unlock(mm);
+ 
+ 	/* The descriptor is unreachable and drained; percpu_ref_exit()
+ 	 * before the kfree_rcu() it is embedded in (sec 2.1).  On the
+@@ -704,6 +742,34 @@ int corten_arena_release(struct mm_struct *mm, unsigned long addr,
+ 	return ret;
+ }
+ 
++int corten_arena_release(struct mm_struct *mm, unsigned long addr,
++			 unsigned long len)
++{
++	struct corten_mm_state *state;
++	int ret;
++
++	if (!mm)
++		return -EINVAL;
++	if (addr & (PMD_SIZE - 1))
++		return -EINVAL;
++	if (!len || (len & (PMD_SIZE - 1)))
++		return -EINVAL;
++
++	/* Pairs with the store in corten_arena_state_create(). */
++	state = smp_load_acquire(&mm->corten_state);
++	if (!state)
++		return -ENOENT;
++
++	/* P0 (DEV-13): mmap_write is the outermost lock, ctl_lock nests
++	 * inside it.
++	 */
++	mmap_write_lock(mm);
++	ret = corten_arena_release_locked(mm, state, addr, len);
++	mmap_write_unlock(mm);
++
++	return ret;
++}
++
+ int corten_arena_query(struct mm_struct *mm, unsigned long addr)
+ {
+ 	struct corten_arena *arena;
+@@ -813,6 +879,11 @@ void corten_arena_mm_exit(struct mm_struct *mm)
+ 	/* Unpublish; no reader can be racing (mm_users == 0). */
+ 	smp_store_release(&mm->corten_state, NULL);
+ 
++	/* DEV-13: exit drains with mm_users already 0 and takes only the
++	 * lower ctl_lock -- "the lower lock alone" cannot form a cycle.
++	 */
++	mutex_lock(&state->ctl_lock);
++
+ 	xa_for_each(&state->arenas, frame, arena) {
+ 		/* Every frame of an arena holds the same descriptor; drain
+ 		 * each one once, at its first frame.  A drain timeout (a
+@@ -834,6 +905,8 @@ void corten_arena_mm_exit(struct mm_struct *mm)
+ 			corten_arena_note_drain_timeout(state);
+ 	}
+ 
++	mutex_unlock(&state->ctl_lock);
++
+ 	corten_arena_state_free(state);
+ }
+ 
+@@ -888,6 +961,504 @@ int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,
+ 	}
+ }
+ 
++/* ------------------------------------------------------------------ *
++ * T0a: MODE-process transparent takeover (M4T0_SPEC.md sec 1/3/5)
++ * ------------------------------------------------------------------
++ */
++
++enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
++						       bool file)
++{
++	if (file)
++		return CORTEN_MMAP_LEGACY;
++
++	/* The type bits must be exactly MAP_PRIVATE: this rejects
++	 * MAP_SHARED/MAP_SHARED_VALIDATE and absorbs the MAP_DROPPABLE
++	 * alias bit (0x08 lives inside the MAP_TYPE nibble).
++	 */
++	if ((flags & MAP_TYPE) != MAP_PRIVATE)
++		return CORTEN_MMAP_LEGACY;
++	if (!(flags & MAP_ANONYMOUS))
++		return CORTEN_MMAP_LEGACY;
++
++	/* Single-bit whitelist: any other flag-word bit -- MAP_FIXED,
++	 * MAP_FIXED_NOREPLACE, MAP_HUGETLB, MAP_GROWSDOWN, MAP_POPULATE,
++	 * MAP_LOCKED, MAP_SYNC, MAP_STACK, MAP_UNINITIALIZED,
++	 * MAP_DENYWRITE, MAP_EXECUTABLE, MAP_NONBLOCK, ... -- keeps the
++	 * mapping legacy.  MAP_STACK stays excluded per OQ-B until the
++	 * mprotect routing (T0b) can serve thread-stack guard pages.
++	 */
++	if (flags & ~(MAP_TYPE | MAP_ANONYMOUS | MAP_NORESERVE))
++		return CORTEN_MMAP_LEGACY;
++
++	return CORTEN_MMAP_AUTO;
++}
++
++int corten_arena_auto_place(unsigned long next_va, unsigned long len,
++			    unsigned long *addr)
++{
++	unsigned long addr2;
++
++	/* Window-sized or larger requests can never fit. */
++	if (!len || len > CORTEN_MODE_WINDOW_END - CORTEN_MODE_WINDOW_START)
++		return -ENOSPC;
++
++	addr2 = round_up(next_va, PMD_SIZE);
++	if (addr2 < CORTEN_MODE_WINDOW_START)
++		addr2 = CORTEN_MODE_WINDOW_START;
++
++	/* Overflow-safe bounds check: addr2 <= WIN_END - len <=> the whole
++	 * [addr2, addr2+len) fits in the window.
++	 */
++	if (addr2 > CORTEN_MODE_WINDOW_END - len)
++		return -ENOSPC;
++
++	*addr = addr2;
++	return 0;
++}
++
++/* The registry, ensured to exist (the auto cursor lives in it).  Called
++ * under this mm's mmap_write lock; the creation itself is serialized by
++ * the global corten_arena_alloc_lock.
++ */
++static struct corten_mm_state *corten_arena_get_state(struct mm_struct *mm)
++{
++	/* Pairs with the store in corten_arena_state_create(). */
++	struct corten_mm_state *state = smp_load_acquire(&mm->corten_state);
++
++	if (!state)
++		state = corten_arena_state_create(mm);
++
++	return state;
++}
++
++static void corten_arena_auto_fallback(struct corten_mm_state *state)
++{
++	/* Degrade to the legacy mmap path, counted.  The named
++	 * auto_mmap_fallbacks debugfs counter arrives with T0b; until
++	 * then the per-mm legacy-fallback bucket carries it.
++	 */
++	if (state)
++		this_cpu_inc(state->stats[CORTEN_ARENA_STAT_FALLBACKS]);
++}
++
++int corten_arena_auto_mmap_route(struct mm_struct *mm, unsigned long len,
++				 unsigned long prot, unsigned long *addr,
++				 unsigned long *lenp, unsigned long *flagsp)
++{
++	struct corten_mm_state *state;
++	unsigned long addr2, len2;
++	int ret;
++
++	if (!corten_enabled_static() || !mm || !READ_ONCE(mm->corten_mode))
++		return 0;
++	/* PROT_NONE and every prot combination are arena-able
++	 * (corten_arena_prot_from_vma() mirrors the VMA bits); @prot is
++	 * not part of the decision.
++	 */
++
++	/* OVERCOMMIT_NEVER does not honour MAP_NORESERVE (mm/mmap.c:563),
++	 * so the created VMA would carry VM_ACCOUNT and fail the DECLARE
++	 * validation chain wholesale -- degrade the auto takeover of this
++	 * configuration to legacy up front (DEV-12).
++	 */
++	if (sysctl_overcommit_memory == OVERCOMMIT_NEVER) {
++		/* MODE implies the registry exists (mode_enter() creates
++		 * it before publishing the MODE bit, both under the write
++		 * lock this route runs under), so the degradation counts
++		 * in the same per-mm fallback bucket as the other
++		 * takeover exits (SPEC sec 3.1 "comment + count").
++		 */
++		state = smp_load_acquire(&mm->corten_state);
++		corten_arena_auto_fallback(state);
++		return 0;
++	}
++
++	if (corten_arena_auto_mmap_classify(*flagsp, false) !=
++	    CORTEN_MMAP_AUTO)
++		return 0;
++
++	state = corten_arena_get_state(mm);
++	if (!state)
++		return -ENOMEM;
++
++	/* The application's page-rounded length is rounded up to the 2M
++	 * arena granularity; the tail is kernel-private padding, invisible
++	 * to the application and covered by the munmap release rule
++	 * (corten_arena_release_classify()).
++	 */
++	len2 = round_up(*lenp, PMD_SIZE);
++	if (!len2) {
++		/* Nothing arena-able left after rounding (len was 0 or the
++		 * window-relayed request degenerated): let the normal path
++		 * produce its -ENOMEM/-EINVAL.
++		 */
++		corten_arena_auto_fallback(state);
++		return 0;
++	}
++
++	ret = corten_arena_auto_place(state->next_va, len2, &addr2);
++	if (ret) {
++		/* Window exhausted (T0-R2): graceful degradation, the
++		 * mapping goes to the legacy mmap_base area.  The cursor
++		 * is not rewound -- T1's per-cpu magazine does VA reuse.
++		 */
++		corten_arena_auto_fallback(state);
++		return 0;
++	}
++
++	/* Never take over a range that is already occupied: skip past any
++	 * obstacle (a MODE-targeted DECLARE inside the window, or a plain
++	 * legacy VMA that ended up here -- explicit-address mappings stay
++	 * legacy by contract), otherwise the MAP_FIXED rewrite below would
++	 * destroy it.  We hold the write lock, so obstacles cannot
++	 * multiply under our feet; each step strictly advances.
++	 */
++	for (;;) {
++		struct corten_arena *ar;
++		struct vm_area_struct *vma;
++		unsigned long obstacle_end = 0;
++
++		rcu_read_lock();
++		ar = corten_arena_lookup(mm, addr2);
++		if (ar)
++			obstacle_end = ar->end;
++		rcu_read_unlock();
++
++		if (!ar) {
++			vma = find_vma_intersection(mm, addr2, addr2 + len2);
++			if (vma)
++				obstacle_end = vma->vm_end;
++		}
++
++		if (!obstacle_end)
++			break;
++
++		addr2 = round_up(obstacle_end, PMD_SIZE);
++		if (addr2 < obstacle_end ||	/* overflow */
++		    addr2 > CORTEN_MODE_WINDOW_END - len2) {
++			corten_arena_auto_fallback(state);
++			return 0;
++		}
++	}
++
++	/* Commit: hand the range out and rewrite the request onto the
++	 * window.  The caller creates the VMA through the normal
++	 * MAP_FIXED flow (__get_unmapped_area() verifies the segment is
++	 * free) and then attaches it with corten_arena_auto_attach().
++	 */
++	state->next_va = addr2 + len2;
++	*addr = addr2;
++	*lenp = len2;
++	*flagsp |= MAP_FIXED | MAP_NORESERVE;
++
++	return 1;
++}
++
++int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
++			     unsigned long len)
++{
++	struct corten_mm_state *state;
++	int ret;
++
++	mmap_assert_write_locked(mm);
++
++	/* Pairs with the store in corten_arena_state_create(); the route
++	 * has created the registry for this MODE mm already.
++	 */
++	state = smp_load_acquire(&mm->corten_state);
++	if (!state)
++		return -ENOENT;
++
++	/* DECLARE's locked body under the write lock the caller (do_mmap)
++	 * already holds -- exactly the nesting the P0 inversion (DEV-13)
++	 * enables.  Failure degrades to a plain legacy anonymous VMA at a
++	 * window address: faults and munmaps on it resolve no arena and
++	 * run the legacy paths (harmless, counted).
++	 */
++	ret = corten_arena_declare_locked(mm, state, addr, len);
++	if (ret)
++		corten_arena_auto_fallback(state);
++
++	return ret;
++}
++
++int corten_arena_mode_enter(struct mm_struct *mm)
++{
++	struct corten_mm_state *state;
++
++	if (!mm)
++		return -EINVAL;
++
++	mmap_write_lock(mm);
++	if (READ_ONCE(mm->corten_mode)) {
++		mmap_write_unlock(mm);
++		return 0;		/* idempotent */
++	}
++
++	/* The cursor registry must exist before the first auto mmap hits
++	 * the route; creating it here keeps the hot path allocation-free.
++	 */
++	state = corten_arena_get_state(mm);
++	if (!state) {
++		mmap_write_unlock(mm);
++		return -ENOMEM;
++	}
++
++	WRITE_ONCE(mm->corten_mode, true);
++	mmap_write_unlock(mm);
++
++	return 0;
++}
++
++int corten_arena_mode_exit(struct mm_struct *mm)
++{
++	struct corten_mm_state *state;
++	int ret = 0;
++
++	if (!mm)
++		return -EINVAL;
++
++	/* Pairs with the store in corten_arena_state_create(); NULL is a
++	 * valid answer here (never-entered MODE process).
++	 */
++	state = smp_load_acquire(&mm->corten_state);
++
++	/* Hold the write lock across the whole operation so that no mmap
++	 * can slip in behind our back and re-enter MODE territory; each
++	 * release steals one arena from the registry, so the loop
++	 * terminates.  Nothing can contend ctl_lock meanwhile (every other
++	 * user of it needs this write lock first).
++	 */
++	mmap_write_lock(mm);
++
++	if (state) {
++		for (;;) {
++			unsigned long frame = 0;
++			struct corten_arena *ar;
++			int r;
++
++			ar = xa_find(&state->arenas, &frame, ULONG_MAX,
++				     XA_PRESENT);
++			if (!ar)
++				break;
++
++			r = corten_arena_release_locked(mm, state, ar->start,
++							ar->end - ar->start);
++			if (r) {
++				/* Memory pressure mid-teardown: keep the
++				 * mode cleared (the process asked to leave)
++				 * and report the first failure; the
++				 * remaining arenas stay registered and are
++				 * retired by exit_mmap().
++				 */
++				if (!ret)
++					ret = r;
++				break;
++			}
++		}
++	}
++
++	WRITE_ONCE(mm->corten_mode, false);
++	mmap_write_unlock(mm);
++
++	return ret;
++}
++
++int corten_arena_mode_get(struct mm_struct *mm)
++{
++	if (!mm)
++		return -EINVAL;
++
++	return READ_ONCE(mm->corten_mode) ? 1 : 0;
++}
++
++int corten_prctl_mode(unsigned int op, unsigned long arg3,
++		      unsigned long arg4, unsigned long arg5)
++{
++	struct mm_struct *mm = current->mm;
++
++	if (arg3 || arg4 || arg5)
++		return -EINVAL;
++	if (op != CORTEN_MODE_ENTER && op != CORTEN_MODE_EXIT &&
++	    op != CORTEN_MODE_GET)
++		return -EINVAL;
++	/* Same boot gate as PR_CORTEN_ARENA (corten=off == feature off),
++	 * same capability posture for ENTER; EXIT/GET only need the
++	 * feature on (M4T0_SPEC.md sec 1.1).
++	 */
++	if (!corten_enabled_static())
++		return -EOPNOTSUPP;
++
++	switch (op) {
++	case CORTEN_MODE_ENTER:
++		if (!capable(CAP_SYS_ADMIN))
++			return -EPERM;
++		return corten_arena_mode_enter(mm);
++	case CORTEN_MODE_EXIT:
++		return corten_arena_mode_exit(mm);
++	default:
++		return corten_arena_mode_get(mm);
++	}
++}
++
++/* Scrub one arena's metadata after its drain (sec 5.2): reset every
++ * recorded page of every 2M window to CORTEN_INVALID -- pure metadata
++ * invalidation, no PTE is touched.  This clears anything a legacy
++ * fallback fault may have written during the drain window (T0-R5) and
++ * guarantees that a later re-DECLARE of the range starts from clean
++ * state (a stale CORTEN_MAPPED behind a fresh DECLARE would resurrect
++ * old translations, the INV7 drift).  Untracked windows (-ENOENT from
++ * the range lock: no PT page) have nothing recorded by definition.
++ * Called with the arena drained and state->ctl_lock held.
++ */
++static int corten_arena_demote_scrub(struct corten_arena *ar,
++				     unsigned long start, unsigned long end)
++{
++	unsigned long addr;
++
++	for (addr = start; addr < end; ) {
++		unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1, end);
++		unsigned long a;
++		struct corten_txn txn;
++		int ret, tries = 0;
++
++		for (;;) {
++			ret = corten_lock_range(ar->mm, addr, win_end - addr,
++						&txn);
++			if (ret != -EAGAIN || ++tries >= 2)
++				break;
++		}
++		/* Nothing transactional in this window: -ENOENT (hole) and
++		 * -EOPNOTSUPP (huge leaf) both mean "no metadata to scrub".
++		 */
++		if (ret == -ENOENT || ret == -EOPNOTSUPP) {
++			addr = win_end;
++			continue;
++		}
++		if (ret)
++			return ret;
++
++		for (a = addr; a < win_end; a += PAGE_SIZE) {
++			ret = corten_unmap(&txn, a, PAGE_SIZE);
++			if (ret && ret != -ENOENT) {
++				corten_unlock(&txn);
++				return ret;
++			}
++		}
++		corten_unlock(&txn);
++
++		addr = win_end;
++	}
++
++	return 0;
++}
++
++int corten_arena_fork_demote(struct mm_struct *mm, struct mm_struct *oldmm)
++{
++	struct corten_mm_state *state;
++	unsigned long frame = 0, drained_until = 0;
++	struct corten_arena *arena;
++	int ret = 0;
++
++	/* MODE-bit inheritance (sec 5.2): both sides keep auto-attaching
++	 * their *new* mmaps; the existing mappings turn legacy below.
++	 * The child's mm is not visible to anyone yet, the parent's is
++	 * write-locked by dup_mmap() -- the MODE writer contract holds.
++	 */
++	WRITE_ONCE(mm->corten_mode, READ_ONCE(oldmm->corten_mode));
++
++	/* Pairs with the store in corten_arena_state_create(); NULL means
++	 * the parent never had arenas.
++	 */
++	state = smp_load_acquire(&oldmm->corten_state);
++	if (!state)
++		return 0;	/* one load; a no-arena fork is unchanged */
++
++	mmap_assert_write_locked(oldmm);
++
++	/* DEV-13: dup_mmap holds oldmm's mmap_write; nesting ctl_lock
++	 * inside it is the legal order.  With the drain below quiescing
++	 * all transactions, the PTEs of the range are frozen while we
++	 * scrub and unshadow.
++	 */
++	mutex_lock(&state->ctl_lock);
++
++	xa_for_each(&state->arenas, frame, arena) {
++		unsigned long first, last;
++		struct vm_area_struct *vma;
++		bool drained;
++		int r;
++
++		/* Every frame of an arena holds the same descriptor; work
++		 * each one once, at its first frame.
++		 */
++		if (frame < drained_until)
++			continue;
++		drained_until = arena->end >> PMD_SHIFT;
++
++		if (!corten_arena_drain(arena)) {
++			/* Leaked transaction reference -- a kernel bug.
++			 * Proceed like RELEASE's timeout path (a runnable
++			 * process with a counted leak beats an unkillable
++			 * fork) but keep the descriptor alive: a straggler
++			 * put would UAF.
++			 */
++			corten_arena_note_drain_timeout(state);
++			drained = false;
++		} else {
++			drained = true;
++		}
++
++		/* Metadata scrub BEFORE the registry/vma teardown.  On
++		 * failure we proceed with the teardown anyway (the
++		 * drain-timeout precedent: a runnable process beats a
++		 * stuck fork) and abort the fork: the possibly-stale
++		 * metadata of the affected range has no reader any more
++		 * (the arena is erased, so lookups miss and faults run
++		 * the legacy VMA body); a later re-DECLARE of the range
++		 * is the one residual INV7-drift exposure, the same one
++		 * T0-R5 notes for the timeout path.
++		 */
++		r = corten_arena_demote_scrub(arena, arena->start,
++					      arena->end);
++		if (r) {
++			if (!ret)
++				ret = (r == -EAGAIN) ? -EOPNOTSUPP : r;
++		}
++
++		/* Now the arena is committed to the demotion: deregister
++		 * (debugfs), restore the shadow-VMA to a plain anonymous
++		 * VMA (vm_flags_clear() takes the per-VMA write mark
++		 * itself, under oldmm's write lock), erase the registry
++		 * frames and free the descriptor.
++		 */
++		corten_arena_obs_remove(arena);
++
++		vma = READ_ONCE(arena->vma);
++		if (vma)
++			corten_arena_unshadow(arena, vma);
++
++		first = arena->start >> PMD_SHIFT;
++		last = (arena->end - 1) >> PMD_SHIFT;
++		for (; first <= last; first++)
++			xa_erase(&state->arenas, first);
++		refcount_set(&state->nr, refcount_read(&state->nr) - 1);
++
++		if (drained)
++			corten_arena_free(arena);
++	}
++
++	mutex_unlock(&state->ctl_lock);
++
++	/* On the (memory-pressure) error exit the parent is still
++	 * consistent -- every arena was either fully demoted or left
++	 * untouched -- but the fork aborts (the child mm is discarded by
++	 * dup_mm()).
++	 */
++	return ret;
++}
++
+ /* ------------------------------------------------------------------ *
+  * S4/S5: fault path (M3B_DESIGN.md sec 4)
+  * ------------------------------------------------------------------
+@@ -1857,6 +2428,30 @@ enum corten_unmap_class corten_arena_unmap_classify(unsigned long start,
+ 	return CORTEN_UNMAP_PARTIAL;
+ }
+ 
++enum corten_unmap_class corten_arena_release_classify(enum corten_unmap_class
++						      class,
++						      unsigned long start,
++						      unsigned long end,
++						      unsigned long ar_start,
++						      unsigned long ar_end)
++{
++	/* T0 release-on-full-coverage (M4T0_SPEC.md sec 3.2): the user
++	 * munmaps the length it asked for at mmap time (page-rounded),
++	 * while the arena was rounded up to 2M granularity -- the natural
++	 * allocator churn shape (glibc free() on an mmap'd block) leaves
++	 * a tail of up to 2M-PAGE_SIZE.  That is a full-coverage release
++	 * of the user-visible mapping, not a chunk zap: the tail is
++	 * kernel-private padding.  Without this rule every such munmap
++	 * would keep the VMA + 2M of window VA alive and dedup_eq-style
++	 * churn would exhaust the window.
++	 */
++	if (class == CORTEN_UNMAP_CHUNK && start == ar_start &&
++	    ar_end - end < PMD_SIZE)
++		return CORTEN_UNMAP_EXACT;
++
++	return class;
++}
++
+ /*
+  * Zap the PTEs of the recorded pages in [start, end) (at most one PMD
+  * window; the caller holds the covering desc write lock obtained through
+@@ -2154,6 +2749,12 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
+ 
+ 		class = corten_arena_unmap_classify(start, end, ar->start,
+ 						    ar->end);
++		/* T0: a CHUNK that spans from the arena base and leaves a
++		 * sub-2M tail is RELEASE territory (see the classify
++		 * helper's comment).
++		 */
++		class = corten_arena_release_classify(class, start, end,
++						      ar->start, ar->end);
+ 		switch (class) {
+ 		case CORTEN_UNMAP_EXACT:
+ 			/* The exact arena range: identical to prctl
+@@ -2165,12 +2766,16 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
+ 			 * pointer is put (the old "!= ar_start" guard
+ 			 * leaked one reference per call and RELEASE's
+ 			 * drain hung forever -- r03 DoD failure B).
++			 * RELEASE (like DECLARE) takes the write lock
++			 * itself -- we run lockless here, so this is the
++			 * DEV-13 outermost acquisition, not a re-entry.
+ 			 */
+ 			if (ar_start)
+ 				percpu_ref_put(&ar_start->active);
+ 			if (ar_end)
+ 				percpu_ref_put(&ar_end->active);
+-			ret = corten_arena_release(mm, start, len);
++			ret = corten_arena_release(mm, ar->start,
++						   ar->end - ar->start);
+ 			return ret < 0 ? ret : 1;
+ 		case CORTEN_UNMAP_CHUNK:
+ 			ret = corten_arena_unmap_chunk(mm, ar, start, len);
+@@ -2197,11 +2802,11 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
+ /*
+  * Routing for callers already holding mmap_lock for writing
+  * (__vm_munmap): the chunk transaction runs under the write lock, a
+- * legal lock-order edge (sec 6.1: mmap_lock outermost, desc->lock
+- * inner, and no transaction ever takes mmap_lock back).  The exact
+- * range cannot route to RELEASE here (RELEASE drains while holding
+- * ctl_lock *before* taking mmap_lock), so it is rejected; kernel
+- * callers never munmap declared arenas anyway.
++ * legal lock-order edge (DEV-13: mmap_lock outermost, desc->lock inner,
++ * and no transaction ever takes mmap_lock back).  The exact range cannot
++ * route to RELEASE here: RELEASE acquires mmap_write itself and the
++ * semaphore is not recursive; kernel callers never munmap declared
++ * arenas anyway.
+  */
+ int corten_arena_munmap_guard(struct mm_struct *mm, unsigned long start,
+ 			      unsigned long len)
+diff --git a/mm/corten_arena.h b/mm/corten_arena.h
+index 9474dff8b9e3..69dd55d2ce42 100644
+--- a/mm/corten_arena.h
++++ b/mm/corten_arena.h
+@@ -100,6 +100,22 @@ enum corten_unmap_class corten_arena_unmap_classify(unsigned long start,
+ 						    unsigned long ar_start,
+ 						    unsigned long ar_end);
+ 
++/*
++ * T0 release-on-full-coverage refinement (M4T0_SPEC.md sec 3.2): a CHUNK
++ * that starts at the arena base and leaves a tail smaller than one PMD
++ * window is really the user's page-rounded view of the whole arena (glibc
++ * free() munmaps the request length, the kernel rounded the arena up to
++ * 2M) and must be RELEASEd instead of chunk-zapped, otherwise allocator
++ * churn leaks one VMA + 2M of window VA per cycle.  Pure; table-driven
++ * in mm/corten_arena_test.c.
++ */
++enum corten_unmap_class corten_arena_release_classify(enum corten_unmap_class
++						      class,
++						      unsigned long start,
++						      unsigned long end,
++						      unsigned long ar_start,
++						      unsigned long ar_end);
++
+ /*
+  * sys_munmap() entry routing (sec 5.5).  Return: 0 = run legacy, 1 = range
+  * already handled (chunk zap or exact-range RELEASE), -errno = reject.
+@@ -112,8 +128,9 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
+ /*
+  * Same routing for callers that already hold mmap_lock for writing
+  * (__vm_munmap).  The chunk path runs its transactions under the write
+- * lock (a legal lock-order edge, sec 6.1); the exact range is rejected
+- * because RELEASE must drain before taking mmap_lock itself.
++ * lock (a legal lock-order edge, DEV-13: mmap_write outermost); the exact
++ * range is rejected because RELEASE acquires mmap_write itself and the
++ * semaphore is not recursive.
+  */
+ int corten_arena_munmap_guard(struct mm_struct *mm, unsigned long start,
+ 			      unsigned long len);
+@@ -140,6 +157,7 @@ int corten_arena_munmap_vma_guard(struct mm_struct *mm, unsigned long start,
+ enum corten_mmap_class {
+ 	CORTEN_MMAP_LEGACY = 0,		/* not arena-markable */
+ 	CORTEN_MMAP_MARK,		/* MAP_FIXED private anon: markable */
++	CORTEN_MMAP_AUTO,		/* MODE auto-arena candidate (T0) */
+ };
+ 
+ enum corten_mmap_class corten_arena_mmap_classify(unsigned long flags,
+@@ -149,6 +167,83 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
+ 			    unsigned long len, unsigned long prot,
+ 			    unsigned long flags, bool file);
+ 
++/* ------------------------------------------------------------------ *
++ * T0a: MODE-process transparent takeover (M4T0_SPEC.md sec 1/3)
++ * ------------------------------------------------------------------
++ */
++
++/*
++ * Auto-mmap whitelist classification (sec 3.1, pure): only an anonymous
++ * MAP_PRIVATE mapping with no other flag word bits than MAP_NORESERVE is
++ * auto-arena-able.  The type-bit check absorbs MAP_SHARED/_VALIDATE and
++ * the MAP_DROPPABLE alias; any other bit (MAP_FIXED*, MAP_HUGETLB,
++ * MAP_GROWSDOWN, MAP_POPULATE, MAP_LOCKED, MAP_SYNC, MAP_STACK,
++ * MAP_UNINITIALIZED, MAP_DENYWRITE, ...) keeps the mapping legacy.
++ * MAP_STACK stays excluded per OQ-B until the mprotect routing (T0b)
++ * can serve thread-stack guard pages.
++ */
++enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
++						       bool file);
++
++/*
++ * Pure cursor arithmetic of the auto-arena window (sec 3.1): place a
++ * PMD-rounded @len at the @next_va cursor.  Return 0 with *@addr set on
++ * success, -ENOSPC when the window is exhausted (the caller degrades to
++ * the legacy path, counted).
++ */
++int corten_arena_auto_place(unsigned long next_va, unsigned long len,
++			    unsigned long *addr);
++
++/*
++ * do_mmap() hook (mm/mmap.c, before __get_unmapped_area()): decide the
++ * auto-arena takeover for one addr==0 anonymous private mapping of a MODE
++ * process and rewrite the request onto the window.  Runs with this mm's
++ * mmap_lock held for writing (do_mmap's contract).
++ *
++ * Return: 1 = takeover, *@addr / *@lenp / *@flagsp rewritten (MAP_FIXED
++ * onto the window; the caller must attach with corten_arena_auto_attach()
++ * once mmap_region() succeeded), 0 = legacy (not a whitelist hit, window
++ * exhausted, or an obstacle in the window), -errno = internal error only.
++ */
++int corten_arena_auto_mmap_route(struct mm_struct *mm, unsigned long len,
++				 unsigned long prot, unsigned long *addr,
++				 unsigned long *lenp, unsigned long *flagsp);
++
++/*
++ * do_mmap() tail hook: register the freshly created VMA at @addr as an
++ * auto arena -- DECLARE's locked body (validate/shadowize/publish), safe
++ * because the caller already holds the mmap_write lock that DECLARE would
++ * otherwise take first (DEV-13).  Failure degrades to a plain legacy
++ * anonymous VMA at a window address (counted, harmless).
++ * Return: 0 on success, -errno otherwise.
++ */
++int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
++			     unsigned long len);
++
++/*
++ * Gate-free MODE internals; the syscall-context caller is
++ * corten_prctl_mode() (capability + static-branch gates applied there).
++ * ENTER creates the registry with the window cursor if needed and sets
++ * mm->corten_mode; EXIT releases every arena and clears the mode; GET
++ * reports the mode.  ENTER/EXIT take this mm's mmap_lock for writing
++ * (the MODE-bit writer contract, sec 1.2).
++ */
++int corten_arena_mode_enter(struct mm_struct *mm);
++int corten_arena_mode_exit(struct mm_struct *mm);
++int corten_arena_mode_get(struct mm_struct *mm);
++
++/*
++ * fork transition (sec 5, DEV-11): tear every arena of @oldmm down and
++ * turn its shadow-VMAs back into plain anonymous VMAs, scrubbing their
++ * metadata; the child starts with @oldmm's MODE bit and no arenas.
++ * Called from dup_mmap() after mmap_write_lock_nested(@mm), i.e. with
++ * @oldmm's mmap_write held (a legal DEV-13 nesting for the ctl_lock this
++ * takes).  clone(CLONE_VM) never runs dup_mmap and is unaffected.
++ * Return: 0 on success, -errno (the fork fails; the parent keeps running,
++ * possibly already demoted -- fork failure loses arena-ness, documented).
++ */
++int corten_arena_fork_demote(struct mm_struct *mm, struct mm_struct *oldmm);
++
+ /*
+  * True if [start, start+len) intersects any declared arena of @mm.  RCU
+  * xarray walk (xa_for_each_range), no mmap_lock needed; safe to call with
+@@ -247,6 +342,44 @@ static inline void corten_arena_hwpoison_check(struct folio *folio)
+ {
+ }
+ 
++static inline int corten_arena_auto_mmap_route(struct mm_struct *mm,
++					       unsigned long len,
++					       unsigned long prot,
++					       unsigned long *addr,
++					       unsigned long *lenp,
++					       unsigned long *flagsp)
++{
++	return 0;
++}
++
++static inline int corten_arena_auto_attach(struct mm_struct *mm,
++					   unsigned long addr,
++					   unsigned long len)
++{
++	return 0;
++}
++
++static inline int corten_arena_mode_enter(struct mm_struct *mm)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline int corten_arena_mode_exit(struct mm_struct *mm)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline int corten_arena_mode_get(struct mm_struct *mm)
++{
++	return 0;
++}
++
++static inline int corten_arena_fork_demote(struct mm_struct *mm,
++					   struct mm_struct *oldmm)
++{
++	return 0;
++}
++
+ #endif /* CONFIG_CORTEN_MM_ARENA */
+ 
+ #endif /* _MM_CORTEN_ARENA_H */
+diff --git a/mm/corten_arena_test.c b/mm/corten_arena_test.c
+index 3454a0890d3d..578381c70f51 100644
+--- a/mm/corten_arena_test.c
++++ b/mm/corten_arena_test.c
+@@ -18,6 +18,7 @@
+ #include <linux/kernel.h>
+ #include <linux/kthread.h>
+ #include <linux/mm.h>
++#include <linux/mman.h>
+ #include <linux/mmap_lock.h>
+ #include <linux/mm_inline.h>
+ #include <linux/pgtable.h>
+@@ -25,6 +26,7 @@
+ #include <linux/sched.h>
+ #include <linux/slab.h>
+ #include <linux/string.h>
++#include <uapi/linux/mman.h>
+ #include <uapi/linux/prctl.h>
+ 
+ #include "corten.h"		/* corten_test_render_dbg() (S8 assertions) */
+@@ -39,6 +41,12 @@
+ #define CORTEN_ARENA_TEST_START2	(CORTEN_ARENA_TEST_BASE + 8UL * PMD_SIZE)
+ #define CORTEN_ARENA_TEST_NOWHERE	(CORTEN_ARENA_TEST_BASE + 64UL * PMD_SIZE)
+ 
++/* The T0a auto-arena window (M4T0_SPEC.md sec 1.3): one PMD slot at the
++ * window base drives the attach/release/cursor cases.
++ */
++#define CORTEN_ARENA_TEST_WIN		(CORTEN_MODE_WINDOW_START)
++#define CORTEN_ARENA_TEST_WIN_LEN	(2UL * PMD_SIZE)
++
+ /* A fresh MAP_NORESERVE-shaped private anonymous VMA (the DECLARE
+  * contract's exact precondition).
+  */
+@@ -173,6 +181,15 @@ static void corten_arena_test_op_release(struct corten_arena_test_op *o)
+ 	o->ret = corten_arena_release(o->mm, o->addr, o->len);
+ }
+ 
++/* MODE EXIT tears the declared arenas down through RELEASE's legacy
++ * munmap leg, which reads current->mm (vms_complete_munmap_vmas()) --
++ * so, like RELEASE itself, the exit runs on the attached op worker.
++ */
++static void corten_arena_test_op_mode_exit(struct corten_arena_test_op *o)
++{
++	o->ret = corten_arena_mode_exit(o->mm);
++}
++
+ static int corten_arena_test_op_thread(void *data)
+ {
+ 	struct corten_arena_test_op *o = data;
+@@ -208,6 +225,28 @@ static int corten_arena_test_run_op(struct kunit *test, struct mm_struct *mm,
+ 	return o->ret;
+ }
+ 
++/* corten_arena_auto_mmap_route() is the do_mmap() front half: its
++ * contract is this mm's mmap_write held by the caller (the obstacle
++ * walk asserts it).  The direct calls below take the lock exactly like
++ * do_mmap() does.
++ */
++static int corten_arena_test_auto_route_locked(struct mm_struct *mm,
++					       unsigned long len,
++					       unsigned long prot,
++					       unsigned long *addr,
++					       unsigned long *lenp,
++					       unsigned long *flagsp)
++{
++	int ret;
++
++	mmap_write_lock(mm);
++	ret = corten_arena_auto_mmap_route(mm, len, prot, addr, lenp,
++					   flagsp);
++	mmap_write_unlock(mm);
++
++	return ret;
++}
++
+ /* ------------------------------------------------------------------ *
+  * DECLARE validation chain (sec 2.1 contract, one case per line)
+  * ------------------------------------------------------------------
+@@ -755,6 +794,12 @@ struct corten_arena_test_conc {
+ 	unsigned long start;
+ 	unsigned long len;
+ 	int iters;
++	/* T0a: churn the same slot in the auto-arena window through
++	 * corten_arena_test_auto_attach_locked()/release instead of the low base
++	 * range through declare()/release() -- the DEV-13 lock-order
++	 * regression must cover the do_mmap-shaped path too.
++	 */
++	bool use_window;
+ 	atomic_t errors;
+ 	atomic_t gets;
+ 	atomic_t query_bad;
+@@ -806,8 +851,12 @@ static int corten_arena_test_conc_worker(void *data)
+ 	 */
+ 	kthread_use_mm(c->mm);
+ 
++	if (c->use_window && corten_arena_mode_enter(c->mm))
++		atomic_inc(&c->errors);
++
+ 	for (i = 0; i < c->iters && !kthread_should_stop(); i++) {
+ 		struct vm_area_struct *vma;
++		int r;
+ 
+ 		vma = corten_arena_test_mkvm(c->mm, c->start,
+ 					     c->start + c->len,
+@@ -817,7 +866,18 @@ static int corten_arena_test_conc_worker(void *data)
+ 			break;
+ 		}
+ 
+-		if (corten_arena_declare(c->mm, c->start, c->len)) {
++		/* The window shape runs the attach under the write lock,
++		 * exactly as the do_mmap tail hook does (DEV-13 outermost
++		 * acquisition); the declare shape takes the lock itself.
++		 */
++		if (c->use_window) {
++			mmap_write_lock(c->mm);
++			r = corten_arena_auto_attach(c->mm, c->start, c->len);
++			mmap_write_unlock(c->mm);
++		} else {
++			r = corten_arena_declare(c->mm, c->start, c->len);
++		}
++		if (r) {
+ 			atomic_inc(&c->errors);
+ 			corten_arena_test_unmap(c->mm, c->start, c->len);
+ 			break;
+@@ -851,7 +911,13 @@ static int corten_arena_test_conc_reader_worker(void *data)
+ 	return 0;
+ }
+ 
+-static void corten_arena_test_concurrent(struct kunit *test)
++/* Shared body of the DECLARE/RELEASE-vs-reader race (sec 6.3 + DEV-13):
++ * @use_window switches the churned range between the low base range
++ * (prctl DECLARE shape) and the auto-arena window slot (do_mmap
++ * auto-attach shape).
++ */
++static void corten_arena_test_concurrent_run(struct kunit *test,
++					     bool use_window)
+ {
+ 	struct corten_arena_test_conc *c;
+ 	struct task_struct *tsk[2] = { NULL, NULL };
+@@ -863,9 +929,10 @@ static void corten_arena_test_concurrent(struct kunit *test)
+ 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, c->mm);
+ 	kunit_add_action(test, corten_arena_test_conc_destroy, c);
+ 
+-	c->start = CORTEN_ARENA_TEST_BASE;
+-	c->len = 2 * PMD_SIZE;
++	c->start = use_window ? CORTEN_ARENA_TEST_WIN : CORTEN_ARENA_TEST_BASE;
++	c->len = use_window ? CORTEN_ARENA_TEST_WIN_LEN : 2 * PMD_SIZE;
+ 	c->iters = 20;
++	c->use_window = use_window;
+ 	atomic_set(&c->errors, 0);
+ 	atomic_set(&c->gets, 0);
+ 	atomic_set(&c->query_bad, 0);
+@@ -904,6 +971,22 @@ static void corten_arena_test_concurrent(struct kunit *test)
+ 	KUNIT_EXPECT_EQ(test, corten_arena_query(c->mm, c->start), 0);
+ }
+ 
++static void corten_arena_test_concurrent(struct kunit *test)
++{
++	corten_arena_test_concurrent_run(test, false);
++}
++
++/* The DEV-13 lock-order regression for the T0a window path: the same
++ * race as above, driven through corten_arena_test_auto_attach_locked() (the body
++ * do_mmap runs under its write lock) with the fault-style reader
++ * hammering lookup+tryget on the window slot.  A deadlock or a
++ * lock-order violation in the inverted nesting shows up here.
++ */
++static void corten_arena_test_concurrent_window(struct kunit *test)
++{
++	corten_arena_test_concurrent_run(test, true);
++}
++
+ /* ------------------------------------------------------------------ *
+  * S8 observability (debugfs arenas ledger + drain-timeout aggregate)
+  * ------------------------------------------------------------------
+@@ -973,16 +1056,625 @@ static void corten_arena_test_drain_timeout_stat(struct kunit *test)
+ 	kfree(dbg);
+ }
+ 
++/* ------------------------------------------------------------------ *
++ * T0a: release-on-full-coverage classification (M4T0_SPEC.md sec 3.2,
++ * pure) -- the glibc free() shape: user munmaps the page-rounded request
++ * length, kernel arena is 2M-rounded, tail < 2M must RELEASE.
++ * ------------------------------------------------------------------
++ */
++
++static void corten_arena_test_release_classify(struct kunit *test)
++{
++	const unsigned long a = 0x1000UL * PAGE_SIZE;	/* an arena base */
++	const unsigned long e = a + 4 * PMD_SIZE;	/* its end */
++
++	/* Exact stays exact (tail 0). */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_release_classify(CORTEN_UNMAP_EXACT, a,
++						      e, a, e),
++			CORTEN_UNMAP_EXACT);
++
++	/* The rule: CHUNK from the arena base with a tail < 2M -> EXACT. */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_release_classify(CORTEN_UNMAP_CHUNK, a,
++						      e - PAGE_SIZE, a, e),
++			CORTEN_UNMAP_EXACT);
++	/* The glibc free() shape's worst tail: 2M-4K (the page-rounded
++	 * request of a full 2M chunk) is still < 2M -> EXACT.
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_release_classify(CORTEN_UNMAP_CHUNK, a,
++						      e - (PMD_SIZE - PAGE_SIZE),
++						      a, e),
++			CORTEN_UNMAP_EXACT);
++	/* Boundary: a full 2M tail is real chunk territory. */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_release_classify(CORTEN_UNMAP_CHUNK, a,
++						      e - 2 * PMD_SIZE, a, e),
++			CORTEN_UNMAP_CHUNK);
++
++	/* Not from the arena base: allocator mid-block free, stays CHUNK. */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_release_classify(CORTEN_UNMAP_CHUNK,
++						      a + PMD_SIZE,
++						      a + 2 * PMD_SIZE, a, e),
++			CORTEN_UNMAP_CHUNK);
++
++	/* Crossing and outside classes pass through untouched. */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_release_classify(CORTEN_UNMAP_PARTIAL,
++						      a + PMD_SIZE,
++						      e + PMD_SIZE, a, e),
++			CORTEN_UNMAP_PARTIAL);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_release_classify(CORTEN_UNMAP_OUTSIDE,
++						      a - PMD_SIZE, a, a, e),
++			CORTEN_UNMAP_OUTSIDE);
++}
++
++/* ------------------------------------------------------------------ *
++ * T0a: auto-mmap whitelist classification (sec 3.1, pure)
++ * ------------------------------------------------------------------
++ */
++
++static void corten_arena_test_auto_classify(struct kunit *test)
++{
++	static const unsigned long bad_bits[] = {
++		MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_HUGETLB, MAP_GROWSDOWN,
++		MAP_POPULATE, MAP_LOCKED, MAP_SYNC, MAP_STACK,
++		MAP_UNINITIALIZED, MAP_DENYWRITE, MAP_EXECUTABLE,
++		MAP_NONBLOCK, MAP_DROPPABLE, MAP_32BIT,
++	};
++	unsigned long good = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
++	size_t i;
++
++	/* The clean hits. */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_mmap_classify(MAP_PRIVATE |
++							MAP_ANONYMOUS, false),
++			CORTEN_MMAP_AUTO);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_mmap_classify(good, false),
++			CORTEN_MMAP_AUTO);
++
++	/* A file backing is never auto-arena material. */
++	KUNIT_EXPECT_EQ(test, corten_arena_auto_mmap_classify(good, true),
++			CORTEN_MMAP_LEGACY);
++
++	/* Shared types (and the MAP_DROPPABLE alias inside the type
++	 * nibble) stay legacy.
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_mmap_classify(MAP_SHARED |
++							MAP_ANONYMOUS, false),
++			CORTEN_MMAP_LEGACY);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_mmap_classify(MAP_SHARED_VALIDATE |
++							MAP_ANONYMOUS, false),
++			CORTEN_MMAP_LEGACY);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_mmap_classify(MAP_PRIVATE |
++							MAP_ANONYMOUS |
++							MAP_DROPPABLE, false),
++			CORTEN_MMAP_LEGACY);
++
++	/* Missing MAP_ANONYMOUS / bare type bits. */
++	KUNIT_EXPECT_EQ(test, corten_arena_auto_mmap_classify(MAP_PRIVATE,
++							      false),
++			CORTEN_MMAP_LEGACY);
++
++	for (i = 0; i < ARRAY_SIZE(bad_bits); i++) {
++		KUNIT_EXPECT_EQ_MSG(test,
++				    corten_arena_auto_mmap_classify(good |
++								    bad_bits[i],
++								    false),
++				    CORTEN_MMAP_LEGACY,
++				    "flag bit %#lx must stay legacy",
++				    bad_bits[i]);
++	}
++}
++
++/* ------------------------------------------------------------------ *
++ * T0a: window cursor arithmetic (sec 3.1, pure)
++ * ------------------------------------------------------------------
++ */
++
++static void corten_arena_test_auto_place(struct kunit *test)
++{
++	unsigned long addr;
++
++	/* Fresh cursor: the first arena lands exactly at the window base. */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_place(CORTEN_MODE_WINDOW_START,
++						2 * PMD_SIZE, &addr), 0);
++	KUNIT_EXPECT_EQ(test, addr, CORTEN_MODE_WINDOW_START);
++
++	/* The cursor is PMD-aligned; a page-stepped cursor rounds up. */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_place(CORTEN_MODE_WINDOW_START +
++						PAGE_SIZE, PMD_SIZE, &addr),
++			0);
++	KUNIT_EXPECT_EQ(test, addr,
++			CORTEN_MODE_WINDOW_START + PMD_SIZE);
++
++	/* The last fitting arena. */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_place(CORTEN_MODE_WINDOW_END -
++						PMD_SIZE, PMD_SIZE, &addr), 0);
++	KUNIT_EXPECT_EQ(test, addr, CORTEN_MODE_WINDOW_END - PMD_SIZE);
++
++	/* Exhaustion: one page past the last fitting placement. */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_place(CORTEN_MODE_WINDOW_END -
++						PMD_SIZE + PAGE_SIZE,
++						PMD_SIZE, &addr), -ENOSPC);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_place(CORTEN_MODE_WINDOW_END,
++						PMD_SIZE, &addr), -ENOSPC);
++
++	/* Never-fitting and degenerate lengths. */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_place(CORTEN_MODE_WINDOW_START,
++						CORTEN_MODE_WINDOW_END -
++						CORTEN_MODE_WINDOW_START +
++						PMD_SIZE, &addr), -ENOSPC);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_auto_place(CORTEN_MODE_WINDOW_START, 0,
++						&addr), -ENOSPC);
++}
++
++/* ------------------------------------------------------------------ *
++ * T0a: prctl gates + gate-free MODE enter/exit/get
++ * ------------------------------------------------------------------
++ */
++
++static void corten_arena_test_mode(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	int ret;
++
++	/* arg3/arg4/arg5 must be 0 (checked before any gate). */
++	KUNIT_EXPECT_EQ(test,
++			corten_prctl_mode(CORTEN_MODE_GET, 1, 0, 0), -EINVAL);
++	KUNIT_EXPECT_EQ(test,
++			corten_prctl_mode(CORTEN_MODE_GET, 0, 1, 0), -EINVAL);
++	KUNIT_EXPECT_EQ(test,
++			corten_prctl_mode(CORTEN_MODE_GET, 0, 0, 1), -EINVAL);
++	KUNIT_EXPECT_EQ(test,
++			corten_prctl_mode(42, 0, 0, 0), -EINVAL);
++
++	/* With corten=off the whole prctl is -EOPNOTSUPP (feature-off
++	 * contract); the gate-free internals below still run so the
++	 * semantics are verified on every boot.
++	 */
++	ret = corten_prctl_mode(CORTEN_MODE_GET, 0, 0, 0);
++	if (!corten_enabled_static()) {
++		KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
++	} else {
++		/* This thread has no mm of its own (kunit_try_catch):
++		 * the dispatcher answers -EINVAL; on a thread with an mm
++		 * it would answer 0/1 -- the semantics live in the
++		 * gate-free checks below.
++		 */
++		KUNIT_EXPECT_TRUE(test, ret == -EINVAL || ret == 0 ||
++				  ret == 1);
++	}
++
++	/* Gate-free enter/exit/get on a synthetic mm. */
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_get(mm), 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_enter(mm), 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_get(mm), 1);
++	KUNIT_EXPECT_NOT_NULL(test, READ_ONCE(mm->corten_state));
++	/* The registry was created eagerly with the window cursor. */
++	KUNIT_EXPECT_EQ(test,
++			READ_ONCE(mm->corten_state)->next_va,
++			CORTEN_MODE_WINDOW_START);
++	/* Re-enter is idempotent. */
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_enter(mm), 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_get(mm), 1);
++
++	/* Exit with no arenas: mode cleared, registry stays. */
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_exit(mm), 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_get(mm), 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_exit(mm), 0);
++
++	/* Exit tears declared arenas down (sec 1.1, RELEASE one by one).
++	 * The RELEASE legs read current->mm, so -- like every other
++	 * munmap in this file -- the exit runs on the op worker, not on
++	 * this mm-less case thread.
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
++					     CORTEN_ARENA_TEST_LEN),
++			0);
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_enter(mm), 0);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_mode_exit,
++						 0, 0),
++			0);
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_get(mm), 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_BASE),
++			0);
++}
++
++/* ------------------------------------------------------------------ *
++ * T0a: the do_mmap route decision (sec 3.1) -- needs the real chain,
++ * so it only produces observations on a corten=on boot.
++ * ------------------------------------------------------------------
++ */
++
++/* Sum a per-mm relaxed counter across cpus (the increments happened on
++ * whichever cpu the calling thread ran on).
++ */
++static long corten_arena_test_stat_sum(struct corten_mm_state *state,
++				       enum corten_arena_stat which)
++{
++	int cpu;
++	long sum = 0;
++
++	if (!state)
++		return 0;
++	for_each_online_cpu(cpu)
++		sum += per_cpu_ptr(state->stats, cpu)[which];
++
++	return sum;
++}
++
++static void corten_arena_test_auto_route(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	struct corten_mm_state *state;
++	unsigned long addr = 0, len = 2 * PAGE_SIZE, flags;
++	unsigned long fallbacks;
++
++	/*
++	 * The route gates on corten_enabled_static(); on a corten=off
++	 * boot the answer is a constant 0 and there is nothing to
++	 * observe.
++	 */
++	if (!corten_enabled_static())
++		kunit_skip(test, "auto-mmap route requires corten=on");
++	if (sysctl_overcommit_memory == OVERCOMMIT_NEVER)
++		kunit_skip(test, "auto takeover degraded (OVERCOMMIT_NEVER)");
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	state = READ_ONCE(mm->corten_state);
++	KUNIT_ASSERT_NOT_NULL(test, state);
++
++	/* Non-whitelisted flags: legacy, cursor untouched. */
++	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
++	addr = 0;
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_auto_route_locked(mm, len, PROT_READ |
++						     PROT_WRITE, &addr, &len,
++						     &flags), 0);
++	KUNIT_EXPECT_EQ(test, addr, 0);
++	KUNIT_EXPECT_EQ(test, state->next_va, CORTEN_MODE_WINDOW_START);
++
++	/* Plain whitelist hit: rewritten onto the window base, 2M-rounded,
++	 * MAP_FIXED|MAP_NORESERVE forced.
++	 */
++	addr = 0;
++	len = 2 * PAGE_SIZE;
++	flags = MAP_PRIVATE | MAP_ANONYMOUS;
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_auto_route_locked(mm, len, PROT_READ |
++						     PROT_WRITE, &addr, &len,
++						     &flags), 1);
++	KUNIT_EXPECT_EQ(test, addr, CORTEN_MODE_WINDOW_START);
++	/* 8K of request, one 2M-rounded arena slot. */
++	KUNIT_EXPECT_EQ(test, len, PMD_SIZE);
++	KUNIT_EXPECT_EQ(test, flags, MAP_PRIVATE | MAP_ANONYMOUS |
++				     MAP_FIXED | MAP_NORESERVE);
++	KUNIT_EXPECT_EQ(test, state->next_va,
++			CORTEN_MODE_WINDOW_START + PMD_SIZE);
++
++	/* Second hit: the cursor advanced. */
++	addr = 0;
++	len = PAGE_SIZE;
++	flags = MAP_PRIVATE | MAP_ANONYMOUS;
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_auto_route_locked(mm, len,
++							    PROT_NONE, &addr,
++							    &len, &flags),
++			1);
++	KUNIT_EXPECT_EQ(test, addr,
++			CORTEN_MODE_WINDOW_START + PMD_SIZE);
++	KUNIT_EXPECT_EQ(test, len, PMD_SIZE);
++
++	/* Arena obstacle (a MODE-targeted DECLARE inside the window): the
++	 * route skips past it instead of MAP_FIXED-destroying it.  The
++	 * cursor is rewound first so the candidate really collides with
++	 * the arena.
++	 */
++	{
++		struct vm_area_struct *vma;
++
++		vma = corten_arena_test_mkvm(mm, CORTEN_MODE_WINDOW_START,
++					     CORTEN_MODE_WINDOW_START +
++					     CORTEN_ARENA_TEST_WIN_LEN,
++					     CORTEN_ARENA_TEST_FLAGS_OK);
++		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
++		KUNIT_ASSERT_EQ(test,
++				corten_arena_declare(mm,
++						     CORTEN_MODE_WINDOW_START,
++						     CORTEN_ARENA_TEST_WIN_LEN),
++				0);
++	}
++
++	WRITE_ONCE(state->next_va, CORTEN_MODE_WINDOW_START);
++	addr = 0;
++	len = PAGE_SIZE;
++	flags = MAP_PRIVATE | MAP_ANONYMOUS;
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_auto_route_locked(mm, len,
++							    PROT_READ, &addr,
++							    &len, &flags),
++			1);
++	KUNIT_EXPECT_EQ(test, addr,
++			CORTEN_MODE_WINDOW_START + 2 * PMD_SIZE);
++	KUNIT_EXPECT_EQ(test, state->next_va,
++			CORTEN_MODE_WINDOW_START + 3 * PMD_SIZE);
++
++	/* Plain legacy VMA obstacle: also skipped, never overwritten. */
++	{
++		struct vm_area_struct *vma;
++
++		vma = corten_arena_test_mkvm(mm,
++					     CORTEN_MODE_WINDOW_START +
++					     4 * PMD_SIZE,
++					     CORTEN_MODE_WINDOW_START +
++					     5 * PMD_SIZE,
++					     CORTEN_ARENA_TEST_FLAGS_OK);
++		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
++	}
++	WRITE_ONCE(state->next_va,
++		   CORTEN_MODE_WINDOW_START + 4 * PMD_SIZE - PAGE_SIZE);
++	addr = 0;
++	len = PAGE_SIZE;
++	flags = MAP_PRIVATE | MAP_ANONYMOUS;
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_auto_route_locked(mm, len,
++							    PROT_READ, &addr,
++							    &len, &flags),
++			1);
++	KUNIT_EXPECT_EQ(test, addr,
++			CORTEN_MODE_WINDOW_START + 5 * PMD_SIZE);
++
++	/* Window exhaustion: graceful legacy degradation, counted. */
++	fallbacks = corten_arena_test_stat_sum(state,
++					       CORTEN_ARENA_STAT_FALLBACKS);
++	WRITE_ONCE(state->next_va, CORTEN_MODE_WINDOW_END);
++	addr = 0xdead0000UL;
++	len = PAGE_SIZE;
++	flags = MAP_PRIVATE | MAP_ANONYMOUS;
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_auto_route_locked(mm, len,
++							    PROT_READ, &addr,
++							    &len, &flags),
++			0);
++	KUNIT_EXPECT_EQ(test, addr, 0xdead0000UL);	/* untouched */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_stat_sum(state,
++						   CORTEN_ARENA_STAT_FALLBACKS),
++			fallbacks + 1);
++
++	/* The declared arena is still alive: the exit's RELEASE legs read
++	 * current->mm, so the teardown runs on the op worker.
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_mode_exit,
++						 0, 0),
++			0);
++}
++
++/* ------------------------------------------------------------------ *
++ * T0a: attach + the release-on-full-coverage rule end to end (sec 3.2)
++ * ------------------------------------------------------------------
++ */
++
++static void corten_arena_test_op_munmap_route(struct corten_arena_test_op *o)
++{
++	o->ret = corten_arena_munmap_route(o->mm, o->addr, o->len);
++}
++
++static void corten_arena_test_auto_attach_release(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	struct vm_area_struct *vma;
++	char expect[64];
++	char *dbg;
++	int ret;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "munmap routing requires corten=on");
++
++	/* The route creates the registry before the real do_mmap attaches;
++	 * mode_enter is the same registry-establishing step (gate-free).
++	 */
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++
++	/* A glibc-shaped mmap: a plain 2M NORESERVE anonymous VMA at the
++	 * window base (as mmap_region would create after a takeover
++	 * rewrite), attached by hand -- the do_mmap tail hook's body.
++	 * The arena must be exactly one 2M chunk here: the release rule
++	 * only applies while the leftover tail stays under 2M.
++	 */
++	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
++				     CORTEN_ARENA_TEST_WIN + PMD_SIZE,
++				     CORTEN_ARENA_TEST_FLAGS_OK);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
++	/* auto_attach() is the do_mmap() tail hook: DECLARE's locked body
++	 * runs under the caller's mmap_write (mmap_region()'s contract).
++	 */
++	mmap_write_lock(mm);
++	ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_WIN, PMD_SIZE);
++	mmap_write_unlock(mm);
++	KUNIT_ASSERT_EQ(test, ret, 0);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_query(mm, CORTEN_ARENA_TEST_WIN), 1);
++
++	/* Visible in the observability ledger. */
++	snprintf(expect, sizeof(expect), "[%lx,%lx)",
++		 CORTEN_ARENA_TEST_WIN, CORTEN_ARENA_TEST_WIN + PMD_SIZE);
++	dbg = corten_test_render_dbg(CORTEN_DBG_ARENAS);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
++	KUNIT_EXPECT_NOT_NULL(test, strstr(dbg, expect));
++	kfree(dbg);
++
++	/* free() shape: one page of the base -- CHUNK by span, RELEASE by
++	 * the full-coverage rule.  The whole arena (VMA included) must be
++	 * gone.
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_munmap_route,
++						 CORTEN_ARENA_TEST_WIN,
++						 PAGE_SIZE),
++			1);
++	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
++			0);
++	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
++
++	/* A genuine mid-arena chunk keeps the VA: chunk zap, not release. */
++	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
++				     CORTEN_ARENA_TEST_WIN +
++				     CORTEN_ARENA_TEST_WIN_LEN,
++				     CORTEN_ARENA_TEST_FLAGS_OK);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
++	/* auto_attach() is the do_mmap() tail hook: DECLARE's locked body
++	 * runs under the caller's mmap_write (mmap_region()'s contract).
++	 */
++	mmap_write_lock(mm);
++	ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_WIN,
++				       CORTEN_ARENA_TEST_WIN_LEN);
++	mmap_write_unlock(mm);
++	KUNIT_ASSERT_EQ(test, ret, 0);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_munmap_route,
++						 CORTEN_ARENA_TEST_WIN +
++						 PMD_SIZE,
++						 PMD_SIZE),
++			1);
++	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
++			1);
++	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
++}
++
++/* ------------------------------------------------------------------ *
++ * T0a: fork transition (sec 5, DEV-11) -- full teardown on the parent,
++ * MODE-bit inheritance on both sides, clean metadata after the scrub.
++ * ------------------------------------------------------------------
++ */
++
++static void corten_arena_test_fork_demote(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	struct mm_struct *child;
++	struct vm_area_struct *vma;
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
++					     CORTEN_ARENA_TEST_LEN),
++			0);
++
++	child = mm_alloc();
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
++	/* Not registered with kunit: mmput() it explicitly at the end so
++	 * the exit_mmap() assertion window stays deterministic.
++	 */
++
++	/* dup_mmap() holds oldmm's write lock at the demote point. */
++	mmap_write_lock(mm);
++	KUNIT_EXPECT_EQ(test, corten_arena_fork_demote(child, mm), 0);
++	mmap_write_unlock(mm);
++
++	/* MODE bit inherited on the child, kept on the parent. */
++	KUNIT_EXPECT_TRUE(test, READ_ONCE(child->corten_mode));
++	KUNIT_EXPECT_TRUE(test, READ_ONCE(mm->corten_mode));
++
++	/* Child: no registry, no arenas (mm_init guarantees NULL). */
++	KUNIT_EXPECT_NULL(test, READ_ONCE(child->corten_state));
++
++	/* Parent: arenas gone, shadow-VMA restored to a plain anonymous
++	 * VMA with identical contents and bounds.
++	 */
++	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_BASE),
++			0);
++	vma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
++	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_CORTEN);
++	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_NOHUGEPAGE);
++	KUNIT_EXPECT_TRUE(test, vma_is_anonymous(vma));
++
++	/* The scrub guarantees a clean re-DECLARE (a stale CORTEN_MAPPED
++	 * behind the fresh arena would resurrect old translations --
++	 * T0-R5).  No PTE was ever written in this test, so emptiness
++	 * holds; the metadata side is what the re-DECLARE exercises.
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
++					     CORTEN_ARENA_TEST_LEN),
++			0);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_release,
++						 CORTEN_ARENA_TEST_BASE,
++						 CORTEN_ARENA_TEST_LEN),
++			0);
++
++	/* No-arena MODE fork: pure bit copy, zero teardown work. */
++	{
++		struct mm_struct *child2 = mm_alloc();
++		struct mm_struct *t2mm;
++
++		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child2);
++		KUNIT_EXPECT_EQ(test, corten_arena_fork_demote(child2, mm),
++				0);
++		KUNIT_EXPECT_TRUE(test, READ_ONCE(child2->corten_mode));
++
++		/* And a fork of a MODE process without any registry. */
++		t2mm = mm_alloc();
++		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t2mm);
++		KUNIT_EXPECT_EQ(test, corten_arena_mode_enter(t2mm), 0);
++		KUNIT_EXPECT_EQ(test, corten_arena_fork_demote(child2, t2mm),
++				0);
++		KUNIT_EXPECT_TRUE(test, READ_ONCE(child2->corten_mode));
++		KUNIT_EXPECT_TRUE(test, READ_ONCE(t2mm->corten_mode));
++		mmput(child2);
++		mmput(t2mm);
++	}
++
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_exit(mm), 0);
++	mmput(child);
++}
++
+ static struct kunit_case corten_arena_test_cases[] = {
+ 	KUNIT_CASE(corten_arena_test_declare_reject),
+ 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
+ 	KUNIT_CASE(corten_arena_test_declare_query),
+ 	KUNIT_CASE(corten_arena_test_range_overlaps),
+ 	KUNIT_CASE(corten_arena_test_release),
++	KUNIT_CASE(corten_arena_test_release_classify),
+ 	KUNIT_CASE(corten_arena_test_shadow_vma),
+ 	KUNIT_CASE(corten_arena_test_exit),
+ 	KUNIT_CASE(corten_arena_test_prctl),
++	KUNIT_CASE(corten_arena_test_mode),
++	KUNIT_CASE(corten_arena_test_auto_classify),
++	KUNIT_CASE(corten_arena_test_auto_place),
++	KUNIT_CASE(corten_arena_test_auto_route),
++	KUNIT_CASE(corten_arena_test_auto_attach_release),
++	KUNIT_CASE(corten_arena_test_fork_demote),
+ 	KUNIT_CASE(corten_arena_test_concurrent),
++	KUNIT_CASE(corten_arena_test_concurrent_window),
+ 	KUNIT_CASE(corten_arena_test_obs_ledger),
+ 	KUNIT_CASE(corten_arena_test_drain_timeout_stat),
+ 	{}
+diff --git a/mm/mmap.c b/mm/mmap.c
+index bd7a96370420..2ea6eb9cdce6 100644
+--- a/mm/mmap.c
++++ b/mm/mmap.c
+@@ -347,6 +347,10 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
+ {
+ 	struct mm_struct *mm = current->mm;
+ 	int pkey = 0;
++#ifdef CONFIG_CORTEN_MM_ARENA
++	bool corten_auto_arena = false;
++	unsigned long corten_auto_len = 0;
++#endif
+ 
+ 	*populate = 0;
+ 
+@@ -409,6 +413,33 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
+ 	vm_flags |= calc_vm_prot_bits(prot, pkey) | calc_vm_flag_bits(file, flags) |
+ 			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
+ 
++#ifdef CONFIG_CORTEN_MM_ARENA
++	/*
++	 * MODE-process transparent takeover (M4T0_SPEC.md sec 3.1): an
++	 * addr==0 anonymous private mapping of a MODE process is served
++	 * from the auto-arena window instead of the legacy mmap_base
++	 * area.  Placed after round_hint_to_min()/len alignment (the
++	 * decision sees the final length) and before __get_unmapped_area()
++	 * (the takeover rewrites addr/len/flags onto a fixed window
++	 * segment).  corten=off / non-MODE processes pay one static-branch
++	 * read plus one byte load and are otherwise untouched.
++	 */
++	if (!file && addr == 0) {
++		int cret = corten_arena_auto_mmap_route(mm, len, prot, &addr,
++							&len, &flags);
++
++		if (cret < 0)
++			return cret;	/* internal error only */
++		if (cret == 1) {
++			/* Takeover: addr/len/flags were rewritten onto the
++			 * window; attach the VMA after mmap_region().
++			 */
++			corten_auto_arena = true;
++			corten_auto_len = len;
++		}
++	}
++#endif
++
+ 	/* Obtain the address to map to. we verify (or select) it and ensure
+ 	 * that it represents a valid section of the address space.
+ 	 */
+@@ -591,6 +622,22 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
+ 	pgoff = __bpf_pgoff_fixup(file, pgoff);
+ 
+ 	addr = mmap_region(file, addr, len, vm_flags, pgoff, uf);
++
++#ifdef CONFIG_CORTEN_MM_ARENA
++	/*
++	 * Auto-arena attach (M4T0_SPEC.md sec 3.1): the takeover VMA was
++	 * created by the MAP_FIXED flow above -- DECLARE its arena now,
++	 * under the write lock do_mmap holds for its whole body.  A
++	 * failure here is a graceful degradation, not an mmap error: the
++	 * mapping stays a plain anonymous VMA at a window address and
++	 * every lookup on it resolves no arena (the residual race window
++	 * to khugepaged collapse noted in the spec is closed the same way
++	 * -- legacy fallback, T1 removes the window).
++	 */
++	if (corten_auto_arena && !IS_ERR_VALUE(addr))
++		corten_arena_auto_attach(mm, addr, corten_auto_len);
++#endif
++
+ 	if (!IS_ERR_VALUE(addr) &&
+ 	    ((vm_flags & VM_LOCKED) ||
+ 	     (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE))
+@@ -1812,6 +1859,26 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+ 	 */
+ 	mmap_write_lock_nested(mm, SINGLE_DEPTH_NESTING);
+ 
++#ifdef CONFIG_CORTEN_MM_ARENA
++	/*
++	 * Arena fork transition (M4T0_SPEC.md sec 5, DEV-11): before any
++	 * VMA is copied, retire every arena of @oldmm -- drain the
++	 * transactions, scrub the metadata, restore the shadow-VMAs to
++	 * plain anonymous VMAs -- so that copy_page_range() below sees an
++	 * all-legacy address space (its COW copies are exact for plain
++	 * anonymous memory).  The child inherits the MODE bit: its new
++	 * mmap(NULL) mappings re-enter the arena.  The demotion cost is
++	 * charged to the fork once; M5 replaces this with the paper-faithful
++	 * traversal (wrprotect + shared + metadata deep copy).  Failure
++	 * aborts the fork (dup_mm() collapses all dup_mmap() errors to
++	 * -ENOMEM at the syscall boundary); the parent keeps running with
++	 * the arenas demoted so far -- both are consistent states.
++	 */
++	retval = corten_arena_fork_demote(mm, oldmm);
++	if (retval)
++		goto loop_out;
++#endif
++
+ 	/* No ordering required: file already has been exposed. */
+ 	dup_mm_exe_file(mm, oldmm);
+ 
+@@ -1830,21 +1897,6 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+ 		struct file *file;
+ 
+ 		vma_start_write(mpnt);
+-#ifdef CONFIG_CORTEN_MM_ARENA
+-		/*
+-		 * Arena fork fail-fast (M3B_DESIGN.md sec 5.1): copying an
+-		 * arena's page tables or metadata needs the transaction
+-		 * protocol (M5).  Refuse cleanly -- the parent is
+-		 * unaffected (dup_mmap() only mutates @mm, the child, on
+-		 * this path) and the whole fork fails with -EOPNOTSUPP
+-		 * here; note dup_mm() collapses all dup_mmap() errors to
+-		 * -ENOMEM at the fork() syscall boundary.
+-		 */
+-		if (mpnt->vm_flags & VM_CORTEN) {
+-			retval = -EOPNOTSUPP;
+-			goto loop_out;
+-		}
+-#endif
+ 		if (mpnt->vm_flags & VM_DONTCOPY) {
+ 			retval = vma_iter_clear_gfp(&vmi, mpnt->vm_start,
+ 						    mpnt->vm_end, GFP_KERNEL);
+-- 
+2.34.1
+

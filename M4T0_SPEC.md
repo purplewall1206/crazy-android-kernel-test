@@ -182,10 +182,17 @@ if (corten_enabled_static() && (mm->corten_mode || mm->corten_state)) {
 | behavior | T0 行为 |
 |---|---|
 | MADV_DONTNEED / DONTNEED_LOCKED | 维持既有 `corten_arena_dontneed_route`（区内 zap 留 VA） |
-| MADV_FREE / MADV_FREE_LOCKED | **新增 → 同 DONTNEED 事务**（MADV_FREE 本就允许"内容变 0", 清零是合规超集; 注释+计数披露） |
+| MADV_FREE | **新增 → 同 DONTNEED 事务**（MADV_FREE 本就允许"内容变 0", 清零是合规超集; 注释+计数披露） |
 | MADV_NORMAL / SEQUENTIAL / RANDOM / COLD | **新增 → 区内返 0 no-op**（纯 hint; 防止 metis_eq 对文件映射外的 hint 打到 arena 报错） |
-| MADV_WILLNEED / PAGEOUT / FREE / HUGEPAGE / NOHUGEPAGE / COLLAPSE / WIPEONFORK 等 | 维持 -EOPNOTSUPP |
+| MADV_WILLNEED / PAGEOUT / HUGEPAGE / NOHUGEPAGE / COLLAPSE / WIPEONFORK 等 | 维持 -EOPNOTSUPP |
 | MADV_SOFT_OFFLINE / HWPOISON | 维持 wt:1936 拒绝 |
+
+> **勘误（2026-09-17, r05 夜验 B2 缺陷）**: 本节原文决策表第二行写作 "MADV_FREE /
+> MADV_FREE_LOCKED", 其中 **MADV_FREE_LOCKED 为笔误**——上游 uapi 无此 behavior
+> （include/uapi/asm-generic/mman-common.h 只有 `MADV_FREE=8` 与
+> `MADV_DONTNEED_LOCKED=24`）, 实现照抄致 =y 编译断
+> （results/r04/t0b-verify.md）。上表已修正为仅 MADV_FREE 一条 FREE 档,
+> 拒绝行中原残留的 "FREE" 一并移除（与第二行路由矛盾）。实现已按此勘误落地。
 
 brk（`sys_brk` mm/mmap.c:122）: **零改动**（DEV-6; shrink 经 wt:1618 guard 后备, 窗口隔离
 使其不可达 arena）。
@@ -204,7 +211,7 @@ brk（`sys_brk` mm/mmap.c:122）: **零改动**（DEV-6; shrink 经 wt:1618 guar
 | mprotect 区内 | M3b=-EOPNOTSUPP | — | **T0: perm 事务路由** |
 | madvise DONTNEED/FREE 区内 | DONTNEED 路由 / FREE 拒 | — | **T0: FREE 并入路由**; hint no-op |
 | brk（grow/shrink） | legacy | legacy | legacy（guard 后备） |
-| mremap 触 arena | -EOPNOTSUPP（DESIGN OQ2） | legacy | 同左 + 计数（§9 OQ-A） |
+| mremap 触 arena | -EOPNOTSUPP（DESIGN OQ2） | legacy | **T0b: 已路由**——收缩=原地+尾窗 zap; 增长=新窗口 arena 内核 copy+RELEASE 旧区; FIXED/DONTUNMAP/跨界维持计数拒绝（§9 OQ-A 关闭） |
 | mlock/mlockall/mseal/mbind/uffd 触 arena | -EOPNOTSUPP/拒绝 | legacy | 同 S6（不变） |
 | fork（有存活 arena） | S7 fail-fast | legacy | **T0: arena 全退场（§5）** |
 | move_pages / migrate_pages 触 arena | **无钩子（审计缺口）** | legacy | **T0 新增: 入口 -EOPNOTSUPP** |
@@ -327,6 +334,7 @@ wt:1830-1848 对含 VM_CORTEN VMA 的 dup_mmap 返回 -EOPNOTSUPP。MODE-process
 - **DEV-13**（INV2 修订）: 锁序增补 `mmap_write > ctl_lock > drain-wait > desc->lock > ptl`;
   declare/release 获取顺序反转（M3B_DESIGN §6.1 与实现注释以本规格为准）。
 - **OQ-A** mremap 区内路由（kernel-copy 版）是否进 T0.5（影响 glibc realloc 语义, §8 T0-R1）。
+  **[r05 已关闭: T0b 已实现该路由, §3.5 行同步勘误]**
 - **OQ-B** MAP_STACK 是否放行白名单（放行则线程栈进 arena, 必须同步保证 guard-mprotect 路由已就绪——T0b 之后才可考虑）。
 - **OQ-C** process_madvise 对 remote arena-mm 的行为口径（核对项 #4; 如走独立路径需补钩子）。
 - **OQ-D** PR_CORTEN_MODE 放松 CAP_SYS_ADMIN 的时机（与 M3b OQ-1 合并决策）。
@@ -342,6 +350,22 @@ wt:1830-1848 对含 VM_CORTEN VMA 的 dup_mmap 返回 -EOPNOTSUPP。MODE-process
 | **T0b** | mprotect 路由 + madvise FREE/hints + move_pages/migrate_pages 拒绝钩子 + debugfs 计数（auto_mmaps/releases/mprotect_routes/fallbacks/fork_demotions）+ 审计清单文档 + LD_PRELOAD runner + DoD 测试 | ~420 | T0a |
 
 > 两片均超 300 行——按 D8 惯例需 review 全绿（M2 先例 1254/1862 行）; 一夜最多一片（ROADMAP §5）。
+
+> **勘误（r05 T0b 收口, 2026-09-17）**:
+> ① 上表 T0b 行的 "move_pages/migrate_pages 拒绝钩子" 实随 S4-S7（commit 7bba3b9f7390,
+> mm/migrate.c `corten_arena_range_overlaps` 入口拒绝）落地, 早于 T0a; T0/T0b 未再触碰
+> mm/migrate.c。文件清单中 `mm/migrate.c`（+15）同此勘误。
+> ② T0b KUnit 增量初记 "4 KUnit", 实落 **6 用例**: arena_test 的
+> mprotect/madvise/mremap_route 3 例 + fault_test 的 mprotect_pte, 以及 D-G/D-G' 修复轮
+> 追加的 mprotect_fresh / untracked_rearm 2 例（含 rearm_recovered/rearm_failed 计数锚）。
+>
+> **已知遗留（T0b 收口登记, 证据 results/r04/t0b-verify.md）**:
+> - **D-G''**: JVM CDS abort（`FileMapInfo::relocate_pointers_in_core_regions` ACCERR,
+>   si_addr 0x100086000010 形状）——独立根因待查（rearm 计数器证明 present-untracked
+>   形状已全恢复, 此为第三种形状; 疑 CDS file-backed MAP_FIXED 与窗口/pending perm 交互）,
+>   探针 dg_probe2.c 可复现; MODE 下 java 完整启动待后续切片。
+> - **fork 边界**: fork 后 arena 提交不存活（DEV-11 demote 把 pending commit 擦为 INVALID）,
+>   属 DEV-11 架构边界, OQ 归规划者; MODE 下 fork 后提交存活待后续切片。
 
 文件清单:
 - 改: `include/uapi/linux/prctl.h`（+8）、`include/linux/mm_types.h`（+4）、`include/linux/corten_arena.h`
