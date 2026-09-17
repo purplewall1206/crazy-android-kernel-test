@@ -529,8 +529,12 @@ void unmap_region(struct ma_state *mas, struct vm_area_struct *vma,
  * __split_vma() bypasses sysctl_max_map_count checking.  We use this where it
  * has already been checked or doesn't make sense to fail.
  * VMA Iterator will point to the original VMA.
+ *
+ * Non-static: the CortenMM arena punch route (mm/corten_arena.c) pre-splits
+ * the shadow-VMA so its cached ar->vma pointer never references the piece
+ * the mmap_region() overlap gather frees (r05 dg2-analysis.md B1).
  */
-static __must_check int
+__must_check int
 __split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	    unsigned long addr, int new_below)
 {
@@ -1607,13 +1611,18 @@ int do_vmi_align_munmap(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	/*
 	 * CortenMM arena guard (M3B_DESIGN.md sec 5.5/5.10): this is the
 	 * deepest legacy zap funnel, so it is the last line of defence
-	 * behind the sys_munmap()/__vm_munmap() routing -- brk shrink,
-	 * mremap's internal unmaps and the MAP_FIXED overlap removal in
-	 * mmap_region() all arrive here.  zap_pte_range() writes PTEs
-	 * without the arena covering write lock, so any range that still
-	 * overlaps a shadow-VMA must be rejected (arena chunks were
+	 * behind the sys_munmap()/__vm_munmap() routing -- brk shrink and
+	 * mremap's internal unmaps arrive here.  zap_pte_range() writes
+	 * PTEs without the arena covering write lock, so any range that
+	 * still overlaps a shadow-VMA must be rejected (arena chunks were
 	 * already routed above us and RELEASE clears the flag before its
-	 * own do_munmap()).  corten=off / no arenas: one load.
+	 * own do_munmap()).
+	 *
+	 * [Corrected, r05 dg2-analysis.md D1] The MAP_FIXED overlap
+	 * removal in mmap_region() does NOT arrive here -- it runs
+	 * through __mmap_prepare()'s own vms_gather_munmap_vmas() (the
+	 * mistaken claim below was the D-G'' guard gap); that funnel has
+	 * its own frame-table backstop.  corten=off / no arenas: one load.
 	 */
 	if (corten_arena_munmap_vma_guard(mm, start, end))
 		return -EOPNOTSUPP;
@@ -2461,6 +2470,29 @@ static int __mmap_prepare(struct mmap_state *map, struct list_head *uf)
 
 	/* OK, we have overlapping VMAs - prepare to unmap them. */
 	if (vms->vma) {
+#ifdef CONFIG_CORTEN_MM_ARENA
+		/*
+		 * CortenMM arena backstop for the MAP_FIXED overlap
+		 * removal (r05 dg2-analysis.md D1): unlike the munmap
+		 * funnels, this gather does NOT pass do_vmi_align_munmap(),
+		 * so corten_arena_munmap_vma_guard() never sees it.  A
+		 * range that still claims live arena frames must not be
+		 * zapped here -- zap_pte_range() writes PTEs without the
+		 * arena covering write lock.  The routed shapes (the
+		 * corten_mark() transaction and the D-G'' file-MAP_FIXED
+		 * punch in corten_arena_mmap_route()) erase their frames
+		 * before mmap_region() runs, so the frame-table probe is
+		 * the precise test: a VM_CORTEN flag walk would veto the
+		 * just-punched hole, whose shadow-VMA is only split by
+		 * the gather below.  Remaining shapes (boundary crossing,
+		 * a span over a middle arena that the two-endpoint route
+		 * lookup cannot see) are rejected like the munmap route.
+		 * corten=off / no arenas: two loads.
+		 */
+		if (corten_arena_range_overlaps(map->mm, map->addr,
+						map->end - map->addr))
+			return -EOPNOTSUPP;
+#endif
 		mt_init_flags(&map->mt_detach,
 			      vmi->mas.tree->ma_flags & MT_FLAGS_LOCK_MASK);
 		mt_on_stack(map->mt_detach);

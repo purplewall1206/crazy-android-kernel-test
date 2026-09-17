@@ -459,11 +459,19 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	 * executed as a corten_mark() transaction (paper Fig.8 L1-7) --
 	 * no VMA change, no zap of the shadow-VMA, no vm_stat_account().
 	 * MAP_FIXED_NOREPLACE intersecting an arena already returned
-	 * -EEXIST above (the shadow-VMA occupies the range); everything
-	 * else stays with the legacy mmap_region() flow, whose
-	 * overlap-removal munmap is guarded by
-	 * corten_arena_munmap_vma_guard().  corten=off / no arenas makes
-	 * the call a two-load no-op.
+	 * -EEXIST above (the shadow-VMA occupies the range).
+	 *
+	 * [Corrected, r05 dg2-analysis.md D1] Every other MAP_FIXED shape
+	 * is routed here too: a range overlapping arena state goes through
+	 * the punch route (frames erased + transactional zap; RELEASE for
+	 * the whole-arena geometry) so the overlap removal inside
+	 * mmap_region() finds no live arena state.  The old comment's
+	 * claim that the legacy overlap-removal is guarded by
+	 * corten_arena_munmap_vma_guard() was wrong -- that guard hangs
+	 * off do_vmi_align_munmap(), which the mmap_region() gather never
+	 * passes (that gap was the D-G'' JVM CDS crash); the gather has
+	 * its own frame-table backstop in __mmap_prepare().  corten=off /
+	 * no arenas makes the call a two-load no-op.
 	 */
 	{
 		int cret = corten_arena_mmap_route(mm, addr, len, prot,

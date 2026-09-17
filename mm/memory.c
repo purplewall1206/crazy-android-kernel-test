@@ -6547,11 +6547,22 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	 * the caller's retry machinery, which re-enters here with
 	 * mmap_lock held.  The arena path never returns VM_FAULT_RETRY or
 	 * VM_FAULT_COMPLETED and never drops mmap_lock, so the caller's
-	 * lock state is preserved either way.
+	 * lock state is preserved either way -- except that the RETRY
+	 * itself must release the per-VMA read lock: the arch fault
+	 * paths skip their vma_end_read() exactly when they see
+	 * VM_FAULT_RETRY/VM_FAULT_COMPLETED, so returning the code with
+	 * the reference still held leaks a vm_refcnt reader on the
+	 * shadow-VMA.  A leaked reader pins the vma above the
+	 * writer-drain target forever, wedging free_pgtables()'
+	 * vma_start_write() in an uninterruptible wait at exit_mmap()
+	 * (r06 dg2-fix2: DECLARE + punch + exit_group hang).  Same
+	 * ritual as vmf_can_call_fault().
 	 */
 	if (corten_enabled_static() && (vma->vm_flags & VM_CORTEN)) {
 		vm_fault_t cret;
 
+		if (flags & FAULT_FLAG_VMA_LOCK)
+			vma_end_read(vma);
 		if ((flags & FAULT_FLAG_VMA_LOCK) || in_atomic())
 			return VM_FAULT_RETRY;
 

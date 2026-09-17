@@ -321,6 +321,19 @@ void vma_link_file(struct vm_area_struct *vma);
 
 int vma_link(struct mm_struct *mm, struct vm_area_struct *vma);
 
+/*
+ * Split @vma at @addr; @new_below selects which half becomes the new
+ * object (true: the below piece, false: the above piece -- the original
+ * keeps the other half).  Bypasses sysctl_max_map_count; the caller must
+ * hold the mmap write lock.  Non-static for CortenMM's arena punch route,
+ * which pre-splits the shadow-VMA so the descriptor's cached ar->vma
+ * never references the piece the overlap gather frees (r05
+ * dg2-analysis.md B1).
+ */
+__must_check int __split_vma(struct vma_iterator *vmi,
+			     struct vm_area_struct *vma, unsigned long addr,
+			     int new_below);
+
 struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
 	unsigned long addr, unsigned long len, pgoff_t pgoff,
 	bool *need_rmap_locks);

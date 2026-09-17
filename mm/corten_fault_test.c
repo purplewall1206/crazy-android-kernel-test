@@ -25,6 +25,7 @@
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
+#include <linux/mman.h>
 #include <linux/mmap_lock.h>
 #include <linux/mm_inline.h>
 #include <linux/pgtable.h>
@@ -1119,6 +1120,346 @@ static void corten_fault_test_chunk_unmap(struct kunit *test)
 }
 
 /*
+ * [F-B/F-A, D-G''] The punch decision table and the fault-ownership
+ * decision, pure (runs on corten=off).  A strictly-inside MAP_FIXED
+ * overwrite of one arena is a punch, the page-rounded whole arena is
+ * RELEASE territory (the tail rule), a boundary-crossing range is
+ * rejected.  The fault decision keeps a punched-out hole -- covered by
+ * the incoming file VMA or by nothing -- out of the arena, while a
+ * split-off VM_CORTEN tail piece stays ours (routed mprotect metadata
+ * must keep applying there).
+ */
+static void corten_fault_test_punch_classify(struct kunit *test)
+{
+	const unsigned long s = FT_BASE, e = FT_BASE + FT_ARENA_LEN;
+	struct vm_area_struct *cached, *file_hole, *tail;
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_punch_classify(s + PAGE_SIZE,
+						    s + 3 * PAGE_SIZE, s, e),
+			CORTEN_UNMAP_CHUNK);
+	/* Head punch: the range starts at the arena base -- the shape the
+	 * B1 regression (punch_head) drives, where the doomed piece is
+	 * the cached shadow-VMA itself.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_punch_classify(s, s + 2 * PAGE_SIZE,
+						    s, e),
+			CORTEN_UNMAP_CHUNK);
+	/* A span across two arenas classifies PARTIAL against either one
+	 * and is rejected.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_punch_classify(s, e + 2 * PMD_SIZE,
+						    s, e),
+			CORTEN_UNMAP_PARTIAL);
+	KUNIT_EXPECT_EQ(test, corten_arena_punch_classify(s, e, s, e),
+			CORTEN_UNMAP_EXACT);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_punch_classify(s, e - PAGE_SIZE, s, e),
+			CORTEN_UNMAP_EXACT);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_punch_classify(s, e + PAGE_SIZE, s, e),
+			CORTEN_UNMAP_PARTIAL);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_punch_classify(e, e + PAGE_SIZE, s, e),
+			CORTEN_UNMAP_OUTSIDE);
+
+	cached = kunit_kzalloc(test, sizeof(*cached), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cached);
+	cached->vm_start = s;
+	cached->vm_end = s + PAGE_SIZE;
+	file_hole = kunit_kzalloc(test, sizeof(*file_hole), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, file_hole);
+	file_hole->vm_start = s + PAGE_SIZE;
+	file_hole->vm_end = s + 2 * PAGE_SIZE;
+	tail = kunit_kzalloc(test, sizeof(*tail), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tail);
+	tail->vm_start = s + 2 * PAGE_SIZE;
+	tail->vm_end = e;
+	/* Off-tree fake VMA: vm_flags is const in the struct; the
+	 * documented no-locking setter is the only legal write.
+	 */
+	vm_flags_init(tail, VM_CORTEN);
+
+	/* Tier 1: inside the cached head, decided with no walk. */
+	KUNIT_EXPECT_TRUE(test, corten_arena_fault_covered(cached, NULL, s));
+	/* The hole: covered by the incoming file VMA or by nothing -- not
+	 * ours (the D-G'' arena-serves-a-file-mapping shape must never
+	 * come back).  The head's vm_end edge is the hole start: tier 1
+	 * misses there by design and the covering VMA decides.
+	 */
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_fault_covered(cached, file_hole,
+						      cached->vm_end));
+	KUNIT_EXPECT_FALSE(test, corten_arena_fault_covered(cached, NULL,
+							    cached->vm_end));
+	/* The split-off tail keeps arena service. */
+	KUNIT_EXPECT_TRUE(test, corten_arena_fault_covered(cached, tail,
+							   e - PAGE_SIZE));
+}
+
+/*
+ * [F-B, D-G''] The file-MAP_FIXED punch route, real chain (corten=on).
+ * Routing a file MAP_FIXED over part of a live arena must erase the
+ * hole's frames (every address-keyed hook -- the hot fault hook first --
+ * then misses and hands the range to the legacy funnel; the guest-only
+ * half of this anchor is that the funnel serves the incoming mapping's
+ * real file data, E1 in results/r05/dg2-analysis.md), drop the hole's
+ * recorded content transactionally, and keep the rest of the arena
+ * alive: the tail (the piece the legacy gather splits off in the real
+ * flow) must keep faulting through the arena -- a marked page restores,
+ * an unmarked one is a FRESH allocation gated on ar->prot.
+ */
+static void corten_fault_test_punch_hole(struct kunit *test)
+{
+	struct corten_mm_state *state;
+	struct vm_area_struct *tv;
+	struct corten_arena *ar;
+	struct corten_pte_meta m;
+	struct ft_mm *t;
+	pte_t *ptep, pte;
+	unsigned long hole = FT_BASE + PAGE_SIZE;
+	unsigned long tail = FT_BASE + PMD_SIZE + 5 * PAGE_SIZE;
+
+	/*
+	 * Same scope note as the other real-chain cases: the M2a
+	 * descriptor-install hook needs corten_enabled_static().
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+
+	t = ft_setup(test);
+	state = corten_arena_state(t->mm);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, state);
+
+	/* A recorded, faulted page inside the future hole. */
+	KUNIT_EXPECT_EQ(test, ft_mark(t, hole, PAGE_SIZE, FT_PERM_RW), 0);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, hole), 0);
+
+	/* The punch: route a file MAP_FIXED over the hole's range. */
+	mmap_write_lock(t->mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mmap_route(t->mm, hole, 2 * PAGE_SIZE,
+						PROT_READ | PROT_WRITE,
+						MAP_PRIVATE | MAP_FIXED,
+						/* file = */ true),
+			0);
+	mmap_write_unlock(t->mm);
+
+	/* The hole's frame is gone; the tail window keeps its frame. */
+	KUNIT_EXPECT_NULL(test, corten_arena_lookup_get(t->mm, hole));
+	KUNIT_EXPECT_NULL(test, xa_load(&state->arenas, hole >> PMD_SHIFT));
+	ar = corten_arena_lookup_get(t->mm, tail);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+	KUNIT_EXPECT_PTR_EQ(test, xa_load(&state->arenas, tail >> PMD_SHIFT),
+			    ar);
+	/* The surgery keeps ar->vma on the surviving head (the original
+	 * object) for a middle punch -- the B1 invariant the gather's
+	 * remove_vma() relies on.
+	 */
+	KUNIT_EXPECT_PTR_EQ(test, READ_ONCE(ar->vma),
+			    vma_lookup(t->mm, FT_BASE));
+	percpu_ref_put(&ar->active);
+
+	/* Hole content dropped: PTE gone, metadata INVALID, accounting
+	 * closed (the zap's anon branch).
+	 */
+	ptep = ft_pte(t, hole);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_none(pte));
+	KUNIT_EXPECT_EQ(test, ft_meta(t, hole, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, get_mm_counter_sum(t->mm, MM_ANONPAGES), 0);
+
+	/* The tail still faults through the arena (the piece the gather
+	 * splits off in the real flow): FRESH gated on ar->prot (= the ft
+	 * VMA's RW), mapped and writable.  The fault must go through the
+	 * tail piece itself, as the memory.c hook would pass it.
+	 */
+	tv = vma_lookup(t->mm, tail);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tv);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_handle_mm_fault(tv, tail,
+						     FAULT_FLAG_WRITE, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, tail, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+	ptep = ft_pte(t, tail);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte) && pte_write(pte));
+}
+
+/*
+ * [B1, D-G''] Head punch, real chain (corten=on): a file MAP_FIXED whose
+ * range starts at the arena base dooms the ORIGINAL shadow-VMA object in
+ * the overlap gather (the gather's start-split keeps the original as the
+ * kept-above piece, the end-split keeps it as the doomed middle, and
+ * remove_vma() frees it).  The punch route must therefore split the tail
+ * off itself and re-point ar->vma at the survivor before returning --
+ * otherwise the next arena fault dereferences a freed VMA through the
+ * cached pointer (tier-1 of the ownership check runs lockless; this is
+ * the use-after-free KASAN would flag, and the pointer-identity asserts
+ * below catch it on any build).
+ *
+ * The gather free itself is emulated for real: strip the doomed piece's
+ * VM_CORTEN (the only thing the arena guard reads) and drive it through
+ * do_munmap()'s regular funnel, then fault the tail -- every arena read
+ * of ar->vma must land on the live tail piece, never on the freed
+ * object.
+ */
+/*
+ * do_munmap() leg runner for the gather-free emulation below: the munmap
+ * completion reads current->mm, which is NULL on the KUnit case kthread.
+ * Mirrors corten_arena_test.c's op worker (attached, self-managed, joined
+ * via completion; results recorded, asserted by the case thread).
+ */
+struct corten_fault_gather_free {
+	struct mm_struct *mm;
+	unsigned long start;
+	unsigned long len;
+	struct vm_area_struct *doomed;
+	int ret;
+	struct completion done;
+};
+
+static void corten_fault_gather_free_fn(struct corten_fault_gather_free *o)
+{
+	mmap_write_lock(o->mm);
+	vm_flags_clear(o->doomed, VM_CORTEN);
+	o->ret = do_munmap(o->mm, o->start, o->len, NULL);
+	mmap_write_unlock(o->mm);
+}
+
+static int corten_fault_gather_free_thread(void *data)
+{
+	struct corten_fault_gather_free *o = data;
+
+	kthread_use_mm(o->mm);
+	corten_fault_gather_free_fn(o);
+	kthread_unuse_mm(o->mm);
+	complete(&o->done);
+
+	return 0;
+}
+
+static void corten_fault_test_punch_head(struct kunit *test)
+{
+	struct vm_area_struct *doomed, *tv;
+	struct corten_arena *ar;
+	struct corten_pte_meta m;
+	struct ft_mm *t;
+	pte_t *ptep, pte;
+	unsigned long hole = FT_BASE;
+	unsigned long tail = FT_BASE + PMD_SIZE + 5 * PAGE_SIZE;
+
+	/*
+	 * Same scope note as the other real-chain cases: the M2a
+	 * descriptor-install hook needs corten_enabled_static().
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+
+	t = ft_setup(test);
+	doomed = t->vma;
+
+	/* The mark below targets the tail window; DECLARE leaves upper
+	 * tables unallocated (ft_setup only fills window 0), so make the
+	 * tail window transaction-ready first or the raw lock_range in
+	 * ft_mark correctly reports -ENOENT.
+	 */
+	{
+		struct corten_arena *ar = corten_arena_lookup_get(t->mm, tail);
+
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+		KUNIT_ASSERT_EQ(test, corten_arena_fill_upper(ar, tail), 0);
+		percpu_ref_put(&ar->active);
+	}
+
+	/* A recorded page in the tail window: it must survive the punch
+	 * and keep its recorded perm.
+	 */
+	KUNIT_EXPECT_EQ(test, ft_mark(t, tail, PAGE_SIZE, FT_PERM_RW), 0);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, tail), 0);
+
+	/* The head punch: [FT_BASE, FT_BASE + 2p) out of the arena base. */
+	mmap_write_lock(t->mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mmap_route(t->mm, hole, 2 * PAGE_SIZE,
+						PROT_READ | PROT_WRITE,
+						MAP_PRIVATE | MAP_FIXED,
+						/* file = */ true),
+			0);
+	mmap_write_unlock(t->mm);
+
+	/* B1 invariant: the cached pointer moved OFF the doomed original
+	 * onto the surviving tail piece (pre-fix it still pointed at
+	 * @doomed, which the gather frees).
+	 */
+	ar = corten_arena_lookup_get(t->mm, tail);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+	KUNIT_EXPECT_PTR_NE(test, READ_ONCE(ar->vma), doomed);
+	KUNIT_EXPECT_PTR_EQ(test, READ_ONCE(ar->vma),
+			    vma_lookup(t->mm, hole + 2 * PAGE_SIZE));
+	percpu_ref_put(&ar->active);
+	KUNIT_EXPECT_NULL(test, xa_load(&corten_arena_state(t->mm)->arenas,
+					hole >> PMD_SHIFT));
+
+	/* Emulate the overlap gather's free of the doomed middle through
+	 * the regular funnel (the guard only reads VM_CORTEN).
+	 * do_munmap()'s completion reads current->mm
+	 * (vms_complete_munmap_vmas()) and the case runs on a kthread
+	 * whose mm is NULL -- the same constraint corten_arena_test.c
+	 * documents for its op worker.  Run the leg on a dedicated,
+	 * fully self-managed attached worker; the case thread joins it
+	 * and asserts on the recorded result (it must not
+	 * kthread_use_mm() itself).
+	 */
+	{
+		struct corten_fault_gather_free gf = {
+			.mm = t->mm,
+			.start = hole,
+			.len = 2 * PAGE_SIZE,
+			.doomed = doomed,
+		};
+		struct task_struct *worker;
+
+		init_completion(&gf.done);
+		worker = kthread_run(corten_fault_gather_free_thread, &gf,
+				     "corten_ft_gather_free");
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, worker);
+		wait_for_completion(&gf.done);
+		KUNIT_EXPECT_EQ(test, gf.ret, 0);
+	}
+
+	/* The arena must serve the tail fault from the live tail piece:
+	 * ownership via the re-pointed cache, restore of the recorded
+	 * page, writable PTE.  With the fix, nothing dereferences the
+	 * freed @doomed (KASAN-clean); pre-fix this is the UAF.
+	 */
+	KUNIT_EXPECT_TRUE(test, corten_arena_fault_owned(ar, t->mm, tail));
+	tv = vma_lookup(t->mm, tail);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tv);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_handle_mm_fault(tv, tail,
+						     FAULT_FLAG_WRITE, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, tail, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+	ptep = ft_pte(t, tail);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte) && pte_write(pte));
+}
+
+/*
  * T0b (M4T0_SPEC.md sec 3.3): routed mprotect on a live arena page.
  * The recorded perm moves in the same transaction and the already
  * installed PTE is rewritten to the matching encoding (TLB flushed) --
@@ -1315,6 +1656,7 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_dispatch),
 	KUNIT_CASE(corten_fault_test_unmap_classify),
 	KUNIT_CASE(corten_fault_test_mmap_classify),
+	KUNIT_CASE(corten_fault_test_punch_classify),
 	KUNIT_CASE(corten_fault_test_map_anon),
 	KUNIT_CASE(corten_fault_test_zero_page),
 	KUNIT_CASE(corten_fault_test_sigsegv),
@@ -1330,6 +1672,8 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_fill_upper_race),
 	KUNIT_CASE(corten_fault_test_map_race),
 	KUNIT_CASE(corten_fault_test_chunk_unmap),
+	KUNIT_CASE(corten_fault_test_punch_hole),
+	KUNIT_CASE(corten_fault_test_punch_head),
 	{}
 };
 

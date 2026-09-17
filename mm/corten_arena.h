@@ -82,6 +82,27 @@ int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
 			     unsigned long start, unsigned long len);
 
 /*
+ * [F-A, D-G''] Fault-side ownership self-check: is @addr still arena
+ * property?  Tier 1 is the cached shadow-VMA bounds test (zero walk),
+ * tier 2 an RCU find_vma_intersection() + VM_CORTEN probe for addresses
+ * outside the cached pointer (a punch split the arena).  Non-owned
+ * addresses must run the legacy funnel -- the frame table is
+ * address-keyed and keeps claiming punched-out holes (r05
+ * dg2-analysis.md D2).  Exported for the D-G'' regression anchor.
+ */
+bool corten_arena_fault_owned(struct corten_arena *ar, struct mm_struct *mm,
+			      unsigned long addr);
+
+/*
+ * The [F-A] decision, pure and table-testable: @cached is the arena's
+ * cached shadow-VMA, @covering the VMA found over @addr by tier 2 (NULL
+ * when tier 1 decides or the range is unmapped).
+ */
+bool corten_arena_fault_covered(const struct vm_area_struct *cached,
+				const struct vm_area_struct *covering,
+				unsigned long addr);
+
+/*
  * ------------------------------------------------------------------ *
  * S6: space-operation routing (M3B_DESIGN.md sec 5)
  * ------------------------------------------------------------------
@@ -138,9 +159,11 @@ int corten_arena_munmap_guard(struct mm_struct *mm, unsigned long start,
 /*
  * The deepest munmap funnel guard (do_vmi_align_munmap): reject any legacy
  * zap whose range still overlaps a shadow-VMA (VM_CORTEN).  This is the
- * safety net behind brk-shrink, mremap and the MAP_FIXED overlap removal;
- * arena chunks never reach here (routed above), and the RELEASE teardown
- * clears the flag before its own do_munmap().
+ * safety net behind brk-shrink and mremap's internal unmaps; arena chunks
+ * never reach here (routed above), and the RELEASE teardown clears the
+ * flag before its own do_munmap().  The MAP_FIXED overlap removal in
+ * mmap_region() does NOT pass this funnel -- it has its own frame-table
+ * backstop in __mmap_prepare() (r05 dg2-analysis.md D1).
  * Must be called with mmap_lock held for writing.  Returns -EOPNOTSUPP if
  * the range overlaps a shadow-VMA, 0 otherwise.
  */
@@ -166,6 +189,19 @@ enum corten_mmap_class corten_arena_mmap_classify(unsigned long flags,
 int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
 			    unsigned long len, unsigned long prot,
 			    unsigned long flags, bool file);
+
+/*
+ * [F-B, D-G''] Punch classification (pure, testable): what a non-markable
+ * MAP_FIXED range overlapping one arena must do -- the geometry answers
+ * are the munmap ones.  EXACT (incl. the release-on-full-coverage tail
+ * rule) means RELEASE territory, CHUNK means punch (frames erased +
+ * transactional zap, then the legacy funnel installs the mapping over
+ * the emptied range), PARTIAL/OUTSIDE are reject/none-of-ours.
+ */
+enum corten_unmap_class corten_arena_punch_classify(unsigned long start,
+						    unsigned long end,
+						    unsigned long ar_start,
+						    unsigned long ar_end);
 
 /* ------------------------------------------------------------------ *
  * T0a: MODE-process transparent takeover (M4T0_SPEC.md sec 1/3)

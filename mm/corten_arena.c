@@ -77,6 +77,7 @@
 
 #include "corten.h"		/* corten_meta_ensure_locked() */
 #include "corten_arena.h"	/* S4-S7 internal interface */
+#include "vma.h"		/* __split_vma() (punch surgery, D-G'' B1) */
 
 #ifdef CONFIG_ANON_VMA_NAME
 #define CORTEN_ARENA_VMA_NAME	"corten_arena"
@@ -143,6 +144,8 @@ static atomic_long_t corten_nr_rearm_failed;	/* windows still untracked */
 static atomic_long_t corten_nr_eagain_retries;	/* route -EAGAIN retry wins */
 static atomic_long_t corten_nr_eagain_leaked;	/* -EAGAIN still escaping */
 static atomic_long_t corten_nr_mremap_release_fail; /* grow RELEASE fails */
+static atomic_long_t corten_nr_mmap_punches;	/* file-MAP_FIXED punch routes */
+static atomic_long_t corten_nr_mmap_punch_rejects; /* unroutable MAP_FIXED */
 
 /* Link @arena into the observability ledger.  Called with state->ctl_lock
  * held, after the arena is fully published in its per-mm xarray; the
@@ -726,7 +729,13 @@ static int corten_arena_release_locked(struct mm_struct *mm,
 
 	last_frame = (addr + len - 1) >> PMD_SHIFT;
 	for (frame = first_frame; frame <= last_frame; frame++) {
-		if (WARN_ON_ONCE(xa_erase(&state->arenas, frame) != arena))
+		struct corten_arena *stale = xa_erase(&state->arenas, frame);
+
+		/* [F-B] An already-NULL frame is legal since the D-G''
+		 * punch route: a file MAP_FIXED may have erased the hole's
+		 * frames earlier.  Only a foreign entry is a kernel bug.
+		 */
+		if (WARN_ON_ONCE(stale && stale != arena))
 			break;
 	}
 	refcount_set(&state->nr, refcount_read(&state->nr) - 1);
@@ -938,6 +947,10 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_eagain_leaked));
 	seq_printf(m, "mremap_release_fail %ld\n",
 		   atomic_long_read(&corten_nr_mremap_release_fail));
+	seq_printf(m, "mmap_punches        %ld\n",
+		   atomic_long_read(&corten_nr_mmap_punches));
+	seq_printf(m, "mmap_punch_rejects  %ld\n",
+		   atomic_long_read(&corten_nr_mmap_punch_rejects));
 }
 
 #ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
@@ -1566,9 +1579,20 @@ int corten_arena_fork_demote(struct mm_struct *mm, struct mm_struct *oldmm)
 		 */
 		corten_arena_obs_remove(arena);
 
+		/* [F-B] Since the D-G'' punch route an arena can span more
+		 * than one shadow-VMA piece (the hole is the legacy
+		 * mapping that replaced it); strip every piece in the
+		 * range, like RELEASE's teardown does.  unshadow() clears
+		 * arena->vma first and is idempotent.
+		 */
 		vma = READ_ONCE(arena->vma);
-		if (vma)
-			corten_arena_unshadow(arena, vma);
+		if (vma) {
+			VMA_ITERATOR(vmi, oldmm, arena->start);
+			struct vm_area_struct *v;
+
+			for_each_vma_range(vmi, v, arena->end)
+				corten_arena_unshadow(arena, v);
+		}
 
 		first = arena->start >> PMD_SHIFT;
 		last = (arena->end - 1) >> PMD_SHIFT;
@@ -1650,6 +1674,114 @@ struct corten_mm_state *corten_arena_state(struct mm_struct *mm)
 static inline struct vm_area_struct *corten_arena_shadow_vma(struct corten_arena *ar)
 {
 	return READ_ONCE(ar->vma);
+}
+
+/*
+ * [F-A, D-G''] Tier 1 of the fault-side ownership self-check: the cached
+ * shadow-VMA bounds, with zero tree walk (the common case -- every fault of
+ * an unpunched arena lands here).
+ */
+static inline bool corten_arena_vma_spans(const struct vm_area_struct *vma,
+					  unsigned long addr)
+{
+	return vma && addr >= vma->vm_start && addr < vma->vm_end;
+}
+
+/*
+ * [F-A] The ownership decision, pure and testable (the D-G'' regression
+ * table): may the arena serve a fault at @addr given the cached
+ * shadow-VMA and the VMA that actually covers the address (NULL if the
+ * range is unmapped, e.g. torn down by a concurrent RELEASE)?
+ *   - inside the cached shadow-VMA: ours, zero walk;
+ *   - outside it but covered by another VM_CORTEN piece (the tail a
+ *     punch split off): still ours -- routed mprotect metadata must keep
+ *     applying;
+ *   - covered by anything else (the file mapping a punch installed) or
+ *     by nothing: not ours.
+ */
+bool corten_arena_fault_covered(const struct vm_area_struct *cached,
+				const struct vm_area_struct *covering,
+				unsigned long addr)
+{
+	if (corten_arena_vma_spans(cached, addr))
+		return true;
+
+	return covering && !!(covering->vm_flags & VM_CORTEN);
+}
+
+/*
+ * [F-A] Is @addr still arena property?  The frame table is address-keyed
+ * (corten_arena_lookup), so a legacy punch that carves a hole out of the
+ * arena leaves the frames claiming a range whose covering VMA is no longer
+ * ours -- serving that fault from the arena would synthesize a fresh
+ * anonymous page on top of a file mapping (r05 dg2-analysis.md D2: the JVM
+ * CDS map_archive() SIGSEGV; even with the FRESH gate opened the result is
+ * silent zero-page corruption, which is worse).
+ *
+ * Tier 1 is the cached-pointer bounds test.  Only when the address falls
+ * outside the cached shadow-VMA (a punch split the arena, or a concurrent
+ * RELEASE is between unshadow() and its munmap) does tier 2 walk the tree:
+ * an RCU find_vma_intersection() plus the VM_CORTEN bit test.  The walk
+ * under plain rcu_read_lock() is the lock_vma_under_rcu() read pattern: the
+ * vm_area_cachep is SLAB_TYPESAFE_BY_RCU, so the object stays valid for the
+ * whole grace period, and a stale answer is bounded in both directions --
+ * a false "not owned" hands a fault to the legacy funnel (today's fallback
+ * behaviour, always safe), a false "owned" is the pre-fix behaviour.
+ *
+ * The slow hook (corten_arena_handle_mm_fault) needs no counterpart: its
+ * caller in mm/memory.c is vma-keyed (diverts only on VM_CORTEN), so a
+ * punched-out hole never reaches it by construction.
+ *
+ * Non-static: mm/corten_fault_test.c drives it (D-G'' regression anchor).
+ */
+bool corten_arena_fault_owned(struct corten_arena *ar, struct mm_struct *mm,
+			      unsigned long addr)
+{
+	struct vm_area_struct *vma;
+	bool owned;
+
+	if (corten_arena_vma_spans(corten_arena_shadow_vma(ar), addr))
+		return true;
+
+	/* Tier 2: rare -- only punched or tearing-down arenas get here. */
+	rcu_read_lock();
+	vma = find_vma_intersection(mm, addr, addr + 1);
+	owned = corten_arena_fault_covered(NULL, vma, addr);
+	rcu_read_unlock();
+
+	return owned;
+}
+
+/*
+ * [F-B seal] Transaction-granularity counterpart of the hot-hook check:
+ * the frame table must still point at @ar when a transaction commits,
+ * otherwise a concurrent punch (which erases frames before its zap) would
+ * race a fresh anonymous install under the incoming legacy VMA -- silent
+ * corruption of one page.  The window's covering desc write lock held by
+ * the caller is what makes the answer sticky: the punch's zap serializes
+ * behind the same lock, so a commit that passed this check is zapped by
+ * the punch rather than surviving it.
+ */
+static bool corten_arena_txn_owned(struct corten_arena *ar,
+				   struct mm_struct *mm, unsigned long addr)
+{
+	/* Pairs with the smp_store_release() publisher in
+	 * corten_arena_state_create(): the state pointer is published
+	 * once and never replaced while the mm is alive.
+	 */
+	struct corten_mm_state *state = smp_load_acquire(&mm->corten_state);
+	struct corten_arena *frame;
+	bool owned = false;
+
+	if (!state)
+		return false;
+
+	rcu_read_lock();
+	frame = xa_load(&state->arenas, addr >> PMD_SHIFT);
+	owned = frame == ar;
+	rcu_read_unlock();
+
+	return owned;
 }
 
 /*
@@ -2236,6 +2368,18 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		return CORTEN_F_FALLBACK;
 	}
 
+	/* [F-B seal] Re-check ownership under the covering desc write lock:
+	 * the hot-hook lookup ran before any concurrent punch erased the
+	 * frame; committing a fresh anonymous page here would land under
+	 * the incoming legacy VMA (r05 dg2-analysis.md D2, punch-window
+	 * race).  A rejected commit falls back to the legacy funnel, which
+	 * sees the post-punch VMA topology and serves correctly.
+	 */
+	if (unlikely(!corten_arena_txn_owned(ctx->ar, ctx->mm, ctx->addr))) {
+		corten_unlock(&txn);
+		return CORTEN_F_FALLBACK;
+	}
+
 	if (corten_query(&txn, ctx->addr, &m)) {
 		corten_unlock(&txn);
 		WARN_ON_ONCE(1);
@@ -2365,6 +2509,23 @@ enum corten_fault_action corten_arena_user_fault(struct mm_struct *mm,
 	ar = corten_arena_lookup_get(mm, address);
 	if (!ar)
 		return CORTEN_FAULT_FALLBACK;
+
+	/* [F-A, D-G''] Ownership self-check: the frame table is
+	 * address-keyed, so a legacy punch (file MAP_FIXED into the arena,
+	 * the r05 JVM CDS crash shape) leaves stale frames claiming a range
+	 * whose covering VMA is a file mapping.  Serving that fault here
+	 * would ACCERR on the FRESH gate -- or, with the gate opened, hand
+	 * the file mapping a fresh anonymous zero page (silent corruption).
+	 * A non-owned address runs the legacy funnel, which sees the real
+	 * VMA and serves file data.  The slow hook is vma-keyed upstream and
+	 * needs no counterpart; the transaction body re-checks under the
+	 * window lock (corten_arena_txn_owned()).
+	 */
+	if (unlikely(!corten_arena_fault_owned(ar, mm, address))) {
+		this_cpu_inc(state->stats[CORTEN_ARENA_STAT_FALLBACKS]);
+		percpu_ref_put(&ar->active);
+		return CORTEN_FAULT_FALLBACK;
+	}
 
 	ctx.mm = mm;
 	ctx.ar = ar;
@@ -2692,8 +2853,22 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 				page = pte_page(oldpte);
 				folio = page_folio(page);
 
+				/* [F-B] A re-punch over an already-punched
+				 * window can find file pages installed
+				 * there by the previous punch's legacy
+				 * mapping; only the counter differs for
+				 * those (the zap_pte_range() convention --
+				 * the !anon rmap removal is
+				 * vma-insensitive).  Every other producer
+				 * of an in-arena PTE (arena map/zero page,
+				 * legacy fault, GUP) attaches a private
+				 * anonymous page.
+				 */
 				folio_remove_rmap_pte(folio, page, vma);
-				add_mm_counter(mm, MM_ANONPAGES, -1);
+				if (folio_test_anon(folio))
+					add_mm_counter(mm, MM_ANONPAGES, -1);
+				else
+					add_mm_counter(mm, MM_FILEPAGES, -1);
 				tlb_remove_page(tlb, page);
 			}
 		}
@@ -2777,12 +2952,20 @@ static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 			}
 			flush_end = addr + PAGE_SIZE;
 
+			/* [F-B] Anon/file split as in
+			 * corten_arena_zap_window(): an already-punched
+			 * window can carry file pages from the legacy
+			 * mapping that filled it.
+			 */
 			if (pte_present(oldpte) && !pte_special(oldpte)) {
 				page = pte_page(oldpte);
 				folio = page_folio(page);
 
 				folio_remove_rmap_pte(folio, page, vma);
-				add_mm_counter(mm, MM_ANONPAGES, -1);
+				if (folio_test_anon(folio))
+					add_mm_counter(mm, MM_ANONPAGES, -1);
+				else
+					add_mm_counter(mm, MM_FILEPAGES, -1);
 				tlb_remove_page(tlb, page);
 			}
 		}
@@ -3030,10 +3213,13 @@ int corten_arena_munmap_guard(struct mm_struct *mm, unsigned long start,
 /*
  * The deepest guard, do_vmi_align_munmap() (sec 5.5/5.10): every legacy
  * zap funnel that is not routed above (brk shrink, mremap's internal
- * unmaps, the MAP_FIXED overlap removal inside mmap_region) must reject
- * ranges overlapping a shadow-VMA, because zap_pte_range() writes PTEs
- * without the covering desc write lock.  RELEASE clears the flag before
- * its own do_munmap(), so teardown still works.
+ * unmaps) must reject ranges overlapping a shadow-VMA, because
+ * zap_pte_range() writes PTEs without the covering desc write lock.  The
+ * MAP_FIXED overlap removal inside mmap_region() bypasses this funnel
+ * entirely -- it has its own backstop in __mmap_prepare(), and the D-G''
+ * punch route keeps live arena state out of its reach
+ * (r05 dg2-analysis.md D1).  RELEASE clears the flag before its own
+ * do_munmap(), so teardown still works.
  */
 int corten_arena_munmap_vma_guard(struct mm_struct *mm, unsigned long start,
 				  unsigned long end)
@@ -3050,6 +3236,268 @@ int corten_arena_munmap_vma_guard(struct mm_struct *mm, unsigned long start,
 	}
 
 	return 0;
+}
+
+/*
+ * [F-B, D-G''] Punch classification (pure, testable): what a non-markable
+ * MAP_FIXED range overlapping one arena must do.  The geometry answers are
+ * the munmap ones -- a page-rounded whole-arena overwrite is RELEASE
+ * territory (the tail rule applies), a strictly-inside range is a punch,
+ * a boundary-crossing range cannot be owned without cross-range VMA
+ * surgery and is rejected.  Table-driven in mm/corten_fault_test.c.
+ */
+enum corten_unmap_class corten_arena_punch_classify(unsigned long start,
+						    unsigned long end,
+						    unsigned long ar_start,
+						    unsigned long ar_end)
+{
+	enum corten_unmap_class raw;
+
+	raw = corten_arena_unmap_classify(start, end, ar_start, ar_end);
+	return corten_arena_release_classify(raw, start, end, ar_start,
+					     ar_end);
+}
+
+/*
+ * Carve [ps, pe) (the punch range clipped to one shadow piece @v) out of
+ * @v with explicit __split_vma() calls, and keep the descriptor's cached
+ * shadow-VMA pointer pointing only at objects the overlap gather will
+ * NOT free (r05 dg2-analysis.md B1: the gather's own splits leave the
+ * original first VMA and the last VMA as the *doomed* pieces --
+ * __split_vma(new_below=1) at the range start makes the original the
+ * kept-above piece, i.e. doomed; same for the last VMA at the range end
+ * -- and remove_vma() frees them.  A cached pointer left on the original
+ * dangles the moment mmap_region() runs).
+ *
+ * The gather frees @doomed; the survivors are the below head piece (the
+ * original object when the lower split ran) and the above tail piece.
+ * If the cached pointer references the doomed piece (a head punch dooms
+ * the original shadow-VMA itself), it is re-pointed at the tail, or
+ * cleared -- NULL is the established safe degradation: the fault paths
+ * fall back, the chunk/mprotect routes reject, and the F-A tier-2 walk
+ * still finds surviving shadow pieces.
+ *
+ * Timing: transactions that entered before the frame erase finish first
+ * (the desc write lock serializes them against the punch's own zap),
+ * the zap runs under the same locks, and the gather's free comes last
+ * under the caller's mmap_write -- so no observer can dereference a
+ * cached pointer at a freed object in between.  A surgery failure is
+ * reported to the route (the mmap fails, the gather never runs, nothing
+ * is freed, and RELEASE's piece-wise teardown cleans any extra piece
+ * up), so no failure path leaves a dangling cache either.
+ *
+ * Called under the mmap write lock with @ar pinned; @ps/@pe are clipped
+ * to @v by the caller.
+ *
+ * Return: 0 on success, -errno otherwise.
+ */
+static int corten_arena_punch_split(struct mm_struct *mm,
+				    struct corten_arena *ar,
+				    struct vm_area_struct *v,
+				    unsigned long ps, unsigned long pe)
+{
+	struct vm_area_struct *doomed = v, *tail = NULL;
+	int ret;
+
+	/* Lower split (new = the above piece): the original object stays
+	 * in the tree as the head piece, so a cached ar->vma pointing at
+	 * the pre-split shadow survives the gather.
+	 */
+	if (ps > v->vm_start) {
+		VMA_ITERATOR(vmi, mm, ps);
+
+		ret = __split_vma(&vmi, v, ps, /* new_below = */ 0);
+		if (ret)
+			return ret;
+		doomed = vma_lookup(mm, ps);
+		if (WARN_ON_ONCE(!doomed))
+			return -EIO;
+	}
+
+	/* Upper split (new = the above tail piece): the doomed middle is
+	 * now exactly [ps, pe) and the gather removes it without touching
+	 * the tail.  Done here rather than left to the gather so the
+	 * head-punch case can re-point ar->vma at the surviving tail
+	 * before any fault can observe the teardown.
+	 */
+	if (pe < doomed->vm_end) {
+		VMA_ITERATOR(vmi, mm, pe);
+
+		ret = __split_vma(&vmi, doomed, pe, /* new_below = */ 0);
+		if (ret)
+			return ret;
+		tail = vma_lookup(mm, pe);
+		if (WARN_ON_ONCE(!tail))
+			return -EIO;
+	}
+
+	if (READ_ONCE(ar->vma) == doomed)
+		WRITE_ONCE(ar->vma, tail);
+
+	return 0;
+}
+
+/*
+ * Drop the arena's claim on [start, end) so the legacy mmap_region() that
+ * follows can install the incoming mapping over it (r05 dg2-analysis.md
+ * D1: today the overlap removal inside __mmap_prepare() silently punches
+ * the shadow-VMA without touching the arena's bookkeeping -- the frames
+ * keep routing the hole's faults into the arena and the JVM CDS
+ * relocation read dies on the stale FRESH gate).
+ *
+ * Caller contract: runs under this mm's mmap_write lock (do_mmap's
+ * contract, the DEV-13 outermost lock) with @ar pinned by an active
+ * reference.
+ *
+ *   1. Erase the hole's frames first -- the RELEASE order.  From here the
+ *      address-keyed hooks (fault/mprotect/munmap routes) miss inside the
+ *      hole, so the range is self-consistently legacy for every later
+ *      space operation, and the F-A transaction seal keeps an in-flight
+ *      fault from committing a fresh page into the hole after the erase.
+ *      The erases serialize against DECLARE/RELEASE/mm_exit through the
+ *      caller's mmap_write; the xarray's internal lock covers the
+ *      single-word store.  An already-NULL frame is a re-punch of a
+ *      previously punched window (overlapping MAP_FIXEDs), not an error.
+ *   2. Zap the arena-tracked content transactionally (the chunk zap drives
+ *      by PTE content, so it also drops whatever a legacy fallback or a
+ *      previous punch's mapping left in the range -- the r03 defect-C
+ *      lesson).  The un-split shadow-VMA is still the rmap/TLB anchor
+ *      here, which is what the pages were mapped under.
+ *   3. Split surgery (corten_arena_punch_split): pre-split every shadow
+ *      piece the range intersects so the doomed middle is exactly
+ *      [start, end) and the descriptor's cached pointer survives the
+ *      gather's remove_vma() (B1).
+ *
+ * The gather below us then has nothing of ours to touch: it removes the
+ * doomed middle and installs the mapping; ar->vma references only
+ * surviving pieces.
+ *
+ * Return: 0 on success (legacy installs the mapping), -errno on failure
+ * (the mmap fails; the hole stays arena-blind -- later accesses fall to
+ * the legacy funnel on the still-reserved shadow pieces, which matches
+ * the plain-Linux behaviour of a failed mapping over a reservation).
+ */
+static int corten_arena_mmap_punch(struct mm_struct *mm,
+				   struct corten_mm_state *state,
+				   struct corten_arena *ar,
+				   unsigned long start, unsigned long end)
+{
+	unsigned long frame, last = (end - 1) >> PMD_SHIFT;
+	unsigned long a;
+	int ret;
+
+	for (frame = start >> PMD_SHIFT; frame <= last; frame++) {
+		struct corten_arena *stale = xa_erase(&state->arenas, frame);
+
+		if (WARN_ON_ONCE(stale && stale != ar))
+			return -EIO;
+	}
+
+	ret = corten_arena_unmap_chunk_retry(mm, ar, start, end - start);
+	if (ret)
+		return ret;
+
+	/* Split every shadow piece the range intersects.  Non-shadow VMAs
+	 * in the range (file mappings of earlier punches) are the gather's
+	 * own legacy business -- nothing in the descriptor references
+	 * them.  a always advances past the processed piece by its
+	 * pre-surgery vm_end: the splits only carve inside [a, vend).
+	 */
+	for (a = start; a < end;) {
+		struct vm_area_struct *v = find_vma_intersection(mm, a, a + 1);
+		unsigned long vend;
+
+		if (!v || v->vm_start >= end)
+			break;
+		vend = v->vm_end;
+		if (v->vm_flags & VM_CORTEN) {
+			ret = corten_arena_punch_split(mm, ar, v,
+						       max(v->vm_start, a),
+						       min(vend, end));
+			if (ret)
+				return ret;
+		}
+		a = vend;
+	}
+
+	atomic_long_inc(&corten_nr_mmap_punches);
+	return 0;
+}
+
+/*
+ * Routing for every MAP_FIXED shape corten_arena_mmap_classify() does not
+ * mark (file-backed, shared, hugetlb, ...).  A range that overlaps arena
+ * state must have its overlap removed through the arena's own teardown
+ * (frames + transactional zap, RELEASE for the whole-arena shape) instead
+ * of the unguarded legacy gather -- that is the D1 half of the D-G''
+ * root cause.  Ranges the arena cannot own (boundary crossing, two
+ * arenas) are cleanly rejected, same verdict as the munmap route.
+ * Runs under mmap_write (do_mmap's contract).
+ * Return: 0 = legacy, -errno = reject.
+ */
+static int corten_arena_mmap_punch_route(struct mm_struct *mm,
+					 unsigned long addr, unsigned long len,
+					 unsigned long flags)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+	struct corten_arena *ar_start, *ar_end, *ar;
+	enum corten_unmap_class class;
+	unsigned long end = addr + len;
+	int ret;
+
+	/* Plain mmaps cannot overlap an arena (__get_unmapped_area() only
+	 * hands out gaps), and MAP_FIXED_NOREPLACE already returned -EEXIST
+	 * on the shadow-VMA at the do_mmap gate -- so only a real MAP_FIXED
+	 * overwrite gets here.
+	 */
+	if (!(flags & MAP_FIXED) || (flags & MAP_FIXED_NOREPLACE))
+		return 0;
+
+	ar_start = corten_arena_lookup_get(mm, addr);
+	ar_end = corten_arena_lookup_get(mm, end - 1);
+	if (!ar_start && !ar_end)
+		return 0;		/* no arena involved */
+
+	ar = ar_start ?: ar_end;
+	class = corten_arena_punch_classify(addr, end, ar->start, ar->end);
+	if (class != CORTEN_UNMAP_CHUNK && class != CORTEN_UNMAP_EXACT) {
+		if (ar_start)
+			percpu_ref_put(&ar_start->active);
+		if (ar_end)
+			percpu_ref_put(&ar_end->active);
+		atomic_long_inc(&corten_nr_mmap_punch_rejects);
+		return -EOPNOTSUPP;
+	}
+
+	if (class == CORTEN_UNMAP_EXACT) {
+		/* The whole arena is overwritten: RELEASE semantics (drain
+		 * + legacy teardown removes the shadow-VMA), then the
+		 * legacy funnel installs the mapping into the emptied
+		 * range.  Drop the pinned references first -- the drain
+		 * inside RELEASE must reach zero.  release_locked() takes
+		 * only the ctl_lock: the caller's mmap_write is already
+		 * the DEV-13 outermost acquisition and the semaphore is
+		 * not recursive.
+		 */
+		if (ar_start)
+			percpu_ref_put(&ar_start->active);
+		if (ar_end)
+			percpu_ref_put(&ar_end->active);
+		ret = corten_arena_release_locked(mm, state, ar->start,
+						  ar->end - ar->start);
+		if (!ret)
+			atomic_long_inc(&corten_nr_mmap_punches);
+		return ret < 0 ? ret : 0;
+	}
+
+	/* CHUNK: punch the hole, keep the rest of the arena. */
+	ret = corten_arena_mmap_punch(mm, state, ar, addr, end);
+	if (ar_start)
+		percpu_ref_put(&ar_start->active);
+	if (ar_end)
+		percpu_ref_put(&ar_end->active);
+
+	return ret < 0 ? ret : 0;
 }
 
 /*
@@ -3083,6 +3531,9 @@ enum corten_mmap_class corten_arena_mmap_classify(unsigned long flags,
  * Runs under mmap_write_lock (do_mmap's contract); no VMA is created,
  * split or merged, no vm_stat_account() runs (the shadow-VMA already
  * carries total_vm).
+ * Every other MAP_FIXED shape goes through the punch route, so the
+ * overlap removal never reaches the legacy funnel with live arena state
+ * (r05 dg2-analysis.md D1, the D-G'' root cause).
  * Return: 0 = legacy, 1 = marked, -errno = reject.
  */
 int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
@@ -3101,7 +3552,7 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_state))
 		return 0;
 	if (corten_arena_mmap_classify(flags, file) != CORTEN_MMAP_MARK)
-		return 0;
+		return corten_arena_mmap_punch_route(mm, addr, len, flags);
 
 	ar = corten_arena_lookup_get(mm, addr);
 	if (!ar)
