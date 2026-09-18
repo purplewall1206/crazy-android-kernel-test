@@ -148,8 +148,7 @@ enum corten_page_state {
  * a later fault re-derives the committed contract instead of the
  * DECLARE-time arena bound (paper Fig.8 L9-13: unmap clears content, keeps
  * the VA -- the committed permission is part of that reservation).  The
- * default scrubs the whole slot (fork demote: the arena contract itself
- * ends).
+ * default scrubs the whole slot (the arena contract itself ends).
  */
 #define CORTEN_UNMAP_KEEP_PERM	_BITUL(1)
 #define CORTEN_UNMAP_ALL	CORTEN_UNMAP_KEEP_PERM

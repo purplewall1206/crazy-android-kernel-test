@@ -240,17 +240,38 @@ static void corten_fault_test_dispatch(struct kunit *test)
 		{ "mapped-write", { CORTEN_MAPPED, CORTEN_PERM_READ |
 				    CORTEN_PERM_WRITE | CORTEN_PERM_USER, 0, { 0 } },
 		  true, false, CORTEN_DISP_RESTORE },
-		/* MAPPED, permission lost -> ACCERR; shared -> M5 stub. */
+		/* MAPPED, permission lost -> ACCERR. */
 		{ "mapped-ro-write", { CORTEN_MAPPED, CORTEN_PERM_READ |
 				       CORTEN_PERM_USER, 0, { 0 } },
 		  true, false, CORTEN_DISP_ACCERR },
-		{ "mapped-shared", { CORTEN_MAPPED, CORTEN_PERM_READ |
-				     CORTEN_PERM_USER, CORTEN_PF_SHARED, { 0 } },
-		  true, false, CORTEN_DISP_STUB },
-		{ "mapped-shared-writable-flag-ok", { CORTEN_MAPPED,
+		/* M5 SHARED states (M5_FORK_SPEC.md sec 3.1).  A write
+		 * fault on a shared page is the fork wrprotect artifact
+		 * (contract writable -> the COW transaction) or a genuine
+		 * permission fault (contract read-only -> SEGV_ACCERR via
+		 * COW_COPY; the FOLL_FORCE-forced copy is M5.T2').  Any
+		 * non-write access on a shared page restores as before --
+		 * but the restore side keeps the hardware read-only (the
+		 * wrprotect guard), which the pure classifier still
+		 * reports as RESTORE.
+		 */
+		{ "shared-ro-write", { CORTEN_MAPPED, CORTEN_PERM_READ |
+				       CORTEN_PERM_USER, CORTEN_PF_SHARED, { 0 } },
+		  true, false, CORTEN_DISP_COW_COPY },
+		{ "shared-writable-write", { CORTEN_MAPPED,
 		  CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER,
 		  CORTEN_PF_SHARED | CORTEN_PF_WRITABLE, { 0 } },
-		  true, false, CORTEN_DISP_RESTORE },
+		  true, false, CORTEN_DISP_COW_MAYBE },
+		{ "shared-read", { CORTEN_MAPPED,
+		  CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER,
+		  CORTEN_PF_SHARED | CORTEN_PF_WRITABLE, { 0 } },
+		  false, false, CORTEN_DISP_RESTORE },
+		{ "shared-exec-instr", { CORTEN_MAPPED,
+		  CORTEN_PERM_READ | CORTEN_PERM_EXEC | CORTEN_PERM_USER,
+		  CORTEN_PF_SHARED, { 0 } },
+		  false, true, CORTEN_DISP_RESTORE },
+		{ "shared-none-write", { CORTEN_MAPPED, 0, CORTEN_PF_SHARED,
+					 { 0 } },
+		  true, false, CORTEN_DISP_COW_COPY },
 		/* Producer states M3 never creates: refuse loudly. */
 		{ "swapped", { CORTEN_SWAPPED, CORTEN_PERM_ALL, 0, { 0 } },
 		  false, false, CORTEN_DISP_STUB },
@@ -623,7 +644,7 @@ static void corten_fault_test_restore(struct kunit *test)
 		kunit_skip(test, "real fault chain requires corten=on");
 	struct ft_mm *t = ft_setup(test);
 	pte_t *ptep, pte;
-	spinlock_t *ptl;
+	spinlock_t *ptl;			/* the wrprotect is a PTE write */
 	pmd_t *pmdp;
 	unsigned long addr = FT_BASE + 4 * PAGE_SIZE;
 
@@ -653,6 +674,297 @@ static void corten_fault_test_restore(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, pte_present(pte));
 	KUNIT_EXPECT_TRUE(test, pte_write(pte));
 	KUNIT_EXPECT_EQ(test, get_mm_counter_sum(t->mm, MM_ANONPAGES), 1);
+}
+
+/* ------------------------------------------------------------------ *
+ * M5: the COW write-fault transaction (M5_FORK_SPEC.md sec 3.2/3.4).
+ * The shapes a real fork produces are simulated on the real fault
+ * chain: the SHARED flags by the state-to-itself mark (fork_commit's
+ * producer), the read-only PTE by the whitelisted copy_page_range
+ * wrprotect, and the second mapper by folio_try_dup_anon_rmap_pte
+ * (the child leg of __copy_present_ptes, minus the second mm a KUnit
+ * thread cannot own).  The dual-kthread case at the end anchors the
+ * transactional single-clear under concurrency; the "only over-copy"
+ * bound itself is structural (the == 1 read under the PTE lock, R-B).
+ * ------------------------------------------------------------------
+ */
+
+/* fork_commit's producer mark: MAPPED -> MAPPED with SHARED plus the
+ * WRITABLE record corten_mark() requires for a writable page.
+ */
+static int ft_arm_shared(struct ft_mm *t, unsigned long addr)
+{
+	struct corten_txn txn;
+	struct corten_pte_meta m, nm;
+	int ret;
+
+	ret = ft_meta(t, addr, &m);
+	if (ret)
+		return ret;
+	if (m.state != CORTEN_MAPPED)
+		return -EINVAL;
+
+	nm = m;
+	nm.flags = m.flags | CORTEN_PF_SHARED;
+	if (m.perm & CORTEN_PERM_WRITE)
+		nm.flags |= CORTEN_PF_WRITABLE;
+
+	ret = corten_lock_range(t->mm, addr, PAGE_SIZE, &txn);
+	if (ret)
+		return ret;
+	ret = corten_mark(&txn, addr, PAGE_SIZE, &nm);
+	corten_unlock(&txn);
+
+	return ret;
+}
+
+/* The fork wrprotect (whitelisted copy_page_range glue): drop the write
+ * bit of the live translation.
+ */
+static int ft_wrprotect(struct ft_mm *t, unsigned long addr)
+{
+	pmd_t *pmdp;
+	pte_t *ptep;
+	spinlock_t *ptl;			/* guards the PTE rewrite */
+
+	pmdp = pmd_offset(pud_offset(p4d_offset(pgd_offset(t->mm, addr),
+						addr), addr), addr);
+	if (!pmd_present(*pmdp))
+		return -ENOENT;
+	ptep = pte_offset_map_lock(t->mm, pmdp, addr, &ptl);
+	if (!ptep)
+		return -EAGAIN;
+	set_ptes(t->mm, addr, ptep, pte_wrprotect(ptep_get(ptep)), 1);
+	pte_unmap_unlock(ptep, ptl);
+
+	return 0;
+}
+
+static void corten_fault_test_cow_reuse(struct kunit *test)
+{
+	/*
+	 * The real fault chain needs corten=on (see the cases above).
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+	struct ft_mm *t = ft_setup(test);
+	unsigned long addr = FT_BASE + 4 * PAGE_SIZE;
+	struct corten_pte_meta m;
+	struct folio *folio;
+	pte_t *ptep, pte;
+	unsigned long pfn_before;
+
+	KUNIT_EXPECT_EQ(test, ft_mark(t, addr, PAGE_SIZE, FT_PERM_RW), 0);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	folio = page_folio(pte_page(pte));
+	pfn_before = pte_pfn(pte);
+
+	/* The fork shape: SHARED metadata + read-only hardware. */
+	KUNIT_EXPECT_EQ(test, ft_arm_shared(t, addr), 0);
+	KUNIT_EXPECT_EQ(test, ft_wrprotect(t, addr), 0);
+
+	/* The parent writes first (mapcount still 1): the reuse branch
+	 * must clear SHARED and re-arm the write bit on the same folio
+	 * -- no copy, no accounting change.
+	 */
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_TRUE(test, pte_write(pte));
+	KUNIT_EXPECT_EQ(test, pte_pfn(pte), pfn_before);
+
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.flags, CORTEN_PF_WRITABLE);
+	KUNIT_EXPECT_EQ(test, m.perm,
+			CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+			CORTEN_PERM_USER);
+
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1);
+	KUNIT_EXPECT_EQ(test, get_mm_counter_sum(t->mm, MM_ANONPAGES), 1);
+}
+
+static void corten_fault_test_cow_copy(struct kunit *test)
+{
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+	struct ft_mm *t = ft_setup(test);
+	unsigned long addr = FT_BASE + 4 * PAGE_SIZE;
+	struct corten_pte_meta m;
+	struct folio *folio, *copy;
+	pte_t *ptep, pte;
+	spinlock_t *ptl;		/* guards the child-leg mapcount dup */
+	pmd_t *pmdp;
+	void *kvaddr;
+	unsigned long pfn_before;
+
+	KUNIT_EXPECT_EQ(test, ft_mark(t, addr, PAGE_SIZE, FT_PERM_RW), 0);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	folio = page_folio(pte_page(pte));
+	pfn_before = pte_pfn(pte);
+
+	/* Fork-shaped content: a pattern the child leg will copy. */
+	kvaddr = kmap_local_page(folio_page(folio, 0));
+	memset(kvaddr, 0xc7, PAGE_SIZE);
+	kunmap_local(kvaddr);
+
+	KUNIT_EXPECT_EQ(test, ft_arm_shared(t, addr), 0);
+	KUNIT_EXPECT_EQ(test, ft_wrprotect(t, addr), 0);
+
+	/* The child leg of __copy_present_ptes: a second mapper (which
+	 * makes folio_mapcount()==2) plus the exclusive-bit clear.  The
+	 * duplicated mapping is only observable as the mapcount here --
+	 * the KUnit thread cannot own the second mm.
+	 */
+	pmdp = pmd_offset(pud_offset(p4d_offset(pgd_offset(t->mm, addr),
+						addr), addr), addr);
+	ptep = pte_offset_map_lock(t->mm, pmdp, addr, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	/* folio_get pairs with the simulated child's PTE reference
+	 * (copy_present_pte()'s folio_get before the dup); 0 = the
+	 * mapping was duplicated (nonzero means "copy instead").
+	 */
+	folio_get(folio);
+	KUNIT_ASSERT_EQ(test,
+			folio_try_dup_anon_rmap_pte(folio,
+						    folio_page(folio, 0),
+						    t->vma, t->vma),
+			0);
+	pte_unmap_unlock(ptep, ptl);
+
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 2);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+
+	/* The private copy: a new folio, writable, with the copied
+	 * content; SHARED gone; the old folio keeps the child's
+	 * reference and mapping.
+	 */
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_TRUE(test, pte_write(pte));
+	KUNIT_EXPECT_NE(test, pte_pfn(pte), pfn_before);
+
+	copy = page_folio(pte_page(pte));
+	KUNIT_EXPECT_PTR_NE(test, copy, folio);
+	kvaddr = kmap_local_page(folio_page(copy, 0));
+	KUNIT_EXPECT_EQ(test, ((u8 *)kvaddr)[0], 0xc7);
+	KUNIT_EXPECT_EQ(test, ((u8 *)kvaddr)[PAGE_SIZE - 1], 0xc7);
+	kunmap_local(kvaddr);
+
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	/* The copy is exclusively ours: corten_map() resets the flags
+	 * (SHARED gone with the shared folio; the WRITABLE record only
+	 * has meaning alongside SHARED).
+	 */
+	KUNIT_EXPECT_EQ(test, m.flags, 0);
+
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(copy), 1);
+	KUNIT_EXPECT_EQ(test, folio_ref_count(copy), 1);
+	KUNIT_EXPECT_EQ(test, get_mm_counter_sum(t->mm, MM_ANONPAGES), 1);
+}
+
+struct ft_cow_race {
+	struct ft_mm *t;
+	unsigned long addr;
+	atomic_t bad;
+	struct completion done;
+};
+
+static int corten_fault_test_cow_worker(void *data)
+{
+	struct ft_cow_race *r = data;
+	int i;
+
+	for (i = 0; i < 50 && !kthread_should_stop(); i++)
+		if (ft_write_fault(r->t, r->addr))
+			atomic_inc(&r->bad);
+
+	complete(&r->done);
+	while (!kthread_should_stop())
+		schedule_timeout_idle(1);
+
+	return 0;
+}
+
+static void corten_fault_test_cow_race(struct kunit *test)
+{
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+	struct ft_mm *t = ft_setup(test);
+	unsigned long addr = FT_BASE + 4 * PAGE_SIZE;
+	struct corten_pte_meta m;
+	struct task_struct *w0, *w1;
+	struct ft_cow_race *r;
+	pte_t *ptep, pte;
+
+	KUNIT_EXPECT_EQ(test, ft_mark(t, addr, PAGE_SIZE, FT_PERM_RW), 0);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+	KUNIT_EXPECT_EQ(test, ft_arm_shared(t, addr), 0);
+	KUNIT_EXPECT_EQ(test, ft_wrprotect(t, addr), 0);
+
+	/* Two threads descend on the freshly shared page: exactly one
+	 * COW transaction may run (the covering desc write lock
+	 * serializes; the loser re-dispatches and finds SHARED gone),
+	 * and every fault must complete handled -- no WARN, no lost
+	 * fault, no double accounting.
+	 */
+	r = kunit_kzalloc(test, sizeof(*r), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, r);
+	r->t = t;
+	r->addr = addr;
+	atomic_set(&r->bad, 0);
+	init_completion(&r->done);
+
+	w0 = kthread_run(corten_fault_test_cow_worker, r, "corten_ft_c0");
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, w0);
+	w1 = kthread_run(corten_fault_test_cow_worker, r, "corten_ft_c1");
+	if (IS_ERR(w1)) {
+		kthread_stop(w0);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, w1);
+	}
+	if (num_online_cpus() >= 2) {
+		set_cpus_allowed_ptr(w0, cpumask_of(0));
+		set_cpus_allowed_ptr(w1, cpumask_of(1 % num_online_cpus()));
+	}
+
+	wait_for_completion(&r->done);
+	wait_for_completion(&r->done);
+	kthread_stop(w1);
+	kthread_stop(w0);
+
+	KUNIT_EXPECT_EQ(test, atomic_read(&r->bad), 0);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	/* Cleared exactly once: WRITABLE survives, SHARED does not. */
+	KUNIT_EXPECT_EQ(test, m.flags, CORTEN_PF_WRITABLE);
+
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_TRUE(test, pte_write(pte));
 }
 
 /* ------------------------------------------------------------------ *
@@ -1805,6 +2117,9 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_untracked_drift),
 #endif
 	KUNIT_CASE(corten_fault_test_restore),
+	KUNIT_CASE(corten_fault_test_cow_reuse),
+	KUNIT_CASE(corten_fault_test_cow_copy),
+	KUNIT_CASE(corten_fault_test_cow_race),
 	KUNIT_CASE(corten_fault_test_mprotect_pte),
 	KUNIT_CASE(corten_fault_test_mprotect_fresh),
 	KUNIT_CASE(corten_fault_test_zap_keep_perm),

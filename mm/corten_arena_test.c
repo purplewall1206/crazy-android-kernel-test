@@ -1648,17 +1648,462 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 }
 
 /* ------------------------------------------------------------------ *
- * T0a: fork transition (sec 5, DEV-11) -- full teardown on the parent,
- * MODE-bit inheritance on both sides, clean metadata after the scrub.
+ * M5.T1a: faithful fork (M5_FORK_SPEC.md sec 1.3, DEV-14/DEV-15) --
+ * the OQ-D replacement for the T0 fork_demote.  The hooks run inside a
+ * dup_mmap()-shaped window (oldmm mmap_write held, child nested); the
+ * child-side VMA/PTE shapes that the real dup_mmap() produces are
+ * simulated by the helpers below, the established ft_* scaffolding
+ * pattern (a KUnit thread cannot fork a real user process).
  * ------------------------------------------------------------------
  */
 
-static void corten_arena_test_fork_demote(struct kunit *test)
+#define CORTEN_ARENA_TEST_FORK_LEN	(2UL * PMD_SIZE)
+
+/* Metadata of @addr through the transaction API; defined with the T0b
+ * routing cases below, used by the fork cases above.
+ */
+static int corten_arena_test_meta(struct mm_struct *mm, unsigned long addr,
+				  struct corten_pte_meta *out);
+
+/* The gated PMD walk (the test-side twin of corten_arena_pmd(); that one
+ * is static to mm/corten_arena.c).
+ */
+static pmd_t *corten_arena_test_pmd(struct mm_struct *mm, unsigned long addr)
+{
+	pgd_t *pgdp = pgd_offset(mm, addr);
+	p4d_t *p4dp;
+	pud_t *pudp;
+	pmd_t *pmdp;
+
+	if (!pgd_present(READ_ONCE(*pgdp)))
+		return NULL;
+	p4dp = p4d_offset(pgdp, addr);
+	if (!p4d_present(READ_ONCE(*p4dp)))
+		return NULL;
+	pudp = pud_offset(p4dp, addr);
+	if (!pud_present(READ_ONCE(*pudp)))
+		return NULL;
+	pmdp = pmd_offset(pudp, addr);
+	if (!pmd_present(READ_ONCE(*pmdp)))
+		return NULL;
+
+	return pmdp;
+}
+
+/* Seed one CORTEN_MAPPED slot: allocate a folio, install the writable
+ * PTE (the map_anon() store sequence, hand-driven) and record the
+ * metadata (map + mark).  The folio reference becomes the PTE
+ * reference.
+ */
+static int corten_arena_test_fork_seed_mapped(struct mm_struct *mm,
+					      unsigned long addr)
+{
+	struct corten_txn txn;
+	struct vm_area_struct *vma;
+	struct folio *folio;
+	struct page *page;
+	pte_t *ptep, entry;
+	spinlock_t *ptl;		/* guards the map_anon-style install */
+	pmd_t *pmdp;
+	pgprot_t pgprot;
+	struct corten_pte_meta m = { };
+	int ret;
+
+	vma = vma_lookup(mm, addr);
+	if (!vma)
+		return -ENOENT;
+
+	folio = folio_alloc(GFP_KERNEL | __GFP_ZERO, 0);
+	if (!folio)
+		return -ENOMEM;
+	page = folio_page(folio, 0);
+	__folio_mark_uptodate(folio);
+
+	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+	if (ret) {
+		folio_put(folio);
+		return ret;
+	}
+	ret = corten_map(&txn, addr, page,
+			 CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+			 CORTEN_PERM_USER, 0);
+	if (ret) {
+		corten_unlock(&txn);
+		folio_put(folio);
+		return ret;
+	}
+	m.state = CORTEN_MAPPED;
+	m.perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER;
+	ret = corten_mark(&txn, addr, PAGE_SIZE, &m);
+	corten_unlock(&txn);
+	if (ret) {
+		folio_put(folio);
+		return ret;
+	}
+
+	pmdp = corten_arena_test_pmd(mm, addr);
+	if (!pmdp)
+		return -ENOENT;
+	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	if (!ptep) {
+		folio_put(folio);
+		return -EAGAIN;
+	}
+	pgprot = vm_get_page_prot(VM_READ | VM_WRITE);
+	entry = pte_mkwrite(pte_mkdirty(mk_pte(page, pgprot)), vma);
+	add_mm_counter(mm, MM_ANONPAGES, 1);
+	folio_add_new_anon_rmap(folio, vma, addr, RMAP_EXCLUSIVE);
+	set_ptes(mm, addr, ptep, entry, 1);
+	pte_unmap_unlock(ptep, ptl);
+
+	return 0;
+}
+
+/* Seed one CORTEN_PRIVATE_ANON slot (the virtual allocation): fill the
+ * window and mark.  No page, no PTE.
+ */
+static int corten_arena_test_fork_seed_anon(struct mm_struct *mm,
+					    unsigned long addr)
+{
+	struct corten_txn txn;
+	struct corten_pte_meta m = { };
+	struct corten_arena *ar;
+	int ret;
+
+	ar = corten_arena_lookup_get(mm, addr);
+	if (!ar)
+		return -ENOENT;
+	ret = corten_arena_fill_upper(ar, addr);
+	percpu_ref_put(&ar->active);
+	if (ret)
+		return ret;
+
+	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+	if (ret)
+		return ret;
+	m.state = CORTEN_PRIVATE_ANON;
+	m.perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER;
+	ret = corten_mark(&txn, addr, PAGE_SIZE, &m);
+	corten_unlock(&txn);
+
+	return ret;
+}
+
+/* The child's page-table page for @addr: copy_page_range() pte_allocs
+ * one for every present parent PT page (metadata-only windows included,
+ * which is how routed-mprotect pending perms get a carrier in the
+ * child).  The M2a descriptor install runs inside pte_alloc_one on a
+ * corten=on boot, and re-arm covers a corten=off one (the same
+ * gate-free convention as the suites).
+ */
+static int corten_arena_test_fork_ensure_pt(struct kunit *test,
+					    struct mm_struct *dst,
+					    unsigned long addr)
+{
+	pgd_t *pgdp = pgd_offset(dst, addr);
+	p4d_t *p4dp = p4d_alloc(dst, pgdp, addr);
+	pud_t *pudp = p4dp ? pud_alloc(dst, p4dp, addr) : NULL;
+	pmd_t *dpmdp = pudp ? pmd_alloc(dst, pudp, addr) : NULL;
+
+	if (!dpmdp) {
+		KUNIT_FAIL(test, "child PT allocation failed");
+		return -ENOMEM;
+	}
+	if (pte_alloc(dst, dpmdp)) {
+		KUNIT_FAIL(test, "child PTE alloc failed");
+		return -ENOMEM;
+	}
+	corten_ptdesc_rearm(dst, pmd_pgtable(*dpmdp));
+
+	return 0;
+}
+
+/* The copy_page_range() leg for one PTE: ensure the child's PT page
+ * (with its gate-free descriptor re-arm), wrprotect the source and dup
+ * the mapping into the child -- folio_try_dup_anon_rmap_pte is the very
+ * primitive __copy_present_ptes() uses; it drops PageAnonExclusive and
+ * raises the mapcount.  Returns the source folio, or NULL.
+ */
+static struct folio *
+corten_arena_test_fork_copy_pte(struct kunit *test, struct mm_struct *dst,
+				struct mm_struct *src, unsigned long addr)
+{
+	struct vm_area_struct *svma, *dvma;
+	struct folio *folio = NULL;
+	pte_t *sptep, *dptep, pte;
+	/* sptl: the wrprotect + child-leg dup; dptl: the child install. */
+	spinlock_t *sptl, *dptl;
+	pmd_t *pmdp;
+
+	svma = vma_lookup(src, addr);
+	dvma = vma_lookup(dst, addr);
+	if (!svma || !dvma)
+		return NULL;
+
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_ensure_pt(test, dst,
+							       addr), 0);
+
+	pmdp = corten_arena_test_pmd(src, addr);
+	if (!pmdp)
+		return NULL;
+	sptep = pte_offset_map_lock(src, pmdp, addr, &sptl);
+	if (!sptep)
+		return NULL;
+
+	pte = ptep_get(sptep);
+	if (!pte_present(pte) || pte_special(pte)) {
+		pte_unmap_unlock(sptep, sptl);
+		return NULL;
+	}
+	folio = page_folio(pte_page(pte));
+	set_ptes(src, addr, sptep, pte_wrprotect(pte), 1);
+	/* folio_get pairs with the child's PTE reference, exactly like
+	 * copy_present_pte()'s folio_get before the dup; 0 = the mapping
+	 * was duplicated (nonzero means "copy the page instead").
+	 */
+	folio_get(folio);
+	KUNIT_EXPECT_EQ(test,
+			folio_try_dup_anon_rmap_pte(folio,
+						    folio_page(folio, 0),
+						    dvma, svma),
+			0);
+	pte_unmap_unlock(sptep, sptl);
+
+	pmdp = corten_arena_test_pmd(dst, addr);
+	if (!pmdp)
+		return folio;
+	dptep = pte_offset_map_lock(dst, pmdp, addr, &dptl);
+	if (!dptep)
+		return folio;
+	set_ptes(dst, addr, dptep, pte_wrprotect(pte), 1);
+	add_mm_counter(dst, MM_ANONPAGES, 1);
+	pte_unmap_unlock(dptep, dptl);
+
+	return folio;
+}
+
+/* The fork window: oldmm mmap_write held with the child's nested
+ * behind it, exactly like dup_mmap() at both hook points (the DEV-13
+ * outermost lock; mmap_write_lock_nested(mm, SINGLE_DEPTH_NESTING)).
+ */
+static int corten_arena_test_fork_begin(struct mm_struct *child,
+					struct mm_struct *parent)
+{
+	int ret;
+
+	mmap_write_lock(parent);
+	mmap_write_lock_nested(child, SINGLE_DEPTH_NESTING);
+	ret = corten_arena_fork_begin(child, parent);
+	mmap_write_unlock(child);
+	mmap_write_unlock(parent);
+
+	return ret;
+}
+
+static int corten_arena_test_fork_commit(struct mm_struct *child,
+					 struct mm_struct *parent)
+{
+	int ret;
+
+	mmap_write_lock(parent);
+	mmap_write_lock_nested(child, SINGLE_DEPTH_NESTING);
+	ret = corten_arena_fork_commit(child, parent);
+	mmap_write_unlock(child);
+	mmap_write_unlock(parent);
+
+	return ret;
+}
+
+static void corten_arena_test_fork_faithful(struct kunit *test)
+{
+	struct corten_arena_test_mm *t;
+	struct mm_struct *mm, *child;
+	struct vm_area_struct *cvma;
+	struct corten_arena *car;
+	struct corten_mm_state *cstate;
+	struct corten_pte_meta m;
+	unsigned long anon_addr = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
+	unsigned long map_addr = CORTEN_ARENA_TEST_BASE + 2 * PAGE_SIZE;
+	long timeouts_before = corten_arena_test_drain_timeouts();
+	long faithful_before = corten_arena_test_fork_faithful_count();
+
+	/* The metadata mirror runs real transactions: on a corten=off
+	 * boot the PT pages are untracked (re-arm is gated) and the
+	 * off-boot contract is the plain-VMA body -- nothing to observe
+	 * (the S4 degraded scope, like the real fault-chain cases).
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "metadata mirror requires corten=on");
+
+	t = corten_arena_test_mm_setup(test);
+	mm = t->mm;
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+	/* The harness VMA only covers the primary range; the second
+	 * arena needs its own DECLARE-contract VMA.
+	 */
+	cvma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_START2,
+				      CORTEN_ARENA_TEST_START2 +
+				      CORTEN_ARENA_TEST_LEN2,
+				      CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_START2,
+					     CORTEN_ARENA_TEST_LEN2),
+			0);
+
+	/* Two committed shapes: a virtual allocation (no content) and a
+	 * mapped page (real folio), both in the first arena's first
+	 * window.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_fork_seed_anon(mm, anon_addr), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_fork_seed_mapped(mm, map_addr), 0);
+
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+
+	/* dup_mmap(): begin before any VMA is copied... */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+
+	/* The freeze window (DEV-15): both parent arenas frozen, the
+	 * MODE bit inherited, the child registry created.
+	 */
+	KUNIT_EXPECT_TRUE(test, READ_ONCE(child->corten_mode));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_arena_frozen(mm,
+							 CORTEN_ARENA_TEST_BASE));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_arena_frozen(mm,
+							 CORTEN_ARENA_TEST_START2));
+	KUNIT_ASSERT_NOT_NULL(test, READ_ONCE(child->corten_state));
+
+	/* ... then the child's shadow pieces appear (vm_area_dup), and
+	 * the PTE layer copies (copy_page_range, the DEV-14 glue).
+	 */
+	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE,
+				      CORTEN_ARENA_TEST_BASE +
+				      CORTEN_ARENA_TEST_LEN,
+				      CORTEN_ARENA_TEST_FLAGS_OK |
+				      VM_CORTEN | VM_NOHUGEPAGE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_START2,
+				      CORTEN_ARENA_TEST_START2 +
+				      CORTEN_ARENA_TEST_LEN2,
+				      CORTEN_ARENA_TEST_FLAGS_OK |
+				      VM_CORTEN | VM_NOHUGEPAGE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+	KUNIT_EXPECT_NOT_NULL(test,
+			      corten_arena_test_fork_copy_pte(test, child, mm,
+							      map_addr));
+
+	/* ... and commit mirrors the metadata + registry. */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+
+	/* Unfreeze closure ran: no frozen arena survives the fork. */
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_test_arena_frozen(mm,
+							  CORTEN_ARENA_TEST_BASE));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_test_arena_frozen(mm,
+							  CORTEN_ARENA_TEST_START2));
+
+	/* The child mirrors the registry, one descriptor per arena. */
+	KUNIT_EXPECT_EQ(test, corten_arena_query(child,
+						 CORTEN_ARENA_TEST_BASE), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_query(child,
+						 CORTEN_ARENA_TEST_START2), 1);
+
+	cstate = READ_ONCE(child->corten_state);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cstate);
+	rcu_read_lock();
+	car = xa_load(&cstate->arenas,
+		      CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
+	if (car) {
+		KUNIT_EXPECT_TRUE(test,
+				  car->start == CORTEN_ARENA_TEST_BASE &&
+				  car->end == CORTEN_ARENA_TEST_BASE +
+				  CORTEN_ARENA_TEST_LEN);
+		KUNIT_EXPECT_TRUE(test, READ_ONCE(car->mm) == child);
+		KUNIT_EXPECT_FALSE(test, READ_ONCE(car->frozen));
+	}
+	rcu_read_unlock();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, car);
+
+	/* The mapped page: SHARED producer on the parent, SHARED +
+	 * WRITABLE mirror on the child (corten_mark's WRITABLE rule).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, map_addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.flags,
+			CORTEN_PF_SHARED | CORTEN_PF_WRITABLE);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, map_addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.flags,
+			CORTEN_PF_SHARED | CORTEN_PF_WRITABLE);
+	KUNIT_EXPECT_EQ(test, m.perm,
+			CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+			CORTEN_PERM_USER);
+
+	/* The virtual allocation keeps its perm, gains no SHARED flag
+	 * (only CORTEN_MAPPED content is shared), and mirrors to the
+	 * child unchanged.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, anon_addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_PRIVATE_ANON);
+	KUNIT_EXPECT_EQ(test, m.flags, 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, anon_addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_PRIVATE_ANON);
+	KUNIT_EXPECT_EQ(test, m.flags, 0);
+
+	/* An untouched arena has no PT page and no metadata on either
+	 * side (-ENOENT): the pmd presence gate skipped the window, and
+	 * the reservation costs nothing across the fork.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm,
+					       CORTEN_ARENA_TEST_START2 +
+					       PAGE_SIZE, &m), -ENOENT);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(child,
+					       CORTEN_ARENA_TEST_START2 +
+					       PAGE_SIZE, &m), -ENOENT);
+
+	/* The commit counted. */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_faithful_count(),
+			faithful_before + 1);
+
+	/* The child exits: its arenas drain through exit_mmap()
+	 * (corten_arena_mm_exit), no leaks, no drain timeouts.
+	 */
+	mmput(child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(),
+			timeouts_before);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+}
+
+/* R-A (M5_FORK_SPEC.md sec 6): a frozen arena that never unfreezes is a
+ * permanent, silent degradation of the parent -- the worst failure the
+ * faithful fork can have.  Both commit-failure stages must run the
+ * unfreeze closure, and the fork must abort.
+ */
+static void corten_arena_test_fork_unwind(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
 	struct mm_struct *child;
-	struct vm_area_struct *vma;
+	long timeouts_before = corten_arena_test_drain_timeouts();
+	long faithful_before = corten_arena_test_fork_faithful_count();
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 	KUNIT_ASSERT_EQ(test,
@@ -1666,115 +2111,250 @@ static void corten_arena_test_fork_demote(struct kunit *test)
 					     CORTEN_ARENA_TEST_LEN),
 			0);
 
+	/* Stage 1: fail at commit entry -- nothing mirrored yet. */
 	child = mm_alloc();
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
-	/* Not registered with kunit: mmput() it explicitly at the end so
-	 * the exit_mmap() assertion window stays deterministic.
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_arena_frozen(mm,
+							 CORTEN_ARENA_TEST_BASE));
+	corten_arena_test_fork_fail_arm(1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm),
+			-ENOMEM);
+	corten_arena_test_fork_fail_arm(0);
+
+	/* The red line: the parent is unfrozen, the fork aborted, the
+	 * commit did not count.
 	 */
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_test_arena_frozen(mm,
+							  CORTEN_ARENA_TEST_BASE));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_faithful_count(),
+			faithful_before);
+	KUNIT_EXPECT_EQ(test, corten_arena_query(child,
+						 CORTEN_ARENA_TEST_BASE), 0);
+	mmput(child);
 
-	/* dup_mmap() holds oldmm's write lock at the demote point. */
-	mmap_write_lock(mm);
-	KUNIT_EXPECT_EQ(test, corten_arena_fork_demote(child, mm), 0);
-	mmap_write_unlock(mm);
-
-	/* MODE bit inherited on the child, kept on the parent. */
-	KUNIT_EXPECT_TRUE(test, READ_ONCE(child->corten_mode));
-	KUNIT_EXPECT_TRUE(test, READ_ONCE(mm->corten_mode));
-
-	/* Child: no registry, no arenas (mm_init guarantees NULL). */
-	KUNIT_EXPECT_NULL(test, READ_ONCE(child->corten_state));
-
-	/* Parent: arenas gone, shadow-VMA restored to a plain anonymous
-	 * VMA with identical contents and bounds.
+	/* Stage 2: fail after the first arena was mirrored -- the child
+	 * keeps the partial registry (the MMF_UNSTABLE exit path drains
+	 * it) and the parent still unfreezes.
 	 */
-	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_BASE),
-			0);
-	vma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
-	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_CORTEN);
-	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_NOHUGEPAGE);
-	KUNIT_EXPECT_TRUE(test, vma_is_anonymous(vma));
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	{
+		struct vm_area_struct *cvma;
 
-	/* The scrub guarantees a clean re-DECLARE (a stale CORTEN_MAPPED
-	 * behind the fresh arena would resurrect old translations --
-	 * T0-R5).  No PTE was ever written in this test, so emptiness
-	 * holds; the metadata side is what the re-DECLARE exercises.
-	 */
-	KUNIT_EXPECT_EQ(test,
-			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
-					     CORTEN_ARENA_TEST_LEN),
-			0);
+		cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE,
+					      CORTEN_ARENA_TEST_BASE +
+					      CORTEN_ARENA_TEST_LEN,
+					      CORTEN_ARENA_TEST_FLAGS_OK |
+					      VM_CORTEN | VM_NOHUGEPAGE);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+	}
+	corten_arena_test_fork_fail_arm(2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm),
+			-ENOMEM);
+	corten_arena_test_fork_fail_arm(0);
+
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_test_arena_frozen(mm,
+							  CORTEN_ARENA_TEST_BASE));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_faithful_count(),
+			faithful_before);
+	KUNIT_EXPECT_EQ(test, corten_arena_query(child,
+						 CORTEN_ARENA_TEST_BASE), 1);
+
+	mmput(child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(),
+			timeouts_before);
+
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
-						 corten_arena_test_op_release,
-						 CORTEN_ARENA_TEST_BASE,
-						 CORTEN_ARENA_TEST_LEN),
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
 			0);
-
-	/* No-arena MODE fork: pure bit copy, zero teardown work. */
-	{
-		struct mm_struct *child2 = mm_alloc();
-		struct mm_struct *t2mm;
-
-		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child2);
-		KUNIT_EXPECT_EQ(test, corten_arena_fork_demote(child2, mm),
-				0);
-		KUNIT_EXPECT_TRUE(test, READ_ONCE(child2->corten_mode));
-
-		/* And a fork of a MODE process without any registry. */
-		t2mm = mm_alloc();
-		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t2mm);
-		KUNIT_EXPECT_EQ(test, corten_arena_mode_enter(t2mm), 0);
-		KUNIT_EXPECT_EQ(test, corten_arena_fork_demote(child2, t2mm),
-				0);
-		KUNIT_EXPECT_TRUE(test, READ_ONCE(child2->corten_mode));
-		KUNIT_EXPECT_TRUE(test, READ_ONCE(t2mm->corten_mode));
-		mmput(child2);
-		mmput(t2mm);
-	}
-
-	KUNIT_EXPECT_EQ(test, corten_arena_mode_exit(mm), 0);
-	mmput(child);
 }
 
-/* ------------------------------------------------------------------ *
- * DEV-11 completion (r06 "rogue" family anchor): the fork demotion must
- * carry the routed mprotect() commits into the plain-VMA layer.  A
- * PROT_NONE reservation whose chunk was committed through the route
- * demotes into a split VMA: the committed range keeps R/W, the rest of
- * the reservation stays inaccessible.  Pre-fix the whole range came out
- * with the DECLARE flags and a surviving parent (glibc heap cleanup
- * after a fork probe) wrote straight into SEGV_ACCERR.
- * ------------------------------------------------------------------
+/* [F-B/OQ-1, M5 report] Since the D-G'' punch route a declared arena can
+ * span several shadow pieces separated by legacy holes.  The fork
+ * traversal must treat the pieces as one arena (the descriptor covers
+ * every frame), mirror metadata per touched window, and leave the holes
+ * to the standard copy_page_range() of their plain VMAs.  The punch
+ * shape is synthesized by hand (split + hole flags + frame erase) --
+ * the real punch route is guest-covered.
  */
-
-static void corten_arena_test_fork_demote_perm(struct kunit *test)
+static void corten_arena_test_fork_multipiece(struct kunit *test)
 {
 	struct corten_arena_test_mm *t;
 	struct mm_struct *mm, *child;
-	struct vm_area_struct *vma;
-	unsigned long commit;
+	struct vm_area_struct *vma, *head, *tail, *cvma;
+	struct corten_mm_state *state;
+	struct corten_pte_meta m;
+	unsigned long hole = CORTEN_ARENA_TEST_BASE + PMD_SIZE;
+	long skips_before;
 	int ret;
 
-	/* The commit under test goes through the mprotect route, whose
-	 * decision gates on corten_enabled_static(); on a corten=off boot
-	 * the route is the legacy funnel and there is nothing to observe.
+	t = kunit_kzalloc(test, sizeof(*t), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t);
+	kunit_add_action(test, corten_arena_test_mm_destroy, t);
+	t->test = test;
+	t->mm = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t->mm);
+	mm = t->mm;
+
+	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_BASE,
+				     CORTEN_ARENA_TEST_BASE +
+				     CORTEN_ARENA_TEST_FORK_LEN,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_FORK_LEN),
+			0);
+
+	/* Punch a hole into the second frame: split the shadow piece and
+	 * turn the tail into a plain VMA whose registry frames are
+	 * erased (the punch route's end state).
 	 */
+	mmap_write_lock(mm);
+	{
+		VMA_ITERATOR(vmi, mm, hole);
+
+		ret = __split_vma(&vmi, vma, hole, /* new_below = */ 0);
+		KUNIT_ASSERT_EQ(test, ret, 0);
+		tail = vma_lookup(mm, hole);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tail);
+		vm_flags_clear(tail, VM_CORTEN | VM_NOHUGEPAGE);
+		head = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, head);
+		KUNIT_ASSERT_TRUE(test, head->vm_flags & VM_CORTEN);
+
+		state = corten_arena_state(mm);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, state);
+		mutex_lock(&state->ctl_lock);
+		xa_erase(&state->arenas, hole >> PMD_SHIFT);
+		mutex_unlock(&state->ctl_lock);
+	}
+	mmap_write_unlock(mm);
+
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+
+	/* The child inherits both pieces with their post-punch flags. */
+	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE, hole,
+				      head->vm_flags);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+	cvma = corten_arena_test_mkvm(child, hole,
+				      CORTEN_ARENA_TEST_BASE +
+				      CORTEN_ARENA_TEST_FORK_LEN,
+				      tail->vm_flags);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+
+	skips_before = corten_arena_test_fork_skips();
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+
+	/* One surviving shadow piece is enough: the arena registers in
+	 * the child (it was NOT skipped), and the hole's window has no
+	 * metadata to mirror (the child never got a PT page for it: the
+	 * hole is copied as a plain VMA by the standard loop).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_skips(),
+			skips_before);
+	KUNIT_EXPECT_EQ(test, corten_arena_query(child,
+						 CORTEN_ARENA_TEST_BASE), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(child,
+					       CORTEN_ARENA_TEST_BASE +
+					       PAGE_SIZE, &m), -ENOENT);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(child, hole, &m), -ENOENT);
+
+	/* The child descriptor's cached piece is the surviving head (the
+	 * hole cannot be the cache: vma_lookup on its start finds a
+	 * non-VM_CORTEN VMA).
+	 */
+	{
+		struct corten_arena *car;
+
+		rcu_read_lock();
+		car = xa_load(&corten_arena_state(child)->arenas,
+			      CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
+		if (car)
+			KUNIT_EXPECT_PTR_EQ(test, READ_ONCE(car->vma),
+					    vma_lookup(child,
+						       CORTEN_ARENA_TEST_BASE));
+		rcu_read_unlock();
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, car);
+	}
+
+	mmput(child);
+
+	/* Now the skip shape (④-1): the child inherits NO shadow piece --
+	 * the MADV_DONTFORK/VM_DONTCOPY shape (E3, simulated by handing
+	 * the child plain pieces).  The parent arena stays fully
+	 * registered (its frames untouched), counted as a skip, and the
+	 * child gets no registry entry.
+	 */
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE, hole,
+				      head->vm_flags & ~(VM_CORTEN |
+							 VM_NOHUGEPAGE));
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+	cvma = corten_arena_test_mkvm(child, hole,
+				      CORTEN_ARENA_TEST_BASE +
+				      CORTEN_ARENA_TEST_FORK_LEN,
+				      tail->vm_flags);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_skips(),
+			skips_before + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_query(child,
+						 CORTEN_ARENA_TEST_BASE), 0);
+	/* The parent side is untouched: still registered, still serving. */
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm,
+						 CORTEN_ARENA_TEST_BASE), 1);
+	mmput(child);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+}
+
+/* OQ-D closure (M5_FORK_SPEC.md sec 0): the routed mprotect() commits
+ * live in the metadata, and the faithful fork mirrors the metadata --
+ * so the child sees the committed contract without any VMA surgery.
+ * The T0 demote re-expressed the commits as split plain VMAs; the M5
+ * fork leaves the shadow-VMA one piece, bounds intact.
+ */
+static void corten_arena_test_fork_perm(struct kunit *test)
+{
+	struct corten_arena_test_mm *t;
+	struct mm_struct *mm, *child;
+	struct vm_area_struct *vma, *cvma;
+	struct corten_arena *ar, *par;
+	struct corten_pte_meta m;
+	unsigned long commit;
+	long timeouts_before = corten_arena_test_drain_timeouts();
+
 	if (!corten_enabled_static())
 		kunit_skip(test, "mprotect route requires corten=on");
 
 	t = kunit_kzalloc(test, sizeof(*t), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t);
 	kunit_add_action(test, corten_arena_test_mm_destroy, t);
-
 	t->test = test;
 	t->mm = mm_alloc();
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t->mm);
 	mm = t->mm;
 
-	/* The reservation: PROT_NONE-shaped (no R/W), the JVM/glibc heap
-	 * reserve shape.
-	 */
+	/* The reservation: PROT_NONE-shaped, the JVM/glibc heap shape. */
 	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_BASE,
 				     CORTEN_ARENA_TEST_BASE +
 				     CORTEN_ARENA_TEST_LEN,
@@ -1788,7 +2368,7 @@ static void corten_arena_test_fork_demote_perm(struct kunit *test)
 					     CORTEN_ARENA_TEST_LEN),
 			0);
 
-	/* Commit pages 1..2 (inclusive) of the arena through the route. */
+	/* Commit pages 1..2 (inclusive) through the route. */
 	commit = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_mprotect_route(mm, commit,
@@ -1799,40 +2379,85 @@ static void corten_arena_test_fork_demote_perm(struct kunit *test)
 
 	child = mm_alloc();
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE,
+				      CORTEN_ARENA_TEST_BASE +
+				      CORTEN_ARENA_TEST_LEN,
+				      (CORTEN_ARENA_TEST_FLAGS_OK &
+				       ~(VM_READ | VM_WRITE)) |
+				      VM_CORTEN | VM_NOHUGEPAGE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+	/* The mprotect route fill_upper'ed the first window on the
+	 * parent, so copy_page_range() gives the child a PT page for it
+	 * (the pending-perm metadata carrier) even though no PTE is
+	 * copied.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_fork_ensure_pt(test, child,
+							 CORTEN_ARENA_TEST_BASE),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
 
-	/* dup_mmap() holds oldmm's write lock at the demote point. */
-	mmap_write_lock(mm);
-	ret = corten_arena_fork_demote(child, mm);
-	mmap_write_unlock(mm);
-	KUNIT_ASSERT_EQ(test, ret, 0);
-
-	/* The committed chunk: a plain anonymous piece carrying R/W. */
-	vma = vma_lookup(mm, commit);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
-	KUNIT_EXPECT_TRUE(test, vma_is_anonymous(vma));
-	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_CORTEN);
-	KUNIT_EXPECT_TRUE(test, vma->vm_flags & VM_READ);
-	KUNIT_EXPECT_TRUE(test, vma->vm_flags & VM_WRITE);
-	KUNIT_EXPECT_EQ(test, vma->vm_start, commit);
-	KUNIT_EXPECT_EQ(test, vma->vm_end, commit + 2 * PAGE_SIZE);
-
-	/* Outside the commit the reservation stays inaccessible. */
+	/* The parent: still ONE shadow-VMA over the whole reservation --
+	 * no demote-style split, the routed commits stay in the
+	 * metadata (the source of truth).
+	 */
 	vma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
-	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_READ);
-	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_WRITE);
 	KUNIT_EXPECT_EQ(test, vma->vm_start, CORTEN_ARENA_TEST_BASE);
-	KUNIT_EXPECT_EQ(test, vma->vm_end, commit);
-
-	vma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE + PMD_SIZE);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_EXPECT_EQ(test, vma->vm_end,
+			CORTEN_ARENA_TEST_BASE + CORTEN_ARENA_TEST_LEN);
+	KUNIT_EXPECT_TRUE(test, vma->vm_flags & VM_CORTEN);
 	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_READ);
 	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_WRITE);
 
-	corten_arena_mode_exit(mm);
-	mmput(child);
-}
+	/* The committed chunk is recorded on BOTH sides identically. */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, commit, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_PRIVATE_ANON);
+	KUNIT_EXPECT_EQ(test, m.perm,
+			CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+			CORTEN_PERM_USER);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, commit, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_PRIVATE_ANON);
+	KUNIT_EXPECT_EQ(test, m.perm,
+			CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+			CORTEN_PERM_USER);
 
+	/* Outside the commit: the reservation bound applies on both
+	 * sides (INVALID slots -- the FRESH gate derives ar->prot).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm,
+						     CORTEN_ARENA_TEST_BASE,
+						     &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child,
+						     CORTEN_ARENA_TEST_BASE,
+						     &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+
+	/* The arena upper bounds mirror. */
+	rcu_read_lock();
+	ar = xa_load(&corten_arena_state(mm)->arenas,
+		     CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
+	par = xa_load(&corten_arena_state(child)->arenas,
+		      CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
+	if (ar && par)
+		KUNIT_EXPECT_EQ(test, READ_ONCE(par->prot),
+				READ_ONCE(ar->prot));
+	rcu_read_unlock();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, par);
+
+	mmput(child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(),
+			timeouts_before);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+}
 /* ------------------------------------------------------------------ *
  * T0b: mprotect / madvise / mremap routing (M4T0_SPEC.md sec 3.3/3.4,
  * STATE D12).  Decision tables on a real declared arena, the MODE
@@ -2389,8 +3014,10 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_protect_flags_kernel_gate),
 	KUNIT_CASE(corten_arena_test_madvise_route),
 	KUNIT_CASE(corten_arena_test_mremap_route),
-	KUNIT_CASE(corten_arena_test_fork_demote),
-	KUNIT_CASE(corten_arena_test_fork_demote_perm),
+	KUNIT_CASE(corten_arena_test_fork_faithful),
+	KUNIT_CASE(corten_arena_test_fork_unwind),
+	KUNIT_CASE(corten_arena_test_fork_multipiece),
+	KUNIT_CASE(corten_arena_test_fork_perm),
 	KUNIT_CASE(corten_arena_test_concurrent),
 	KUNIT_CASE(corten_arena_test_concurrent_window),
 	KUNIT_CASE(corten_arena_test_obs_ledger),

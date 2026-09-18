@@ -43,8 +43,21 @@ enum corten_disp {
 				 * caller completes the dispatch after the
 				 * corten_mark() synthesis
 				 */
+	CORTEN_DISP_COW_MAYBE,	/* M5: write fault on a shared page whose
+				 * contract is writable -- the fork
+				 * wrprotect artifact.  The COW transaction
+				 * reuses the page (map_count==1) or copies
+				 * it (paper Sec. 4.3)
+				 */
+	CORTEN_DISP_COW_COPY,	/* M5: write fault on a shared page whose
+				 * contract is read-only -- a genuine
+				 * permission fault, not a wrprotect
+				 * artifact; SIGSEGV in T1a (the
+				 * FOLL_FORCE-forced copy unlock is M5.T2'
+				 * scope, M5_FORK_SPEC.md sec 3.4)
+				 */
 	CORTEN_DISP_ACCERR,	/* permission mismatch -> SEGV_ACCERR */
-	CORTEN_DISP_STUB,	/* M5/M6/M4+ state -> WARN + SIGSEGV */
+	CORTEN_DISP_STUB,	/* M6/M4+ state -> WARN + SIGSEGV */
 	CORTEN_DISP_MAPERR,	/* undecodable state -> SEGV_MAPERR */
 };
 
@@ -269,16 +282,39 @@ int corten_arena_mode_exit(struct mm_struct *mm);
 int corten_arena_mode_get(struct mm_struct *mm);
 
 /*
- * fork transition (sec 5, DEV-11): tear every arena of @oldmm down and
- * turn its shadow-VMAs back into plain anonymous VMAs, scrubbing their
- * metadata; the child starts with @oldmm's MODE bit and no arenas.
- * Called from dup_mmap() after mmap_write_lock_nested(@mm), i.e. with
- * @oldmm's mmap_write held (a legal DEV-13 nesting for the ctl_lock this
- * takes).  clone(CLONE_VM) never runs dup_mmap and is unaffected.
- * Return: 0 on success, -errno (the fork fails; the parent keeps running,
- * possibly already demoted -- fork failure loses arena-ness, documented).
+ * Faithful fork (M5_FORK_SPEC.md sec 1.3, DEV-14/DEV-15; replaces the T0
+ * fork_demote -- no fallback exists, a failure aborts the fork like any
+ * other dup_mmap() error).  Both hooks run inside dup_mmap()'s window:
+ * @oldmm's mmap_write is held (the DEV-13 outermost lock, so nesting the
+ * registry ctl_lock is legal) and @mm's is held nested.
+ *
+ * corten_arena_fork_begin(): before any VMA is copied.  Inherits the MODE
+ * bit, creates the child registry (next_va cursor copied) and freezes
+ * every parent arena: frozen refuses new transactions at the fault-path
+ * lookup, and the per-arena drain quiesces the in-flight ones -- the
+ * copy_page_range()/fork_commit() below see a static snapshot.
+ *
+ * corten_arena_fork_commit(): after the for_each_vma()/copy_page_range()
+ * loop (the PTE layer, the corten_glue_pte_write whitelist entry #1 per
+ * DEV-14).  Marks the parent's CORTEN_MAPPED pages CORTEN_PF_SHARED from
+ * the drained snapshot, registers the child arenas and deep-copies the
+ * page metadata, then unfreezes the parent -- the single R-A closure:
+ * whatever happens above, the parent is never left frozen.  A mid-commit
+ * failure leaves the child's partial registry to the MMF_UNSTABLE exit
+ * path (corten_arena_mm_exit()); SHARED-bit residue self-heals through
+ * the COW reuse branch (the child that would have shared is gone).
+ *
+ * corten_arena_fork_abort(): the error-path counterpart for aborts that
+ * skip fork_commit (fatal signal, copy_page_range failure); a cheap no-op
+ * when no freeze is outstanding.  clone(CLONE_VM) never runs dup_mmap and
+ * is unaffected (M5_FORK_SPEC.md sec 2.3 E2).
+ *
+ * Return (begin/commit): 0 on success, -errno (the fork fails; dup_mm()
+ * collapses the error to -ENOMEM at the syscall boundary).
  */
-int corten_arena_fork_demote(struct mm_struct *mm, struct mm_struct *oldmm);
+int corten_arena_fork_begin(struct mm_struct *mm, struct mm_struct *oldmm);
+int corten_arena_fork_commit(struct mm_struct *mm, struct mm_struct *oldmm);
+void corten_arena_fork_abort(struct mm_struct *oldmm);
 
 /*
  * True if [start, start+len) intersects any declared arena of @mm.  RCU
@@ -451,10 +487,20 @@ static inline int corten_arena_mode_get(struct mm_struct *mm)
 	return 0;
 }
 
-static inline int corten_arena_fork_demote(struct mm_struct *mm,
+static inline int corten_arena_fork_begin(struct mm_struct *mm,
+					  struct mm_struct *oldmm)
+{
+	return 0;
+}
+
+static inline int corten_arena_fork_commit(struct mm_struct *mm,
 					   struct mm_struct *oldmm)
 {
 	return 0;
+}
+
+static inline void corten_arena_fork_abort(struct mm_struct *oldmm)
+{
 }
 
 #endif /* CONFIG_CORTEN_MM_ARENA */

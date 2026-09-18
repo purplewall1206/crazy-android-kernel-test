@@ -146,6 +146,18 @@ static atomic_long_t corten_nr_eagain_leaked;	/* -EAGAIN still escaping */
 static atomic_long_t corten_nr_mremap_release_fail; /* grow RELEASE fails */
 static atomic_long_t corten_nr_mmap_punches;	/* file-MAP_FIXED punch routes */
 static atomic_long_t corten_nr_mmap_punch_rejects; /* unroutable MAP_FIXED */
+/* M5 faithful-fork counters (M5_FORK_SPEC.md 1.3-④6): fork_demotes stays
+ * as the historical T0 telemetry and no longer grows.
+ */
+static atomic_long_t corten_nr_fork_faithful;	/* commits that mirrored */
+static atomic_long_t corten_nr_fork_skips;	/* child-less arena skips */
+
+/*
+ * KUnit injection point for the commit failure unwinds (R-A): 1 = fail at
+ * commit entry, 2 = fail after the first arena was mirrored.  Written
+ * only by corten_arena_test_fork_fail_arm() (KUnit, single-threaded).
+ */
+static int corten_fork_fail_stage;
 
 /* Link @arena into the observability ledger.  Called with state->ctl_lock
  * held, after the arena is fully published in its per-mm xarray; the
@@ -947,6 +959,10 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_munmap_releases));
 	seq_printf(m, "fork_demotes        %ld\n",
 		   atomic_long_read(&corten_nr_fork_demotes));
+	seq_printf(m, "fork_faithful       %ld\n",
+		   atomic_long_read(&corten_nr_fork_faithful));
+	seq_printf(m, "fork_skips          %ld\n",
+		   atomic_long_read(&corten_nr_fork_skips));
 	seq_printf(m, "rearm_recovered     %ld\n",
 		   atomic_long_read(&corten_nr_rearm_recovered));
 	seq_printf(m, "rearm_failed        %ld\n",
@@ -972,6 +988,34 @@ void corten_arena_test_inject_drain_timeout(void)
 long corten_arena_test_drain_timeouts(void)
 {
 	return atomic_long_read(&corten_arena_nr_drain_timeouts);
+}
+
+void corten_arena_test_fork_fail_arm(int stage)
+{
+	corten_fork_fail_stage = stage;
+}
+
+bool corten_arena_test_arena_frozen(struct mm_struct *mm, unsigned long addr)
+{
+	struct corten_arena *ar;
+	bool frozen;
+
+	rcu_read_lock();
+	ar = corten_arena_lookup(mm, addr);
+	frozen = ar && READ_ONCE(ar->frozen);
+	rcu_read_unlock();
+
+	return frozen;
+}
+
+long corten_arena_test_fork_faithful_count(void)
+{
+	return atomic_long_read(&corten_nr_fork_faithful);
+}
+
+long corten_arena_test_fork_skips(void)
+{
+	return atomic_long_read(&corten_nr_fork_skips);
 }
 #endif
 
@@ -1456,382 +1500,631 @@ int corten_prctl_mode(unsigned int op, unsigned long arg3,
 	}
 }
 
-/* Scrub one arena's metadata after its drain (sec 5.2): reset every
- * recorded page of every 2M window to CORTEN_INVALID -- pure metadata
- * invalidation, no PTE is touched.  This clears anything a legacy
- * fallback fault may have written during the drain window (T0-R5) and
- * guarantees that a later re-DECLARE of the range starts from clean
- * state (a stale CORTEN_MAPPED behind a fresh DECLARE would resurrect
- * old translations, the INV7 drift).  Untracked windows (-ENOENT from
- * the range lock: no PT page) have nothing recorded by definition.
- * Called with the arena drained and state->ctl_lock held.
+/* ------------------------------------------------------------------ *
+ * M5.T1a: faithful fork (M5_FORK_SPEC.md sec 1.3, DEV-14/DEV-15).
+ *
+ * The T0 fork_demote exit strategy is replaced wholesale (its
+ * scrub/materialize/unshadow teardown is deleted, not kept as a
+ * fallback): fork no longer touches the arena lifecycle.  The parent
+ * keeps its arenas and the child receives a full semantic mirror --
+ * shadow-VMAs by vm_area_dup(), page contents by the ordinary
+ * copy_page_range() (whose wrprotect is the corten_glue_pte_write
+ * whitelist entry #1, DEV-14) and the metadata/registry by the two
+ * hooks below.  A failure aborts the fork with the upstream dup_mmap
+ * precedent; the one red line is that the parent must never stay
+ * frozen (R-A), which is why every exit funnels through the single
+ * unfreeze closure.
+ * ------------------------------------------------------------------
  */
-/*
- * Re-express one permission run [rs, re) as plain VMA flags: split the
- * covering piece at the run boundaries (the same __split_vma surgery the
- * punch route uses, under the same oldmm mmap_write contract) and set the
- * flags on exactly the run's piece.
- */
-static int corten_arena_demote_apply_run(struct mm_struct *mm,
-					 unsigned long rs, unsigned long re,
-					 u8 perm)
-{
-	struct vm_area_struct *piece;
-	vm_flags_t want;
-	int ret;
-
-	piece = vma_lookup(mm, rs);
-	if (WARN_ON_ONCE(!piece))
-		return -EIO;
-
-	want = piece->vm_flags & ~(VM_READ | VM_WRITE | VM_EXEC);
-	if (perm & CORTEN_PERM_READ)
-		want |= VM_READ;
-	if (perm & CORTEN_PERM_WRITE)
-		want |= VM_WRITE;
-	if (perm & CORTEN_PERM_EXEC)
-		want |= VM_EXEC;
-	if ((piece->vm_flags & (VM_READ | VM_WRITE | VM_EXEC)) ==
-	    (want & (VM_READ | VM_WRITE | VM_EXEC)))
-		return 0;
-
-	if (rs > piece->vm_start) {
-		VMA_ITERATOR(vmi, mm, rs);
-
-		/* new_below = 0: the new VMA is the piece above @rs, the
-		 * head keeps its object.
-		 */
-		ret = __split_vma(&vmi, piece, rs, /* new_below = */ 0);
-		if (ret)
-			return ret;
-		piece = vma_lookup(mm, rs);
-		if (WARN_ON_ONCE(!piece))
-			return -EIO;
-	}
-	if (re < piece->vm_end) {
-		VMA_ITERATOR(vmi, mm, re);
-
-		ret = __split_vma(&vmi, piece, re, /* new_below = */ 0);
-		if (ret)
-			return ret;
-	}
-
-	vm_flags_clear(piece, VM_READ | VM_WRITE | VM_EXEC);
-	vm_flags_set(piece, want | VM_SOFTDIRTY);
-	vma_set_page_prot(piece);
-
-	return 0;
-}
 
 /*
- * DEV-11 completion (the r06 "rogue" ACCERR family): the routed
- * mprotect() commits of an arena live only in the per-page metadata --
- * the one shadow-VMA cannot carry sub-VMA permissions.  The fork
- * demotion turns the shadow-VMAs back into plain anonymous VMAs, which
- * drops every routed commit back to the DECLARE-time flags: a surviving
- * parent (fork keeps both sides running) and the child's copies then sit
- * on a reserve-shaped PROT_NONE VMA whose committed chunks are lost, and
- * the next write dies with SEGV_ACCERR -- glibc's exit-time heap cleanup
- * after a fork probe (dedup_eq / metis_eq / java rc=139,
- * libc.so+0xa2a63/0xa2b40, "segfault at 0x1000...0030 error 7").
- *
- * Before the scrub erases the metadata, re-express the recorded
- * permissions in the VMA layer: split each shadow piece into
- * permission-homogeneous runs and flag them.  The permission of a page
- * is its recorded perm; a recorded-but-Invalid slot keeps the perm the
- * content drop preserved (CORTEN_UNMAP_KEEP_PERM); a fully unrecorded
- * page carries the arena bound (ar->prot), which is what the plain VMA
- * already encodes, so only the routed commits produce splits.
- *
- * Caller contract: oldmm's mmap_write held (dup_mmap, the DEV-13
- * outermost lock -- the same nesting the punch route's splits run
- * under), @ar drained (no competing transactions), metadata intact.
+ * The single R-A unwind closure: re-arm the transaction refcount the
+ * freeze-drain killed and clear the frozen bit, for every arena this
+ * fork froze.  Called with oldmm's mmap_write and @state->ctl_lock
+ * held, so no lookup can observe an intermediate state: a fault either
+ * still sees frozen (falls back and blocks on the write lock) or a live
+ * ref and a clear bit.  Child arenas have no frozen bit (born live; the
+ * child cannot schedule until dup_mmap() returns), so "unfreeze" only
+ * ever touches parent-side descriptors.
  */
-static int corten_arena_demote_materialize(struct corten_arena *ar,
-					   struct mm_struct *mm,
-					   unsigned long start,
-					   unsigned long end)
+static void corten_arena_fork_unfreeze_locked(struct corten_mm_state *state)
 {
-	unsigned long cursor = start;
+	unsigned long frame = 0, unfrozen_until = 0;
+	struct corten_arena *arena;
 
-	while (cursor < end) {
-		unsigned long ps, pe;
-		struct vm_area_struct *v;
-		unsigned long addr, rs = 0;
-		u8 cur = 0;
-		bool have = false;
-		int ret;
-
-		v = find_vma(mm, cursor);
-		if (!v || v->vm_start >= end)
-			break;
-		ps = max(v->vm_start, cursor);
-		pe = min(v->vm_end, end);
-		cursor = v->vm_end;
-
-		/* A punch hole (the legacy mapping that replaced a chunk)
-		 * is not ours to re-flag; its recorded metadata, if any,
-		 * describes content that is gone.
-		 */
-		if (!(v->vm_flags & VM_CORTEN))
+	xa_for_each(&state->arenas, frame, arena) {
+		/* Every frame of an arena holds the same descriptor. */
+		if (frame < unfrozen_until)
 			continue;
+		unfrozen_until = arena->end >> PMD_SHIFT;
 
-		for (addr = ps; addr < pe;) {
-			unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1,
-						    pe);
-			struct corten_txn txn;
-			unsigned long a;
-			int tries = 0;
-
-			for (;;) {
-				ret = corten_lock_range(mm, addr,
-							win_end - addr, &txn);
-				if (ret != -EAGAIN || ++tries >= 2)
-					break;
-			}
-			/* Untracked window: nothing recorded, the arena
-			 * bound applies uniformly.  Close a pending run
-			 * that differs from the bound at the window start;
-			 * the untracked pages themselves need no split (the
-			 * plain VMA already encodes the bound).
-			 */
-			if (ret == -ENOENT || ret == -EOPNOTSUPP) {
-				if (have && cur != READ_ONCE(ar->prot)) {
-					ret = corten_arena_demote_apply_run(mm, rs,
-									    addr, cur);
-					if (ret)
-						return ret;
-				}
-				have = false;
-				addr = win_end;
-				continue;
-			}
-			if (ret)
-				return ret;
-
-			for (a = addr; a < win_end; a += PAGE_SIZE) {
-				struct corten_pte_meta m;
-				u8 p;
-
-				if (corten_query(&txn, a, &m) ||
-				    (m.state == CORTEN_INVALID && !m.perm))
-					p = READ_ONCE(ar->prot);
-				else
-					p = m.perm;
-
-				if (have && p == cur)
-					continue;
-
-				/* A perm change closes the run that ends at
-				 * @a; otherwise a new run opens here.
-				 */
-				if (have) {
-					ret = corten_arena_demote_apply_run(mm,
-									    rs, a,
-									    cur);
-					if (ret) {
-						corten_unlock(&txn);
-						return ret;
-					}
-				}
-				rs = a;
-				cur = p;
-				have = true;
-			}
-			corten_unlock(&txn);
-			addr = win_end;
-		}
-
-		if (have) {
-			ret = corten_arena_demote_apply_run(mm, rs, pe, cur);
-			if (ret)
-				return ret;
-		}
+		if (!READ_ONCE(arena->frozen))
+			continue;
+		/* The drain-timeout shape (E5, a kernel bug): reinit
+		 * WARNs once on a non-zero count (leaked transaction
+		 * reference), the loud signal the E5 contract asks for;
+		 * the resurrect itself puts the ref into a consistent
+		 * live state so a straggler's put still lands safely.
+		 */
+		percpu_ref_reinit(&arena->active);
+		WRITE_ONCE(arena->frozen, false);
 	}
-
-	return 0;
 }
 
-static int corten_arena_demote_scrub(struct corten_arena *ar,
-				     unsigned long start, unsigned long end)
-{
-	unsigned long addr;
-
-	for (addr = start; addr < end; ) {
-		unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1, end);
-		unsigned long a;
-		struct corten_txn txn;
-		int ret, tries = 0;
-
-		for (;;) {
-			ret = corten_lock_range(ar->mm, addr, win_end - addr,
-						&txn);
-			if (ret != -EAGAIN || ++tries >= 2)
-				break;
-		}
-		/* Nothing transactional in this window: -ENOENT (hole) and
-		 * -EOPNOTSUPP (huge leaf) both mean "no metadata to scrub".
-		 */
-		if (ret == -ENOENT || ret == -EOPNOTSUPP) {
-			addr = win_end;
-			continue;
-		}
-		if (ret)
-			return ret;
-
-		for (a = addr; a < win_end; a += PAGE_SIZE) {
-			/* The demote scrub ends the arena contract itself:
-			 * a full slot scrub (no KEEP_PERM).
-			 */
-			ret = corten_unmap(&txn, a, PAGE_SIZE, 0);
-			if (ret && ret != -ENOENT) {
-				corten_unlock(&txn);
-				return ret;
-			}
-		}
-		corten_unlock(&txn);
-
-		addr = win_end;
-	}
-
-	return 0;
-}
-
-int corten_arena_fork_demote(struct mm_struct *mm, struct mm_struct *oldmm)
+void corten_arena_fork_abort(struct mm_struct *oldmm)
 {
 	struct corten_mm_state *state;
+
+	/* Pairs with the store in corten_arena_state_create(). */
+	state = smp_load_acquire(&oldmm->corten_state);
+	if (!state || !refcount_read(&state->nr))
+		return;
+
+	mmap_assert_write_locked(oldmm);
+	mutex_lock(&state->ctl_lock);
+	corten_arena_fork_unfreeze_locked(state);
+	mutex_unlock(&state->ctl_lock);
+}
+
+int corten_arena_fork_begin(struct mm_struct *mm, struct mm_struct *oldmm)
+{
+	struct corten_mm_state *old_state;
 	unsigned long frame = 0, drained_until = 0;
 	struct corten_arena *arena;
-	int ret = 0;
 
-	/* MODE-bit inheritance (sec 5.2): both sides keep auto-attaching
-	 * their *new* mmaps; the existing mappings turn legacy below.
-	 * The child's mm is not visible to anyone yet, the parent's is
+	/* MODE-bit inheritance (the T0 sec 5.2 rule, moved here by
+	 * M5_FORK_SPEC.md 1.3-2): both sides keep auto-attaching their
+	 * *new* mmaps; the existing arenas are mirrored by fork_commit.
+	 * The child mm is not visible to anyone yet, the parent's is
 	 * write-locked by dup_mmap() -- the MODE writer contract holds.
 	 */
 	WRITE_ONCE(mm->corten_mode, READ_ONCE(oldmm->corten_mode));
 
-	/* Pairs with the store in corten_arena_state_create(); NULL means
-	 * the parent never had arenas.
+	/* R-G: a dying process aborts at the dup_mmap() loop's
+	 * fatal_signal_pending() checkpoint before any mirroring work --
+	 * do not pay for the freeze.  (A signal arriving after this point
+	 * is covered by fork_commit's checks and fork_abort().)
 	 */
-	state = smp_load_acquire(&oldmm->corten_state);
-	if (!state)
-		return 0;	/* one load; a no-arena fork is unchanged */
+	if (fatal_signal_pending(current))
+		return -EINTR;
+
+	/* Pairs with the store in corten_arena_state_create(); NULL means
+	 * the parent never had arenas: one load, a no-arena fork is
+	 * unchanged (E1).
+	 */
+	old_state = smp_load_acquire(&oldmm->corten_state);
+	if (!old_state)
+		return 0;
 
 	mmap_assert_write_locked(oldmm);
+	mmap_assert_write_locked(mm);
+
+	/* The child registry is created eagerly so that fork_commit() can
+	 * register the mirrored arenas into it; the child's mmap_write is
+	 * held nested by dup_mmap(), which is the MODE writer contract
+	 * for the cursor copy below (the window cursor must match, or the
+	 * child's new mmaps would collide with the inherited arenas).
+	 */
+	{
+		struct corten_mm_state *state = corten_arena_get_state(mm);
+
+		if (!state)
+			return -ENOMEM;
+		state->next_va = READ_ONCE(old_state->next_va);
+	}
 
 	/* DEV-13: dup_mmap holds oldmm's mmap_write; nesting ctl_lock
-	 * inside it is the legal order.  With the drain below quiescing
-	 * all transactions, the PTEs of the range are frozen while we
-	 * scrub and unshadow.
+	 * inside it is the legal order.
 	 */
-	mutex_lock(&state->ctl_lock);
+	mutex_lock(&old_state->ctl_lock);
 
-	xa_for_each(&state->arenas, frame, arena) {
-		unsigned long first, last;
-		struct vm_area_struct *vma;
-		bool drained;
-		int r;
-
-		/* Every frame of an arena holds the same descriptor; work
-		 * each one once, at its first frame.
-		 */
+	/* Freeze window (DEV-15): refuse new transactions, then drain
+	 * the in-flight ones.  The frozen write and the drain pair per
+	 * arena; a drained arena stays frozen until fork_commit()'s (or
+	 * fork_abort()'s) unfreeze closure.  Only the child-state
+	 * allocation above can fail, so nothing frozen is ever unwound
+	 * inside begin itself.
+	 */
+	xa_for_each(&old_state->arenas, frame, arena) {
 		if (frame < drained_until)
 			continue;
 		drained_until = arena->end >> PMD_SHIFT;
 
+		WRITE_ONCE(arena->frozen, true);
 		if (!corten_arena_drain(arena)) {
-			/* Leaked transaction reference -- a kernel bug.
-			 * Proceed like RELEASE's timeout path (a runnable
-			 * process with a counted leak beats an unkillable
-			 * fork) but keep the descriptor alive: a straggler
-			 * put would UAF.
+			/* Leaked transaction reference -- a kernel bug
+			 * (E5).  Count it and proceed: the snapshot below
+			 * is taken after the drain, so a straggler can
+			 * only surface as this count, and the unfreeze
+			 * closure's reinit WARN covers the leak loudly.
+			 * The descriptor stays alive (a straggler put
+			 * would otherwise UAF).
 			 */
-			corten_arena_note_drain_timeout(state);
-			drained = false;
-		} else {
-			drained = true;
+			corten_arena_note_drain_timeout(old_state);
 		}
-
-		/* DEV-11 completion (r06 "rogue" family): the routed
-		 * mprotect() commits live only in the metadata, so they
-		 * must be re-expressed as VMA flags before the plain-VMA
-		 * conversion makes the metadata unreadable -- otherwise a
-		 * surviving parent loses every routed commit on the
-		 * reserve-shaped VMA and the next write ACCERRs.
-		 * Failure aborts the fork with the same precedent as the
-		 * scrub below (a consistent all-legacy or partially
-		 * materialized state; nothing half-torn).
-		 */
-		r = corten_arena_demote_materialize(arena, oldmm,
-						    arena->start, arena->end);
-		if (r) {
-			if (!ret)
-				ret = (r == -EAGAIN) ? -EOPNOTSUPP : r;
-		}
-
-		/* Metadata scrub BEFORE the registry/vma teardown.  On
-		 * failure we proceed with the teardown anyway (the
-		 * drain-timeout precedent: a runnable process beats a
-		 * stuck fork) and abort the fork: the possibly-stale
-		 * metadata of the affected range has no reader any more
-		 * (the arena is erased, so lookups miss and faults run
-		 * the legacy VMA body); a later re-DECLARE of the range
-		 * is the one residual INV7-drift exposure, the same one
-		 * T0-R5 notes for the timeout path.
-		 */
-		r = corten_arena_demote_scrub(arena, arena->start,
-					      arena->end);
-		if (r) {
-			if (!ret)
-				ret = (r == -EAGAIN) ? -EOPNOTSUPP : r;
-		}
-
-		/* Now the arena is committed to the demotion: deregister
-		 * (debugfs), restore the shadow-VMA to a plain anonymous
-		 * VMA (vm_flags_clear() takes the per-VMA write mark
-		 * itself, under oldmm's write lock), erase the registry
-		 * frames and free the descriptor.
-		 */
-		corten_arena_obs_remove(arena);
-
-		/* [F-B] Since the D-G'' punch route an arena can span more
-		 * than one shadow-VMA piece (the hole is the legacy
-		 * mapping that replaced it); strip every piece in the
-		 * range, like RELEASE's teardown does.  unshadow() clears
-		 * arena->vma first and is idempotent.
-		 */
-		vma = READ_ONCE(arena->vma);
-		if (vma) {
-			VMA_ITERATOR(vmi, oldmm, arena->start);
-			struct vm_area_struct *v;
-
-			for_each_vma_range(vmi, v, arena->end)
-				corten_arena_unshadow(arena, v);
-		}
-
-		first = arena->start >> PMD_SHIFT;
-		last = (arena->end - 1) >> PMD_SHIFT;
-		for (; first <= last; first++)
-			xa_erase(&state->arenas, first);
-		refcount_set(&state->nr, refcount_read(&state->nr) - 1);
-
-		if (drained)
-			corten_arena_free(arena);
 	}
+
+	mutex_unlock(&old_state->ctl_lock);
+
+	return 0;
+}
+
+/*
+ * Parent-side 2M-window pass (M5_FORK_SPEC.md 1.3 ④-2): snapshot ONE
+ * window's metadata and turn every CORTEN_MAPPED page in it into a
+ * shared one (SHARED, plus the WRITABLE record corten_mark() requires
+ * for logically writable pages).  Private-anon and dropped-content
+ * slots are snapshot unchanged.  The snapshot is consumed by the child
+ * replay of the SAME window right after (corten_arena_fork_mirror's
+ * window loop) -- one buffer, one window at a time, and the parent's
+ * and child's descriptor locks still never nest.  The pmd presence
+ * gate skips windows with no PT page: no PT page means no metadata and
+ * no content (INV4 same birth), which is what keeps the fork cost
+ * proportional to the *touched* windows, not the reserved size.
+ * Called frozen and drained: no transaction can race.
+ */
+static int
+corten_arena_fork_mark_window(struct corten_arena *ar, unsigned long addr,
+			      unsigned long win_end,
+			      struct corten_pte_meta *snap)
+{
+	pmd_t *pmdp = corten_arena_pmd(ar->mm, addr);
+	struct corten_txn txn;
+	unsigned long a;
+	int tries = 0;
+	int ret;
+
+	memset(snap, 0, CORTEN_META_ARRAY_BYTES);
+	if (!pmdp || !pmd_present(READ_ONCE(*pmdp)) ||
+	    pmd_leaf(READ_ONCE(*pmdp)))
+		return 0;
+
+	for (;;) {
+		ret = corten_lock_range(ar->mm, addr, win_end - addr, &txn);
+		if (ret != -EAGAIN || ++tries >= 2)
+			break;
+	}
+	/* Untracked window (hole/defective install): nothing recorded --
+	 * the shadow pieces still copy as plain VMAs.
+	 */
+	if (ret == -ENOENT || ret == -EOPNOTSUPP)
+		return 0;
+	if (ret)
+		return ret;
+
+	/* Snapshot first, then the SHARED marks: the snapshot is what the
+	 * child replay of this window reads, under the child's own locks
+	 * -- the parent's and the child's descriptor trees are never
+	 * locked at the same time (④-4 discipline).  A mark failure must
+	 * abort the fork (the caller's ⑤ unwind runs): replaying a
+	 * snapshot whose parent-side marks are missing would hand the
+	 * child a writable-looking page that is still hardware-shared.
+	 */
+	for (a = addr; a < win_end; a += PAGE_SIZE) {
+		struct corten_pte_meta m, nm;
+
+		ret = corten_query(&txn, a, &m);
+		if (unlikely(ret))
+			break;
+
+		if (m.state != CORTEN_MAPPED) {
+			snap[pte_index(a)] = m;
+			continue;
+		}
+		/* The child mirrors the SHARED shape, so the snapshot
+		 * records the post-mark state, not the pre-mark one.
+		 */
+		nm = m;
+		nm.flags = m.flags | CORTEN_PF_SHARED;
+		if (m.perm & CORTEN_PERM_WRITE)
+			nm.flags |= CORTEN_PF_WRITABLE;
+		snap[pte_index(a)] = nm;
+		if (nm.flags == m.flags)
+			continue;
+		ret = corten_mark(&txn, a, PAGE_SIZE, &nm);
+		if (unlikely(ret))
+			break;
+	}
+	corten_unlock(&txn);
+	return ret;
+}
+
+/*
+ * Child arena registration (④-3): the declare_locked() construction
+ * sequence minus the shadowize (the child's shadow pieces already carry
+ * VM_CORTEN via vm_area_dup(), and their anon_vma is already forked).
+ * The cached shadow-VMA mirrors the parent's cache exactly: the piece
+ * the parent cached, when the child inherited it; NULL on a punch-hole
+ * cache (the multi-piece degradation the fault paths already handle).
+ * Registered under the child state's ctl_lock.  The caller holds the
+ * parent registry's lock nowhere on this path: the two mutexes share
+ * one lockdep class, so nesting them -- however singleton -- is not
+ * expressible and is avoided (see fork_commit).
+ */
+static int corten_arena_fork_register_child(struct mm_struct *mm,
+					    struct corten_mm_state *state,
+					    struct corten_arena *ar,
+					    struct vm_area_struct *cvma)
+{
+	unsigned long frame, first, last;
+	struct corten_arena *child;
+	int ret;
+
+	child = kzalloc(sizeof(*child), GFP_KERNEL_ACCOUNT);
+	if (!child)
+		return -ENOMEM;
+
+	child->start = ar->start;
+	child->end = ar->end;
+	child->mm = mm;
+	child->prot = READ_ONCE(ar->prot);
+	mutex_init(&child->fill_lock);
+	init_completion(&child->drained);
+	WRITE_ONCE(child->frozen, false);
+	ret = percpu_ref_init(&child->active, corten_arena_active_release,
+			      PERCPU_REF_INIT_ATOMIC, GFP_KERNEL);
+	if (ret) {
+		mutex_destroy(&child->fill_lock);
+		kfree(child);
+		return ret;
+	}
+
+	/* Publish the cached shadow-VMA before the arena becomes visible
+	 * in the xarray below ([FAIL-2], the DECLARE order).
+	 */
+	WRITE_ONCE(child->vma, cvma);
+
+	mutex_lock(&state->ctl_lock);
+
+	first = ar->start >> PMD_SHIFT;
+	last = (ar->end - 1) >> PMD_SHIFT;
+	for (frame = first; frame <= last; frame++) {
+		ret = xa_err(xa_store(&state->arenas, frame, child,
+				      GFP_KERNEL));
+		if (ret)
+			goto out_unwind;
+	}
+	refcount_set(&state->nr, refcount_read(&state->nr) + 1);
+
+	/* Last publishing step: the observability ledger (S8).  On the
+	 * unwind below the arena was never published, so it must not be
+	 * linked (the ledger only ever contains registered arenas).
+	 */
+	corten_arena_obs_add(child);
 
 	mutex_unlock(&state->ctl_lock);
 
-	/* T0b named counter: this fork demoted at least one arena
-	 * (DEV-11 transition; M5 replaces the policy, the counter stays).
-	 */
-	atomic_long_inc(&corten_nr_fork_demotes);
+	return 0;
 
-	/* On the (memory-pressure) error exit the parent is still
-	 * consistent -- every arena was either fully demoted or left
-	 * untouched -- but the fork aborts (the child mm is discarded by
-	 * dup_mm()).
+out_unwind:
+	while (frame > first)
+		xa_erase(&state->arenas, --frame);
+	mutex_unlock(&state->ctl_lock);
+	percpu_ref_exit(&child->active);
+	mutex_destroy(&child->fill_lock);
+	kfree(child);
+	return ret;
+}
+
+/*
+ * Child-side 2M-window pass (④-4): replay the parent snapshot into the
+ * child's descriptors.  Runs after the parent window pass finished and
+ * unlocked, so the two descriptor trees are never locked together.  The
+ * child's PT pages mirror the parent's (copy_page_range() pte_alloc's
+ * every present parent PT page), so the same pmd presence gate applies --
+ * a VM_WIPEONFORK piece skipped the PTE copy and therefore shows up here
+ * as an absent PT page: its windows stay unrecorded, the child keeps the
+ * clean-slate contract.  The child cannot schedule inside dup_mmap(), so
+ * no transaction can race this walk.
+ *
+ * Slot mapping:
+ *   - CORTEN_MAPPED: corten_map() (Invalid->MAPPED, the only legal
+ *     producer) + corten_mark() for the snapshot's flags (SHARED, plus
+ *     the WRITABLE record).  The folio identity comes from the copied
+ *     child PTE -- metadata-wise the protocol records no page identity
+ *     (the PTE is the identity), but map() requires a live page and the
+ *     copied one is the honest answer.
+ *   - CORTEN_PRIVATE_ANON: mark() as-is (state to itself).
+ *   - CORTEN_INVALID with a recorded perm (a dropped-content slot, the
+ *     CORTEN_UNMAP_KEEP_PERM shape): the protocol cannot write an
+ *     Invalid slot's perm, so it is re-expressed as PRIVATE_ANON with
+ *     the same perm -- behaviourally identical for every consumer (the
+ *     FRESH gate reads the perm either way, the mprotect route treats
+ *     the two spellings alike).  DEVIATION from the spec letter
+ *     ("INVALID pages skipped"), registered in the M5 report: skipping
+ *     would lose the child's committed mprotect contract, the r06
+ *     "rogue ACCERR" shape re-created on the child side.
+ *   - CORTEN_INVALID without perm: never recorded, skipped.
+ */
+static int corten_arena_fork_copy_window(struct mm_struct *mm,
+					 unsigned long addr,
+					 unsigned long win_end,
+					 struct corten_pte_meta *snap)
+{
+	pmd_t *pmdp = corten_arena_pmd(mm, addr);
+	struct corten_txn txn;
+	unsigned long a;
+	int tries = 0;
+	int ret;
+
+	/* The child PT page mirrors the parent's (copy_page_range()
+	 * pte_allocs one for every present parent PT page); a VM_WIPEONFORK
+	 * piece skipped the PTE copy and therefore shows up here as an
+	 * absent PT page: its windows stay unrecorded, the child keeps
+	 * the clean-slate contract.  The child cannot schedule inside
+	 * dup_mmap(), so no transaction can race this walk.
 	 */
+	if (!pmdp || !pmd_present(READ_ONCE(*pmdp)) ||
+	    pmd_leaf(READ_ONCE(*pmdp)))
+		return 0;
+
+	for (;;) {
+		ret = corten_lock_range(mm, addr, win_end - addr, &txn);
+		if (ret != -EAGAIN || ++tries >= 2)
+			break;
+	}
+	if (ret == -ENOENT || ret == -EOPNOTSUPP)
+		return 0;
+	if (ret)
+		return ret;
+
+	/* Ensure the metadata array before the PTE lock: the allocation
+	 * is GFP_NOWAIT under the desc write lock and must not happen
+	 * with the PTE lock already held (the map_anon() ordering).
+	 */
+	if (corten_meta_ensure_locked(txn.covering)) {
+		corten_unlock(&txn);
+		return -ENOMEM;
+	}
+
+	for (a = addr; a < win_end; a += PAGE_SIZE) {
+		struct corten_pte_meta m = snap[pte_index(a)];
+		struct corten_pte_meta nm;
+		pte_t *ptep, cur;
+		spinlock_t *ptl;	/* ptl nests below desc lock */
+		struct page *page;
+
+		if (m.state == CORTEN_INVALID && !m.perm)
+			continue;
+
+		ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
+		if (!ptep) {
+			corten_unlock(&txn);
+			return -EAGAIN;
+		}
+		cur = ptep_get(ptep);
+		pte_unmap_unlock(ptep, ptl);
+
+		page = NULL;
+		if (pte_present(cur) && !pte_special(cur))
+			page = pte_page(cur);
+
+		switch (m.state) {
+		case CORTEN_MAPPED:
+			if (WARN_ON_ONCE(!page))
+				/* MAPPED without a translation: the
+				 * restore-side INV7 drift; leave the child
+				 * slot unrecorded (its fault warns the same
+				 * way).
+				 */
+				continue;
+			/* Invalid->MAPPED needs map(); mark() then replays
+			 * the snapshot flags (SHARED, plus the WRITABLE
+			 * record) on top of the state map() reset.
+			 */
+			ret = corten_map(&txn, a, page, m.perm, 0);
+			nm = m;
+			if (!ret)
+				ret = corten_mark(&txn, a, PAGE_SIZE, &nm);
+			break;
+		case CORTEN_INVALID:
+			/* Dropped-content slot: re-express as PRIVATE_ANON
+			 * + perm (see the comment).
+			 */
+			nm.state = CORTEN_PRIVATE_ANON;
+			nm.perm = m.perm;
+			nm.flags = 0;
+			memset(nm.__resv, 0, sizeof(nm.__resv));
+			ret = corten_mark(&txn, a, PAGE_SIZE, &nm);
+			break;
+		default:
+			nm = m;
+			ret = corten_mark(&txn, a, PAGE_SIZE, &nm);
+			break;
+		}
+		if (WARN_ON_ONCE(ret)) {
+			corten_unlock(&txn);
+			return ret;
+		}
+	}
+	corten_unlock(&txn);
+
+	return 0;
+}
+
+/*
+ * The per-arena mirror body of fork_commit(): the child-side skip test
+ * (④-1), the child arena registration (④-3) and then the per-window
+ * loop of parent SHARED marks + snapshot (④-2) followed immediately by
+ * the child metadata replay (④-4) of the same window.  The parent and
+ * child transactions of one window are strictly sequential, so the two
+ * descriptor trees are never locked together.  Returns 0 (including a
+ * legitimate skip) or the first error; on error the caller aborts the
+ * fork and the already-mirrored child arenas are left to the
+ * MMF_UNSTABLE exit path (⑤).
+ */
+static int corten_arena_fork_mirror(struct mm_struct *mm,
+				    struct corten_mm_state *state,
+				    struct corten_arena *ar,
+				    struct corten_pte_meta *snap)
+{
+	struct vm_area_struct *vma, *pvma, *cvma = NULL;
+	unsigned long addr;
+	bool any_piece = false;
+	int ret;
+
+	/* ④-1 child-side skip.  [F-B] Since the D-G'' punch route an arena
+	 * can span several shadow pieces separated by legacy holes (a
+	 * hole is an ordinary file/anon VMA and the fork loop copies it
+	 * with the standard copy_page_range()); every inherited piece
+	 * carries VM_CORTEN via vm_area_dup().  A VM_DONTCOPY piece is
+	 * absent from the child altogether (the dup_mmap loop cleared
+	 * it).  No surviving piece means the arena's only potential
+	 * second mapper is gone: the arena stays parent-only, no SHARED
+	 * marks are needed, and any residue self-heals through the COW
+	 * reuse branch.  Counted as fork_skips.
+	 */
+	VMA_ITERATOR(vmi, mm, ar->start);
+	for_each_vma_range(vmi, vma, ar->end) {
+		if (vma->vm_start >= ar->end)
+			break;
+		if (vma->vm_flags & VM_CORTEN) {
+			any_piece = true;
+			break;
+		}
+	}
+	if (!any_piece) {
+		atomic_long_inc(&corten_nr_fork_skips);
+		return 0;
+	}
+
+	/* Mirror the parent's cached shadow-VMA: the same piece, when the
+	 * child inherited it (its start is the identity); NULL otherwise,
+	 * the established safe degradation (fault paths fall back, the
+	 * F-A tier-2 walk still finds the surviving pieces).
+	 */
+	pvma = READ_ONCE(ar->vma);
+	if (pvma) {
+		cvma = vma_lookup(mm, pvma->vm_start);
+		if (!cvma || !(cvma->vm_flags & VM_CORTEN))
+			cvma = NULL;
+	}
+
+	/* ④-3 child arena object + registry frames.  Registration before
+	 * the window loop: a mid-window failure leaves a registered child
+	 * whose metadata replay is partial -- acceptable, the child mm is
+	 * discarded (MMF_UNSTABLE) and its arenas drained by
+	 * corten_arena_mm_exit(); the parent's SHARED bits stay as
+	 * residue that the COW reuse branch clears on first write.
+	 */
+	ret = corten_arena_fork_register_child(mm, state, ar, cvma);
+	if (ret)
+		return ret;
+
+	/* ④-2 + ④-4 per window: parent snapshot + SHARED marks, then the
+	 * child replay of the same window.
+	 */
+	for (addr = ar->start; addr < ar->end;
+	     addr = min((addr | (PMD_SIZE - 1)) + 1, ar->end)) {
+		unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1,
+					    ar->end);
+
+		ret = corten_arena_fork_mark_window(ar, addr, win_end, snap);
+		if (ret)
+			return ret;
+
+		ret = corten_arena_fork_copy_window(mm, addr, win_end, snap);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+int corten_arena_fork_commit(struct mm_struct *mm, struct mm_struct *oldmm)
+{
+	struct corten_mm_state *old_state, *state;
+	struct corten_pte_meta *snap;
+	unsigned long frame = 0, drained_until = 0;
+	struct corten_arena *arena;
+	bool did_arena = false;
+	int ret = 0;
+
+	/* Pairs with the store in corten_arena_state_create(). */
+	old_state = smp_load_acquire(&oldmm->corten_state);
+	if (!old_state)
+		return 0;
+	/* Pairs with the store in corten_arena_state_create(). */
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state)			/* fork_begin created it */
+		return 0;
+
+	mmap_assert_write_locked(oldmm);
+	/* dup_mmap() holds @mm's write lock nested (mmap.c): the child
+	 * registry stores and the child-side VMA walk below rely on it,
+	 * exactly like the for_each_vma() loop that just ran.
+	 */
+	mmap_assert_write_locked(mm);
+
+	/* R-G: the dup_mmap loop aborts on a fatal signal before reaching
+	 * us (fork_abort() unwinds there); a signal arriving between that
+	 * checkpoint and now is checked here and per arena below.
+	 */
+	if (fatal_signal_pending(current))
+		ret = -EINTR;
+
+	/* KUnit injection (R-A): fail before any arena work -- the unwind
+	 * below must still release the freeze, and the child (whose
+	 * registry fork_begin created) keeps no arena.
+	 */
+	if (corten_fork_fail_stage == 1)
+		ret = -ENOMEM;
+
+	snap = kmalloc(CORTEN_META_ARRAY_BYTES, GFP_KERNEL_ACCOUNT);
+	if (!snap)
+		ret = -ENOMEM;
+
+	/* The mirror loop runs WITHOUT the parent registry's ctl_lock:
+	 * register_child() nests the CHILD state's ctl_lock inside it and
+	 * the two mutexes share one lockdep class -- the nesting is
+	 * singleton (nowhere else do two ctl_locks meet) but not
+	 * expressible to lockdep.  It is also simply not needed: no
+	 * registry writer can run concurrently (every one of them holds
+	 * oldmm's mmap_write), and the frozen-bit accounting below is
+	 * re-taken under the lock.
+	 */
+	xa_for_each(&old_state->arenas, frame, arena) {
+		if (frame < drained_until)
+			continue;
+		drained_until = arena->end >> PMD_SHIFT;
+
+		if (ret)
+			break;
+		if (fatal_signal_pending(current)) {
+			ret = -EINTR;
+			break;
+		}
+
+		ret = corten_arena_fork_mirror(mm, state, arena, snap);
+		if (ret)
+			break;
+		did_arena = true;
+
+		/* KUnit injection (R-A): fail after the first arena was
+		 * fully mirrored, to exercise the unwind below plus the
+		 * MMF_UNSTABLE child-teardown path.
+		 */
+		if (corten_fork_fail_stage == 2) {
+			ret = -ENOMEM;
+			break;
+		}
+	}
+
+	/* ⑤ The red line (R-A): whatever happened above, the parent is
+	 * unfrozen before the error (or success) is reported.  SHARED-bit
+	 * residue needs no rollback: the failed child is discarded, its
+	 * copies never happen, every affected folio ends up mapcount==1
+	 * and the COW reuse branch clears the bits on first write.
+	 */
+	mutex_lock(&old_state->ctl_lock);
+	corten_arena_fork_unfreeze_locked(old_state);
+	mutex_unlock(&old_state->ctl_lock);
+
+	kfree(snap);
+
+	if (!ret && did_arena)
+		atomic_long_inc(&corten_nr_fork_faithful);
+
 	return ret;
 }
 
@@ -1860,6 +2153,15 @@ struct corten_arena *corten_arena_lookup_get(struct mm_struct *mm,
 
 	rcu_read_lock();
 	ar = corten_arena_lookup(mm, addr);
+	/* M5 fork freeze window (DEV-15): a frozen arena refuses new
+	 * transactions, so the fault (or the space operation behind this
+	 * lookup) falls back to the legacy funnel -- which needs
+	 * mmap_lock and therefore blocks against dup_mmap()'s write lock.
+	 * That is what makes the freeze window a static snapshot: no new
+	 * transaction can appear while the fork mirrors the metadata.
+	 */
+	if (ar && READ_ONCE(ar->frozen))
+		ar = NULL;
 	if (ar && !percpu_ref_tryget_live(&ar->active))
 		ar = NULL;
 	rcu_read_unlock();
@@ -2058,11 +2360,24 @@ enum corten_disp corten_arena_dispatch(const struct corten_pte_meta *m,
 			return CORTEN_DISP_ACCERR;
 		return write ? CORTEN_DISP_MAP_ANON : CORTEN_DISP_ZERO_PAGE;
 	case CORTEN_MAPPED:
+		/* M5 (M5_FORK_SPEC.md sec 3.1): a SHARED page is never
+		 * restored writable outside the COW transaction -- the
+		 * RESTORE bypass would let one side write through the
+		 * fork's wrprotect and break the parent/child isolation.
+		 * A write fault on a shared page is either the wrprotect
+		 * artifact (contract writable -> COW_MAYBE) or a genuine
+		 * permission fault (contract read-only -> COW_COPY).
+		 * corten_mark()'s WRITABLE rule guarantees the WRITABLE
+		 * flag is set whenever a shared page's perm carries
+		 * WRITE, so the two shapes are disjoint.
+		 */
 		if (!corten_arena_perm_ok(m, write, instruction)) {
 			if (m->flags & CORTEN_PF_SHARED)
-				return CORTEN_DISP_STUB;	/* fork COW: M5 */
+				return CORTEN_DISP_COW_COPY;
 			return CORTEN_DISP_ACCERR;
 		}
+		if (write && (m->flags & CORTEN_PF_SHARED))
+			return CORTEN_DISP_COW_MAYBE;
 		return CORTEN_DISP_RESTORE;
 	case CORTEN_SWAPPED:			/* M6 producer: unreachable */
 	case CORTEN_FILE_MAPPED:		/* M4+ producers: unreachable */
@@ -2513,6 +2828,18 @@ static int corten_arena_restore_pte(struct corten_fault_ctx *ctx,
 	if (ctx->write)
 		entry = pte_mkwrite(pte_mkdirty(entry), vma);
 
+	/* M5: a SHARED page must never regain its write bit outside the
+	 * COW transaction.  Reaching here with SHARED set means a
+	 * read/instruction fault (the dispatch routes write faults on
+	 * shared pages to the COW transaction), so keep the read-only
+	 * shape the fork's wrprotect left -- this is the INV7 exemption
+	 * "a shared page may sit read-only while its perm carries
+	 * WRITE" (M5_FORK_SPEC.md sec 8).  Without this guard the
+	 * restore bypass would break the parent/child isolation.
+	 */
+	if (m->flags & CORTEN_PF_SHARED)
+		entry = pte_wrprotect(entry);
+
 	/* ptep_set_access_flags() flushes only when something actually
 	 * changed and the old translation could be cached (the protnone
 	 * case); a pure no-op rebuild stays flush-free.
@@ -2523,6 +2850,166 @@ static int corten_arena_restore_pte(struct corten_fault_ctx *ctx,
 
 	corten_arena_fault_stat(READ_ONCE(ctx->mm->corten_state),
 				CORTEN_ARENA_STAT_RESTORES);
+
+	return 0;
+}
+
+/*
+ * M5.T2 core carried by T1a (M5_FORK_SPEC.md sec 3.2/3.4): the write-fault
+ * transaction on a CORTEN_MAPPED + SHARED page whose contract is writable.
+ * Entered from fault_once with the covering desc write lock held.  A write
+ * fault on a logically-writable shared page can only be the fork's
+ * wrprotect artifact (the dispatch guarantees perm W, and corten_mark()'s
+ * rule guarantees the WRITABLE record); the paper's two answers (Sec. 4.3):
+ *
+ *   map_count == 1: the last mapper writes first -- clear SHARED in the
+ *   same transaction and re-arm the write bit on the live PTE (the
+ *   restore_pte skeleton plus the meta-bit clear).  No copy.
+ *
+ *   map_count > 1: copy the folio into the fault path's speculative
+ *   allocation, break the old read-only translation (it may be cached),
+ *   rebuild rmap/accounting around the private copy and re-map() the
+ *   metadata (MAPPED->MAPPED needs FORCE -- the COW copy-in hole the
+ *   protocol reserved).
+ *
+ * R-B discipline (sec 6): folio_mapcount() is read under the PTE lock.
+ * Every other mapper's PTE removal clears the PTE under ITS ptl before
+ * decrementing the mapcount (the folio_remove_rmap_pte order), so a count
+ * observed under our ptl is >= the true number of live mappers: the race
+ * direction is bounded to "copy where a reuse would also have been safe"
+ * (one wasted page).  An under-count -- two processes handed one writable
+ * page, the unforgivable cross-process corruption -- is impossible, which
+ * is why the branch is == 1 and not <= 1 with a relaxed read.
+ */
+static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
+				  struct corten_txn *txn,
+				  const struct corten_pte_meta *m)
+{
+	struct mm_struct *mm = ctx->mm;
+	struct vm_area_struct *vma;
+	struct folio *old;
+	struct page *page;
+	pmd_t *pmdp;
+	pte_t *ptep;
+	pte_t cur, entry;
+	spinlock_t *ptl;	/* ptl nests below the desc write lock (R2) */
+	int ret;
+
+	vma = corten_arena_get_vma(ctx);
+	if (!vma)
+		return -EFAULT;
+
+	pmdp = corten_arena_pmd(mm, ctx->addr);
+	if (!pmdp)
+		return -EAGAIN;
+	ptep = pte_offset_map_lock(mm, pmdp, ctx->addr, &ptl);
+	if (!ptep)
+		return -EAGAIN;
+
+	cur = ptep_get(ptep);
+	if (unlikely(!pte_present(cur) || pte_special(cur))) {
+		/* MAPPED without a translation: no M3 path produces this
+		 * (the restore-side WARN owns the diagnosis).
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		WARN_ON_ONCE(1);
+		return -EFAULT;
+	}
+
+	page = pte_page(cur);
+	old = page_folio(page);
+
+	if (folio_mapcount(old) == 1) {
+		/* Reuse (paper: map_count==1).  The meta flag clear and
+		 * the PTE re-arm are one transaction: every observer is
+		 * excluded by the covering desc write lock.
+		 */
+		struct corten_pte_meta nm = *m;
+
+		nm.flags = m->flags & ~CORTEN_PF_SHARED;
+		ret = corten_mark(txn, ctx->addr, PAGE_SIZE, &nm);
+		if (unlikely(ret)) {
+			pte_unmap_unlock(ptep, ptl);
+			return ret == -ENOMEM ? -ENOMEM : -EFAULT;
+		}
+
+		entry = mk_pte(page, corten_arena_perm_pgprot(vma, m->perm));
+		entry = pte_mkyoung(entry);
+		entry = pte_mkwrite(pte_mkdirty(entry), vma);
+		/* Flushes only when the old translation could be cached
+		 * (the fork's RO shape always qualifies).
+		 */
+		ptep_set_access_flags(vma, ctx->addr, ptep, entry, 1);
+		update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
+		pte_unmap_unlock(ptep, ptl);
+
+		corten_arena_fault_stat(READ_ONCE(mm->corten_state),
+					CORTEN_ARENA_STAT_COW_REUSE);
+		return 0;
+	}
+
+	/* Copy branch: the fault path preallocates for every write
+	 * fault; a lost race consumed the folio -- retry re-arms it.
+	 */
+	if (!ctx->folio) {
+		pte_unmap_unlock(ptep, ptl);
+		return -EAGAIN;
+	}
+
+	/* Copy while holding the PTE lock, like wp_page_copy(): the page
+	 * contents are copied from the old folio, which stays alive for
+	 * the whole critical section (our PTE reference is not dropped
+	 * before the new translation is in).
+	 */
+	copy_user_highpage(folio_page(ctx->folio, 0), page, ctx->addr, vma);
+	__folio_mark_uptodate(ctx->folio);
+
+	if (unlikely(check_stable_address_space(mm))) {
+		pte_unmap_unlock(ptep, ptl);
+		return -EAGAIN;
+	}
+
+	/* Break-before-make (the map_anon zero-upgrade precedent): the old
+	 * read-only translation may be cached in any CPU's TLB.
+	 */
+	ptep_clear_flush(vma, ctx->addr, ptep);
+
+	entry = folio_mk_pte(ctx->folio, corten_arena_perm_pgprot(vma,
+								  m->perm));
+	entry = pte_mkyoung(entry);
+	entry = pte_mkwrite(pte_mkdirty(entry), vma);
+
+	/* The speculative single reference becomes the new PTE reference
+	 * (order-0); the old folio's PTE reference is released only after
+	 * the flush, in the zap ordering.
+	 */
+	add_mm_counter(mm, MM_ANONPAGES, 1);
+	folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr, RMAP_EXCLUSIVE);
+	set_ptes(mm, ctx->addr, ptep, entry, 1);
+	update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
+
+	folio_remove_rmap_pte(old, page, vma);
+	add_mm_counter(mm, MM_ANONPAGES, -1);
+	pte_unmap_unlock(ptep, ptl);
+	folio_put(old);
+
+	/* MAPPED->MAPPED needs FORCE (corten.h); corten_map() resets the
+	 * flags -- SHARED is gone with the shared folio, which is exactly
+	 * the private copy's semantics.
+	 */
+	ret = corten_map(txn, ctx->addr, folio_page(ctx->folio, 0), m->perm,
+			 CORTEN_MAP_FORCE);
+	if (WARN_ON_ONCE(ret))
+		return -EFAULT;
+
+	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
+				CORTEN_ARENA_STAT_COW_COPY);
+
+	/* The speculative single reference became the new PTE reference
+	 * (see the fault_once success epilogue for the other handlers'
+	 * ownership).
+	 */
+	ctx->folio = NULL;
 
 	return 0;
 }
@@ -2672,11 +3159,24 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 	case CORTEN_DISP_RESTORE:
 		ret = corten_arena_restore_pte(ctx, &txn, &m);
 		break;
+	case CORTEN_DISP_COW_MAYBE:
+		ret = corten_arena_cow_write(ctx, &txn, &m);
+		break;
+	case CORTEN_DISP_COW_COPY:
+		/* T1a: a write against a shared page whose contract is
+		 * read-only is a genuine permission fault (the page was
+		 * RO before the fork -- the wrprotect changed nothing).
+		 * The STUB-era WARN is gone: this is a normal, legal
+		 * outcome.  The FOLL_FORCE-forced copy (ptrace POKE on
+		 * such a page) is M5.T2' scope (M5_FORK_SPEC.md sec 3.4).
+		 */
+		corten_unlock(&txn);
+		return CORTEN_F_ACCERR;
 	case CORTEN_DISP_ACCERR:
 		corten_unlock(&txn);
 		return CORTEN_F_ACCERR;
 	case CORTEN_DISP_STUB:
-		/* M5 COW / M6 swap / M4+ shared: M3 refuses loudly. */
+		/* M6 swap / M4+ shared-anon: M3 refuses loudly. */
 		WARN_ONCE(1, "corten: unhandled arena metadata state %u\n",
 			  m.state);
 		corten_unlock(&txn);
@@ -2690,10 +3190,22 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 	corten_unlock(&txn);
 
 	if (ret == 0) {
-		/* Success: the speculative reference became the PTE
-		 * reference.
+		/* Success.  Only MAP_ANON installed a *fresh* page and
+		 * transferred the speculative reference into the PTE.
+		 * The zero-page, restore and COW-reuse handlers re-arm
+		 * an existing translation and never touch the folio --
+		 * the reference stays with the caller, whose epilogue
+		 * folio_put() releases it.  Blanket-NULLing here leaked
+		 * exactly one preallocated page per such fault: with
+		 * T1a every post-fork parent write re-arms a shared
+		 * page, which is the 1k-page round-trip OOM (r06/m5t1a
+		 * fork_roundtrip: ~4 MB per fork leaked, with MemFree
+		 * flat in AnonPages/PageTables/Percpu -- pure allocator
+		 * loss).  cow_write's copy branch NULLs @ctx->folio
+		 * itself.
 		 */
-		ctx->folio = NULL;
+		if (disp == CORTEN_DISP_MAP_ANON)
+			ctx->folio = NULL;
 		return CORTEN_F_HANDLED;
 	}
 	if (ret == -EAGAIN || ret == -ENOMEM)
@@ -3944,7 +4456,18 @@ static int corten_arena_protect_window(struct mm_struct *mm,
 			if (nm.state == CORTEN_INVALID)
 				nm.state = CORTEN_PRIVATE_ANON;
 			nm.perm = perm;
-			if (nm.state != m.state || nm.perm != m.perm) {
+			/* M5: a shared page whose contract gains WRITE
+			 * must carry the WRITABLE record (corten_mark's
+			 * rule).  The hardware stays read-only until the
+			 * COW transaction clears SHARED -- this only
+			 * records that the write fault is the wrprotect
+			 * artifact shape (COW_MAYBE), not a genuine one.
+			 */
+			if ((nm.perm & CORTEN_PERM_WRITE) &&
+			    (nm.flags & CORTEN_PF_SHARED))
+				nm.flags |= CORTEN_PF_WRITABLE;
+			if (nm.state != m.state || nm.perm != m.perm ||
+			    nm.flags != m.flags) {
 				ret = corten_mark(txn, addr, PAGE_SIZE, &nm);
 				if (WARN_ON_ONCE(ret))
 					return ret;

@@ -89,6 +89,13 @@ enum corten_arena_stat {
 	 * freed to keep the process/exit path moving (r03 DoD failure B).
 	 */
 	CORTEN_ARENA_STAT_DRAIN_TIMEOUTS,
+	/* M5 COW write-fault branches (M5_FORK_SPEC.md sec 3.2): the
+	 * map_count==1 reuse (SHARED cleared in place) and the private
+	 * copy.  The T2 对拍表 reads both; reuse > 0 is what proves the
+	 * no-copy branch is reachable after a fork+exit.
+	 */
+	CORTEN_ARENA_STAT_COW_REUSE,
+	CORTEN_ARENA_STAT_COW_COPY,
 	CORTEN_ARENA_NR_STATS,
 };
 
@@ -120,6 +127,14 @@ enum corten_arena_stat {
  *       what keeps the hot path at zero maple-tree walks (M3 DoD).
  * @rcu: kfree_rcu() deferral so that an RCU-protected lookup can still
  *       read @start/@end while a concurrent RELEASE unregisters.
+ * @frozen: fork freeze window (M5_FORK_SPEC.md sec 1.3, DEV-15).  Set
+ *          under the owner mm's mmap_write + the registry ctl_lock by
+ *          corten_arena_fork_begin() together with the transaction-drain
+ *          kill; cleared by the single unfreeze closure before that lock
+ *          pair is released.  Read locklessly by the fault-path lookup:
+ *          a frozen arena refuses new transactions (lookup_get returns
+ *          NULL), so the dup_mmap() write lock -- which every legacy
+ *          fallback needs -- is what makes the window a static snapshot.
  */
 struct corten_arena {
 	unsigned long		start;
@@ -128,6 +143,7 @@ struct corten_arena {
 	struct mm_struct	*mm;
 	struct percpu_ref	active;
 	struct completion	drained;
+	bool			frozen;
 	/* Upper-page-table ensure-alloc serialization (never nests inside
 	 * a descriptor lock).
 	 */
@@ -305,6 +321,15 @@ void corten_arena_stats_report(struct seq_file *m);
  */
 void corten_arena_test_inject_drain_timeout(void);
 long corten_arena_test_drain_timeouts(void);
+
+/* Test hooks for the M5 fork unwinds (R-A): arm a forced fork_commit
+ * failure at @stage (1 = commit entry, 2 = after the first arena was
+ * mirrored; 0 disarms) and read back an arena's frozen bit.
+ */
+void corten_arena_test_fork_fail_arm(int stage);
+bool corten_arena_test_arena_frozen(struct mm_struct *mm, unsigned long addr);
+long corten_arena_test_fork_faithful_count(void);
+long corten_arena_test_fork_skips(void);
 #endif
 
 #else /* !CONFIG_CORTEN_MM_ARENA */

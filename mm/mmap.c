@@ -1869,20 +1869,23 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 
 #ifdef CONFIG_CORTEN_MM_ARENA
 	/*
-	 * Arena fork transition (M4T0_SPEC.md sec 5, DEV-11): before any
-	 * VMA is copied, retire every arena of @oldmm -- drain the
-	 * transactions, scrub the metadata, restore the shadow-VMAs to
-	 * plain anonymous VMAs -- so that copy_page_range() below sees an
-	 * all-legacy address space (its COW copies are exact for plain
-	 * anonymous memory).  The child inherits the MODE bit: its new
-	 * mmap(NULL) mappings re-enter the arena.  The demotion cost is
-	 * charged to the fork once; M5 replaces this with the paper-faithful
-	 * traversal (wrprotect + shared + metadata deep copy).  Failure
-	 * aborts the fork (dup_mm() collapses all dup_mmap() errors to
-	 * -ENOMEM at the syscall boundary); the parent keeps running with
-	 * the arenas demoted so far -- both are consistent states.
+	 * Arena fork transition, M5 faithful fork (M5_FORK_SPEC.md sec
+	 * 1.3, DEV-14/DEV-15): before any VMA is copied, inherit the MODE
+	 * bit, create the child registry and freeze the parent's arenas
+	 * (drain in-flight transactions; new faults fall back and block
+	 * on this write lock, so the copy below sees a static snapshot).
+	 * The shadow-VMAs are copied by the ordinary vm_area_dup(), the
+	 * page contents and wrprotect by the ordinary copy_page_range()
+	 * below (the PTE layer, the corten_glue_pte_write whitelist
+	 * entry #1, DEV-14), and the metadata/registry mirror happens in
+	 * corten_arena_fork_commit() after the VMA loop.  Failure aborts
+	 * the fork with the upstream precedent (dup_mm() collapses all
+	 * dup_mmap() errors to -ENOMEM at the syscall boundary); the
+	 * parent is never left frozen -- the freeze is undone by
+	 * fork_begin's own unwind, fork_commit's closure, or
+	 * fork_abort() at loop_out below (R-A).
 	 */
-	retval = corten_arena_fork_demote(mm, oldmm);
+	retval = corten_arena_fork_begin(mm, oldmm);
 	if (retval)
 		goto loop_out;
 #endif
@@ -1993,8 +1996,34 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 		}
 	}
 	/* a new mm has just been created */
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * Metadata + registration mirror (M5_FORK_SPEC.md sec 1.3 ④):
+	 * parent-side SHARED marks from the drained snapshot, child arena
+	 * registry and metadata deep copy, then the unfreeze closure.
+	 * Still inside the dup_mmap() write-lock window: the child cannot
+	 * schedule and no transaction can be in flight (frozen).  A
+	 * failure discards the child (MMF_UNSTABLE below, its arenas die
+	 * through exit_mmap()->corten_arena_mm_exit()); the parent is
+	 * unfrozen before the error is returned (spec ⑤).
+	 */
+	retval = corten_arena_fork_commit(mm, oldmm);
+	if (retval)
+		goto loop_out;
+#endif
 	retval = arch_dup_mmap(oldmm, mm);
 loop_out:
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * R-A/R-G unwind closure for the aborts that skip fork_commit()
+	 * (fatal signal in the loop above, copy_page_range failure,
+	 * VM_DONTCOPY clear failure): unfreeze whatever this fork froze.
+	 * A no-op unless a freeze is outstanding; the success path never
+	 * reaches it (fork_commit() already unfroze).
+	 */
+	if (retval)
+		corten_arena_fork_abort(oldmm);
+#endif
 	vma_iter_free(&vmi);
 	if (!retval) {
 		mt_set_in_rcu(vmi.mas.tree);
