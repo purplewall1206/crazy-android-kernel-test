@@ -1731,6 +1731,102 @@ static void corten_arena_test_fork_demote(struct kunit *test)
 }
 
 /* ------------------------------------------------------------------ *
+ * DEV-11 completion (r06 "rogue" family anchor): the fork demotion must
+ * carry the routed mprotect() commits into the plain-VMA layer.  A
+ * PROT_NONE reservation whose chunk was committed through the route
+ * demotes into a split VMA: the committed range keeps R/W, the rest of
+ * the reservation stays inaccessible.  Pre-fix the whole range came out
+ * with the DECLARE flags and a surviving parent (glibc heap cleanup
+ * after a fork probe) wrote straight into SEGV_ACCERR.
+ * ------------------------------------------------------------------
+ */
+
+static void corten_arena_test_fork_demote_perm(struct kunit *test)
+{
+	struct corten_arena_test_mm *t;
+	struct mm_struct *mm, *child;
+	struct vm_area_struct *vma;
+	unsigned long commit;
+	int ret;
+
+	/* The commit under test goes through the mprotect route, whose
+	 * decision gates on corten_enabled_static(); on a corten=off boot
+	 * the route is the legacy funnel and there is nothing to observe.
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "mprotect route requires corten=on");
+
+	t = kunit_kzalloc(test, sizeof(*t), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t);
+	kunit_add_action(test, corten_arena_test_mm_destroy, t);
+
+	t->test = test;
+	t->mm = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t->mm);
+	mm = t->mm;
+
+	/* The reservation: PROT_NONE-shaped (no R/W), the JVM/glibc heap
+	 * reserve shape.
+	 */
+	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_BASE,
+				     CORTEN_ARENA_TEST_BASE +
+				     CORTEN_ARENA_TEST_LEN,
+				     CORTEN_ARENA_TEST_FLAGS_OK &
+				     ~(VM_READ | VM_WRITE));
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+
+	/* Commit pages 1..2 (inclusive) of the arena through the route. */
+	commit = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_mprotect_route(mm, commit,
+						    2 * PAGE_SIZE,
+						    PROT_READ | PROT_WRITE,
+						    -1),
+			1);
+
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+
+	/* dup_mmap() holds oldmm's write lock at the demote point. */
+	mmap_write_lock(mm);
+	ret = corten_arena_fork_demote(child, mm);
+	mmap_write_unlock(mm);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+
+	/* The committed chunk: a plain anonymous piece carrying R/W. */
+	vma = vma_lookup(mm, commit);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_EXPECT_TRUE(test, vma_is_anonymous(vma));
+	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_CORTEN);
+	KUNIT_EXPECT_TRUE(test, vma->vm_flags & VM_READ);
+	KUNIT_EXPECT_TRUE(test, vma->vm_flags & VM_WRITE);
+	KUNIT_EXPECT_EQ(test, vma->vm_start, commit);
+	KUNIT_EXPECT_EQ(test, vma->vm_end, commit + 2 * PAGE_SIZE);
+
+	/* Outside the commit the reservation stays inaccessible. */
+	vma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_READ);
+	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_WRITE);
+	KUNIT_EXPECT_EQ(test, vma->vm_start, CORTEN_ARENA_TEST_BASE);
+	KUNIT_EXPECT_EQ(test, vma->vm_end, commit);
+
+	vma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE + PMD_SIZE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_READ);
+	KUNIT_EXPECT_FALSE(test, vma->vm_flags & VM_WRITE);
+
+	corten_arena_mode_exit(mm);
+	mmput(child);
+}
+
+/* ------------------------------------------------------------------ *
  * T0b: mprotect / madvise / mremap routing (M4T0_SPEC.md sec 3.3/3.4,
  * STATE D12).  Decision tables on a real declared arena, the MODE
  * full-on state machine, and the named arena_stats counters.
@@ -2223,6 +2319,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_madvise_route),
 	KUNIT_CASE(corten_arena_test_mremap_route),
 	KUNIT_CASE(corten_arena_test_fork_demote),
+	KUNIT_CASE(corten_arena_test_fork_demote_perm),
 	KUNIT_CASE(corten_arena_test_concurrent),
 	KUNIT_CASE(corten_arena_test_concurrent_window),
 	KUNIT_CASE(corten_arena_test_obs_ledger),

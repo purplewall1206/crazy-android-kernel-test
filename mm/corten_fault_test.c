@@ -1583,6 +1583,145 @@ static void corten_fault_test_mprotect_fresh(struct kunit *test)
 			ft_write_fault(t, FT_BASE + 96 * PAGE_SIZE), 0);
 }
 
+/* The allocator commit/churn shape (r06 "rogue" ACCERR family anchor): a
+ * PROT_NONE reservation is committed through the routed mprotect, the
+ * pages are faulted in and written, then MADV_DONTNEED drops the contents
+ * (the dedup_eq shape: commit mprotect(RW) -> touch -> madvise(DONTNEED)
+ * -> write again -> SEGV_ACCERR).  The content drop must keep the
+ * committed permission in the Invalid slot (CORTEN_UNMAP_KEEP_PERM) so
+ * the FRESH gate re-derives the committed contract instead of the
+ * DECLARE bound; the next write zero-fills like the legacy path.
+ */
+static void corten_fault_test_zap_keep_perm(struct kunit *test)
+{
+	struct ft_mm *t;
+	unsigned long addr;
+	struct corten_pte_meta m;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+
+	t = kunit_kzalloc(test, sizeof(*t), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t);
+	kunit_add_action(test, ft_mm_destroy, t);
+
+	t->mm = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t->mm);
+
+	/* The reservation: PROT_NONE, so the DECLARE bound carries no R/W
+	 * and only the routed commit can open the prefix.
+	 */
+	t->vma = ft_mkvm(t->mm, FT_BASE, FT_BASE + FT_ARENA_LEN,
+			 FT_FLAGS_OK & ~(VM_READ | VM_WRITE));
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t->vma);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(t->mm, FT_BASE, FT_ARENA_LEN), 0);
+	t->ar_start = FT_BASE;
+	t->ar_end = FT_BASE + FT_ARENA_LEN;
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(t->mm), 0);
+
+	/* Commit a prefix, fault the page in, write it. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_mprotect_route(t->mm, FT_BASE,
+						    33 * PAGE_SIZE,
+						    PROT_READ | PROT_WRITE,
+						    -1), 1);
+	addr = FT_BASE + PAGE_SIZE;
+	KUNIT_ASSERT_EQ(test, ft_write_fault(t, addr), 0);
+
+	/* Drop the contents (the DONTNEED route's transactional zap). */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_dontneed_route(t->mm, addr, PAGE_SIZE),
+			1);
+
+	/* The slot is Invalid again but keeps the committed perm... */
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+
+	/* ...so the next write zero-fills with the committed permission
+	 * instead of dying on the DECLARE bound (SEGV_ACCERR pre-fix).
+	 */
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+
+	/* A page outside every commit keeps the inaccessible contract. */
+	KUNIT_EXPECT_NE(test,
+			ft_write_fault(t, FT_BASE + 96 * PAGE_SIZE), 0);
+}
+
+/* A committed chunk downgraded back to inaccessible (routed
+ * mprotect(PROT_NONE)) must not be resurrected by the content-drop perm
+ * preservation: the downgrade rewrites the recorded perm of every page in
+ * the range, so a later zap preserves the *downgraded* permission and the
+ * write still ACCERRs.
+ */
+static void corten_fault_test_zap_keep_perm_downgrade(struct kunit *test)
+{
+	struct ft_mm *t;
+	unsigned long addr;
+	struct corten_pte_meta m;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+
+	t = kunit_kzalloc(test, sizeof(*t), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t);
+	kunit_add_action(test, ft_mm_destroy, t);
+
+	t->mm = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t->mm);
+
+	t->vma = ft_mkvm(t->mm, FT_BASE, FT_BASE + FT_ARENA_LEN,
+			 FT_FLAGS_OK & ~(VM_READ | VM_WRITE));
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, t->vma);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(t->mm, FT_BASE, FT_ARENA_LEN), 0);
+	t->ar_start = FT_BASE;
+	t->ar_end = FT_BASE + FT_ARENA_LEN;
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(t->mm), 0);
+
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_mprotect_route(t->mm, FT_BASE,
+						    33 * PAGE_SIZE,
+						    PROT_READ | PROT_WRITE,
+						    -1), 1);
+	addr = FT_BASE + PAGE_SIZE;
+	KUNIT_ASSERT_EQ(test, ft_write_fault(t, addr), 0);
+
+	/* Downgrade the chunk to no-access, then drop the contents. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_mprotect_route(t->mm, FT_BASE,
+						    33 * PAGE_SIZE,
+						    PROT_NONE, -1), 1);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_dontneed_route(t->mm, addr, PAGE_SIZE),
+			1);
+
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_USER);
+
+	/* The committed contract is now "no access": the write must die
+	 * with the metadata gate, not resurrect the old RW commit.
+	 */
+	KUNIT_EXPECT_NE(test, ft_write_fault(t, addr), 0);
+
+	/* Re-commit: the route rewrites the perm, the write succeeds. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_mprotect_route(t->mm, addr, PAGE_SIZE,
+						    PROT_READ | PROT_WRITE,
+						    -1), 1);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+}
+
 /* The "pmd present, descriptor missing" shape (D-G' regression anchor):
  * the window's PT page exists but its descriptor install failed
  * (GFP_NOWAIT) or the descriptor was dropped, so the window is
@@ -1668,6 +1807,8 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_restore),
 	KUNIT_CASE(corten_fault_test_mprotect_pte),
 	KUNIT_CASE(corten_fault_test_mprotect_fresh),
+	KUNIT_CASE(corten_fault_test_zap_keep_perm),
+	KUNIT_CASE(corten_fault_test_zap_keep_perm_downgrade),
 	KUNIT_CASE(corten_fault_test_untracked_rearm),
 	KUNIT_CASE(corten_fault_test_fill_upper_race),
 	KUNIT_CASE(corten_fault_test_map_race),

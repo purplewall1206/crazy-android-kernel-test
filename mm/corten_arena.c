@@ -1466,6 +1466,192 @@ int corten_prctl_mode(unsigned int op, unsigned long arg3,
  * the range lock: no PT page) have nothing recorded by definition.
  * Called with the arena drained and state->ctl_lock held.
  */
+/*
+ * Re-express one permission run [rs, re) as plain VMA flags: split the
+ * covering piece at the run boundaries (the same __split_vma surgery the
+ * punch route uses, under the same oldmm mmap_write contract) and set the
+ * flags on exactly the run's piece.
+ */
+static int corten_arena_demote_apply_run(struct mm_struct *mm,
+					 unsigned long rs, unsigned long re,
+					 u8 perm)
+{
+	struct vm_area_struct *piece;
+	vm_flags_t want;
+	int ret;
+
+	piece = vma_lookup(mm, rs);
+	if (WARN_ON_ONCE(!piece))
+		return -EIO;
+
+	want = piece->vm_flags & ~(VM_READ | VM_WRITE | VM_EXEC);
+	if (perm & CORTEN_PERM_READ)
+		want |= VM_READ;
+	if (perm & CORTEN_PERM_WRITE)
+		want |= VM_WRITE;
+	if (perm & CORTEN_PERM_EXEC)
+		want |= VM_EXEC;
+	if ((piece->vm_flags & (VM_READ | VM_WRITE | VM_EXEC)) ==
+	    (want & (VM_READ | VM_WRITE | VM_EXEC)))
+		return 0;
+
+	if (rs > piece->vm_start) {
+		VMA_ITERATOR(vmi, mm, rs);
+
+		/* new_below = 0: the new VMA is the piece above @rs, the
+		 * head keeps its object.
+		 */
+		ret = __split_vma(&vmi, piece, rs, /* new_below = */ 0);
+		if (ret)
+			return ret;
+		piece = vma_lookup(mm, rs);
+		if (WARN_ON_ONCE(!piece))
+			return -EIO;
+	}
+	if (re < piece->vm_end) {
+		VMA_ITERATOR(vmi, mm, re);
+
+		ret = __split_vma(&vmi, piece, re, /* new_below = */ 0);
+		if (ret)
+			return ret;
+	}
+
+	vm_flags_clear(piece, VM_READ | VM_WRITE | VM_EXEC);
+	vm_flags_set(piece, want | VM_SOFTDIRTY);
+	vma_set_page_prot(piece);
+
+	return 0;
+}
+
+/*
+ * DEV-11 completion (the r06 "rogue" ACCERR family): the routed
+ * mprotect() commits of an arena live only in the per-page metadata --
+ * the one shadow-VMA cannot carry sub-VMA permissions.  The fork
+ * demotion turns the shadow-VMAs back into plain anonymous VMAs, which
+ * drops every routed commit back to the DECLARE-time flags: a surviving
+ * parent (fork keeps both sides running) and the child's copies then sit
+ * on a reserve-shaped PROT_NONE VMA whose committed chunks are lost, and
+ * the next write dies with SEGV_ACCERR -- glibc's exit-time heap cleanup
+ * after a fork probe (dedup_eq / metis_eq / java rc=139,
+ * libc.so+0xa2a63/0xa2b40, "segfault at 0x1000...0030 error 7").
+ *
+ * Before the scrub erases the metadata, re-express the recorded
+ * permissions in the VMA layer: split each shadow piece into
+ * permission-homogeneous runs and flag them.  The permission of a page
+ * is its recorded perm; a recorded-but-Invalid slot keeps the perm the
+ * content drop preserved (CORTEN_UNMAP_KEEP_PERM); a fully unrecorded
+ * page carries the arena bound (ar->prot), which is what the plain VMA
+ * already encodes, so only the routed commits produce splits.
+ *
+ * Caller contract: oldmm's mmap_write held (dup_mmap, the DEV-13
+ * outermost lock -- the same nesting the punch route's splits run
+ * under), @ar drained (no competing transactions), metadata intact.
+ */
+static int corten_arena_demote_materialize(struct corten_arena *ar,
+					   struct mm_struct *mm,
+					   unsigned long start,
+					   unsigned long end)
+{
+	unsigned long cursor = start;
+
+	while (cursor < end) {
+		unsigned long ps, pe;
+		struct vm_area_struct *v;
+		unsigned long addr, rs = 0;
+		u8 cur = 0;
+		bool have = false;
+		int ret;
+
+		v = find_vma(mm, cursor);
+		if (!v || v->vm_start >= end)
+			break;
+		ps = max(v->vm_start, cursor);
+		pe = min(v->vm_end, end);
+		cursor = v->vm_end;
+
+		/* A punch hole (the legacy mapping that replaced a chunk)
+		 * is not ours to re-flag; its recorded metadata, if any,
+		 * describes content that is gone.
+		 */
+		if (!(v->vm_flags & VM_CORTEN))
+			continue;
+
+		for (addr = ps; addr < pe;) {
+			unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1,
+						    pe);
+			struct corten_txn txn;
+			unsigned long a;
+			int tries = 0;
+
+			for (;;) {
+				ret = corten_lock_range(mm, addr,
+							win_end - addr, &txn);
+				if (ret != -EAGAIN || ++tries >= 2)
+					break;
+			}
+			/* Untracked window: nothing recorded, the arena
+			 * bound applies uniformly.  Close a pending run
+			 * that differs from the bound at the window start;
+			 * the untracked pages themselves need no split (the
+			 * plain VMA already encodes the bound).
+			 */
+			if (ret == -ENOENT || ret == -EOPNOTSUPP) {
+				if (have && cur != READ_ONCE(ar->prot)) {
+					ret = corten_arena_demote_apply_run(mm, rs,
+									    addr, cur);
+					if (ret)
+						return ret;
+				}
+				have = false;
+				addr = win_end;
+				continue;
+			}
+			if (ret)
+				return ret;
+
+			for (a = addr; a < win_end; a += PAGE_SIZE) {
+				struct corten_pte_meta m;
+				u8 p;
+
+				if (corten_query(&txn, a, &m) ||
+				    (m.state == CORTEN_INVALID && !m.perm))
+					p = READ_ONCE(ar->prot);
+				else
+					p = m.perm;
+
+				if (have && p == cur)
+					continue;
+
+				/* A perm change closes the run that ends at
+				 * @a; otherwise a new run opens here.
+				 */
+				if (have) {
+					ret = corten_arena_demote_apply_run(mm,
+									    rs, a,
+									    cur);
+					if (ret) {
+						corten_unlock(&txn);
+						return ret;
+					}
+				}
+				rs = a;
+				cur = p;
+				have = true;
+			}
+			corten_unlock(&txn);
+			addr = win_end;
+		}
+
+		if (have) {
+			ret = corten_arena_demote_apply_run(mm, rs, pe, cur);
+			if (ret)
+				return ret;
+		}
+	}
+
+	return 0;
+}
+
 static int corten_arena_demote_scrub(struct corten_arena *ar,
 				     unsigned long start, unsigned long end)
 {
@@ -1494,7 +1680,10 @@ static int corten_arena_demote_scrub(struct corten_arena *ar,
 			return ret;
 
 		for (a = addr; a < win_end; a += PAGE_SIZE) {
-			ret = corten_unmap(&txn, a, PAGE_SIZE);
+			/* The demote scrub ends the arena contract itself:
+			 * a full slot scrub (no KEEP_PERM).
+			 */
+			ret = corten_unmap(&txn, a, PAGE_SIZE, 0);
 			if (ret && ret != -ENOENT) {
 				corten_unlock(&txn);
 				return ret;
@@ -1562,6 +1751,23 @@ int corten_arena_fork_demote(struct mm_struct *mm, struct mm_struct *oldmm)
 			drained = false;
 		} else {
 			drained = true;
+		}
+
+		/* DEV-11 completion (r06 "rogue" family): the routed
+		 * mprotect() commits live only in the metadata, so they
+		 * must be re-expressed as VMA flags before the plain-VMA
+		 * conversion makes the metadata unreadable -- otherwise a
+		 * surviving parent loses every routed commit on the
+		 * reserve-shaped VMA and the next write ACCERRs.
+		 * Failure aborts the fork with the same precedent as the
+		 * scrub below (a consistent all-legacy or partially
+		 * materialized state; nothing half-torn).
+		 */
+		r = corten_arena_demote_materialize(arena, oldmm,
+						    arena->start, arena->end);
+		if (r) {
+			if (!ret)
+				ret = (r == -EAGAIN) ? -EOPNOTSUPP : r;
 		}
 
 		/* Metadata scrub BEFORE the registry/vma teardown.  On
@@ -2400,8 +2606,8 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 	 * arena fault cycle): a page inside a declared arena that no
 	 * producer ever recorded is a fresh PrivateAnon virtual
 	 * allocation.  Gate the access on the arena contract first (the
-	 * metadata is zeroed, so dispatch's own permission check cannot
-	 * run), then record the allocation -- from here on the fault is
+	 * metadata carries no state, so dispatch's own permission check
+	 * cannot run), then record the allocation -- from here on the fault is
 	 * indistinguishable from an mmap-marked one, which keeps the
 	 * map/zero-page/upgrade machinery single-sourced.  This was the
 	 * guest-smoke MAPERR: the churn mark path bypassed the synthesis,
@@ -2413,9 +2619,15 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		struct corten_pte_meta gate = {
 			.state = CORTEN_PRIVATE_ANON,
 			/* A routed mprotect() rewrites this upper bound
-			 * under the arena's active-ref barrier (T0b).
+			 * under the arena's active-ref barrier (T0b).  A
+			 * slot that carries a perm despite being Invalid
+			 * is a dropped-content page (chunk munmap /
+			 * MADV_DONTNEED route, CORTEN_UNMAP_KEEP_PERM):
+			 * the committed mprotect contract outlives the
+			 * content, so it wins over the DECLARE bound.
 			 */
-			.perm = READ_ONCE(ctx->ar->prot),
+			.perm = m.perm ? m.perm :
+					 READ_ONCE(ctx->ar->prot),
 		};
 		struct corten_pte_meta fresh = gate;
 
@@ -2884,7 +3096,19 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 		}
 
 		if (recorded) {
-			ret = corten_unmap(txn, addr, PAGE_SIZE);
+			/* KEEP_PERM: the content drop must not dissolve the
+			 * mprotect contract committed on the VA.  The slot
+			 * comes back Invalid but keeps the recorded perm, so
+			 * the FRESH fault gate re-derives the committed
+			 * permission (zero-fill-on-demand semantics, like the
+			 * legacy MADV_DONTNEED/munmap of a committed chunk)
+			 * instead of the DECLARE-time arena bound -- a
+			 * PROT_NONE reservation with routed RW commits died
+			 * with SEGV_ACCERR on the next write here (the r06
+			 * dedup_eq "rogue" ACCERR family).
+			 */
+			ret = corten_unmap(txn, addr, PAGE_SIZE,
+					   CORTEN_UNMAP_KEEP_PERM);
 			if (WARN_ON_ONCE(ret))
 				goto out_flush;
 

@@ -139,6 +139,22 @@ enum corten_page_state {
 #define CORTEN_MAP_ALL		CORTEN_MAP_FORCE
 
 /*
+ * Flags for corten_unmap().
+ *
+ * CORTEN_UNMAP_KEEP_PERM: move the state back to CORTEN_INVALID but keep
+ * the recorded permission bits in the slot.  The arena content-drop path
+ * (chunk munmap / MADV_DONTNEED routing) uses this: the VA reservation and
+ * every routed mprotect() permission committed on it survive the drop, so
+ * a later fault re-derives the committed contract instead of the
+ * DECLARE-time arena bound (paper Fig.8 L9-13: unmap clears content, keeps
+ * the VA -- the committed permission is part of that reservation).  The
+ * default scrubs the whole slot (fork demote: the arena contract itself
+ * ends).
+ */
+#define CORTEN_UNMAP_KEEP_PERM	_BITUL(1)
+#define CORTEN_UNMAP_ALL	CORTEN_UNMAP_KEEP_PERM
+
+/*
  * Entries per PTE page on x86-64.  Kept as a literal so this header stays
  * architecture-independent; mm/corten.c BUILD_BUG_ONs it against
  * PTRS_PER_PTE.
@@ -424,16 +440,19 @@ int corten_mark(struct corten_txn *txn, unsigned long start, unsigned long len,
  * @txn: locked transaction handle.
  * @start: first VA of the sub-range (page aligned, inside the locked range).
  * @len: length of the sub-range in bytes (> 0, multiple of PAGE_SIZE).
+ * @flags: CORTEN_UNMAP_KEEP_PERM or 0.
  *
  * Every page in the sub-range must be recorded (state != CORTEN_INVALID),
  * else -ENOENT and nothing is changed.  The whole sub-range is validated
  * before anything is written.  Dropping the physical page references is
- * wired in by M3/M4; 2b only flips the metadata back to CORTEN_INVALID.
+ * wired in by M3/M4; 2b only flips the metadata back to CORTEN_INVALID
+ * (with %CORTEN_UNMAP_KEEP_PERM, keeping the recorded permission -- see
+ * the flag's documentation), else scrubbing the slot.
  *
  * Return: 0 on success, negative error otherwise.
  */
 int corten_unmap(struct corten_txn *txn, unsigned long start,
-		 unsigned long len);
+		 unsigned long len, unsigned int flags);
 
 /**
  * corten_unlock - release a transaction (paper: AddrSpace::unlock; releases
@@ -488,7 +507,7 @@ static inline int corten_mark(struct corten_txn *txn, unsigned long start,
 }
 
 static inline int corten_unmap(struct corten_txn *txn, unsigned long start,
-			       unsigned long len)
+			       unsigned long len, unsigned int flags)
 {
 	return -EOPNOTSUPP;
 }

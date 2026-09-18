@@ -683,13 +683,13 @@ static void corten_test_txn_state_machine(struct kunit *test)
 					    CORTEN_MAP_FORCE));
 
 	/* munmap(): Mapped -> Invalid; Invalid -> unmap: -ENOENT. */
-	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, 8 * PAGE_SIZE, PAGE_SIZE));
+	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, 8 * PAGE_SIZE, PAGE_SIZE, 0));
 	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 8 * PAGE_SIZE, &q));
 	KUNIT_EXPECT_EQ(test, q.state, CORTEN_INVALID);
 	KUNIT_EXPECT_EQ(test, q.perm, 0);
 	KUNIT_EXPECT_EQ(test, q.flags, 0);
 	KUNIT_EXPECT_EQ(test, -ENOENT,
-			corten_unmap(&txn, 8 * PAGE_SIZE, PAGE_SIZE));
+			corten_unmap(&txn, 8 * PAGE_SIZE, PAGE_SIZE, 0));
 
 	/* Illegal state transitions (each rejected, nothing written). */
 	m.state = CORTEN_INVALID;
@@ -741,7 +741,7 @@ static void corten_test_txn_state_machine(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, -ERANGE, corten_mark(&txn, 8 * PAGE_SIZE,
 						   5 * PAGE_SIZE, &m));
 	KUNIT_EXPECT_EQ(test, -ERANGE, corten_unmap(&txn, 4 * PAGE_SIZE,
-						    PAGE_SIZE));
+					    PAGE_SIZE, 0));
 
 	corten_unlock(&txn);
 	KUNIT_EXPECT_NULL(test, txn.covering);
@@ -770,7 +770,7 @@ static void corten_test_txn_atomic_validate(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, 0, corten_mark(&txn, 8 * PAGE_SIZE,
 					     2 * PAGE_SIZE, &m));
 	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, 8 * PAGE_SIZE,
-					      2 * PAGE_SIZE));
+					      2 * PAGE_SIZE, 0));
 	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 12 * PAGE_SIZE, &q));
 	KUNIT_EXPECT_EQ(test, q.state, CORTEN_INVALID);
 
@@ -781,7 +781,7 @@ static void corten_test_txn_atomic_validate(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, 0, corten_mark(&txn, 8 * PAGE_SIZE, PAGE_SIZE,
 					     &m));
 	KUNIT_EXPECT_EQ(test, -ENOENT, corten_unmap(&txn, 8 * PAGE_SIZE,
-						    2 * PAGE_SIZE));
+					      2 * PAGE_SIZE, 0));
 	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 8 * PAGE_SIZE, &q));
 	KUNIT_EXPECT_EQ(test, q.state, CORTEN_PRIVATE_ANON);
 	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 12 * PAGE_SIZE, &q));
@@ -903,7 +903,7 @@ static void corten_test_txn_real_glue(struct kunit *test)
 					    0));
 	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, addr, &q));
 	KUNIT_EXPECT_EQ(test, q.state, CORTEN_MAPPED);
-	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, addr, PAGE_SIZE));
+	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, addr, PAGE_SIZE, 0));
 	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, addr, &q));
 	KUNIT_EXPECT_EQ(test, q.state, CORTEN_INVALID);
 	corten_unlock(&txn);
@@ -1009,7 +1009,7 @@ static int corten_test_mutex_worker(void *data)
 			atomic_inc(&c->op_errors);
 		if (corten_map(&txn, w->start, c->tree->page[0], m.perm, 0))
 			atomic_inc(&c->op_errors);
-		if (corten_unmap(&txn, w->start, w->len))
+		if (corten_unmap(&txn, w->start, w->len, 0))
 			atomic_inc(&c->op_errors);
 
 		/* Leave the instrumentation window only after all the
@@ -1383,7 +1383,7 @@ static void corten_test_txn_hole_fill(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, 0, corten_mark(&txn, start, PAGE_SIZE, &m));
 	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, start, &q));
 	KUNIT_EXPECT_EQ(test, q.state, CORTEN_PRIVATE_ANON);
-	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, start, PAGE_SIZE));
+	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, start, PAGE_SIZE, 0));
 	corten_unlock(&txn);
 
 	/* Second descent over the (now filled) hole must not allocate. */
@@ -1468,7 +1468,7 @@ static int corten_test_race_worker(void *data)
 			 CORTEN_PERM_USER;
 		if (corten_mark(&txn, c->start, 4 * PAGE_SIZE, &m))
 			atomic_inc(&c->op_errors);
-		if (corten_unmap(&txn, c->start, 4 * PAGE_SIZE))
+		if (corten_unmap(&txn, c->start, 4 * PAGE_SIZE, 0))
 			atomic_inc(&c->op_errors);
 
 		corten_unlock(&txn);
@@ -1614,7 +1614,7 @@ static int corten_test_interlock_a(void *data)
 	m.state = CORTEN_PRIVATE_ANON;
 	m.perm = CORTEN_PERM_READ;
 	if (corten_mark(&txn, 8 * PAGE_SIZE, PAGE_SIZE, &m) ||
-	    corten_unmap(&txn, 8 * PAGE_SIZE, PAGE_SIZE))
+	    corten_unmap(&txn, 8 * PAGE_SIZE, PAGE_SIZE, 0))
 		atomic_inc(&c->a_err);
 
 	atomic_set(&c->a_locked, 0);
@@ -1957,8 +1957,8 @@ static void corten_test_full_window_atomic(struct kunit *test)
 
 	/* One Invalid slot: the full-window unmap fails atomically. */
 	KUNIT_EXPECT_EQ(test, 0,
-			corten_unmap(&txn, 256 * PAGE_SIZE, PAGE_SIZE));
-	KUNIT_EXPECT_EQ(test, -ENOENT, corten_unmap(&txn, start, len));
+			corten_unmap(&txn, 256 * PAGE_SIZE, PAGE_SIZE, 0));
+	KUNIT_EXPECT_EQ(test, -ENOENT, corten_unmap(&txn, start, len, 0));
 	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 0, &q));
 	KUNIT_EXPECT_EQ(test, q.state, CORTEN_PRIVATE_ANON);
 	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 511 * PAGE_SIZE, &q));
@@ -1976,7 +1976,7 @@ static void corten_test_full_window_atomic(struct kunit *test)
 	/* Repair the gap, then retire the whole window in one go. */
 	KUNIT_EXPECT_EQ(test, 0,
 			corten_mark(&txn, 256 * PAGE_SIZE, PAGE_SIZE, &m));
-	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, start, len));
+	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, start, len, 0));
 	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 511 * PAGE_SIZE, &q));
 	KUNIT_EXPECT_EQ(test, q.state, CORTEN_INVALID);
 

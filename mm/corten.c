@@ -1267,10 +1267,13 @@ int corten_mark(struct corten_txn *txn, unsigned long start, unsigned long len,
  * corten_unmap - see include/linux/corten.h.
  */
 int corten_unmap(struct corten_txn *txn, unsigned long start,
-		 unsigned long len)
+		 unsigned long len, unsigned int flags)
 {
 	unsigned long addr, end;
 	int ret;
+
+	if (unlikely(flags & ~CORTEN_UNMAP_ALL))
+		return -EINVAL;
 
 	ret = corten_txn_subrange(txn, start, len, &end);
 	if (unlikely(ret))
@@ -1299,9 +1302,15 @@ int corten_unmap(struct corten_txn *txn, unsigned long start,
 		 * and scrubs the payload bytes (__resv): the slot may be
 		 * re-marked later and must not resurrect stale payload
 		 * fields that the state machine no longer validates.
+		 * KEEP_PERM (the arena content-drop path) keeps the
+		 * permission bits instead: the mprotect contract committed
+		 * on the VA survives the drop, so the FRESH fault gate
+		 * re-derives it rather than the DECLARE bound (the r06
+		 * "rogue" ACCERR family).
 		 */
 		m->state = CORTEN_INVALID;
-		m->perm = 0;
+		if (!(flags & CORTEN_UNMAP_KEEP_PERM))
+			m->perm = 0;
 		m->flags = 0;
 		memset(m->__resv, 0, sizeof(m->__resv));
 	}
