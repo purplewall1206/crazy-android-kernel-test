@@ -1074,6 +1074,26 @@ access_error(unsigned long error_code, struct vm_area_struct *vma)
 		return 1;
 
 	/*
+	 * r06 gupfix: a CortenMM shadow-VMA carries the DECLARE-time
+	 * R/W/X encoding on purpose -- allocators reserve their arenas
+	 * PROT_NONE (glibc new_heap()) and commit sub-ranges through
+	 * routed mprotect(), which only the arena metadata owns.  Defer
+	 * the verdict to handle_mm_fault(): its CortenMM hook re-checks
+	 * the covering metadata and reports VM_FAULT_SIGSEGV for pages
+	 * the contract denies, which the kernel-mode fixup turns into a
+	 * clean EFAULT -- the same observable the access_error verdict
+	 * would produce, without rejecting committed pages.  Without
+	 * this, a kernel-mode access (buffered-read copy_to_user) into
+	 * an arena buffer dies at the first not-yet-installed page: the
+	 * multi-page pread short read (JDK libjimage class resources).
+	 * The shadow-VMA flags must not simply be widened instead: fork
+	 * demotion's materialize walk reads them as the unrecorded-page
+	 * baseline.
+	 */
+	if (vma->vm_flags & VM_CORTEN)
+		return 0;
+
+	/*
 	 * Make sure to check the VMA so that we do not perform
 	 * faults just to hit a X86_PF_PK as soon as we fill in a
 	 * page.

@@ -55,6 +55,13 @@
 					 VM_MAYREAD | VM_MAYWRITE | \
 					 VM_NORESERVE)
 
+/* The glibc thread-arena shape: a PROT_NONE MAP_NORESERVE reserve
+ * (new_heap()), committed sub-ranges arrive later as routed
+ * mprotect() calls.
+ */
+#define CORTEN_ARENA_TEST_FLAGS_NONE	(VM_MAYREAD | VM_MAYWRITE | \
+					 VM_MAYEXEC | VM_NORESERVE)
+
 struct corten_arena_test_mm {
 	struct kunit *test;
 	struct mm_struct *mm;
@@ -2039,6 +2046,69 @@ static void corten_arena_test_mprotect_route(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_ARENA_TEST_PERM_RW);
 }
 
+/*
+ * r06 gupfix invariant pin: a routed chunk mprotect must NOT touch the
+ * shadow-VMA R/W/X flags -- they stay at the DECLARE bound, because the
+ * fork demotion's materialize walk reads them as the unrecorded-page
+ * baseline ("already encoded" fast path) and any routed bit would leak
+ * the commit into every never-routed page of the demoted VMA.  The
+ * kernel-side gates (GUP check_vma_flags, arch access_error) defer
+ * shadow-VMA verdicts to the arena metadata instead.
+ */
+static void corten_arena_test_protect_flags_kernel_gate(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *vma;
+	struct corten_arena *ar;
+	u8 prot;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "mprotect route requires corten=on");
+
+	/* The glibc thread-arena shape: a PROT_NONE MAP_NORESERVE reserve
+	 * (DECLARE reads perm=USER from it), committed sub-ranges arrive
+	 * as routed mprotect() calls.
+	 */
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test,
+				     corten_arena_test_mkvm(mm,
+							    CORTEN_ARENA_TEST_START2,
+							    CORTEN_ARENA_TEST_START2 +
+							    CORTEN_ARENA_TEST_LEN2,
+							    CORTEN_ARENA_TEST_FLAGS_NONE));
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_START2,
+					     CORTEN_ARENA_TEST_LEN2), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* Chunk route (the first PMD only) up to RW: recorded perm lands
+	 * in the metadata, the shadow-VMA flags stay at the DECLARE
+	 * bound (the demote baseline -- see the invariant comment).
+	 */
+	mmap_write_lock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mprotect_route(mm,
+						    CORTEN_ARENA_TEST_START2,
+						    PMD_SIZE,
+						    PROT_READ | PROT_WRITE,
+						    -1), 1);
+	mmap_write_unlock(mm);
+
+	vma = vma_lookup(mm, CORTEN_ARENA_TEST_START2);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_EXPECT_FALSE(test, vma->vm_flags &
+			   (VM_READ | VM_WRITE | VM_EXEC));
+
+	/* The FRESH upper bound does not move with a chunk route:
+	 * unrouted pages keep the DECLARE (PROT_NONE) verdict.
+	 */
+	rcu_read_lock();
+	ar = corten_arena_lookup(mm, CORTEN_ARENA_TEST_START2);
+	prot = ar ? READ_ONCE(ar->prot) : CORTEN_PERM_ALL;
+	rcu_read_unlock();
+	KUNIT_EXPECT_EQ(test, prot, CORTEN_PERM_USER);
+}
+
 static void corten_arena_test_madvise_route(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
@@ -2316,6 +2386,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_auto_route),
 	KUNIT_CASE(corten_arena_test_auto_attach_release),
 	KUNIT_CASE(corten_arena_test_mprotect_route),
+	KUNIT_CASE(corten_arena_test_protect_flags_kernel_gate),
 	KUNIT_CASE(corten_arena_test_madvise_route),
 	KUNIT_CASE(corten_arena_test_mremap_route),
 	KUNIT_CASE(corten_arena_test_fork_demote),

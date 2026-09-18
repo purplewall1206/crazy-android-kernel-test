@@ -1216,6 +1216,22 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
 	int write = (gup_flags & FOLL_WRITE);
 	int foreign = (gup_flags & FOLL_REMOTE);
 	bool vma_anon = vma_is_anonymous(vma);
+	/*
+	 * r06 gupfix: a CortenMM shadow-VMA carries the DECLARE-time
+	 * R/W/X encoding on purpose -- allocators reserve their arenas
+	 * PROT_NONE (glibc new_heap()) and commit sub-ranges through
+	 * routed mprotect(), which only the arena metadata owns.  Plain
+	 * GUP therefore defers to the fault machinery, where the arena
+	 * hooks rule per page from the metadata (VM_FAULT_SIGSEGV ->
+	 * -EFAULT for pages the contract never committed).  Without
+	 * this, a pinned multi-page access into an arena buffer (9p and
+	 * O_DIRECT zero-copy, io_uring) dies with -EFAULT at the first
+	 * not-yet-installed page: the jtbcfe pread short read.  The
+	 * shadow-VMA flags must not simply be widened instead: fork
+	 * demotion's materialize walk reads them as the unrecorded-page
+	 * baseline.  FOLL_FORCE keeps the legacy COW semantics below.
+	 */
+	bool corten_own = (vm_flags & VM_CORTEN) && !(gup_flags & FOLL_FORCE);
 
 	if (vm_flags & (VM_IO | VM_PFNMAP))
 		return -EFAULT;
@@ -1237,7 +1253,8 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
 		    !writable_file_mapping_allowed(vma, gup_flags))
 			return -EFAULT;
 
-		if (!(vm_flags & VM_WRITE) || (vm_flags & VM_SHADOW_STACK)) {
+		if (!corten_own &&
+		    (!(vm_flags & VM_WRITE) || (vm_flags & VM_SHADOW_STACK))) {
 			if (!(gup_flags & FOLL_FORCE))
 				return -EFAULT;
 			/*
@@ -1252,7 +1269,7 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
 			if (!is_cow_mapping(vm_flags))
 				return -EFAULT;
 		}
-	} else if (!(vm_flags & VM_READ)) {
+	} else if (!(vm_flags & VM_READ) && !corten_own) {
 		if (!(gup_flags & FOLL_FORCE))
 			return -EFAULT;
 		/*

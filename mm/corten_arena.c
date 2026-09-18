@@ -4127,7 +4127,14 @@ out:
 		vm_flags_set(vma, flags | VM_SOFTDIRTY);
 		WRITE_ONCE(vma->vm_page_prot, new_pgprot);
 	}
-
+	/* A chunk route deliberately leaves the shadow-VMA R/W/X flags
+	 * at the DECLARE bound: fork demotion's materialize walk uses
+	 * them as the unrecorded-page baseline (corten_arena_demote_
+	 * apply_run's "already encoded" fast path).  Kernel-side access
+	 * to routed pages is opened by the gates instead (r06 gupfix:
+	 * GUP check_vma_flags() and the arch kernel-mode access_error()
+	 * consult VM_CORTEN and defer to the arena metadata).
+	 */
 	return 0;
 }
 
