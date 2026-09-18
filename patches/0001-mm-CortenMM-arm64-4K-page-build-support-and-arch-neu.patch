@@ -1,0 +1,111 @@
+From 025756094542570beb38537b37f03868f11db501 Mon Sep 17 00:00:00 2001
+From: purplewall1206 <purplewall1206@github.com>
+Date: Fri, 18 Sep 2026 13:04:47 +0800
+Subject: [PATCH] mm: CortenMM: arm64 4K-page build support and arch-neutral
+ test macros
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Extend CORTEN_MM to ARM64 4K-page configurations and make the KUnit
+huge-leaf test macros arch-neutral:
+
+- mm/Kconfig: CORTEN_MM depends becomes
+  MMU && (X86_64 || (ARM64 && ARM64_4K_PAGES)); the x86_64 branch is
+  unchanged, ARM64 is gated to ARM64_4K_PAGES because that is the only
+  non-x86 granule exercised so far.  16K/64K granules are covered by the
+  dependency gate but are NOT empirically validated yet (no build/boot
+  evidence); this transitional gate keeps them out until they are.
+
+- mm/corten_test.c (corten_test_real_huge_leaf): split the
+  block-descriptor construction three ways.  X86_64 keeps the existing
+  PSE leaf path verbatim; ARM64 uses PMD_TYPE_SECT/PUD_TYPE_SECT
+  (pgtable-hwdef.h), whose !table encoding is what pmd_leaf()/pud_leaf()
+  key off -- the arm64 equivalent of the x86 PSE leaf -- with the PUD
+  leg compiled out when PGTABLE_LEVELS <= 3; other arches kunit_skip().
+
+Empirical evidence (arm64 virtconfig, ARM64_PORTING.md §11.4 Round B,
+results/r06/m9-p1/m9-p1-verify.md): mm/corten.o + mm/corten_test.o
+build with zero errors, arm64 Image links with +196 KiB increment over
+the corten=off baseline, and the full KUnit battery passes 25/25 under
+qemu -smp 4.
+
+x86_64 behaviour is unchanged: the X86_64 test-macro branch and the
+Kconfig dependency are carried over as-is.
+
+Signed-off-by purplewall1206 <purplewall1206@github.com>
+---
+ mm/Kconfig       |  6 +++++-
+ mm/corten_test.c | 25 +++++++++++++++++++++++++
+ 2 files changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/mm/Kconfig b/mm/Kconfig
+index 62aa2f25f185..f10ba14daf78 100644
+--- a/mm/Kconfig
++++ b/mm/Kconfig
+@@ -1429,7 +1429,7 @@ config PT_RECLAIM
+ config CORTEN_MM
+ 	bool "CortenMM: page-descriptor based transactional MM (EXPERIMENTAL)"
+ 	default n
+-	depends on MMU && X86_64
++	depends on MMU && (X86_64 || (ARM64 && ARM64_4K_PAGES))
+ 	help
+ 	  CortenMM replaces the two-level (VMA + page table) synchronization
+ 	  of the memory management code with a single-level abstraction: every
+@@ -1445,6 +1445,10 @@ config CORTEN_MM
+ 	  kernel is booted with corten=on (static branch, default off), so
+ 	  the disabled cost is one nop per page-table alloc/free.
+ 
++	  The protocol core is geometry-neutral and compiles on any 4K-page
++	  configuration; ARM64 is gated to ARM64_4K_PAGES because that is
++	  the only non-x86 granule exercised so far (16K/64K untested).
++
+ 	  If unsure, say N.
+ 
+ config CORTEN_MM_KUNIT_TEST
+diff --git a/mm/corten_test.c b/mm/corten_test.c
+index 851bc1b671d8..baec439d5700 100644
+--- a/mm/corten_test.c
++++ b/mm/corten_test.c
+@@ -1906,6 +1906,7 @@ static void corten_test_real_huge_leaf(struct kunit *test)
+ 	pmdp = pmd_alloc(mm, pudp, addr);
+ 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+ 
++#if defined(CONFIG_X86_64)
+ 	/* PMD-level leaf (THP-shaped): present, but not a PT page. */
+ 	set_pmd(pmdp, __pmd(_PAGE_PSE | _PAGE_PRESENT));
+ 	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+@@ -1917,6 +1918,30 @@ static void corten_test_real_huge_leaf(struct kunit *test)
+ 	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+ 	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
+ 	pud_clear(pudp);
++#elif defined(CONFIG_ARM64)
++	/*
++	 * arm64 block descriptors: VALID (bit 0) and type 0b01, encoded
++	 * together in PMD_TYPE_SECT/PUD_TYPE_SECT (pgtable-hwdef.h);
++	 * pmd_leaf()/pud_leaf() key off !pmd_table()/!pud_table(), which
++	 * the SECT type satisfies (arm64 equivalent of the x86 PSE leaf
++	 * above).
++	 */
++	set_pmd(pmdp, __pmd(PMD_TYPE_SECT));
++	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
++	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
++	pmd_clear(pmdp);
++
++	/* PUD-level leaf (1G page); none when the PUD level is folded. */
++#if CONFIG_PGTABLE_LEVELS > 3
++	set_pud(pudp, __pud(PUD_TYPE_SECT));
++	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
++	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
++	pud_clear(pudp);
++#endif
++#else
++	/* Unreachable under the CORTEN_MM dependency gate today. */
++	kunit_skip(test, "huge-leaf descriptor construction is arch-specific");
++#endif
+ 
+ 	/* Balance the pgtables_bytes accounting that pmd_alloc()/pud_alloc()
+ 	 * did (same raw teardown as corten_test_real_destroy()).
+-- 
+2.34.1
+
