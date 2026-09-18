@@ -569,8 +569,18 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	arena->mm = mm;
 	mutex_init(&arena->fill_lock);
 	init_completion(&arena->drained);
-	ret = percpu_ref_init(&arena->active, corten_arena_active_release, 0,
-			      GFP_KERNEL);
+	/* Born atomic (D15): a percpu-born ref forces percpu_ref_kill()'s
+	 * atomic switch through a full RCU grace period, and RELEASE drains
+	 * with mmap_write held -- every arena munmap paid one GP
+	 * (4.9-20ms measured, r06-t5), which ran the dedup_eq tcmalloc arm
+	 * at 12x its base wall time.  An atomic-born ref makes the kill
+	 * synchronous: the drain only ever waits for in-flight
+	 * transactions, never for grace.  The fault path's tryget/put pay
+	 * one contended atomic op instead of a percpu one -- the
+	 * transactions serialize on the covering desc write lock anyway.
+	 */
+	ret = percpu_ref_init(&arena->active, corten_arena_active_release,
+			      PERCPU_REF_INIT_ATOMIC, GFP_KERNEL);
 	if (ret) {
 		mutex_destroy(&arena->fill_lock);
 		kfree(arena);

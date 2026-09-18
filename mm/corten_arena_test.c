@@ -598,6 +598,53 @@ static void corten_arena_test_range_overlaps(struct kunit *test)
  * ------------------------------------------------------------------
  */
 
+/*
+ * D15 (r06-t5 overhead diagnosis): arena refs must be BORN atomic
+ * (PERCPU_REF_INIT_ATOMIC).  A percpu-born ref pushes every
+ * percpu_ref_kill_and_confirm() through the percpu->atomic switch's
+ * call_rcu() grace period; RELEASE drains under mmap_write, so each
+ * arena munmap carried a measured 4.9-20ms lower bound and the dedup_eq
+ * tcmalloc arm collapsed to 12x its base wall time (25,600 serialized
+ * releases).  Anchor: immediately after a live DECLARE -- with no kill
+ * and no switch in flight -- the active ref is already in atomic mode.
+ */
+static void corten_arena_test_ref_born_atomic(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	unsigned long __percpu *percpu_count;
+	struct corten_arena *ar;
+
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(t->mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+
+	rcu_read_lock();
+	ar = corten_arena_lookup(t->mm, CORTEN_ARENA_TEST_BASE);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	if (percpu_ref_tryget_live(&ar->active)) {
+		rcu_read_unlock();
+		/* The drain contract (D15): born atomic, so a healthy
+		 * kill confirms synchronously -- no grace period sits
+		 * between percpu_ref_kill_and_confirm() and completion.
+		 */
+		KUNIT_EXPECT_FALSE(test,
+				   __ref_is_percpu(&ar->active,
+						   &percpu_count));
+		percpu_ref_put(&ar->active);
+	} else {
+		rcu_read_unlock();
+	}
+
+	/* Unchanged RELEASE semantics on top. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, t->mm,
+						 corten_arena_test_op_release,
+						 CORTEN_ARENA_TEST_BASE,
+						 CORTEN_ARENA_TEST_LEN),
+			0);
+}
+
 static void corten_arena_test_release(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
@@ -810,6 +857,13 @@ struct corten_arena_test_conc {
 	atomic_t errors;
 	atomic_t gets;
 	atomic_t query_bad;
+	/* D15: born-atomic refs made the RELEASE drain grace-free, so the
+	 * churn window is microseconds wide.  The reader cannot win it by
+	 * free-running any more; the worker pauses at the first arena
+	 * until the reader reports a pinned ref (completion below), which
+	 * is the race the drain contract is about.
+	 */
+	struct completion got;
 	struct completion done[2];
 };
 
@@ -836,9 +890,13 @@ static void corten_arena_test_conc_reader(struct corten_arena_test_conc *c)
 		if (ar && percpu_ref_tryget_live(&ar->active)) {
 			rcu_read_unlock();
 			atomic_inc(&c->gets);
-			/* Mimic a short transaction, then drop the pin:
-			 * a concurrent RELEASE's drain waits for it.
+			/* D15: tell the worker a live arena is pinned; its
+			 * next RELEASE's drain waits for the put below
+			 * (bounded by this short hold, not by a grace
+			 * period any more).
 			 */
+			if (atomic_read(&c->gets) == 1)
+				complete(&c->got);
 			cond_resched();
 			percpu_ref_put(&ar->active);
 		} else {
@@ -889,6 +947,13 @@ static int corten_arena_test_conc_worker(void *data)
 			corten_arena_test_unmap(c->mm, c->start, c->len);
 			break;
 		}
+
+		/* D15: give the reader a fair shot at the first arena --
+		 * with a grace-free drain the churn window is microseconds,
+		 * and a free-running reader loses it every time.
+		 */
+		if (i == 0)
+			wait_for_completion_timeout(&c->got, 10 * HZ);
 
 		if (corten_arena_release(c->mm, c->start, c->len)) {
 			atomic_inc(&c->errors);
@@ -943,6 +1008,7 @@ static void corten_arena_test_concurrent_run(struct kunit *test,
 	atomic_set(&c->errors, 0);
 	atomic_set(&c->gets, 0);
 	atomic_set(&c->query_bad, 0);
+	init_completion(&c->got);
 	init_completion(&c->done[0]);
 	init_completion(&c->done[1]);
 
@@ -2143,6 +2209,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_declare_query),
 	KUNIT_CASE(corten_arena_test_range_overlaps),
 	KUNIT_CASE(corten_arena_test_release),
+	KUNIT_CASE(corten_arena_test_ref_born_atomic),
 	KUNIT_CASE(corten_arena_test_release_classify),
 	KUNIT_CASE(corten_arena_test_shadow_vma),
 	KUNIT_CASE(corten_arena_test_exit),
