@@ -1429,7 +1429,7 @@ config PT_RECLAIM
 config CORTEN_MM
 	bool "CortenMM: page-descriptor based transactional MM (EXPERIMENTAL)"
 	default n
-	depends on MMU && X86_64
+	depends on MMU && (X86_64 || (ARM64 && ARM64_4K_PAGES))
 	help
 	  CortenMM replaces the two-level (VMA + page table) synchronization
 	  of the memory management code with a single-level abstraction: every
@@ -1444,6 +1444,10 @@ config CORTEN_MM
 	  fault path learns to use it in M3.  The code is inert unless the
 	  kernel is booted with corten=on (static branch, default off), so
 	  the disabled cost is one nop per page-table alloc/free.
+
+	  The protocol core is geometry-neutral and compiles on any 4K-page
+	  configuration; ARM64 is gated to ARM64_4K_PAGES because that is
+	  the only non-x86 granule exercised so far (16K/64K untested).
 
 	  If unsure, say N.
 

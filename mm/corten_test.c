@@ -1906,6 +1906,7 @@ static void corten_test_real_huge_leaf(struct kunit *test)
 	pmdp = pmd_alloc(mm, pudp, addr);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
 
+#if defined(CONFIG_X86_64)
 	/* PMD-level leaf (THP-shaped): present, but not a PT page. */
 	set_pmd(pmdp, __pmd(_PAGE_PSE | _PAGE_PRESENT));
 	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
@@ -1917,6 +1918,30 @@ static void corten_test_real_huge_leaf(struct kunit *test)
 	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
 	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
 	pud_clear(pudp);
+#elif defined(CONFIG_ARM64)
+	/*
+	 * arm64 block descriptors: VALID (bit 0) and type 0b01, encoded
+	 * together in PMD_TYPE_SECT/PUD_TYPE_SECT (pgtable-hwdef.h);
+	 * pmd_leaf()/pud_leaf() key off !pmd_table()/!pud_table(), which
+	 * the SECT type satisfies (arm64 equivalent of the x86 PSE leaf
+	 * above).
+	 */
+	set_pmd(pmdp, __pmd(PMD_TYPE_SECT));
+	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
+	pmd_clear(pmdp);
+
+	/* PUD-level leaf (1G page); none when the PUD level is folded. */
+#if CONFIG_PGTABLE_LEVELS > 3
+	set_pud(pudp, __pud(PUD_TYPE_SECT));
+	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
+	pud_clear(pudp);
+#endif
+#else
+	/* Unreachable under the CORTEN_MM dependency gate today. */
+	kunit_skip(test, "huge-leaf descriptor construction is arch-specific");
+#endif
 
 	/* Balance the pgtables_bytes accounting that pmd_alloc()/pud_alloc()
 	 * did (same raw teardown as corten_test_real_destroy()).
