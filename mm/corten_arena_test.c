@@ -1409,6 +1409,7 @@ static void corten_arena_test_auto_route(struct kunit *test)
 	struct corten_mm_state *state;
 	unsigned long addr = 0, len = 2 * PAGE_SIZE, flags;
 	unsigned long fallbacks;
+	int cpu, i, ncpus;
 
 	/*
 	 * The route gates on corten_enabled_static(); on a corten=off
@@ -1424,7 +1425,7 @@ static void corten_arena_test_auto_route(struct kunit *test)
 	state = READ_ONCE(mm->corten_state);
 	KUNIT_ASSERT_NOT_NULL(test, state);
 
-	/* Non-whitelisted flags: legacy, cursor untouched. */
+	/* Non-whitelisted flags: legacy, window untouched. */
 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
 	addr = 0;
 	KUNIT_EXPECT_EQ(test,
@@ -1435,7 +1436,10 @@ static void corten_arena_test_auto_route(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, state->next_va, CORTEN_MODE_WINDOW_START);
 
 	/* Plain whitelist hit: rewritten onto the window base, 2M-rounded,
-	 * MAP_FIXED|MAP_NORESERVE forced.
+	 * MAP_FIXED|MAP_NORESERVE forced.  The running cpu's magazine
+	 * claims the very first segment of the window, so the handed-out
+	 * address is the window base (deterministic: the claim cursor
+	 * starts there no matter which cpu runs this thread).
 	 */
 	addr = 0;
 	len = 2 * PAGE_SIZE;
@@ -1449,87 +1453,128 @@ static void corten_arena_test_auto_route(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, len, PMD_SIZE);
 	KUNIT_EXPECT_EQ(test, flags, MAP_PRIVATE | MAP_ANONYMOUS |
 				     MAP_FIXED | MAP_NORESERVE);
+	/* The claim advanced the global cursor past the whole segment. */
 	KUNIT_EXPECT_EQ(test, state->next_va,
-			CORTEN_MODE_WINDOW_START + PMD_SIZE);
+			CORTEN_MODE_WINDOW_START + CORTEN_VA_SEG_SIZE);
 
-	/* Second hit: the cursor advanced. */
-	addr = 0;
-	len = PAGE_SIZE;
-	flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	/*
+	 * Deterministic per-cpu bump semantics via the explicit-cpu test
+	 * hook (migration-proof, unlike the running cpu): the hook cpu's
+	 * first claim takes the NEXT segment (window base + segment
+	 * size), and its bump advances frame-wise.  The hook cpu must be
+	 * one that has not claimed a segment yet -- the whitelist hit
+	 * above claimed the *running* cpu's segment (that is where the
+	 * window-base address came from), so a hardcoded cpu 0 would
+	 * just continue that cpu's bump whenever the suite happens to
+	 * run on cpu 0 (exactly what the first boot of this test
+	 * logged).  Pick any online cpu whose segment is still
+	 * all-zero, i.e. unclaimed.
+	 */
+	ncpus = num_online_cpus();
+	cpu = ncpus;
+	for (i = 0; i < ncpus; i++) {
+		struct corten_va_seg *seg = per_cpu_ptr(state->va_segs, i);
+
+		if (!seg->base && !seg->end && !seg->next) {
+			cpu = i;
+			break;
+		}
+	}
+	if (cpu == ncpus)
+		kunit_skip(test, "no unclaimed cpu segment (single-cpu?)");
+
+	#define T12_SEG2 (CORTEN_MODE_WINDOW_START + CORTEN_VA_SEG_SIZE)
 	KUNIT_EXPECT_EQ(test,
-			corten_arena_test_auto_route_locked(mm, len,
-							    PROT_NONE, &addr,
-							    &len, &flags),
-			1);
-	KUNIT_EXPECT_EQ(test, addr,
-			CORTEN_MODE_WINDOW_START + PMD_SIZE);
-	KUNIT_EXPECT_EQ(test, len, PMD_SIZE);
+			corten_arena_test_mag_alloc_cpu(mm, cpu, PMD_SIZE,
+							&addr), 0);
+	KUNIT_EXPECT_EQ(test, addr, T12_SEG2);
+	KUNIT_EXPECT_EQ(test, state->next_va,
+			CORTEN_MODE_WINDOW_START + 2 * CORTEN_VA_SEG_SIZE);
 
-	/* Arena obstacle (a MODE-targeted DECLARE inside the window): the
-	 * route skips past it instead of MAP_FIXED-destroying it.  The
-	 * cursor is rewound first so the candidate really collides with
-	 * the arena.
+	/* Second bump: one frame onward. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_mag_alloc_cpu(mm, cpu, PMD_SIZE,
+							&addr), 0);
+	KUNIT_EXPECT_EQ(test, addr, T12_SEG2 + PMD_SIZE);
+
+	/* Arena obstacle (a MODE-targeted DECLARE on the bump's next
+	 * slot): the magazine skips the occupied frame instead of
+	 * MAP_FIXED-destroying it.
 	 */
 	{
 		struct vm_area_struct *vma;
 
-		vma = corten_arena_test_mkvm(mm, CORTEN_MODE_WINDOW_START,
-					     CORTEN_MODE_WINDOW_START +
-					     CORTEN_ARENA_TEST_WIN_LEN,
+		vma = corten_arena_test_mkvm(mm, T12_SEG2 + 2 * PMD_SIZE,
+					     T12_SEG2 + 3 * PMD_SIZE,
 					     CORTEN_ARENA_TEST_FLAGS_OK);
 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
 		KUNIT_ASSERT_EQ(test,
 				corten_arena_declare(mm,
-						     CORTEN_MODE_WINDOW_START,
-						     CORTEN_ARENA_TEST_WIN_LEN),
-				0);
+						     T12_SEG2 + 2 * PMD_SIZE,
+						     PMD_SIZE), 0);
 	}
 
-	WRITE_ONCE(state->next_va, CORTEN_MODE_WINDOW_START);
-	addr = 0;
-	len = PAGE_SIZE;
-	flags = MAP_PRIVATE | MAP_ANONYMOUS;
 	KUNIT_EXPECT_EQ(test,
-			corten_arena_test_auto_route_locked(mm, len,
-							    PROT_READ, &addr,
-							    &len, &flags),
-			1);
-	KUNIT_EXPECT_EQ(test, addr,
-			CORTEN_MODE_WINDOW_START + 2 * PMD_SIZE);
-	KUNIT_EXPECT_EQ(test, state->next_va,
-			CORTEN_MODE_WINDOW_START + 3 * PMD_SIZE);
+			corten_arena_test_mag_alloc_cpu(mm, cpu, PMD_SIZE,
+							&addr), 0);
+	KUNIT_EXPECT_EQ(test, addr, T12_SEG2 + 3 * PMD_SIZE);
 
-	/* Plain legacy VMA obstacle: also skipped, never overwritten. */
+	/* Plain legacy VMA obstacle: also skipped, never overwritten
+	 * (the T0 obstacle contract holds inside claimed segments).
+	 */
 	{
 		struct vm_area_struct *vma;
 
-		vma = corten_arena_test_mkvm(mm,
-					     CORTEN_MODE_WINDOW_START +
-					     4 * PMD_SIZE,
-					     CORTEN_MODE_WINDOW_START +
-					     5 * PMD_SIZE,
+		vma = corten_arena_test_mkvm(mm, T12_SEG2 + 4 * PMD_SIZE,
+					     T12_SEG2 + 5 * PMD_SIZE,
 					     CORTEN_ARENA_TEST_FLAGS_OK);
 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
 	}
-	WRITE_ONCE(state->next_va,
-		   CORTEN_MODE_WINDOW_START + 4 * PMD_SIZE - PAGE_SIZE);
-	addr = 0;
-	len = PAGE_SIZE;
-	flags = MAP_PRIVATE | MAP_ANONYMOUS;
 	KUNIT_EXPECT_EQ(test,
-			corten_arena_test_auto_route_locked(mm, len,
-							    PROT_READ, &addr,
-							    &len, &flags),
-			1);
-	KUNIT_EXPECT_EQ(test, addr,
-			CORTEN_MODE_WINDOW_START + 5 * PMD_SIZE);
+			corten_arena_test_mag_alloc_cpu(mm, cpu, PMD_SIZE,
+							&addr), 0);
+	KUNIT_EXPECT_EQ(test, addr, T12_SEG2 + 5 * PMD_SIZE);
+	#undef T12_SEG2
 
-	/* Window exhaustion: graceful legacy degradation, counted. */
+	/* Multi-cpu segments: one allocation per online cpu -- pairwise
+	 * disjoint, window-bound, frame-aligned (the PS-E1 contract the
+	 * magazine implements: no two cpus share a VA span).
+	 */
+	{
+		unsigned long addrs[8] = { 0 };
+		int i, j, ncpus;
+
+		ncpus = num_online_cpus();
+		KUNIT_ASSERT_LE(test, ncpus, 8);
+		for (i = 0; i < ncpus; i++) {
+			KUNIT_EXPECT_EQ(test,
+					corten_arena_test_mag_alloc_cpu(mm,
+									i,
+									PMD_SIZE,
+									&addrs[i]),
+					0);
+			KUNIT_EXPECT_FALSE(test, addrs[i] <
+					   CORTEN_MODE_WINDOW_START ||
+					   addrs[i] >= CORTEN_MODE_WINDOW_END);
+			KUNIT_EXPECT_EQ(test, addrs[i] & (PMD_SIZE - 1), 0);
+			for (j = 0; j < i; j++)
+				KUNIT_EXPECT_FALSE(test,
+						   addrs[i] < addrs[j] +
+						   PMD_SIZE &&
+						   addrs[j] < addrs[i] +
+						   PMD_SIZE);
+		}
+	}
+
+	/* Oversized request (> one segment): the magazine declines and
+	 * the global cursor path is consulted; with the cursor parked at
+	 * the window end it degrades to legacy, counted.
+	 */
 	fallbacks = corten_arena_test_stat_sum(state,
 					       CORTEN_ARENA_STAT_FALLBACKS);
 	WRITE_ONCE(state->next_va, CORTEN_MODE_WINDOW_END);
 	addr = 0xdead0000UL;
-	len = PAGE_SIZE;
+	len = CORTEN_VA_SEG_SIZE + PMD_SIZE;
 	flags = MAP_PRIVATE | MAP_ANONYMOUS;
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_auto_route_locked(mm, len,
@@ -1560,6 +1605,147 @@ static void corten_arena_test_auto_route(struct kunit *test)
 static void corten_arena_test_op_munmap_route(struct corten_arena_test_op *o)
 {
 	o->ret = corten_arena_munmap_route(o->mm, o->addr, o->len);
+}
+
+/*
+ * M4.T1 recycle: a released auto-arena's frames return to the magazine
+ * and the next allocation re-uses the SAME address (markers restored, no
+ * tree churn).  Route-level: place -> release (the release-on-full-
+ * coverage rule through sys_munmap routing) -> place again.
+ */
+static void corten_arena_test_mag_recycle(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long addr = 0, len = 2 * PAGE_SIZE, flags;
+	struct vm_area_struct *vma;
+	long recycles;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "auto-mmap route requires corten=on");
+	if (sysctl_overcommit_memory == OVERCOMMIT_NEVER)
+		kunit_skip(test, "auto takeover degraded (OVERCOMMIT_NEVER)");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* Take one auto arena at the window base. */
+	addr = 0;
+	len = 2 * PAGE_SIZE;
+	flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, len, PROT_READ |
+						     PROT_WRITE, &addr, &len,
+						     &flags), 1);
+	KUNIT_EXPECT_EQ(test, addr, CORTEN_MODE_WINDOW_START);
+
+	/* Attach it (the do_mmap tail hook body) so the release rule can
+	 * see a real arena, then let the glibc free() shape release it.
+	 * The route front half does not create the VMA -- mmap_region()
+	 * does, between the two halves -- so stand one in first, exactly
+	 * what the kernel flow would have installed.
+	 */
+	vma = corten_arena_test_mkvm(mm, CORTEN_MODE_WINDOW_START,
+				     CORTEN_MODE_WINDOW_START + PMD_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	mmap_write_lock(mm);
+	ret = corten_arena_auto_attach(mm, CORTEN_MODE_WINDOW_START, PMD_SIZE);
+	mmap_write_unlock(mm);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+
+	recycles = corten_arena_test_va_recycles();
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_MODE_WINDOW_START,
+						 PAGE_SIZE),
+			1);
+	/* The release restored the frame's reserve marker and pushed it
+	 * onto the recycle list.  The recycle COUNTER only moves when a
+	 * placement SERVES the block (release is bookkeeping-only).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_va_recycles(), recycles);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_frame_reserved(mm,
+								 CORTEN_MODE_WINDOW_START));
+	/* The state exists (MODE entered); the released frame reads as
+	 * "not inside an arena" == 0.  -ENOENT is reserved for mms that
+	 * never created a registry.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_MODE_WINDOW_START),
+			0);
+
+	/* The next placement serves the recycled frame: same address. */
+	addr = 0;
+	len = 2 * PAGE_SIZE;
+	flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, len, PROT_READ |
+						     PROT_WRITE, &addr, &len,
+						     &flags), 1);
+	KUNIT_EXPECT_EQ(test, addr, CORTEN_MODE_WINDOW_START);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_va_recycles(), recycles + 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+}
+
+/*
+ * M4.T1 marker discipline: claimed-but-unallocated magazine frames read
+ * as "no arena" to the fault/munmap lookups while still blocking a
+ * targeted DECLARE from inside the registry.
+ */
+static void corten_arena_test_mag_marker(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long addr = 0, len = 2 * PAGE_SIZE, flags;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "auto-mmap route requires corten=on");
+	if (sysctl_overcommit_memory == OVERCOMMIT_NEVER)
+		kunit_skip(test, "auto takeover degraded (OVERCOMMIT_NEVER)");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	addr = 0;
+	len = 2 * PAGE_SIZE;
+	flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, len, PROT_READ |
+						     PROT_WRITE, &addr, &len,
+						     &flags), 1);
+
+	/* Reserve marker on the handed-out-but-unallocated frame. */
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_frame_reserved(mm,
+								 CORTEN_MODE_WINDOW_START));
+	/* Lookups report no arena; a fault there falls back to the legacy
+	 * funnel on the (plain) VMA the caller is about to create.
+	 */
+	rcu_read_lock();
+	KUNIT_EXPECT_NULL(test,
+			  corten_arena_lookup(mm, CORTEN_MODE_WINDOW_START));
+	rcu_read_unlock();
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_MODE_WINDOW_START),
+			0);
+
+	/* A targeted DECLARE overlapping the claimed span's unallocated
+	 * frames still fails on the VMA validation chain (no VMA there).
+	 * Overlap-rejection of the marker itself is exercised by the
+	 * registry walk: re-DECLARE must not silently succeed.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_declare(mm, CORTEN_MODE_WINDOW_START,
+					     PMD_SIZE), -EINVAL);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
 }
 
 static void corten_arena_test_auto_attach_release(struct kunit *test)
@@ -1620,6 +1806,45 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
 			0);
 	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+
+	/*
+	 * M4.T2 regression anchor (r06-m4t12 drain-timeout): cross-frame
+	 * full-coverage release.  start and end-1 fall in DIFFERENT 2M
+	 * frames of one arena, so the route holds TWO references to the
+	 * same descriptor and the EXACT branch must drop both, or the
+	 * RELEASE drain times out (the r03 DoD-B leak shape; the JVM's
+	 * 64MB heap free is its real-world form).  The tail is 1 page
+	 * < 2M, so the release-on-full-coverage rule stays in force.
+	 * The same-frame glibc one-pager is the WIN block above.  A
+	 * released arena reads query()==0 ("state exists, not in an
+	 * arena"), never -ENOENT (reserved for registry-less mms).
+	 */
+	{
+		long drains = corten_arena_test_drain_timeouts();
+
+		vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_START2,
+					     CORTEN_ARENA_TEST_START2 +
+					     2 * PMD_SIZE,
+					     CORTEN_ARENA_TEST_FLAGS_OK);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+		mmap_write_lock(mm);
+		ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_START2,
+					       2 * PMD_SIZE);
+		mmap_write_unlock(mm);
+		KUNIT_ASSERT_EQ(test, ret, 0);
+
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_run_op(test, mm,
+							 corten_arena_test_op_munmap_route,
+							 CORTEN_ARENA_TEST_START2,
+							 2 * PMD_SIZE - PAGE_SIZE),
+				1);
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_query(mm, CORTEN_ARENA_TEST_START2),
+				0);
+		KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(),
+				drains);
+	}
 
 	/* A genuine mid-arena chunk keeps the VA: chunk zap, not release. */
 	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
@@ -3010,6 +3235,8 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_auto_place),
 	KUNIT_CASE(corten_arena_test_auto_route),
 	KUNIT_CASE(corten_arena_test_auto_attach_release),
+	KUNIT_CASE(corten_arena_test_mag_recycle),
+	KUNIT_CASE(corten_arena_test_mag_marker),
 	KUNIT_CASE(corten_arena_test_mprotect_route),
 	KUNIT_CASE(corten_arena_test_protect_flags_kernel_gate),
 	KUNIT_CASE(corten_arena_test_madvise_route),

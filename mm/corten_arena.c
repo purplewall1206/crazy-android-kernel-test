@@ -90,6 +90,24 @@
  */
 static DEFINE_MUTEX(corten_arena_alloc_lock);
 
+/* Claimed-segment ledger entry: base/end of one cpu's magazine segment.
+ * Walked on RELEASE (marker restoration) and in the debugfs report --
+ * both cold paths.
+ */
+struct corten_va_segrec {
+	struct list_head	list;
+	unsigned long		base;
+	unsigned long		end;
+};
+
+/* M4.T1 magazine internals, defined in the magazine section below. */
+static int corten_va_mag_alloc_cpu(struct mm_struct *mm,
+				   struct corten_mm_state *state,
+				   unsigned long len2, unsigned long *addr2,
+				   int cpu);
+static void corten_va_release_frame(struct corten_mm_state *state,
+				    unsigned long addr);
+
 static void corten_arena_stat_add(struct corten_mm_state *state,
 				  enum corten_arena_stat which, long val)
 {
@@ -146,6 +164,23 @@ static atomic_long_t corten_nr_eagain_leaked;	/* -EAGAIN still escaping */
 static atomic_long_t corten_nr_mremap_release_fail; /* grow RELEASE fails */
 static atomic_long_t corten_nr_mmap_punches;	/* file-MAP_FIXED punch routes */
 static atomic_long_t corten_nr_mmap_punch_rejects; /* unroutable MAP_FIXED */
+/* M4.T1 magazine observability: segments claimed (one per cpu per mm,
+ * amortized over CORTEN_VA_SEG_FRAMES allocations), frames skipped at
+ * allocation because a punch erased their reserve markers (they are
+ * conservatively leaked rather than handed out over a foreign mapping),
+ * and frames served from the recycle list (real VA reuse -- the T0-R2
+ * follow-up the magazine enables).
+ */
+static atomic_long_t corten_nr_seg_claims;	/* per-cpu segments claimed */
+static atomic_long_t corten_nr_mag_skips;	/* marker-lost frames skipped */
+static atomic_long_t corten_nr_va_recycles;	/* frames from va_free */
+
+/* Reserve sentinel for claimed-but-unallocated magazine frames (see
+ * include/linux/corten_arena.h).  Never published as an arena: it has no
+ * start/end/refs and is filtered at lookup; every other xarray walker
+ * treats it as an obstacle exactly like a live arena.
+ */
+struct corten_arena corten_va_reserve_sentinel;
 /* M5 faithful-fork counters (M5_FORK_SPEC.md 1.3-④6): fork_demotes stays
  * as the historical T0 telemetry and no longer grows.
  */
@@ -196,9 +231,30 @@ static void corten_arena_note_drain_timeout(struct corten_mm_state *state)
 	atomic_long_inc(&corten_arena_nr_drain_timeouts);
 }
 
+/* Recycle-list / claimed-segment ledger teardown (M4.T1).  Called from
+ * corten_arena_state_free() only: no reader can hold these -- both lists
+ * are mmap_write-serialized and the mm is going away.
+ */
+static void corten_va_lists_free(struct corten_mm_state *state)
+{
+	struct corten_va_freeblk *blk, *blk_n;
+	struct corten_va_segrec *seg, *seg_n;
+
+	list_for_each_entry_safe(blk, blk_n, &state->va_free, list) {
+		list_del(&blk->list);
+		kfree(blk);
+	}
+	list_for_each_entry_safe(seg, seg_n, &state->seg_list, list) {
+		list_del(&seg->list);
+		kfree(seg);
+	}
+}
+
 static void corten_arena_state_free(struct corten_mm_state *state)
 {
 	xa_destroy(&state->arenas);
+	free_percpu(state->va_segs);
+	corten_va_lists_free(state);
 	free_percpu(state->stats);
 	mutex_destroy(&state->ctl_lock);
 	kfree(state);
@@ -222,14 +278,20 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 	xa_init(&state->arenas);
 	refcount_set(&state->nr, 0);
 	mutex_init(&state->ctl_lock);
-	/* The MODE auto-arena cursor starts at the window base regardless
-	 * of which entry point created the registry (M4T0_SPEC.md 1.3).
+	/* The MODE global cursor starts at the window base regardless of
+	 * which entry point created the registry (M4T0_SPEC.md 1.3); the
+	 * T1 magazine layers its per-cpu segments and recycle list on top
+	 * (both consume the same cursor under this mm's mmap_write).
 	 */
 	state->next_va = CORTEN_MODE_WINDOW_START;
+	INIT_LIST_HEAD(&state->va_free);
+	INIT_LIST_HEAD(&state->seg_list);
+	state->va_segs = __alloc_percpu(sizeof(struct corten_va_seg),
+					__alignof__(unsigned long));
 	state->stats = __alloc_percpu(sizeof(unsigned long) *
 				      CORTEN_ARENA_NR_STATS,
 				      __alignof__(unsigned long));
-	if (!state->stats) {
+	if (!state->stats || !state->va_segs) {
 		corten_arena_state_free(state);
 		return NULL;
 	}
@@ -492,7 +554,14 @@ static bool corten_arena_overlaps(struct corten_mm_state *state,
 	unsigned long last = (addr + len - 1) >> PMD_SHIFT;
 
 	for (; frame <= last; frame++) {
-		if (xa_load(&state->arenas, frame))
+		struct corten_arena *ar = xa_load(&state->arenas, frame);
+
+		/* Magazine reserve markers are not arenas: the magazine's
+		 * own frames must not overlap-reject its own allocations.
+		 * A targeted DECLARE hitting a markered frame still fails
+		 * -- validate_vma finds no VMA there.
+		 */
+		if (ar && ar != &corten_va_reserve_sentinel)
 			return true;
 	}
 
@@ -751,7 +820,7 @@ static int corten_arena_release_locked(struct mm_struct *mm,
 
 	last_frame = (addr + len - 1) >> PMD_SHIFT;
 	for (frame = first_frame; frame <= last_frame; frame++) {
-		struct corten_arena *stale = xa_erase(&state->arenas, frame);
+		struct corten_arena *stale = xa_load(&state->arenas, frame);
 
 		/* [F-B] An already-NULL frame is legal since the D-G''
 		 * punch route: a file MAP_FIXED may have erased the hole's
@@ -759,6 +828,16 @@ static int corten_arena_release_locked(struct mm_struct *mm,
 		 */
 		if (WARN_ON_ONCE(stale && stale != arena))
 			break;
+		/* M4.T1: magazine frames get their reserve marker back
+		 * (and the range joins the recycle list) instead of a
+		 * bare erase -- the warm xarray subtree and the recycled
+		 * VA are the point of the magazine.  Hole frames stay
+		 * erased: a punch carved them out precisely because a
+		 * legacy VMA lives there, and restoring a marker would
+		 * make them read as "claimed and free" to the magazine.
+		 */
+		if (stale == arena)
+			corten_va_release_frame(state, frame << PMD_SHIFT);
 	}
 	refcount_set(&state->nr, refcount_read(&state->nr) - 1);
 	corten_arena_stat_add(state, CORTEN_ARENA_STAT_RELEASES, 1);
@@ -977,6 +1056,13 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_mmap_punches));
 	seq_printf(m, "mmap_punch_rejects  %ld\n",
 		   atomic_long_read(&corten_nr_mmap_punch_rejects));
+	/* M4.T1 magazine observability. */
+	seq_printf(m, "seg_claims          %ld\n",
+		   atomic_long_read(&corten_nr_seg_claims));
+	seq_printf(m, "mag_skips           %ld\n",
+		   atomic_long_read(&corten_nr_mag_skips));
+	seq_printf(m, "va_recycles         %ld\n",
+		   atomic_long_read(&corten_nr_va_recycles));
 }
 
 #ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
@@ -1017,6 +1103,57 @@ long corten_arena_test_fork_skips(void)
 {
 	return atomic_long_read(&corten_nr_fork_skips);
 }
+
+/* M4.T1 hooks: drive the magazine allocator against an explicit cpu (the
+ * segment state is plain per-mm memory; every writer holds the write
+ * lock, which the KUnit caller takes) and observe the bookkeeping.
+ */
+int corten_arena_test_mag_alloc_cpu(struct mm_struct *mm, int cpu,
+				    unsigned long len, unsigned long *addr)
+{
+	struct corten_mm_state *state;
+	int ret;
+
+	/* Pairs with the release store in corten_arena_state_create(). */
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state)
+		return -ENOENT;
+
+	/* Magazine writers hold this mm's mmap_lock for writing; the hook
+	 * is self-contained so KUnit cannot get the lock contract wrong
+	 * (find_vma_intersection asserts it).
+	 */
+	mmap_write_lock(mm);
+	ret = corten_va_mag_alloc_cpu(mm, state, len, addr, cpu);
+	mmap_write_unlock(mm);
+
+	return ret;
+}
+
+bool corten_arena_test_frame_reserved(struct mm_struct *mm, unsigned long addr)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+
+	if (!state)
+		return false;
+	return xa_load(&state->arenas, addr >> PMD_SHIFT) ==
+	       &corten_va_reserve_sentinel;
+}
+
+long corten_arena_test_mag_skips(void)
+{
+	return atomic_long_read(&corten_nr_mag_skips);
+}
+
+long corten_arena_test_seg_claims(void)
+{
+	return atomic_long_read(&corten_nr_seg_claims);
+}
+
+long corten_arena_test_va_recycles(void)
+{
+	return atomic_long_read(&corten_nr_va_recycles);
+}
 #endif
 
 /* ------------------------------------------------------------------ *
@@ -1050,6 +1187,10 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	mutex_lock(&state->ctl_lock);
 
 	xa_for_each(&state->arenas, frame, arena) {
+		/* M4.T1: reserve markers are not arenas. */
+		if (arena == &corten_va_reserve_sentinel)
+			continue;
+
 		/* Every frame of an arena holds the same descriptor; drain
 		 * each one once, at its first frame.  A drain timeout (a
 		 * leaked reference -- mm_users is 0 here, so only a kernel
@@ -1084,6 +1225,7 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
 					 unsigned long addr)
 {
 	struct corten_mm_state *state;
+	struct corten_arena *ar;
 
 	RCU_LOCKDEP_WARN(!rcu_read_lock_held(),
 			 "arena lookup without rcu_read_lock() protection");
@@ -1095,7 +1237,15 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
 	if (!state || !refcount_read(&state->nr))
 		return NULL;
 
-	return xa_load(&state->arenas, addr >> PMD_SHIFT);
+	/* M4.T1: reserve markers of claimed-but-unallocated magazine
+	 * frames read as "no arena" -- the frames are not arena property
+	 * until handed out and DECLAREd.
+	 */
+	ar = xa_load(&state->arenas, addr >> PMD_SHIFT);
+	if (ar == &corten_va_reserve_sentinel)
+		return NULL;
+
+	return ar;
 }
 
 int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,
@@ -1182,24 +1332,387 @@ int corten_arena_auto_place(unsigned long next_va, unsigned long len,
 	return 0;
 }
 
+/* ------------------------------------------------------------------ *
+ * M4.T1: per-cpu 2M-frame VA magazine (PS-E1, DESIGN.md sec 1 row E1)
+ *
+ * The T0 single cursor handed every allocation a PMD-aligned range by
+ * bumping one per-mm word under mmap_write, and every allocation paid a
+ * VMA-tree obstacle scan (find_vma_intersection) plus a registry probe.
+ * The magazine instead claims one exclusive CORTEN_VA_SEG_SIZE segment
+ * per cpu -- obstacle-scanned ONCE per CORTEN_VA_SEG_FRAMES allocations,
+ * marked frame-by-frame with reserve sentinels in the same registry
+ * xarray -- and then serves its allocations by a private bump pointer
+ * whose only per-op cost is one marker xa_load (replacing the old maple
+ * walk).  Released auto-arena frames return to a per-mm recycle list
+ * (markers restored instead of erased, so the xarray subtree stays warm
+ * and no node churns) and are served before fresh window.  Everything
+ * runs under this mm's mmap_lock for writing: the percpu layout is about
+ * address locality and xarray-subtree disjointness, not concurrency.
+ * ------------------------------------------------------------------
+ */
+
+/* True when @addr's frame lies inside one of this mm's claimed magazine
+ * segments (and therefore may carry a restorable reserve marker).
+ */
+static bool corten_va_in_seg(struct corten_mm_state *state, unsigned long addr)
+{
+	struct corten_va_segrec *seg;
+
+	list_for_each_entry(seg, &state->seg_list, list) {
+		if (addr >= seg->base && addr < seg->end)
+			return true;
+	}
+
+	return false;
+}
+
 /*
- * Window placement under this mm's mmap_write lock (T0b): hand out the
- * next PMD-rounded [addr2, addr2+len2) from the MODE cursor, skipping
- * past any obstacle (a MODE-targeted DECLARE inside the window, or a
- * plain legacy VMA that ended up here -- explicit-address mappings stay
- * legacy by contract) so the caller's MAP_FIXED install can never
- * destroy an existing mapping.  The write lock we hold is what keeps
- * obstacles from multiplying under our feet; each skip step strictly
- * advances.  Shared by the auto-mmap route (T0a) and the mremap move
- * route (T0b).  The cursor is advanced only on success (T0 never
- * recycles window VA -- T1's per-cpu magazine does).
+ * Claim one fresh segment for the running cpu: scan
+ * [state->next_va, CORTEN_MODE_WINDOW_END) for a CORTEN_VA_SEG_FRAMES
+ * span with no VMA (explicit legacy mappings in the window are jumped
+ * past) and no arena entry (markers included -- another cpu's live
+ * segment, jumped frame-wise), store reserve markers over the whole span,
+ * record it, and advance the global cursor past it.  The T0 obstacle
+ * semantics live here now: nothing inside a claimed segment can be a
+ * foreign mapping at claim time, and the per-allocation marker check
+ * keeps that true for the segment's whole life (a punch that carves a
+ * hole erases markers; those frames are skipped at allocation).
+ *
+ * Called under this mm's mmap_write; sleeps (xa_store GFP_KERNEL).
+ * Return: 0 with *@seg filled, -ENOSPC when the window cannot hold a
+ * further segment (the caller degrades, counted).
+ */
+static int corten_va_seg_claim(struct mm_struct *mm,
+			       struct corten_mm_state *state,
+			       struct corten_va_seg *seg)
+{
+	unsigned long start = state->next_va, seg_size;
+
+	if (start < CORTEN_MODE_WINDOW_START)
+		start = CORTEN_MODE_WINDOW_START;
+	start = round_up(start, PMD_SIZE);
+	seg_size = CORTEN_VA_SEG_FRAMES * PMD_SIZE;
+
+	for (;;) {
+		unsigned long end = start + seg_size;
+		unsigned long frame, last;
+		struct corten_va_segrec *rec;
+		int ret;
+
+		if (end > CORTEN_MODE_WINDOW_END || end <= start)
+			return -ENOSPC;		/* window exhausted */
+
+		/* VMA obstacle: jump past it (round_up can overflow past
+		 * the window end, caught by the bounds check above).
+		 */
+		{
+			struct vm_area_struct *v =
+				find_vma_intersection(mm, start, end);
+
+			if (v) {
+				start = round_up(v->vm_end, PMD_SIZE);
+				if (start < v->vm_end)
+					return -ENOSPC;
+				continue;
+			}
+		}
+
+		/* Arena obstacles: jump past the arena extent; a marker of
+		 * a foreign (disjoint by cursor) segment is jumped one
+		 * frame -- it should not exist here, but a stale one must
+		 * not be handed out either.
+		 */
+		last = start >> PMD_SHIFT;
+		for (frame = last; frame < last + CORTEN_VA_SEG_FRAMES;
+		     frame++) {
+			struct corten_arena *ar = xa_load(&state->arenas,
+							 frame);
+
+			if (!ar)
+				continue;
+			if (ar == &corten_va_reserve_sentinel) {
+				start = (frame + 1) * PMD_SIZE;
+			} else {
+				start = round_up(ar->end, PMD_SIZE);
+				if (start < ar->end)
+					return -ENOSPC;
+			}
+			break;
+		}
+		if (frame < last + CORTEN_VA_SEG_FRAMES)
+			continue;	/* jumped: rescan */
+
+		/* Mark the span, then commit it.  Unwind on allocation
+		 * failure so no half-marked segment is left behind.
+		 */
+		last = start >> PMD_SHIFT;
+		for (frame = last; frame < last + CORTEN_VA_SEG_FRAMES;
+		     frame++) {
+			ret = xa_err(xa_store(&state->arenas, frame,
+					      &corten_va_reserve_sentinel,
+					      GFP_KERNEL));
+			if (ret) {
+				while (frame > last)
+					xa_erase(&state->arenas, --frame);
+				return ret;
+			}
+		}
+
+		rec = kmalloc(sizeof(*rec), GFP_KERNEL);
+		if (!rec) {
+			for (frame = last;
+			     frame < last + CORTEN_VA_SEG_FRAMES; frame++)
+				xa_erase(&state->arenas, frame);
+			return -ENOMEM;
+		}
+		rec->base = start;
+		rec->end = start + seg_size;
+		list_add_tail(&rec->list, &state->seg_list);
+
+		state->next_va = rec->end;
+		seg->base = start;
+		seg->end = rec->end;
+		seg->next = start;
+		atomic_long_inc(&corten_nr_seg_claims);
+
+		return 0;
+	}
+}
+
+/*
+ * Carve @len2 (PMD-rounded) frames from the magazine: recycle list first,
+ * then the @cpu segment's private bump, then a fresh segment claim.
+ * Reserve markers are verified on every handed-out frame (they are what
+ * proves the frame carries no foreign mapping; frames whose marker a
+ * punch erased are skipped, counted, and effectively leaked).  Oversized
+ * requests go straight to the T0 global path.
+ *
+ * Called under this mm's mmap_write.  @cpu < 0 selects the running cpu;
+ * the KUnit hook passes an explicit id (the percpu state is plain memory
+ * owned by @state, and every writer is serialized by the write lock).
+ * Return: 0 with *@addr2, -ENOSPC when the magazine cannot serve it
+ * (caller falls back to the global path, which keeps the T0 semantics).
+ */
+static int corten_va_mag_alloc_cpu(struct mm_struct *mm,
+				   struct corten_mm_state *state,
+				   unsigned long len2, unsigned long *addr2,
+				   int cpu)
+{
+	unsigned long frames = len2 >> PMD_SHIFT;
+	struct corten_va_seg want, *seg;
+
+	BUILD_BUG_ON_NOT_POWER_OF_2(CORTEN_VA_SEG_FRAMES);
+
+	if (frames > CORTEN_VA_SEG_FRAMES)
+		return -ENOSPC;
+
+	/* 1. Recycle (M4.T1 real VA recycle).  A block is consumed only
+	 * whole: a single lost marker anywhere in it (punch legacy
+	 * mapping) drops it -- conservative and rare, and it keeps the
+	 * steady-state churn (release-restore + re-carve of one frame)
+	 * free of any tree walk beyond the marker xa_loads.
+	 */
+	while (!list_empty(&state->va_free)) {
+		struct corten_va_freeblk *blk =
+			list_first_entry(&state->va_free,
+					 struct corten_va_freeblk, list);
+		unsigned long f, last;
+		bool ok = true;
+
+		if (blk->frames < frames)
+			goto drop;
+		last = (blk->base >> PMD_SHIFT) + frames;
+		for (f = blk->base >> PMD_SHIFT; f < last; f++) {
+			if (xa_load(&state->arenas, f) !=
+			    &corten_va_reserve_sentinel) {
+				ok = false;
+				break;
+			}
+		}
+		if (!ok)
+			goto drop;
+
+		/* T0 obstacle semantics on the recycle path too: an
+		 * explicit-address legacy mapping can claim a markered
+		 * frame's VA in the window between its RELEASE and this
+		 * serve (the markers were restored at release).  The bump
+		 * path skips such frames frame-wise; here a block with a
+		 * foreign VMA over the served range is dropped whole --
+		 * conservative, and rare (the window is app-opaque).
+		 */
+		if (find_vma_intersection(mm, blk->base, blk->base + len2))
+			goto drop;
+
+		*addr2 = blk->base;
+		blk->base += len2;
+		blk->frames -= frames;
+		state->va_nrfree -= frames;
+		if (!blk->frames) {
+			list_del(&blk->list);
+			kfree(blk);
+		}
+		atomic_long_add(frames, &corten_nr_va_recycles);
+		return 0;
+drop:
+		list_del(&blk->list);
+		state->va_nrfree -= blk->frames;
+		kfree(blk);
+	}
+
+	/* 2. Segment bump.  Every handed-out span re-verifies the T0
+	 * obstacle contract (this is what keeps the magazine safe against
+	 * an explicit-address mapping appearing inside a claimed segment
+	 * after claim time): reserve markers present -- a punch erased
+	 * them means the frames went legacy -- and no VMA covering any of
+	 * it.  The claim-side scans only reduce how often the skip fires.
+	 * Neither check sleeps, so the cpu-local bump state is read under
+	 * a preemption-off section; all writers hold this mm's mmap_write,
+	 * so preemption can only migrate the writer, never parallelize.
+	 */
+	for (;;) {
+		unsigned long a2, skip_to = 0;
+
+		if (cpu < 0)
+			seg = get_cpu_ptr(state->va_segs);
+		else
+			seg = per_cpu_ptr(state->va_segs, cpu);
+
+		while (seg->next >= seg->base && seg->next < seg->end &&
+		       seg->next + len2 <= seg->end) {
+			unsigned long f, last;
+			struct vm_area_struct *v;
+			bool ok = true;
+
+			a2 = seg->next;
+			last = (a2 >> PMD_SHIFT) + frames;
+			for (f = a2 >> PMD_SHIFT; f < last; f++) {
+				if (xa_load(&state->arenas, f) !=
+				    &corten_va_reserve_sentinel) {
+					ok = false;
+					skip_to = (f + 1) << PMD_SHIFT;
+					break;
+				}
+			}
+			if (!ok)
+				goto skip;
+
+			/* T0 obstacle semantics: an explicit-address
+			 * mapping inside the claimed segment wins -- the
+			 * range is skipped past it, never overwritten.
+			 */
+			v = find_vma_intersection(mm, a2, a2 + len2);
+			if (v) {
+				skip_to = round_up(v->vm_end, PMD_SIZE);
+				if (skip_to < v->vm_end)
+					break;	/* overflow: segment done */
+				goto skip;
+			}
+
+			seg->next = a2 + len2;
+			if (cpu < 0)
+				put_cpu_ptr(state->va_segs);
+			*addr2 = a2;
+			return 0;
+skip:
+			atomic_long_inc(&corten_nr_mag_skips);
+			seg->next = skip_to;
+		}
+		want = *seg;
+		if (cpu < 0)
+			put_cpu_ptr(state->va_segs);
+
+		if (corten_va_seg_claim(mm, state, &want))
+			return -ENOSPC;
+
+		/* Publish the fresh segment; if we migrated across the
+		 * claim, the receiving cpu merely gains a segment and the
+		 * origin keeps its own -- both stay disjoint, which is all
+		 * the magazine promises.  An explicit @cpu (KUnit) writes
+		 * that cpu directly and retries the bump there.
+		 */
+		preempt_disable();
+		if (cpu < 0)
+			*this_cpu_ptr(state->va_segs) = want;
+		else
+			*per_cpu_ptr(state->va_segs, cpu) = want;
+		preempt_enable();
+	}
+}
+
+static int corten_va_mag_alloc(struct mm_struct *mm,
+			       struct corten_mm_state *state,
+			       unsigned long len2, unsigned long *addr2)
+{
+	return corten_va_mag_alloc_cpu(mm, state, len2, addr2, -1);
+}
+
+/* Bound on the recycle list: beyond it releases stop restoring blocks
+ * (markers are still restored, so correctness is unaffected; the frames
+ * fall back to the T0 leak behaviour), keeping the block kmallocs bounded.
+ */
+#define CORTEN_VA_FREE_MAX_FRAMES	BIT(20)		/* 2 GiB of frames */
+
+/*
+ * Return a released auto-arena's frame range to the magazine: restore
+ * reserve markers for frames inside claimed segments (instead of leaving
+ * the slots empty, which would churn xarray nodes every cycle) and push
+ * the range as one recycle block.  Frames outside claimed segments (the
+ * T0 global path / targeted arenas) keep the plain erase.  Called under
+ * this mm's mmap_write, in place of the release loop's xa_erase.
+ */
+static void corten_va_release_frame(struct corten_mm_state *state,
+				    unsigned long addr)
+{
+	struct corten_va_freeblk *blk;
+
+	if (corten_va_in_seg(state, addr)) {
+		xa_store(&state->arenas, addr >> PMD_SHIFT,
+			 &corten_va_reserve_sentinel, GFP_KERNEL);
+
+		/* Extend the tail block when contiguous (the common
+		 * multi-frame release), else push a new one.
+		 */
+		blk = list_empty(&state->va_free) ? NULL :
+			list_last_entry(&state->va_free,
+					struct corten_va_freeblk, list);
+		if (blk && blk->base + blk->frames * PMD_SIZE == addr) {
+			blk->frames++;
+			state->va_nrfree++;
+			return;
+		}
+		if (state->va_nrfree + 1 <= CORTEN_VA_FREE_MAX_FRAMES) {
+			blk = kmalloc(sizeof(*blk), GFP_KERNEL);
+			if (blk) {
+				blk->base = addr;
+				blk->frames = 1;
+				state->va_nrfree++;
+				list_add_tail(&blk->list, &state->va_free);
+				return;
+			}
+		}
+		return;	/* marker restored; frame leaks (T0 behaviour) */
+	}
+
+	xa_erase(&state->arenas, addr >> PMD_SHIFT);
+}
+
+/*
+ * T0 global placement (unchanged semantics): hand out the next
+ * PMD-rounded [addr2, addr2+len2) from the global cursor, skipping past
+ * any obstacle (a MODE-targeted DECLARE inside the window, or a plain
+ * legacy VMA that ended up here -- explicit-address mappings stay legacy
+ * by contract) so the caller's MAP_FIXED install can never destroy an
+ * existing mapping.  Now the fallback path for oversized magazine
+ * requests; the cursor is shared with segment claims (both under this
+ * mm's mmap_write).
  *
  * Return: 0 with *@addr2 set, -ENOSPC when the window cannot hold the
  * request (the caller degrades, counted).
  */
-static int corten_arena_window_place(struct mm_struct *mm,
-				     struct corten_mm_state *state,
-				     unsigned long len2, unsigned long *addr2)
+static int corten_arena_window_place_global(struct mm_struct *mm,
+					    struct corten_mm_state *state,
+					    unsigned long len2,
+					    unsigned long *addr2)
 {
 	unsigned long a2;
 	int ret;
@@ -1238,6 +1751,23 @@ static int corten_arena_window_place(struct mm_struct *mm,
 	*addr2 = a2;
 
 	return 0;
+}
+
+/*
+ * Placement dispatcher (M4.T1): the per-cpu magazine serves everything up
+ * to one segment; the T0 global cursor path remains for oversized spans
+ * (and, transiently, for a segment-exhausted magazine -- the fallback the
+ * spec's "耗尽回退全局" names).  Both paths keep the T0 contract: the
+ * handed-out range can never carry a foreign mapping.
+ */
+static int corten_arena_window_place(struct mm_struct *mm,
+				     struct corten_mm_state *state,
+				     unsigned long len2, unsigned long *addr2)
+{
+	if (!corten_va_mag_alloc(mm, state, len2, addr2))
+		return 0;
+
+	return corten_arena_window_place_global(mm, state, len2, addr2);
 }
 
 /* The registry, ensured to exist (the auto cursor lives in it).  Called
@@ -1423,16 +1953,23 @@ int corten_arena_mode_exit(struct mm_struct *mm)
 	state = smp_load_acquire(&mm->corten_state);
 
 	/* Hold the write lock across the whole operation so that no mmap
-	 * can slip in behind our back and re-enter MODE territory; each
-	 * release steals one arena from the registry, so the loop
-	 * terminates.  Nothing can contend ctl_lock meanwhile (every other
-	 * user of it needs this write lock first).
+	 * can slip in behind our back and re-enter MODE territory.  The
+	 * scan is monotonic: xa_find() restarts from the current @frame,
+	 * sentinel markers are skipped frame-wise, and a released arena's
+	 * frames are either erased or re-stored as sentinels (M4.T1
+	 * magazine recycle) -- all of which the scan then walks past, so
+	 * the loop drains.  The old rescan-from-0 pattern ("each release
+	 * steals one arena, so the loop terminates") would livelock now:
+	 * restored markers keep the registry non-empty forever.  Nothing
+	 * can contend ctl_lock meanwhile (every other user of it needs
+	 * this write lock first).
 	 */
 	mmap_write_lock(mm);
 
 	if (state) {
+		unsigned long frame = 0;
+
 		for (;;) {
-			unsigned long frame = 0;
 			struct corten_arena *ar;
 			int r;
 
@@ -1440,6 +1977,13 @@ int corten_arena_mode_exit(struct mm_struct *mm)
 				     XA_PRESENT);
 			if (!ar)
 				break;
+			/* M4.T1: reserve markers are not arenas; release
+			 * only consumes live arenas, so skip forward.
+			 */
+			if (ar == &corten_va_reserve_sentinel) {
+				frame++;
+				continue;
+			}
 
 			r = corten_arena_release_locked(mm, state, ar->start,
 							ar->end - ar->start);
@@ -1454,6 +1998,12 @@ int corten_arena_mode_exit(struct mm_struct *mm)
 					ret = r;
 				break;
 			}
+			/* Rescan at the released arena's first frame: its
+			 * magazine frames (if any) are back to sentinels
+			 * and are skipped above; entries below it cannot
+			 * reappear (no new registration under this lock).
+			 */
+			frame = ar->start >> PMD_SHIFT;
 		}
 	}
 
@@ -1533,6 +2083,10 @@ static void corten_arena_fork_unfreeze_locked(struct corten_mm_state *state)
 	struct corten_arena *arena;
 
 	xa_for_each(&state->arenas, frame, arena) {
+		/* M4.T1: reserve markers are not arenas. */
+		if (arena == &corten_va_reserve_sentinel)
+			continue;
+
 		/* Every frame of an arena holds the same descriptor. */
 		if (frame < unfrozen_until)
 			continue;
@@ -1626,6 +2180,9 @@ int corten_arena_fork_begin(struct mm_struct *mm, struct mm_struct *oldmm)
 	 * inside begin itself.
 	 */
 	xa_for_each(&old_state->arenas, frame, arena) {
+		/* M4.T1: reserve markers are not arenas. */
+		if (arena == &corten_va_reserve_sentinel)
+			continue;
 		if (frame < drained_until)
 			continue;
 		drained_until = arena->end >> PMD_SHIFT;
@@ -2084,6 +2641,9 @@ int corten_arena_fork_commit(struct mm_struct *mm, struct mm_struct *oldmm)
 	 * re-taken under the lock.
 	 */
 	xa_for_each(&old_state->arenas, frame, arena) {
+		/* M4.T1: reserve markers are not arenas. */
+		if (arena == &corten_va_reserve_sentinel)
+			continue;
 		if (frame < drained_until)
 			continue;
 		drained_until = arena->end >> PMD_SHIFT;
@@ -3510,6 +4070,17 @@ enum corten_unmap_class corten_arena_release_classify(enum corten_unmap_class
  * (sec 5.5 boundary argument: a re-map of the same VA during the window
  * only produces a harmless extra fault, the old page's reference is
  * dropped after the flush).
+ *
+ * M4.T2 batching: the walk takes the PTE lock once for the whole window
+ * (one PT page) instead of per PTE, and the TLB invalidation is left
+ * entirely to the mmu_gather -- tlb_finish_mmu() (or a mid-batch
+ * tlb_flush_mmu()) issues exactly one ranged flush over the recorded
+ * span.  The previous explicit flush_tlb_range() here duplicated the
+ * gather's flush, doubling the shootdown cost of every content-bearing
+ * unmap (the r06-m4t12 diagnosis measured the flush/IPI block at more
+ * than half of the MODE-arm samples on the unmap shapes).  The gather is
+ * finished on every caller exit -- error paths included -- so the single
+ * flush guarantee covers the whole walk.
  */
 static int corten_arena_zap_window(struct mm_struct *mm,
 				   struct vm_area_struct *vma,
@@ -3517,9 +4088,8 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 				   unsigned long start, unsigned long end,
 				   struct mmu_gather *tlb)
 {
-	unsigned long addr;
-	unsigned long flush_start = 0, flush_end = 0;
-	bool flushed = false;
+	unsigned long addr = start;
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
 	pmd_t *pmdp;
 	int ret = 0;
 
@@ -3539,99 +4109,110 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 	 * fault, GUP) attaches a private anonymous page with rmap, so the
 	 * present-and-not-special release below is correct for all of
 	 * them; the shared zero page is pte_special()d and owns nothing.
-	 *
-	 * The mmu_gather session here is range-based (tlb_gather_mmu(),
-	 * not _fullmm) and this walk bypasses tlb_start_vma(); the
-	 * tlb_remove_tlb_entry() calls below are what feed the gather's
-	 * flush range, so both tlb_finish_mmu() and any mid-batch
-	 * tlb_flush_mmu() (page-batch overflow, discontiguous spans)
-	 * invalidate exactly the cleared span.  The explicit
-	 * flush_tlb_range() on every exit -- error paths included -- keeps
-	 * the guarantee local to this walk.
 	 */
-	for (addr = start; addr < end; addr += PAGE_SIZE) {
-		struct corten_pte_meta m;
-		struct folio *folio;
-		struct page *page;
+	for (;;) {
+		bool force = false;
+
 		pte_t *ptep;
-		pte_t oldpte;
-		bool recorded;
 		spinlock_t *ptl;
 
-		recorded = corten_query(txn, addr, &m) == 0 &&
-			   m.state != CORTEN_INVALID;
-
 		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
-		if (!ptep) {
-			ret = -EAGAIN;
-			goto out_flush;
+		if (!ptep)
+			return -EAGAIN;
+
+		for (; addr < end; addr += PAGE_SIZE, ptep++) {
+			struct corten_pte_meta m;
+			struct folio *folio;
+			struct page *page;
+			pte_t oldpte;
+			bool recorded;
+
+			recorded = corten_query(txn, addr, &m) == 0 &&
+				   m.state != CORTEN_INVALID;
+
+			oldpte = ptep_get_and_clear(mm, addr, ptep);
+			if (!pte_none(oldpte))
+				tlb_remove_tlb_entry(tlb, ptep, addr);
+
+			if (!pte_none(oldpte)) {
+				/* Zero-page entries are pte_special()d and
+				 * not ours to release; swap entries cannot
+				 * exist in M3.
+				 */
+				if (pte_present(oldpte) &&
+				    !pte_special(oldpte)) {
+					page = pte_page(oldpte);
+					folio = page_folio(page);
+
+					/* [F-B] A re-punch over an
+					 * already-punched window can find
+					 * file pages installed there by the
+					 * previous punch's legacy mapping;
+					 * only the counter differs for
+					 * those (the zap_pte_range()
+					 * convention -- the !anon rmap
+					 * removal is vma-insensitive).
+					 * Every other producer of an
+					 * in-arena PTE (arena map/zero
+					 * page, legacy fault, GUP) attaches
+					 * a private anonymous page.
+					 */
+					folio_remove_rmap_pte(folio, page,
+							      vma);
+					if (folio_test_anon(folio))
+						add_mm_counter(mm,
+							       MM_ANONPAGES, -1);
+					else
+						add_mm_counter(mm,
+							       MM_FILEPAGES,
+							       -1);
+					force = __tlb_remove_page_size(tlb, page, false, PAGE_SIZE);
+					if (force)
+						break;
+				}
+			}
+
+			if (recorded) {
+				/* KEEP_PERM: the content drop must not
+				 * dissolve the mprotect contract committed
+				 * on the VA.  The slot comes back Invalid
+				 * but keeps the recorded perm, so the
+				 * FRESH fault gate re-derives the
+				 * committed permission
+				 * (zero-fill-on-demand semantics, like
+				 * the legacy MADV_DONTNEED/munmap of a
+				 * committed chunk) instead of the
+				 * DECLARE-time arena bound -- a PROT_NONE
+				 * reservation with routed RW commits died
+				 * with SEGV_ACCERR on the next write here
+				 * (the r06 dedup_eq "rogue" ACCERR
+				 * family).
+				 */
+				ret = corten_unmap(txn, addr, PAGE_SIZE,
+						   CORTEN_UNMAP_KEEP_PERM);
+				if (WARN_ON_ONCE(ret))
+					break;
+
+				this_cpu_inc(state->stats[CORTEN_ARENA_STAT_UNMAP_PAGES]);
+			}
 		}
 
-		oldpte = ptep_get_and_clear(mm, addr, ptep);
-		if (!pte_none(oldpte))
-			tlb_remove_tlb_entry(tlb, ptep, addr);
 		pte_unmap_unlock(ptep, ptl);
 
-		if (!pte_none(oldpte)) {
-			if (!flushed) {
-				flush_start = addr;
-				flushed = true;
-			}
-			flush_end = addr + PAGE_SIZE;
-
-			/* Zero-page entries are pte_special()d and not
-			 * ours to release; swap entries cannot exist in
-			 * M3.
-			 */
-			if (pte_present(oldpte) && !pte_special(oldpte)) {
-				page = pte_page(oldpte);
-				folio = page_folio(page);
-
-				/* [F-B] A re-punch over an already-punched
-				 * window can find file pages installed
-				 * there by the previous punch's legacy
-				 * mapping; only the counter differs for
-				 * those (the zap_pte_range() convention --
-				 * the !anon rmap removal is
-				 * vma-insensitive).  Every other producer
-				 * of an in-arena PTE (arena map/zero page,
-				 * legacy fault, GUP) attaches a private
-				 * anonymous page.
-				 */
-				folio_remove_rmap_pte(folio, page, vma);
-				if (folio_test_anon(folio))
-					add_mm_counter(mm, MM_ANONPAGES, -1);
-				else
-					add_mm_counter(mm, MM_FILEPAGES, -1);
-				tlb_remove_page(tlb, page);
-			}
-		}
-
-		if (recorded) {
-			/* KEEP_PERM: the content drop must not dissolve the
-			 * mprotect contract committed on the VA.  The slot
-			 * comes back Invalid but keeps the recorded perm, so
-			 * the FRESH fault gate re-derives the committed
-			 * permission (zero-fill-on-demand semantics, like the
-			 * legacy MADV_DONTNEED/munmap of a committed chunk)
-			 * instead of the DECLARE-time arena bound -- a
-			 * PROT_NONE reservation with routed RW commits died
-			 * with SEGV_ACCERR on the next write here (the r06
-			 * dedup_eq "rogue" ACCERR family).
-			 */
-			ret = corten_unmap(txn, addr, PAGE_SIZE,
-					   CORTEN_UNMAP_KEEP_PERM);
-			if (WARN_ON_ONCE(ret))
-				goto out_flush;
-
-			this_cpu_inc(READ_ONCE(mm->corten_state)->stats[
-					CORTEN_ARENA_STAT_UNMAP_PAGES]);
-		}
+		if (!force)
+			break;
+		/* Batch overflow (MMU_GATHER_BUNDLE): flush + free now --
+		 * one shootdown per full batch -- then retry the page
+		 * whose removal filled the batch (its PTE is already
+		 * cleared; the retry only re-runs its metadata reset).
+		 * This is the zap_pte_range() force_flush convention,
+		 * which the previous code silently ignored: an allocation
+		 * failure in tlb_next_batch() would have overflowed the
+		 * batch array.
+		 */
+		tlb_flush_mmu(tlb);
+		cond_resched();
 	}
-
-out_flush:
-	if (flushed)
-		flush_tlb_range(vma, flush_start, flush_end);
 
 	return ret;
 }
@@ -3654,6 +4235,8 @@ out_flush:
  * pages alive through the munmap, so zap whatever is actually there.
  * No transaction and no metadata exist; every present non-special PTE
  * is a private anonymous page with rmap (see corten_arena_zap_window()).
+ * M4.T2 batching as there: one PTE-lock section, and the TLB
+ * invalidation left to the caller's single tlb_finish_mmu() flush.
  */
 static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 					     struct vm_area_struct *vma,
@@ -3661,9 +4244,8 @@ static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 					     unsigned long end,
 					     struct mmu_gather *tlb)
 {
-	unsigned long addr;
-	unsigned long flush_start = 0, flush_end = 0;
-	bool flushed = false;
+	unsigned long addr = start;
+	bool drift = false;
 	pmd_t *pmdp;
 	int ret = 0;
 
@@ -3673,55 +4255,64 @@ static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 	if (pmd_leaf(READ_ONCE(*pmdp)))
 		return -EOPNOTSUPP;	/* THP: not ours in M3 */
 
-	for (addr = start; addr < end; addr += PAGE_SIZE) {
-		struct folio *folio;
-		struct page *page;
+	for (;;) {
+		bool force = false;
 		pte_t *ptep;
-		pte_t oldpte;
 		spinlock_t *ptl;
 
 		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
-		if (!ptep) {
-			ret = -EAGAIN;
-			goto out_flush;
+		if (!ptep)
+			return -EAGAIN;
+
+		for (; addr < end; addr += PAGE_SIZE, ptep++) {
+			struct folio *folio;
+			struct page *page;
+			pte_t oldpte;
+
+			oldpte = ptep_get_and_clear(mm, addr, ptep);
+			if (!pte_none(oldpte))
+				tlb_remove_tlb_entry(tlb, ptep, addr);
+
+			if (!pte_none(oldpte)) {
+				drift = true;
+
+				/* [F-B] Anon/file split as in
+				 * corten_arena_zap_window(): an
+				 * already-punched window can carry file
+				 * pages from the legacy mapping that
+				 * filled it.
+				 */
+				if (pte_present(oldpte) &&
+				    !pte_special(oldpte)) {
+					page = pte_page(oldpte);
+					folio = page_folio(page);
+
+					folio_remove_rmap_pte(folio, page,
+							      vma);
+					if (folio_test_anon(folio))
+						add_mm_counter(mm,
+							       MM_ANONPAGES, -1);
+					else
+						add_mm_counter(mm,
+							       MM_FILEPAGES,
+							       -1);
+					force = __tlb_remove_page_size(tlb, page, false, PAGE_SIZE);
+					if (force)
+						break;
+				}
+			}
 		}
 
-		oldpte = ptep_get_and_clear(mm, addr, ptep);
-		if (!pte_none(oldpte))
-			tlb_remove_tlb_entry(tlb, ptep, addr);
 		pte_unmap_unlock(ptep, ptl);
 
-		if (!pte_none(oldpte)) {
-			if (!flushed) {
-				flush_start = addr;
-				flushed = true;
-			}
-			flush_end = addr + PAGE_SIZE;
-
-			/* [F-B] Anon/file split as in
-			 * corten_arena_zap_window(): an already-punched
-			 * window can carry file pages from the legacy
-			 * mapping that filled it.
-			 */
-			if (pte_present(oldpte) && !pte_special(oldpte)) {
-				page = pte_page(oldpte);
-				folio = page_folio(page);
-
-				folio_remove_rmap_pte(folio, page, vma);
-				if (folio_test_anon(folio))
-					add_mm_counter(mm, MM_ANONPAGES, -1);
-				else
-					add_mm_counter(mm, MM_FILEPAGES, -1);
-				tlb_remove_page(tlb, page);
-			}
-		}
+		if (!force)
+			break;
+		tlb_flush_mmu(tlb);
+		cond_resched();
 	}
 
-out_flush:
-	if (flushed) {
+	if (drift)
 		corten_legacy_drift_inc();
-		flush_tlb_range(vma, flush_start, flush_end);
-	}
 
 	return ret;
 }
@@ -3845,7 +4436,23 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
 		return 0;
 
 	ar_start = corten_arena_lookup_get(mm, start);
-	ar_end = corten_arena_lookup_get(mm, end - 1);
+	/* M4.T2 single-lookup fast path: start and end-1 inside one 2M
+	 * frame are definitionally the same arena (the registry is
+	 * frame-granular and arenas are frame-aligned unions), so the
+	 * second RCU lookup + pin -- a contended atomic pair on the
+	 * born-atomic ref under churn -- only runs when the range
+	 * actually crosses a frame boundary.  Reference accounting is
+	 * by @ar_end (NULL when the range never crossed a frame
+	 * boundary), NOT by pointer identity: a cross-frame range of
+	 * one arena holds TWO references to the same descriptor, and
+	 * conflating the two is exactly how the r03 DoD-B leak
+	 * regressed under the first cut of this fast path (r06-m4t12:
+	 * the JVM's 64MB heap free drained-timed-out 10s later).
+	 */
+	if (((end - 1) >> PMD_SHIFT) != (start >> PMD_SHIFT))
+		ar_end = corten_arena_lookup_get(mm, end - 1);
+	else
+		ar_end = NULL;	/* same frame: ar_start's reference covers it */
 
 	if (!ar_start && !ar_end)
 		return 0;
@@ -3876,14 +4483,11 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
 			 * RELEASE (drain + legacy teardown removes the
 			 * shadow-VMA).  Drop our active references
 			 * first: the drain inside RELEASE must reach
-			 * zero.  Both lookups pinned the same descriptor
-			 * when start and end fall in one arena, so each
-			 * pointer is put (the old "!= ar_start" guard
-			 * leaked one reference per call and RELEASE's
-			 * drain hung forever -- r03 DoD failure B).
-			 * RELEASE (like DECLARE) takes the write lock
-			 * itself -- we run lockless here, so this is the
-			 * DEV-13 outermost acquisition, not a re-entry.
+			 * zero.  One put per HELD reference (see the
+			 * lookup above).  RELEASE (like DECLARE) takes
+			 * the write lock itself -- we run lockless
+			 * here, so this is the DEV-13 outermost
+			 * acquisition, not a re-entry.
 			 */
 			if (ar_start)
 				percpu_ref_put(&ar_start->active);
@@ -3902,9 +4506,8 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
 		}
 	}
 
-	/* One put per lookup: when start and end-1 resolve to the same
-	 * arena (the common in-arena chunk), both pointers are equal and
-	 * each holds one of the two references taken above.
+	/* One put per held reference (ar_end is non-NULL exactly when the
+	 * second lookup pinned one, same arena or not).
 	 */
 	if (ar_start)
 		percpu_ref_put(&ar_start->active);

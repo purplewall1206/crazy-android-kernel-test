@@ -170,12 +170,54 @@ struct corten_arena {
 /*
  * MODE-process auto-arena window (DESIGN.md sec 2, M4T0_SPEC.md sec 1.3):
  * a fixed span inside x86_64 TASK_SIZE (128T), disjoint from the legacy
- * mmap_base / brk / vdso areas.  The per-mm cursor hands out PMD-aligned
- * ranges from it; T0 never recycles them (window exhaustion degrades to
- * the legacy mmap path, counted).
+ * mmap_base / brk / vdso areas.  T1 (M4.T1) replaces the T0 single cursor
+ * with a per-cpu 2M-frame magazine: each CPU claims an exclusive segment
+ * of the window once (obstacle-scanned at claim time, marked with
+ * CORTEN_FRAME_RESERVE sentinels) and then serves its allocations by a
+ * private bump pointer -- no per-mmap VMA-tree walk and no cross-cpu
+ * cursor sharing (PS-E1, DESIGN.md sec 1 row E1).  Window exhaustion
+ * degrades to the legacy mmap path, counted.
  */
 #define CORTEN_MODE_WINDOW_START	0x100000000000UL	/* 16T */
 #define CORTEN_MODE_WINDOW_END		0x400000000000UL	/* 64T */
+
+/* Magazine geometry: one 1GiB segment per cpu, handed out frame-granular.
+ * 48T of window / 1GiB caps the segment count at 48k; the claimed-segment
+ * list is walked on RELEASE only (to restore reserve markers), so its
+ * length is cold-path.
+ */
+#define CORTEN_VA_SEG_FRAMES		512UL
+#define CORTEN_VA_SEG_SIZE		(CORTEN_VA_SEG_FRAMES * PMD_SIZE)
+
+/* Reserve sentinel stored in state->arenas for claimed-but-unallocated
+ * magazine frames.  It keeps every other xarray walker honest the same
+ * way a live arena does (targeted DECLAREs overlap-reject it, punches
+ * erase it) while corten_arena_lookup() reports "no arena" for it.  A
+ * real (never published) object rather than an IS_ERR encoding, so the
+ * xarray stores an ordinary pointer.
+ */
+struct corten_arena;
+extern struct corten_arena corten_va_reserve_sentinel;
+
+/* One magazine block on the per-mm recycle list (M4.T1): frames of a
+ * released auto-arena whose markers were restored.  The next magazine
+ * allocation carves from here before claiming fresh window (real VA
+ * recycling, the T0-R2 follow-up).  Writers are serialized by the owner
+ * mm's mmap_lock for writing (both the RELEASE side and the alloc side
+ * run under it); the list is torn down in corten_arena_state_free().
+ */
+struct corten_va_freeblk {
+	struct list_head	list;
+	unsigned long		base;	/* first frame VA (PMD-aligned) */
+	unsigned long		frames;	/* frame count */
+};
+
+/* One cpu's private VA segment (bump allocator state). */
+struct corten_va_seg {
+	unsigned long		base;	/* first VA of the segment */
+	unsigned long		end;	/* first VA past the segment */
+	unsigned long		next;	/* next unallocated VA (bump) */
+};
 
 /**
  * struct corten_mm_state - per-mm arena registry, lazily allocated.
@@ -186,12 +228,24 @@ struct corten_arena {
  * @ctl_lock: serializes DECLARE/RELEASE (including the drain wait) so
  *            that arena registration is atomic w.r.t. itself.  The fault
  *            path never takes it.
- * @next_va: the MODE-process auto-arena allocation cursor
- *           (M4T0_SPEC.md sec 1.3): the next candidate base address in
- *           the [CORTEN_MODE_WINDOW_START, CORTEN_MODE_WINDOW_END)
- *           window.  Written only under this mm's mmap_lock for writing
- *           (do_mmap auto-attach route / ENTER); read with the same lock
- *           held.
+ * @next_va: the MODE-process global window cursor (M4T0_SPEC.md sec 1.3,
+ *           T1 repurposed): the next candidate base for SEGMENT CLAIMS
+ *           and for allocations too large for one magazine segment.
+ *           Written only under this mm's mmap_lock for writing (do_mmap
+ *           auto-attach route / ENTER); read with the same lock held.
+ * @va_segs: per-cpu magazine segments (M4.T1, PS-E1): one
+ *           CORTEN_VA_SEG_SIZE-bounded, PMD-aligned span per cpu, handed
+ *           out frame-granular by a private bump pointer.  All writers
+ *           (segment claim, bump advance, recycle-list push/pop) run
+ *           under this mm's mmap_lock for writing, so the percpu layout
+ *           only provides address locality and xarray-subtree disjointness,
+ *           not concurrency.
+ * @va_free: recycled frame blocks of released auto-arenas (M4.T1
+ *           real recycle): LIFO, carved before fresh window is claimed.
+ * @va_nrfree: frames currently on @va_free (bounded; overflow degrades
+ *             to plain erase, counted).
+ * @seg_list: claimed segments (base/end), for marker restoration on
+ *            RELEASE and for the debugfs report.
  * @stats: percpu counters, indexed by enum corten_arena_stat.  Relaxed;
  *         the debugfs readers land with the observability slice (S8,
  *         M3B_DESIGN.md sec 7.4).
@@ -208,6 +262,10 @@ struct corten_mm_state {
 	 */
 	struct mutex		ctl_lock;
 	unsigned long		next_va;
+	struct corten_va_seg __percpu *va_segs;
+	struct list_head	va_free;
+	unsigned long		va_nrfree;
+	struct list_head	seg_list;
 	unsigned long __percpu	*stats;
 };
 
@@ -330,6 +388,19 @@ void corten_arena_test_fork_fail_arm(int stage);
 bool corten_arena_test_arena_frozen(struct mm_struct *mm, unsigned long addr);
 long corten_arena_test_fork_faithful_count(void);
 long corten_arena_test_fork_skips(void);
+
+/* M4.T1 magazine hooks (mm/corten_arena_test.c): allocate @len
+ * (PMD-rounded) from @cpu's segment of @mm's magazine (caller holds the
+ * mm's mmap_lock for writing), probe a frame's reserve marker, and read
+ * the named counters.
+ */
+int corten_arena_test_mag_alloc_cpu(struct mm_struct *mm, int cpu,
+				    unsigned long len, unsigned long *addr);
+bool corten_arena_test_frame_reserved(struct mm_struct *mm,
+				      unsigned long addr);
+long corten_arena_test_mag_skips(void);
+long corten_arena_test_seg_claims(void);
+long corten_arena_test_va_recycles(void);
 #endif
 
 #else /* !CONFIG_CORTEN_MM_ARENA */
