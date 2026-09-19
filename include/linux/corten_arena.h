@@ -135,6 +135,21 @@ enum corten_arena_stat {
  *          a frozen arena refuses new transactions (lookup_get returns
  *          NULL), so the dup_mmap() write lock -- which every legacy
  *          fallback needs -- is what makes the window a static snapshot.
+ * @idle: T1c resident-pool state (M4T12_T1C: park instead of RELEASE).
+ *          Set under the owner mm's mmap_write + ctl_lock when a
+ *          full-coverage munmap of a MODE-process arena parks the arena
+ *          in the per-mm pool instead of tearing it down: the content is
+ *          zapped and the metadata reset (a pristine, empty window), the
+ *          shadow-VMA loses VM_CORTEN and R/W/X (a reserved PROT_NONE
+ *          anonymous mapping), but the descriptor, its live percpu_ref
+ *          and the warm xarray slots stay.  Read locklessly by
+ *          corten_arena_lookup(): a parked arena is lookup-invisible, so
+ *          the munmapped range keeps legacy semantics (no arena, access
+ *          faults).  Cleared by the reactivation that hands the window
+ *          to the next mmap.
+ * @pool: the per-mm pool's LRU node (valid only while @idle is set;
+ *          INIT_LIST_HEAD()d at DECLARE so the membership test is
+ *          exactly the @idle flag).
  */
 struct corten_arena {
 	unsigned long		start;
@@ -144,6 +159,8 @@ struct corten_arena {
 	struct percpu_ref	active;
 	struct completion	drained;
 	bool			frozen;
+	bool			idle;
+	struct list_head	pool;
 	/* Upper-page-table ensure-alloc serialization (never nests inside
 	 * a descriptor lock).
 	 */
@@ -246,6 +263,15 @@ struct corten_va_seg {
  *             to plain erase, counted).
  * @seg_list: claimed segments (base/end), for marker restoration on
  *            RELEASE and for the debugfs report.
+ * @arena_pool: T1c resident arena pool (M4T12_T1C): parked (idle)
+ *            arenas of this MODE mm, LRU order (tail = most recently
+ *            parked).  Writers run under this mm's mmap_lock for writing
+ *            and the registry ctl_lock (park, reactivation, ejection,
+ *            pool flush); the only reader fast path (corten_arena_pool_
+ *            pick) holds the same locks.
+ * @nr_pool: arenas currently parked in @arena_pool; bounded by
+ *            CORTEN_ARENA_POOL_MAX (overflow releases the LRU victim,
+ *            counted).
  * @stats: percpu counters, indexed by enum corten_arena_stat.  Relaxed;
  *         the debugfs readers land with the observability slice (S8,
  *         M3B_DESIGN.md sec 7.4).
@@ -266,8 +292,20 @@ struct corten_mm_state {
 	struct list_head	va_free;
 	unsigned long		va_nrfree;
 	struct list_head	seg_list;
+	struct list_head	arena_pool;
+	unsigned long		nr_pool;
 	unsigned long __percpu	*stats;
 };
+
+/* T1c resident-pool capacity.  The guest benchmark shapes (8 vCPU: the
+ * t8 mmbench legs, tcmalloc's 8 per-thread caches) churn at most a couple
+ * of distinct PMD-rounded sizes per process, so 16 slots cover the whole
+ * working set with headroom; the cost of a parked arena is its ~150-byte
+ * descriptor plus one 4K PT page per 2M window (~70KB worst case).  A
+ * >MAX-size round-robin simply degrades to the pre-pool behaviour (the
+ * overflowing park releases the LRU victim, counted as pool_over).
+ */
+#define CORTEN_ARENA_POOL_MAX	16
 
 /*
  * S4 hot-path fault hook result (M3B_DESIGN.md sec 4.1).  The arch hook
@@ -401,6 +439,17 @@ bool corten_arena_test_frame_reserved(struct mm_struct *mm,
 long corten_arena_test_mag_skips(void);
 long corten_arena_test_seg_claims(void);
 long corten_arena_test_va_recycles(void);
+
+/* T1c pool hooks: the named counters, the pool occupancy of @mm's
+ * registry, and the parked-state probe for one frame.
+ */
+long corten_arena_test_pool_parks(void);
+long corten_arena_test_pool_hits(void);
+long corten_arena_test_pool_misses(void);
+long corten_arena_test_pool_over(void);
+long corten_arena_test_pool_ejects(void);
+long corten_arena_test_pool_nr(struct mm_struct *mm);
+bool corten_arena_test_pool_idle(struct mm_struct *mm, unsigned long addr);
 #endif
 
 #else /* !CONFIG_CORTEN_MM_ARENA */

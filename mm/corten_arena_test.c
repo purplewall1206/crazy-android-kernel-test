@@ -1610,8 +1610,11 @@ static void corten_arena_test_op_munmap_route(struct corten_arena_test_op *o)
 /*
  * M4.T1 recycle: a released auto-arena's frames return to the magazine
  * and the next allocation re-uses the SAME address (markers restored, no
- * tree churn).  Route-level: place -> release (the release-on-full-
- * coverage rule through sys_munmap routing) -> place again.
+ * tree churn).  T1c note: the route-level churn now PARKS full-coverage
+ * munmaps (the pool cases below), so this case anchors the magazine's
+ * marker/counter mechanics through the direct RELEASE -- the teardown
+ * path the pool's ejections, the MODE-exit and the non-MODE churn still
+ * take.
  */
 static void corten_arena_test_mag_recycle(struct kunit *test)
 {
@@ -1639,8 +1642,9 @@ static void corten_arena_test_mag_recycle(struct kunit *test)
 						     &flags), 1);
 	KUNIT_EXPECT_EQ(test, addr, CORTEN_MODE_WINDOW_START);
 
-	/* Attach it (the do_mmap tail hook body) so the release rule can
-	 * see a real arena, then let the glibc free() shape release it.
+	/* Attach it (the do_mmap tail hook body) so the release can see a
+	 * real arena, then release it directly (the prctl RELEASE body:
+	 * drain + teardown + magazine recycle).
 	 * The route front half does not create the VMA -- mmap_region()
 	 * does, between the two halves -- so stand one in first, exactly
 	 * what the kernel flow would have installed.
@@ -1657,10 +1661,10 @@ static void corten_arena_test_mag_recycle(struct kunit *test)
 	recycles = corten_arena_test_va_recycles();
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
-						 corten_arena_test_op_munmap_route,
+						 corten_arena_test_op_release,
 						 CORTEN_MODE_WINDOW_START,
-						 PAGE_SIZE),
-			1);
+						 PMD_SIZE),
+			0);
 	/* The release restored the frame's reserve marker and pushed it
 	 * onto the recycle list.  The recycle COUNTER only moves when a
 	 * placement SERVES the block (release is bookkeeping-only).
@@ -1794,8 +1798,9 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 	kfree(dbg);
 
 	/* free() shape: one page of the base -- CHUNK by span, RELEASE by
-	 * the full-coverage rule.  The whole arena (VMA included) must be
-	 * gone.
+	 * the full-coverage rule.  T1c: in a MODE process the arena parks
+	 * instead of tearing down: lookup-invisible (query 0), the VMA
+	 * stays as a reserved PROT_NONE mapping, the pool holds it.
 	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
@@ -1805,7 +1810,10 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 			1);
 	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
 			0);
-	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pool_idle(mm,
+						      CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
 
 	/*
 	 * M4.T2 regression anchor (r06-m4t12 drain-timeout): cross-frame
@@ -1845,6 +1853,19 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 		KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(),
 				drains);
 	}
+
+	/* T1c: MODE exit tears both parked reservations down through the
+	 * idle-aware release body -- the teardown anchor the two munmaps
+	 * above used to carry (the whole arena, VMA included, is gone).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_START2));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
 
 	/* A genuine mid-arena chunk keeps the VA: chunk zap, not release. */
 	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
@@ -3219,6 +3240,403 @@ static void corten_arena_test_mremap_route(struct kunit *test)
 	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, new_addr));
 }
 
+/* ------------------------------------------------------------------
+ * T1c: the resident arena pool.  Park on a full-coverage munmap,
+ * same-window reactivation on the next auto mmap, the bounded pool's
+ * LRU-overflow release, the MODE-exit teardown and the fork-begin
+ * flush.
+ * ------------------------------------------------------------------
+ */
+
+/* Attach one auto arena at [addr, addr+len): the harness VMA is the
+ * takeover product, the attach is the do_mmap tail hook's body.
+ */
+static int corten_arena_test_pool_attach(struct mm_struct *mm,
+					 unsigned long addr, unsigned long len)
+{
+	int ret;
+
+	mmap_write_lock(mm);
+	ret = corten_arena_auto_attach(mm, addr, len);
+	mmap_write_unlock(mm);
+
+	return ret;
+}
+
+/* The pool-flush fork window: the flush's release legs run do_munmap(),
+ * which reads current->mm (vms_complete_munmap_vmas), so -- like the
+ * release cases -- the window runs on an attached worker.  Production
+ * dup_mmap() always has current->mm == oldmm; use_mm() reproduces that.
+ */
+struct corten_arena_test_pool_fork {
+	struct mm_struct *parent;
+	struct mm_struct *child;
+	int begin_ret;
+	int commit_ret;
+	struct completion done;
+};
+
+static int corten_arena_test_pool_fork_thread(void *data)
+{
+	struct corten_arena_test_pool_fork *o = data;
+
+	kthread_use_mm(o->parent);
+	o->begin_ret = corten_arena_test_fork_begin(o->child, o->parent);
+	o->commit_ret = corten_arena_test_fork_commit(o->child, o->parent);
+	kthread_unuse_mm(o->parent);
+	complete(&o->done);
+
+	return 0;
+}
+
+static void corten_arena_test_pool_reuse(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *vma;
+	struct corten_pte_meta m;
+	unsigned long addr, lenp, flags;
+	long parks = corten_arena_test_pool_parks();
+	long hits = corten_arena_test_pool_hits();
+	long misses = corten_arena_test_pool_misses();
+	long timeouts = corten_arena_test_drain_timeouts();
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "pool routing requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* One glibc-shaped 2M NORESERVE anonymous arena at the window
+	 * base, with one committed page (real folio + CORTEN_MAPPED).
+	 */
+	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
+				     CORTEN_ARENA_TEST_WIN + PMD_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_pool_attach(mm,
+							    CORTEN_ARENA_TEST_WIN,
+							    PMD_SIZE), 0);
+	/* seed_anon first: fill_upper() creates the tracked PT page the
+	 * mapped seeding installs into (a fresh arena has none).
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_fork_seed_anon(mm,
+							 CORTEN_ARENA_TEST_WIN),
+			0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_fork_seed_mapped(mm,
+							   CORTEN_ARENA_TEST_WIN),
+			0);
+
+	/* The free() shape: a full-coverage munmap parks the arena. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+
+	/* Parked: lookup-invisible, reservation retained, pool occupancy
+	 * 1 -- and zero drain activity, the percpu_ref never died.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
+			0);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pool_idle(mm,
+						      CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_parks(), parks + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 1);
+	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
+
+	/* The park zap reset the committed page: perm-0 Invalid -- the
+	 * munmap killed the mprotect contract with the mapping.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, m.perm, 0);
+
+	/* The next auto mmap of the same size is served from the pool:
+	 * ret 2 -- the re-warmed reservation IS the mapping, live before
+	 * any do_mmap flow runs.
+	 */
+	addr = 0;
+	lenp = PAGE_SIZE;
+	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+	mmap_write_lock(mm);
+	ret = corten_arena_auto_mmap_route(mm, PAGE_SIZE,
+					   PROT_READ | PROT_WRITE, &addr,
+					   &lenp, &flags);
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test, ret, 2);
+	KUNIT_EXPECT_EQ(test, addr, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_EQ(test, lenp, PMD_SIZE);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_hits(), hits + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_test_pool_idle(mm,
+						       CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
+			1);
+	/* The reused mapping carries the requested protection and the
+	 * shadow identity again (park had stripped all three).
+	 */
+	vma = vma_lookup(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_EXPECT_TRUE(test, !!(vma->vm_flags & VM_CORTEN));
+	KUNIT_EXPECT_TRUE(test, !!(vma->vm_flags & (VM_READ | VM_WRITE)));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
+
+	/* Park it again and re-serve through the DECLARE-side probe: the
+	 * safety net that also covers a prctl DECLARE over a parked
+	 * range (the attach drives corten_arena_declare_locked()).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_attach(mm,
+							    CORTEN_ARENA_TEST_WIN,
+							    PMD_SIZE), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_hits(), hits + 2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
+
+	/* A size no slot parked is a counted miss; the magazine places
+	 * fresh window past the (live) pool-hit arena.
+	 */
+	addr = 0;
+	lenp = PAGE_SIZE;
+	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+	mmap_write_lock(mm);
+	ret = corten_arena_auto_mmap_route(mm, 2 * PMD_SIZE,
+					   PROT_READ | PROT_WRITE, &addr,
+					   &lenp, &flags);
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test, ret, 1);
+	KUNIT_EXPECT_EQ(test, addr, CORTEN_ARENA_TEST_WIN + PMD_SIZE);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_misses(), misses + 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
+}
+
+static void corten_arena_test_pool_limit(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long base = CORTEN_ARENA_TEST_WIN;
+	unsigned long addr, lenp, flags;
+	long parks = corten_arena_test_pool_parks();
+	long over = corten_arena_test_pool_over();
+	long timeouts = corten_arena_test_drain_timeouts();
+	long i;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "pool routing requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* Park CORTEN_ARENA_POOL_MAX arenas, then one more full-coverage
+	 * munmap on a full pool: the D12 fallback -- the pre-pool real
+	 * RELEASE, counted as pool_over.
+	 */
+	for (i = 0; i <= CORTEN_ARENA_POOL_MAX; i++) {
+		unsigned long va = base + i * PMD_SIZE;
+		struct vm_area_struct *vma;
+
+		vma = corten_arena_test_mkvm(mm, va, va + PMD_SIZE,
+					     CORTEN_ARENA_TEST_FLAGS_OK);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_pool_attach(mm, va,
+							      PMD_SIZE), 0);
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_run_op(test, mm,
+							 corten_arena_test_op_munmap_route,
+							 va, PAGE_SIZE), 1);
+	}
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_parks(),
+			parks + CORTEN_ARENA_POOL_MAX);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_over(), over + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm),
+			CORTEN_ARENA_POOL_MAX);
+
+	/* Arena MAX found the pool full and is really gone; arenas 0 and
+	 * MAX - 1 are the oldest and newest parked slots.
+	 */
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, base +
+					   CORTEN_ARENA_POOL_MAX * PMD_SIZE));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_test_pool_idle(mm,
+						       base +
+						       CORTEN_ARENA_POOL_MAX *
+						       PMD_SIZE));
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_pool_idle(mm, base));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pool_idle(mm,
+						      base +
+						      (CORTEN_ARENA_POOL_MAX -
+						       1) * PMD_SIZE));
+
+	/* The bounded pool still serves: the route takes the MRU slot
+	 * (the park order's tail) for the same size, ret 2.
+	 */
+	addr = 0;
+	lenp = PAGE_SIZE;
+	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+	mmap_write_lock(mm);
+	ret = corten_arena_auto_mmap_route(mm, PAGE_SIZE,
+					   PROT_READ | PROT_WRITE, &addr,
+					   &lenp, &flags);
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test, ret, 2);
+	KUNIT_EXPECT_EQ(test, addr,
+			base + (CORTEN_ARENA_POOL_MAX - 1) * PMD_SIZE);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm),
+			CORTEN_ARENA_POOL_MAX - 1);
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
+}
+
+static void corten_arena_test_pool_mode_exit(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *vma;
+	unsigned long parked = CORTEN_ARENA_TEST_WIN;
+	unsigned long live = CORTEN_ARENA_TEST_WIN + 4 * PMD_SIZE;
+	long timeouts = corten_arena_test_drain_timeouts();
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "pool routing requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* One parked and one live arena. */
+	vma = corten_arena_test_mkvm(mm, parked, parked + PMD_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, parked, PMD_SIZE),
+			0);
+	vma = corten_arena_test_mkvm(mm, live, live + PMD_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, live, PMD_SIZE), 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 parked, PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 1);
+
+	/* MODE exit tears both shapes down: the live arena through the
+	 * regular RELEASE, the parked one through the idle-aware
+	 * teardown (pool node dropped, no double accounting).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_mode_get(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
+	KUNIT_EXPECT_FALSE(test, corten_arena_test_pool_idle(mm, parked));
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, parked), 0);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, parked));
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, live), 0);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, live));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
+}
+
+static void corten_arena_test_pool_fork(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_arena_test_pool_fork fk;
+	struct vm_area_struct *vma;
+	struct task_struct *tsk;
+	struct mm_struct *child;
+	long timeouts = corten_arena_test_drain_timeouts();
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "pool routing requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
+				     CORTEN_ARENA_TEST_WIN + PMD_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 1);
+
+	/* dup_mmap()-shaped window on an attached worker (the flush
+	 * releases the parked reservation through do_munmap, which reads
+	 * current->mm); the child copies no shadow pieces -- with the
+	 * parked arena flushed there is nothing left to mirror.
+	 */
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	fk.parent = mm;
+	fk.child = child;
+	init_completion(&fk.done);
+	tsk = kthread_run(corten_arena_test_pool_fork_thread, &fk,
+			  "corten_pool_fork");
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tsk);
+	wait_for_completion(&fk.done);
+
+	KUNIT_EXPECT_EQ(test, fk.begin_ret, 0);
+	KUNIT_EXPECT_EQ(test, fk.commit_ret, 0);
+
+	/* The parent came out of the fork in the pre-pool layout: the
+	 * parked reservation is really gone.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_test_pool_idle(mm,
+						       CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
+			0);
+
+	/* The child inherited the MODE bit and an empty registry. */
+	KUNIT_EXPECT_TRUE(test, READ_ONCE(child->corten_mode));
+	KUNIT_EXPECT_EQ(test, corten_arena_query(child, CORTEN_ARENA_TEST_WIN),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(child), 0);
+
+	mmput(child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
@@ -3237,6 +3655,10 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_auto_attach_release),
 	KUNIT_CASE(corten_arena_test_mag_recycle),
 	KUNIT_CASE(corten_arena_test_mag_marker),
+	KUNIT_CASE(corten_arena_test_pool_reuse),
+	KUNIT_CASE(corten_arena_test_pool_limit),
+	KUNIT_CASE(corten_arena_test_pool_mode_exit),
+	KUNIT_CASE(corten_arena_test_pool_fork),
 	KUNIT_CASE(corten_arena_test_mprotect_route),
 	KUNIT_CASE(corten_arena_test_protect_flags_kernel_gate),
 	KUNIT_CASE(corten_arena_test_madvise_route),

@@ -108,6 +108,20 @@ static int corten_va_mag_alloc_cpu(struct mm_struct *mm,
 static void corten_va_release_frame(struct corten_mm_state *state,
 				    unsigned long addr);
 
+/* T1c resident arena pool, defined in the pool section below. */
+static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
+					    struct corten_mm_state *state,
+					    unsigned long addr,
+					    unsigned long len);
+static int corten_arena_pool_take(struct mm_struct *mm,
+				  struct corten_mm_state *state,
+				  unsigned long len2, unsigned long prot,
+				  unsigned long *addr);
+static int corten_arena_pool_release(struct mm_struct *mm, unsigned long start,
+				     unsigned long len);
+static void corten_arena_pool_flush_locked(struct mm_struct *mm,
+					   struct corten_mm_state *state);
+
 static void corten_arena_stat_add(struct corten_mm_state *state,
 				  enum corten_arena_stat which, long val)
 {
@@ -174,6 +188,19 @@ static atomic_long_t corten_nr_mmap_punch_rejects; /* unroutable MAP_FIXED */
 static atomic_long_t corten_nr_seg_claims;	/* per-cpu segments claimed */
 static atomic_long_t corten_nr_mag_skips;	/* marker-lost frames skipped */
 static atomic_long_t corten_nr_va_recycles;	/* frames from va_free */
+/* T1c resident arena pool (M4T12_T1C): full-coverage munmaps of
+ * MODE-process arenas that parked instead of releasing, auto mmaps
+ * served from the park (vs. pool_misses: scans that found no candidate),
+ * munmaps that found the pool full and took the real RELEASE (the D12
+ * fallback, the pre-pool behaviour), and parked arenas deregistered for
+ * cause (interference while parked, or a reuse candidate that failed
+ * validation).
+ */
+static atomic_long_t corten_nr_pool_parks;
+static atomic_long_t corten_nr_pool_hits;
+static atomic_long_t corten_nr_pool_misses;
+static atomic_long_t corten_nr_pool_over;
+static atomic_long_t corten_nr_pool_ejects;
 
 /* Reserve sentinel for claimed-but-unallocated magazine frames (see
  * include/linux/corten_arena.h).  Never published as an arena: it has no
@@ -286,6 +313,7 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 	state->next_va = CORTEN_MODE_WINDOW_START;
 	INIT_LIST_HEAD(&state->va_free);
 	INIT_LIST_HEAD(&state->seg_list);
+	INIT_LIST_HEAD(&state->arena_pool);
 	state->va_segs = __alloc_percpu(sizeof(struct corten_va_seg),
 					__alignof__(unsigned long));
 	state->stats = __alloc_percpu(sizeof(unsigned long) *
@@ -641,15 +669,33 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	struct vm_area_struct *vma;
 	int ret;
 
+	mutex_lock(&state->ctl_lock);
+
+	/* T1c arena pool: a parked arena of exactly this extent is
+	 * reactivated in place -- no descriptor allocation, no percpu_ref
+	 * cycle, warm page tables.  Any other parked arena inside the
+	 * range is deregistered first so the fresh path below sees a
+	 * clean range (its registry slots would otherwise overlap-reject
+	 * or collide with the stores below).
+	 */
+	ret = corten_arena_pool_prepare_locked(mm, state, addr, len);
+	if (ret <= 0) {
+		mutex_unlock(&state->ctl_lock);
+		return ret;		/* 0 = reactivated, else errno */
+	}
+
 	arena = kzalloc(sizeof(*arena), GFP_KERNEL_ACCOUNT);
-	if (!arena)
+	if (!arena) {
+		mutex_unlock(&state->ctl_lock);
 		return -ENOMEM;
+	}
 
 	arena->start = addr;
 	arena->end = addr + len;
 	arena->mm = mm;
 	mutex_init(&arena->fill_lock);
 	init_completion(&arena->drained);
+	INIT_LIST_HEAD(&arena->pool);
 	/* Born atomic (D15): a percpu-born ref forces percpu_ref_kill()'s
 	 * atomic switch through a full RCU grace period, and RELEASE drains
 	 * with mmap_write held -- every arena munmap paid one GP
@@ -667,8 +713,6 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 		kfree(arena);
 		return ret;
 	}
-
-	mutex_lock(&state->ctl_lock);
 
 	/* Arena ranges must not overlap; also rejects re-declaring the
 	 * same range.  Exclusive under ctl_lock.
@@ -781,10 +825,21 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
 }
 
 /*
- * The RELEASE body proper (P0, DEV-13).  The caller holds @mm's mmap_lock
- * for writing; this nests state->ctl_lock inside it.
+ * The teardown tail shared by RELEASE, the pool eviction/flush and the
+ * parked-arena ejection (T1c): the arena is located, its extent is
+ * verified and @mm's mmap_write + state->ctl_lock are held.  Deregisters
+ * the arena, drains in-flight transactions, strips the shadow decoration
+ * and removes the range with the plain legacy munmap, then frees the
+ * descriptor.
  *
- * The drain now waits under BOTH locks and is still deadlock-free
+ * T1c: a *parked* arena tears down through the same body with two
+ * differences -- the pool node goes, and the live-set accounting was
+ * already done by its park (no @nr decrement, no second RELEASE stat;
+ * the DECLARES/RELEASES pairing stays D-R == live arenas).  A parked
+ * arena's shadow-VMA is already decoration-free, so the unshadow pass is
+ * an idempotent no-op on whatever plain-anonymous pieces remain.
+ *
+ * The drain waits under BOTH locks and is still deadlock-free
  * (see the lock-order contract in include/linux/corten_arena.h): a
  * transaction pins the arena with percpu_ref tryget/put only -- the S4
  * fast hook (arch/x86/mm/fault.c) runs before any mmap_lock action and
@@ -798,27 +853,26 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
  * and guarantees the teardown below sees a quiesced range.  (The M3b
  * order -- drain under ctl_lock, then take mmap_write -- formed exactly
  * that reverse edge against the do_mmap auto-attach and was inverted.)
+ *
+ * Return: the do_munmap() status (0, or -errno on memory pressure -- the
+ * range survives as plain anonymous memory; see the error path below).
  */
-static int corten_arena_release_locked(struct mm_struct *mm,
-				       struct corten_mm_state *state,
-				       unsigned long addr, unsigned long len)
+static int corten_arena_release_arena_locked(struct mm_struct *mm,
+					     struct corten_mm_state *state,
+					     struct corten_arena *arena)
 {
 	unsigned long frame, first_frame, last_frame;
-	struct corten_arena *arena;
-	bool drained;
+	bool drained, was_idle = READ_ONCE(arena->idle);
 	int ret;
 
-	mutex_lock(&state->ctl_lock);
-
-	/* RELEASE must hit one declared arena exactly (by start). */
-	first_frame = addr >> PMD_SHIFT;
-	arena = xa_load(&state->arenas, first_frame);
-	if (!arena || arena->start != addr || arena->end != addr + len) {
-		ret = -ENOENT;
-		goto out_unlock;
+	if (was_idle) {
+		WRITE_ONCE(arena->idle, false);
+		list_del(&arena->pool);
+		state->nr_pool--;
 	}
 
-	last_frame = (addr + len - 1) >> PMD_SHIFT;
+	first_frame = arena->start >> PMD_SHIFT;
+	last_frame = (arena->end - 1) >> PMD_SHIFT;
 	for (frame = first_frame; frame <= last_frame; frame++) {
 		struct corten_arena *stale = xa_load(&state->arenas, frame);
 
@@ -839,8 +893,10 @@ static int corten_arena_release_locked(struct mm_struct *mm,
 		if (stale == arena)
 			corten_va_release_frame(state, frame << PMD_SHIFT);
 	}
-	refcount_set(&state->nr, refcount_read(&state->nr) - 1);
-	corten_arena_stat_add(state, CORTEN_ARENA_STAT_RELEASES, 1);
+	if (!was_idle) {
+		refcount_set(&state->nr, refcount_read(&state->nr) - 1);
+		corten_arena_stat_add(state, CORTEN_ARENA_STAT_RELEASES, 1);
+	}
 
 	/* Deregister from the observability ledger before the drain: a
 	 * RELEASE that has made the arena unreachable in its own registry
@@ -849,16 +905,15 @@ static int corten_arena_release_locked(struct mm_struct *mm,
 	 */
 	corten_arena_obs_remove(arena);
 
-	/* Drain in-flight transactions (see the locking argument above),
-	 * then tear the shadow-VMA down with the plain legacy munmap:
-	 * pages are zapped and the PT pages travel through the regular
-	 * free funnels (M2a uninstall).  On a drain timeout (leaked
-	 * reference, a kernel bug) the teardown still runs: a runnable
-	 * process with a counted leak beats an unkillable D-state zombie;
-	 * the in-flight-transaction safety argument above is void in that
-	 * case, which is why the leak is counted loudly
-	 * (CORTEN_ARENA_STAT_DRAIN_TIMEOUTS + the global arena_stats
-	 * aggregate).
+	/* Drain in-flight transactions, then tear the shadow-VMA down
+	 * with the plain legacy munmap: pages are zapped and the PT pages
+	 * travel through the regular free funnels (M2a uninstall).  On a
+	 * drain timeout (leaked reference, a kernel bug) the teardown
+	 * still runs: a runnable process with a counted leak beats an
+	 * unkillable D-state zombie; the in-flight-transaction safety
+	 * argument above is void in that case, which is why the leak is
+	 * counted loudly (CORTEN_ARENA_STAT_DRAIN_TIMEOUTS + the global
+	 * arena_stats aggregate).
 	 */
 	if (!corten_arena_drain(arena)) {
 		corten_arena_note_drain_timeout(state);
@@ -908,12 +963,34 @@ static int corten_arena_release_locked(struct mm_struct *mm,
 	 */
 	if (drained)
 		corten_arena_free(arena);
-	mutex_unlock(&state->ctl_lock);
 
 	return ret;
+}
 
-out_unlock:
+/*
+ * The RELEASE body proper (P0, DEV-13).  The caller holds @mm's mmap_lock
+ * for writing; this nests state->ctl_lock inside it.
+ */
+static int corten_arena_release_locked(struct mm_struct *mm,
+				       struct corten_mm_state *state,
+				       unsigned long addr, unsigned long len)
+{
+	struct corten_arena *arena;
+	int ret;
+
+	mutex_lock(&state->ctl_lock);
+
+	/* RELEASE must hit one declared arena exactly (by start). */
+	arena = xa_load(&state->arenas, addr >> PMD_SHIFT);
+	if (!arena || arena->start != addr || arena->end != addr + len) {
+		mutex_unlock(&state->ctl_lock);
+		return -ENOENT;
+	}
+
+	ret = corten_arena_release_arena_locked(mm, state, arena);
+
 	mutex_unlock(&state->ctl_lock);
+
 	return ret;
 }
 
@@ -1063,6 +1140,17 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_mag_skips));
 	seq_printf(m, "va_recycles         %ld\n",
 		   atomic_long_read(&corten_nr_va_recycles));
+	/* T1c resident arena pool. */
+	seq_printf(m, "pool_parks          %ld\n",
+		   atomic_long_read(&corten_nr_pool_parks));
+	seq_printf(m, "pool_hits           %ld\n",
+		   atomic_long_read(&corten_nr_pool_hits));
+	seq_printf(m, "pool_misses         %ld\n",
+		   atomic_long_read(&corten_nr_pool_misses));
+	seq_printf(m, "pool_over           %ld\n",
+		   atomic_long_read(&corten_nr_pool_over));
+	seq_printf(m, "pool_ejects         %ld\n",
+		   atomic_long_read(&corten_nr_pool_ejects));
 }
 
 #ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
@@ -1154,6 +1242,57 @@ long corten_arena_test_va_recycles(void)
 {
 	return atomic_long_read(&corten_nr_va_recycles);
 }
+
+/* T1c pool hooks: named counters, the pool occupancy and the parked
+ * probe.  The test owns @mm exclusively, so the plain (unlocked) reads
+ * are the established pattern here (cf. test_frame_reserved()).
+ */
+long corten_arena_test_pool_parks(void)
+{
+	return atomic_long_read(&corten_nr_pool_parks);
+}
+
+long corten_arena_test_pool_hits(void)
+{
+	return atomic_long_read(&corten_nr_pool_hits);
+}
+
+long corten_arena_test_pool_misses(void)
+{
+	return atomic_long_read(&corten_nr_pool_misses);
+}
+
+long corten_arena_test_pool_over(void)
+{
+	return atomic_long_read(&corten_nr_pool_over);
+}
+
+long corten_arena_test_pool_ejects(void)
+{
+	return atomic_long_read(&corten_nr_pool_ejects);
+}
+
+long corten_arena_test_pool_nr(struct mm_struct *mm)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+
+	if (!state)
+		return 0;
+	return READ_ONCE(state->nr_pool);
+}
+
+bool corten_arena_test_pool_idle(struct mm_struct *mm, unsigned long addr)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+	struct corten_arena *ar;
+
+	if (!state)
+		return false;
+	ar = xa_load(&state->arenas, addr >> PMD_SHIFT);
+
+	return ar && ar != &corten_va_reserve_sentinel &&
+	       READ_ONCE(ar->idle);
+}
 #endif
 
 /* ------------------------------------------------------------------ *
@@ -1180,6 +1319,13 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		return;
 	/* Unpublish; no reader can be racing (mm_users == 0). */
 	smp_store_release(&mm->corten_state, NULL);
+
+	/* T1c: parked arenas carry no bookkeeping beyond their pool node;
+	 * the walk below drains and frees them like any other descriptor,
+	 * so only the list head itself needs resetting here.
+	 */
+	INIT_LIST_HEAD(&state->arena_pool);
+	state->nr_pool = 0;
 
 	/* DEV-13: exit drains with mm_users already 0 and takes only the
 	 * lower ctl_lock -- "the lower lock alone" cannot form a cycle.
@@ -1243,6 +1389,15 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
 	 */
 	ar = xa_load(&state->arenas, addr >> PMD_SHIFT);
 	if (ar == &corten_va_reserve_sentinel)
+		return NULL;
+
+	/* T1c: a parked (pooled) arena is lookup-invisible -- the range
+	 * was munmapped and must keep legacy semantics (no arena: faults
+	 * fall to the legacy funnel on the reserved PROT_NONE mapping,
+	 * munmap/mprotect routes run legacy).  Its window comes back only
+	 * through the pool reactivation.
+	 */
+	if (ar && READ_ONCE(ar->idle))
 		return NULL;
 
 	return ar;
@@ -1853,6 +2008,24 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, unsigned long len,
 		return 0;
 	}
 
+	/* T1c: serve the request from the resident pool -- the most
+	 * recently parked arena of exactly this PMD-rounded size is
+	 * re-warmed in place (R/W/X re-encoded to @prot) and its address
+	 * returned with ret 2: do_mmap() completes immediately, WITHOUT
+	 * the MAP_FIXED flow (whose VMA replacement would free the
+	 * window's tracked page tables only for the first touch faults to
+	 * rebuild them).  The auto churn re-asks for the size it just
+	 * freed, so the pool covers the whole working set; a request no
+	 * slot matches keeps the pre-pool placement behaviour.
+	 */
+	ret = corten_arena_pool_take(mm, state, len2, prot, &addr2);
+	if (!ret) {
+		*addr = addr2;
+		*lenp = len2;
+		return 2;
+	}
+	atomic_long_inc(&corten_nr_pool_misses);
+
 	ret = corten_arena_window_place(mm, state, len2, &addr2);
 	if (ret) {
 		/* Window exhausted or obstacle-skip ran out of window
@@ -2171,6 +2344,20 @@ int corten_arena_fork_begin(struct mm_struct *mm, struct mm_struct *oldmm)
 	 * inside it is the legal order.
 	 */
 	mutex_lock(&old_state->ctl_lock);
+
+	/* T1c: flush the pool before the freeze window.  A parked arena is
+	 * a munmapped-range reservation: its VMA shows as a plain
+	 * PROT_NONE anonymous mapping that a no-pool kernel would not
+	 * have, and the mirror loop has no idle-awareness.  Releasing the
+	 * parked arenas here returns the parent to exactly the pre-pool
+	 * layout before dup_mmap() copies any VMA, so parent and child
+	 * both end up with the space the application itself observably
+	 * munmapped -- and the fork paths need no parked-state handling.
+	 * The teardowns are cheap: no content (park zapped it), no
+	 * in-flight transactions (the park gating), no PT-page churn
+	 * beyond what do_munmap releases.
+	 */
+	corten_arena_pool_flush_locked(oldmm, old_state);
 
 	/* Freeze window (DEV-15): refuse new transactions, then drain
 	 * the in-flight ones.  The frozen write and the drain pair per
@@ -4081,12 +4268,18 @@ enum corten_unmap_class corten_arena_release_classify(enum corten_unmap_class
  * than half of the MODE-arm samples on the unmap shapes).  The gather is
  * finished on every caller exit -- error paths included -- so the single
  * flush guarantee covers the whole walk.
+ *
+ * @zflags goes to corten_unmap() verbatim: the live-arena chunk zap uses
+ * CORTEN_UNMAP_KEEP_PERM (the committed mprotect contract survives the
+ * content drop), while the T1c park zap passes 0 -- a munmapped arena's
+ * permission commitments die with the mapping, and the pooled window must
+ * come back pristine (perm-0 Invalid slots) for its next incarnation.
  */
 static int corten_arena_zap_window(struct mm_struct *mm,
 				   struct vm_area_struct *vma,
 				   struct corten_txn *txn,
 				   unsigned long start, unsigned long end,
-				   struct mmu_gather *tlb)
+				   struct mmu_gather *tlb, u8 zflags)
 {
 	unsigned long addr = start;
 	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
@@ -4189,7 +4382,7 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 				 * family).
 				 */
 				ret = corten_unmap(txn, addr, PAGE_SIZE,
-						   CORTEN_UNMAP_KEEP_PERM);
+						   zflags);
 				if (WARN_ON_ONCE(ret))
 					break;
 
@@ -4317,9 +4510,14 @@ static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 	return ret;
 }
 
-/* Non-static: mm/corten_fault_test.c drives the chunk zap directly. */
-int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
-			     unsigned long start, unsigned long len)
+/* The chunk-zap driver; @zflags selects the metadata-reset semantics
+ * (see corten_arena_zap_window()).  Static: only the chunk routes and
+ * the T1c park reach it.
+ */
+static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
+					  struct corten_arena *ar,
+					  unsigned long start, unsigned long len,
+					  u8 zflags)
 {
 	unsigned long end = start + len;
 	struct vm_area_struct *vma;
@@ -4347,7 +4545,7 @@ int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
 		switch (ret) {
 		case 0:
 			ret = corten_arena_zap_window(mm, vma, &txn, start,
-						      win_end, &tlb);
+						      win_end, &tlb, zflags);
 			corten_unlock(&txn);
 			if (ret)
 				goto out;
@@ -4391,6 +4589,485 @@ int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
 out:
 	tlb_finish_mmu(&tlb);
 	return ret;
+}
+
+/* Non-static: mm/corten_fault_test.c drives the chunk zap directly. */
+int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
+			     unsigned long start, unsigned long len)
+{
+	/* The live-arena content drop keeps the recorded permission (the
+	 * committed mprotect contract survives a chunk munmap / DONTNEED).
+	 */
+	return corten_arena_unmap_chunk_flags(mm, ar, start, len,
+					      CORTEN_UNMAP_KEEP_PERM);
+}
+
+/* ------------------------------------------------------------------ *
+ * T1c: the resident arena pool (M4T12_T1C).
+ *
+ * In a MODE process every mmap(NULL) anonymous mapping is one whole
+ * arena lifecycle: DECLARE (~ceremony) + RELEASE (~teardown) -- the
+ * r07-m4t12 diagnosis priced that at ~12.6us per 16KB op, all of it
+ * under mmap_write.  The pool removes the lifecycle from the churn: a
+ * full-coverage munmap of a MODE arena *parks* it (transactional zap
+ * with a full metadata reset, then a reserved PROT_NONE anonymous VMA
+ * and inert registry slots) and the next auto mmap of the same
+ * PMD-rounded size *reactivates* the parked arena in place -- no
+ * descriptor allocation, no percpu_ref kill/reinit, warm page tables and
+ * xarray nodes.
+ *
+ * Parked-state invariants (all under the owner mm's mmap_write; flag
+ * reads on the hot paths are READ_ONCE against those writers):
+ *   - @idle is the single source of truth: set only after the content
+ *     zap completed, cleared only after the reactivation republished the
+ *     cached shadow-VMA ([FAIL-2] order).  corten_arena_lookup() gates
+ *     on it, so every fault/route path treats the range as if unmapped.
+ *   - The registry slots keep pointing at the descriptor (zero xarray
+ *     churn) while the shadow-VMA cache is NULL; the magazine's obstacle
+ *     walks and the global placer see the slots and stay off the range.
+ *   - The percpu_ref stays live for the whole park: no drain, no
+ *     grace-period accounting, and reactivation is a flag flip.
+ *   - state->nr counts only live arenas (park decrements,
+ *     reactivation increments), so the nr==0 fast negation covers an
+ *     all-parked registry and DECLARES-RELEASES == live holds.
+ *
+ * The D12 red lines: the reuse hands out a pristine window (the park zap
+ * reset every slot to perm-0 Invalid), the pool is bounded and overflows
+ * back into the exact pre-pool RELEASE behaviour (counted), and EXIT /
+ * mm_exit / fork tear everything down as before.
+ * ------------------------------------------------------------------
+ */
+
+/*
+ * Deregister a parked arena without touching the VMAs in its range: the
+ * park left the range a plain anonymous mapping which the reuse flow has
+ * usually already replaced, and the fresh declare that follows wants the
+ * registry slots back.  Frames return to the magazine (markers restored,
+ * recycle blocks pushed) exactly like a real release.
+ *
+ * Called with the owner mm's mmap_write and state->ctl_lock held.
+ */
+static void corten_arena_pool_eject_locked(struct corten_mm_state *state,
+					   struct corten_arena *ar)
+{
+	unsigned long frame, first, last;
+
+	WRITE_ONCE(ar->idle, false);
+	list_del(&ar->pool);
+	state->nr_pool--;
+
+	first = ar->start >> PMD_SHIFT;
+	last = (ar->end - 1) >> PMD_SHIFT;
+	for (frame = first; frame <= last; frame++) {
+		struct corten_arena *stale = xa_load(&state->arenas, frame);
+
+		if (WARN_ON_ONCE(stale && stale != ar))
+			break;
+		if (stale == ar)
+			corten_va_release_frame(state, frame << PMD_SHIFT);
+	}
+	atomic_long_inc(&corten_nr_pool_ejects);
+
+	/* No transaction can hold a reference (lookup has gated the park
+	 * since the zap; the zap itself fenced the stragglers per window),
+	 * so the drain completes synchronously; the timeout branch is the
+	 * same counted kernel-bug path as the release body's.
+	 */
+	if (corten_arena_drain(ar))
+		corten_arena_free(ar);
+	else
+		corten_arena_note_drain_timeout(state);
+}
+
+/*
+ * Hand a parked arena's window back out: re-decorate the (new) shadow
+ * VMA, refresh the permission bound from it and republish.  The
+ * descriptor, its live percpu_ref, the observability ledger entry and
+ * the warm registry slots are reused as-is.
+ *
+ * Called with the owner mm's mmap_write and state->ctl_lock held.
+ * Return: 0, or the shadowize failure (-ENOMEM).
+ */
+static int corten_arena_pool_reactivate(struct mm_struct *mm,
+					struct corten_mm_state *state,
+					struct corten_arena *ar,
+					struct vm_area_struct *vma)
+{
+	int ret;
+
+	ret = corten_arena_shadowize(vma);
+	if (ret)
+		return ret;
+
+	ar->prot = corten_arena_prot_from_vma(vma);
+	/* [FAIL-2] order: the cached shadow-VMA publishes before the
+	 * arena becomes lookup-visible again.
+	 */
+	WRITE_ONCE(ar->vma, vma);
+	WRITE_ONCE(ar->idle, false);
+	list_del(&ar->pool);
+	state->nr_pool--;
+	refcount_set(&state->nr, refcount_read(&state->nr) + 1);
+	corten_arena_stat_add(state, CORTEN_ARENA_STAT_DECLARES, 1);
+	atomic_long_inc(&corten_nr_pool_hits);
+
+	return 0;
+}
+
+/*
+ * The DECLARE-side pool probe: serve the range from the park if it fits,
+ * else make the range fresh-path-clean.
+ *
+ *   - A parked arena of exactly [addr, addr+len) with intact registry
+ *     slots is reactivated onto the (validated) target VMA -- this is
+ *     the pool hit.  The C1 emptiness check runs for parity with the
+ *     fresh path: content cannot exist in a parked range through any
+ *     normal route (the park zapped it; the PROT_NONE reservation cannot
+ *     fault; do_mmap's MAP_FIXED flow replaced the VMA), but exotic
+ *     writers exist (mprotect-then-fault on the reservation, FOLL_FORCE)
+ *     and a slot that is not empty must never serve a reuse -- the park
+ *     slot is ejected and the fresh path takes over (which itself fails
+ *     [C1] and degrades the mapping to a plain anonymous VMA, the
+ *     established attach-failure contract).
+ *   - Any other parked arena with frames inside the range is deregistered
+ *     (ejected) so the fresh path's overlap check and frame stores see a
+ *     clean range.  Its VMA business is already done: a parked arena is
+ *     decoration-free plain memory.
+ *
+ * Called with the owner mm's mmap_write and state->ctl_lock held.
+ * Return: 0 = reactivated (DECLARE is done), 1 = proceed with the fresh
+ * path, -errno = the declare failed.
+ */
+static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
+					    struct corten_mm_state *state,
+					    unsigned long addr,
+					    unsigned long len)
+{
+	unsigned long frame, first, last;
+	struct corten_arena *ar;
+	bool intact = true;
+
+	first = addr >> PMD_SHIFT;
+	last = (addr + len - 1) >> PMD_SHIFT;
+
+	ar = xa_load(&state->arenas, first);
+	if (ar && ar != &corten_va_reserve_sentinel &&
+	    READ_ONCE(ar->idle) && ar->start == addr && ar->end == addr + len) {
+		struct vm_area_struct *vma;
+		int ret;
+
+		for (frame = first; frame <= last; frame++) {
+			if (xa_load(&state->arenas, frame) != ar) {
+				intact = false;
+				break;
+			}
+		}
+
+		if (intact) {
+			vma = vma_lookup(mm, addr);
+			ret = corten_arena_validate_vma(vma, addr, len);
+			if (!ret) {
+				ret = corten_arena_check_empty_locked(mm,
+								      addr,
+								      addr +
+								      len);
+				if (!ret)
+					return corten_arena_pool_reactivate(mm,
+									    state,
+									    ar,
+									    vma);
+			}
+		}
+
+		/* Holed (punched while parked), or the target VMA is not a
+		 * valid declare target, or the window is not empty: the
+		 * slot cannot serve this reuse.  Return its frames to the
+		 * magazine and let the fresh path rebuild.
+		 */
+		corten_arena_pool_eject_locked(state, ar);
+		return 1;
+	}
+
+	/* Anything else parked inside the range is inert residue for the
+	 * fresh path (e.g. an mmap of a different size landing on a
+	 * parked arena's slots via the global placer).
+	 */
+	for (frame = first; frame <= last; frame++) {
+		ar = xa_load(&state->arenas, frame);
+
+		if (ar && ar != &corten_va_reserve_sentinel &&
+		    READ_ONCE(ar->idle))
+			corten_arena_pool_eject_locked(state, ar);
+	}
+
+	return 1;
+}
+
+/*
+ * Parkability: the arena must be one intact shadow piece spanning its
+ * whole extent and every registry slot must still point at it.  A punched
+ * arena (split shadow pieces, NULL hole frames) cannot be parked as a
+ * unit -- it takes the real RELEASE, exactly like the pre-pool kernel.
+ *
+ * Called with the owner mm's mmap_write and state->ctl_lock held.
+ */
+static bool corten_arena_pool_parkable(struct mm_struct *mm,
+				       struct corten_mm_state *state,
+				       struct corten_arena *ar)
+{
+	struct vm_area_struct *vma = READ_ONCE(ar->vma);
+	unsigned long frame, first, last;
+
+	if (!vma || vma->vm_start != ar->start || vma->vm_end != ar->end)
+		return false;
+	if (vma_lookup(mm, ar->start) != vma)
+		return false;
+
+	first = ar->start >> PMD_SHIFT;
+	last = (ar->end - 1) >> PMD_SHIFT;
+	for (frame = first; frame <= last; frame++)
+		if (xa_load(&state->arenas, frame) != ar)
+			return false;
+
+	return true;
+}
+
+/*
+ * Park @arena (the munmap-route EXACT shape in a MODE process): drop the
+ * content with a full metadata reset, then keep the descriptor, its live
+ * percpu_ref and the registry slots; the shadow-VMA becomes a reserved
+ * PROT_NONE anonymous mapping and the arena joins the pool LRU.  A full
+ * pool (D12 fallback) refuses the park: this munmap takes the real
+ * RELEASE -- the exact pre-pool behaviour, counted.
+ *
+ * Called with the owner mm's mmap_write and state->ctl_lock held.
+ * Return: true = parked, false = take the real RELEASE instead.
+ */
+static bool corten_arena_pool_park_locked(struct mm_struct *mm,
+					  struct corten_mm_state *state,
+					  struct corten_arena *ar)
+{
+	struct vm_area_struct *vma;
+	int ret;
+
+	if (state->nr_pool >= CORTEN_ARENA_POOL_MAX) {
+		atomic_long_inc(&corten_nr_pool_over);
+		return false;
+	}
+	if (!corten_arena_pool_parkable(mm, state, ar))
+		return false;
+
+	/* Content drop, one mmu_gather over the whole arena.  flags=0
+	 * resets every slot to perm-0 Invalid: a munmap kills the
+	 * mprotect contracts of the range, and the reuse must hand out a
+	 * pristine window (the FRESH fault gate derives from ar->prot
+	 * after reactivation, which the next mmap re-records -- never
+	 * from a previous incarnation's recorded perm).
+	 */
+	ret = corten_arena_unmap_chunk_flags(mm, ar, ar->start,
+					     ar->end - ar->start, 0);
+	if (ret)
+		return false;
+
+	/* Publish the parked state before the VMA decoration goes: from
+	 * here every lookup misses, so no route can observe the
+	 * intermediate "live arena, cache cleared" shape.  In-flight
+	 * transactions that entered before the park were fenced window by
+	 * window by the zap's descriptor write locks (the [F-B seal]
+	 * argument), so none can commit after the zap returned.
+	 */
+	WRITE_ONCE(ar->idle, true);
+	vma = ar->vma;
+	corten_arena_unshadow(ar, vma);
+	/* Parked = reserved-but-inaccessible: strip R/W/X (MAY* stay) so
+	 * an access to the munmapped range keeps faulting instead of
+	 * zero-fill-succeeding through the legacy funnel.
+	 */
+	vm_flags_clear(vma, VM_READ | VM_WRITE | VM_EXEC);
+
+	list_add_tail(&ar->pool, &state->arena_pool);
+	state->nr_pool++;
+	refcount_set(&state->nr, refcount_read(&state->nr) - 1);
+	corten_arena_stat_add(state, CORTEN_ARENA_STAT_RELEASES, 1);
+	atomic_long_inc(&corten_nr_pool_parks);
+
+	return true;
+}
+
+/*
+ * munmap-route entry (EXACT class, MODE process): park, or fall back to
+ * the real RELEASE.  Takes the DEV-13 outermost write lock itself, like
+ * corten_arena_release() which it stands in for.
+ */
+static int corten_arena_pool_release(struct mm_struct *mm, unsigned long start,
+				     unsigned long len)
+{
+	struct corten_mm_state *state;
+	struct corten_arena *arena;
+	int ret;
+
+	/* Pairs with the store in corten_arena_state_create(); the route
+	 * verified the arena exists, so NULL cannot happen.
+	 */
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state)
+		return -ENOENT;
+
+	mmap_write_lock(mm);
+	mutex_lock(&state->ctl_lock);
+
+	arena = xa_load(&state->arenas, start >> PMD_SHIFT);
+	if (!arena || arena->start != start || arena->end != start + len) {
+		mutex_unlock(&state->ctl_lock);
+		mmap_write_unlock(mm);
+		return -ENOENT;
+	}
+
+	if (!corten_arena_pool_park_locked(mm, state, arena))
+		ret = corten_arena_release_arena_locked(mm, state, arena);
+	else
+		ret = 0;
+
+	mutex_unlock(&state->ctl_lock);
+	mmap_write_unlock(mm);
+
+	return ret;
+}
+
+/* Tear every parked arena down (real releases): the fork-begin pool
+ * flush.  Called with oldmm's mmap_write and state->ctl_lock held.
+ */
+static void corten_arena_pool_flush_locked(struct mm_struct *mm,
+					   struct corten_mm_state *state)
+{
+	struct corten_arena *ar, *n;
+
+	list_for_each_entry_safe(ar, n, &state->arena_pool, pool)
+		corten_arena_release_arena_locked(mm, state, ar);
+}
+
+/*
+ * mmap-side pool take: the most recently parked arena of exactly @len2
+ * (the tail of the LRU -- warmest PT pages and cache lines) is
+ * re-warmed IN PLACE and handed out: the parked reservation IS the
+ * mapping the application gets, with R/W/X re-encoded to @prot.  This
+ * is what keeps a pool-hit mmap from paying the MAP_FIXED flow's VMA
+ * replacement -- which would free the window's tracked page tables (and
+ * the metadata descriptors attached to them) only for the first touch
+ * faults to re-allocate them: exactly the churn the pool exists to
+ * remove.
+ *
+ * The C1 emptiness check runs before the take: content cannot exist in
+ * a parked range through any normal route (the park zapped it; the
+ * PROT_NONE reservation cannot fault), but exotic writers exist
+ * (mprotect-then-fault on the reservation, FOLL_FORCE) and a slot that
+ * is not empty must never serve a reuse -- it is ejected and the caller
+ * degrades to fresh window.
+ *
+ * A reactivated arena's declare bookkeeping (DECLARES stat, nr, ledger
+ * entry) is reused as-is; the percpu_ref never died.
+ *
+ * Called under this mm's mmap_write (do_mmap's contract).
+ * Return: 0 with *@addr set, -ENOENT when no slot can serve (the caller
+ * counts one pool miss and places fresh window), -ENOMEM when the
+ * re-decoration failed (the slot stays parked).
+ */
+static int corten_arena_pool_take(struct mm_struct *mm,
+				  struct corten_mm_state *state,
+				  unsigned long len2, unsigned long prot,
+				  unsigned long *addr)
+{
+	unsigned long frame, first, last, perm = CORTEN_PERM_USER;
+	struct corten_arena *ar;
+	struct vm_area_struct *vma;
+	vm_flags_t flags;
+	int ret;
+
+	mmap_assert_write_locked(mm);
+
+	/* A reused mapping cannot honour mlockall() (def_flags) -- fall
+	 * back to the fresh flow, which runs the full accounting.
+	 */
+	if (mm->def_flags & VM_LOCKED)
+		return -ENOENT;
+
+	mutex_lock(&state->ctl_lock);
+
+	list_for_each_entry_reverse(ar, &state->arena_pool, pool) {
+		if (ar->end - ar->start == len2)
+			goto found;
+	}
+	mutex_unlock(&state->ctl_lock);
+	return -ENOENT;
+
+found:
+	first = ar->start >> PMD_SHIFT;
+	last = (ar->end - 1) >> PMD_SHIFT;
+	for (frame = first; frame <= last; frame++) {
+		if (xa_load(&state->arenas, frame) != ar)
+			goto eject;
+	}
+
+	vma = vma_lookup(mm, ar->start);
+	if (!vma || vma->vm_start != ar->start || vma->vm_end != ar->end)
+		goto eject;
+
+	/* [C1] parity with the fresh declare (see above). */
+	ret = corten_arena_check_empty_locked(mm, ar->start, ar->end);
+	if (ret)
+		goto eject;
+
+	/* Re-decorate the same VMA: shadow identity, NOHUGEPAGE, name and
+	 * the R/W/X encoding of the *new* mapping (the FRESH fault gate
+	 * derives from ar->prot, which moves with it).  No live PTE can
+	 * exist (the park zap + [C1] above), so no TLB maintenance is
+	 * owed.
+	 */
+	ret = corten_arena_shadowize(vma);
+	if (ret) {
+		mutex_unlock(&state->ctl_lock);
+		return ret;	/* -ENOMEM: stays parked, degrade */
+	}
+
+	if (prot & PROT_READ)
+		perm |= CORTEN_PERM_READ;
+	if (prot & PROT_WRITE)
+		perm |= CORTEN_PERM_WRITE;
+	if (prot & PROT_EXEC)
+		perm |= CORTEN_PERM_EXEC;
+
+	flags = vma->vm_flags & ~(VM_READ | VM_WRITE | VM_EXEC);
+	if (perm & CORTEN_PERM_READ)
+		flags |= VM_READ;
+	if (perm & CORTEN_PERM_WRITE)
+		flags |= VM_WRITE;
+	if (perm & CORTEN_PERM_EXEC)
+		flags |= VM_EXEC;
+	vm_flags_clear(vma, VM_READ | VM_WRITE | VM_EXEC);
+	vm_flags_set(vma, flags | VM_SOFTDIRTY);
+	WRITE_ONCE(vma->vm_page_prot, corten_arena_perm_pgprot(vma, perm));
+
+	ar->prot = (u8)perm;
+	WRITE_ONCE(ar->vma, vma);
+	WRITE_ONCE(ar->idle, false);
+	list_del(&ar->pool);
+	state->nr_pool--;
+	refcount_set(&state->nr, refcount_read(&state->nr) + 1);
+	corten_arena_stat_add(state, CORTEN_ARENA_STAT_DECLARES, 1);
+	atomic_long_inc(&corten_nr_pool_hits);
+	*addr = ar->start;
+	mutex_unlock(&state->ctl_lock);
+
+	return 0;
+
+eject:
+	/* Holed (punched while parked), or the reservation was replaced,
+	 * or the window is not empty: deregister and let the caller place
+	 * fresh window.
+	 */
+	corten_arena_pool_eject_locked(state, ar);
+	mutex_unlock(&state->ctl_lock);
+	return -ENOENT;
 }
 
 /*
@@ -4488,13 +5165,25 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
 			 * the write lock itself -- we run lockless
 			 * here, so this is the DEV-13 outermost
 			 * acquisition, not a re-entry.
+			 *
+			 * T1c: in a MODE process the arena parks into
+			 * the per-mm pool instead (zap + reset, keep
+			 * descriptor/VMA/frames); the real RELEASE runs
+			 * only when the arena is unparkable or the pool
+			 * is full (LRU eviction pays it).
 			 */
 			if (ar_start)
 				percpu_ref_put(&ar_start->active);
 			if (ar_end)
 				percpu_ref_put(&ar_end->active);
-			ret = corten_arena_release(mm, ar->start,
-						   ar->end - ar->start);
+			if (READ_ONCE(mm->corten_mode))
+				ret = corten_arena_pool_release(mm, ar->start,
+								ar->end -
+								ar->start);
+			else
+				ret = corten_arena_release(mm, ar->start,
+							   ar->end -
+							   ar->start);
 			return ret < 0 ? ret : 1;
 		case CORTEN_UNMAP_CHUNK:
 			ret = corten_arena_unmap_chunk(mm, ar, start, len);
@@ -4966,7 +5655,8 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
 			 * semantics), then mark the fresh allocation.
 			 */
 			ret = corten_arena_zap_window(mm, vma, &txn, start,
-						      win_end, &tlb);
+						      win_end, &tlb,
+						      CORTEN_UNMAP_KEEP_PERM);
 			if (ret) {
 				corten_unlock(&txn);
 				goto out;
@@ -5660,7 +6350,13 @@ bool corten_arena_range_overlaps(struct mm_struct *mm, unsigned long start,
 	bool ret = false;
 
 	state = READ_ONCE(mm->corten_state);
-	if (!corten_enabled_static() || !state || !refcount_read(&state->nr))
+	if (!corten_enabled_static() || !state)
+		return false;
+	/* T1c: parked arenas do not count as arena state (their range is
+	 * a plain anonymous reservation); with the whole population
+	 * parked the fast negation must not fire either.
+	 */
+	if (!refcount_read(&state->nr) && !READ_ONCE(state->nr_pool))
 		return false;
 	if (!len)
 		return false;
@@ -5668,6 +6364,8 @@ bool corten_arena_range_overlaps(struct mm_struct *mm, unsigned long start,
 	rcu_read_lock();
 	xa_for_each_range(&state->arenas, frame, ar, start >> PMD_SHIFT,
 			  (start + len - 1) >> PMD_SHIFT) {
+		if (ar == &corten_va_reserve_sentinel || READ_ONCE(ar->idle))
+			continue;
 		if (start < ar->end && start + len > ar->start) {
 			ret = true;
 			break;
