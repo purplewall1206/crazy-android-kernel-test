@@ -75,6 +75,7 @@
 #include <linux/userfaultfd_k.h>
 #include <linux/mm_inline.h>
 #include <linux/oom.h>
+#include "corten_arena.h"	/* M6.T1 reclaim-walker guard (V2) */
 
 #include <asm/tlb.h>
 
@@ -1873,6 +1874,26 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 	int ptes = 0;
 
 	/*
+	 * CortenMM (M6.T1, M6_RMAP_SPEC.md sec 2.1 D1 / sec 1.3 V2): arena
+	 * PTEs are transaction property and reclaim must never write them
+	 * bare -- the metadata records what a zap does not (INV6/INV7).
+	 * Hand every shadow-VMA hit to the transaction slow path: false
+	 * means declined, so refuse the folio -- try_to_unmap() reports
+	 * "still mapped" and the caller (shrink_folio_list, hwpoison)
+	 * keeps the page resident, the same kswapd-skips-it posture the
+	 * missing LRU anchor produced, now enforced at the reachable
+	 * entry.  M6.T2's swap-out transaction returns true here and the
+	 * walk then reports success for this VMA without touching
+	 * page_vma_mapped_walk().  Checked before the notifier range:
+	 * the refusal writes nothing, so secondary-MMU users see nothing.
+	 */
+	if (corten_enabled_static() && (vma->vm_flags & VM_CORTEN)) {
+		if (corten_rmap_unmap_one(folio, vma, address, flags))
+			return true;
+		return false;
+	}
+
+	/*
 	 * When racing against e.g. zap_pte_range() on another cpu,
 	 * in between its ptep_get_and_clear_full() and folio_remove_rmap_*(),
 	 * try_to_unmap() may return before page_mapped() has become false,
@@ -2297,6 +2318,21 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 	enum ttu_flags flags = (enum ttu_flags)(long)arg;
 	unsigned long pfn;
 	unsigned long hsz = 0;
+
+	/*
+	 * CortenMM (M6.T1, M6_RMAP_SPEC.md sec 2.1 D1 / sec 1.2 P7): same
+	 * guard as try_to_unmap_one() -- the anon_vma of a shadow-VMA can
+	 * hand arena folios to the migration walker, and a migration entry
+	 * is as bare a PTE write as a zap.  Stage 1 refuses every shape
+	 * (migration interop is OQ-M6-3); the callers (compaction, hotplug)
+	 * already require an LRU-anchored folio, so this only arms the
+	 * future door-opener, counted in rmap_rejects.
+	 */
+	if (corten_enabled_static() && (vma->vm_flags & VM_CORTEN)) {
+		if (corten_rmap_unmap_one(folio, vma, address, flags))
+			return true;
+		return false;
+	}
 
 	/*
 	 * When racing against e.g. zap_pte_range() on another cpu,

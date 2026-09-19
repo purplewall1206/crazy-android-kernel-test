@@ -190,6 +190,18 @@ static void corten_arena_note_zap_pinned(void)
 {
 	atomic_long_inc(&corten_nr_zap_pinned);
 }
+
+/* M6.T1 reclaim-path guards (M6_RMAP_SPEC.md sec 1.3 V1/V2): external
+ * walkers that found an arena page and were refused.  Global aggregates
+ * like the route counters above: the walker's mm may die at any moment
+ * and debugfs cannot enumerate per-mm states.  A non-zero reap_skips is
+ * the OOM-pressure evidence; rmap_rejects must stay zero on every boot
+ * where reclaim cannot reach arena folios -- it counting on a kswapd/
+ * migration run means the structural "never on the LRU" gate was opened
+ * by someone and the guard caught it (risk R6-3's tripwire).
+ */
+static atomic_long_t corten_nr_reap_skips;	/* oom_reaper shadow-VMA skips */
+static atomic_long_t corten_nr_rmap_rejects;	/* ttu walker refusals (V2) */
 /* M4.T1 magazine observability: segments claimed (one per cpu per mm,
  * amortized over CORTEN_VA_SEG_FRAMES allocations), frames skipped at
  * allocation because a punch erased their reserve markers (they are
@@ -1165,6 +1177,11 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_pool_ejects));
 	seq_printf(m, "zap_pinned          %ld\n",
 		   atomic_long_read(&corten_nr_zap_pinned));
+	/* M6.T1 reclaim-path guards (M6_RMAP_SPEC.md sec 1.3 V1/V2). */
+	seq_printf(m, "reap_skips          %ld\n",
+		   atomic_long_read(&corten_nr_reap_skips));
+	seq_printf(m, "rmap_rejects        %ld\n",
+		   atomic_long_read(&corten_nr_rmap_rejects));
 }
 
 #ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
@@ -3481,6 +3498,10 @@ static int corten_arena_map_anon(struct corten_fault_ctx *ctx,
 	/* M3 difference vs do_anonymous_page(): no folio_add_lru_vma() --
 	 * arena pages stay off the LRU so reclaim/migration can never
 	 * write to them outside a transaction (sec 4.6, matrix 5.17).
+	 * M6.T1 no longer leans on this alone: the rmap walkers refuse
+	 * shadow-VMAs at their entry (corten_rmap_unmap_one()), so the
+	 * claim survives even if some future change anchors arena folios
+	 * on an LRU (M6_RMAP_SPEC.md risk R6-3 / violation V2).
 	 */
 
 	set_ptes(mm, ctx->addr, ptep, entry, 1);
@@ -3597,7 +3618,12 @@ static int corten_arena_restore_pte(struct corten_fault_ctx *ctx,
 	cur = ptep_get(ptep);
 	if (unlikely(!pte_present(cur))) {
 		/* CORTEN_MAPPED without a PTE: no M3 path produces this
-		 * (all zaps go through transactions).
+		 * (all zaps go through transactions).  M6.T1 premise note:
+		 * the reclaim side doors are guarded too -- the OOM reaper
+		 * skips shadow-VMAs (corten_oom_reap_skip_vma()) and the
+		 * rmap walkers refuse them (corten_rmap_unmap_one()) -- so
+		 * this WARN firing under memory pressure means the guard
+		 * was bypassed, not that reclaim is expected here.
 		 */
 		pte_unmap_unlock(ptep, ptl);
 		WARN_ON_ONCE(1);
@@ -4386,6 +4412,17 @@ enum corten_unmap_class corten_arena_release_classify(enum corten_unmap_class
  * content drop), while the T1c park zap passes 0 -- a munmapped arena's
  * permission commitments die with the mapping, and the pooled window must
  * come back pristine (perm-0 Invalid slots) for its next incarnation.
+ *
+ * R6-2 (M6_RMAP_SPEC.md sec 5, registered not fixed): this zap, unlike
+ * the mprotect route (corten_arena_protect_window()), runs without an
+ * mmu_notifier invalidation window, so secondary-MMU users (KVM,
+ * process-scoped notifiers) are not told about the PTE removals.  M6.T1
+ * does not touch that exposure -- the guard refusal arms it adds write
+ * nothing and start no notifier traffic of their own -- but the T2
+ * swap-out transaction must not copy this shape: its walker-side entry
+ * runs inside try_to_unmap_one()'s existing invalidate window, and the
+ * shrinker side will have to open one.  Guest exposure today is nil
+ * (no secondary-MMU user maps arena ranges), recorded as a Stage-2 item.
  */
 static int corten_arena_zap_window(struct mm_struct *mm,
 				   struct vm_area_struct *vma,
@@ -6829,4 +6866,108 @@ void corten_arena_hwpoison_check(struct folio *folio)
 	}
 	anon_vma_unlock_read(anon_vma);
 	put_anon_vma(anon_vma);
+}
+
+/* ------------------------------------------------------------------ *
+ * M6.T1: reclaim-path guards (M6_RMAP_SPEC.md sec 1.3 V1/V2, sec 2.1
+ * D1/D3).  The arena page is "full swap-out shape" (swapbacked, anon
+ * rmap, memcg-charged) but deliberately off the LRU, so reclaim only
+ * reaches its PTEs through two side doors: the OOM reaper's
+ * unmap_page_range() (V1, reachable today) and the rmap walkers
+ * try_to_unmap_one()/try_to_migrate_one() via the shadow-VMA's
+ * anon_vma (V2, latent until something puts arena folios on the LRU).
+ * Both write arena PTEs bare -- no descriptor write lock, no metadata
+ * update -- which leaves meta=CORTEN_MAPPED behind a none PTE
+ * (INV6/INV7 broken, a false restore WARN on the next fault).  These
+ * guards close both doors without moving arena pages: every arena
+ * content transition still happens inside a transaction.
+ */
+
+/**
+ * corten_oom_reap_skip_vma - the OOM reaper's shadow-VMA predicate (V1).
+ * @vma: the VMA the reaper is about to unmap_page_range().
+ *
+ * D3 of the spec sketched an MMF_UNSTABLE fault gate so that the reaper
+ * could keep unmapping arena pages while new transactions refuse to
+ * start.  That shape still lets the in-flight unmap race a transaction
+ * that predates the flag (ptl-serialised, but the survivor shape is a
+ * half-updated window).  The reaper is best-effort by contract and its
+ * victim is SIGKILL'd anyway: skipping the VMA outright keeps every
+ * arena PTE transaction-owned (zero tearing, by construction rather
+ * than by arbitration), at the cost of freeing the arena's memory a few
+ * moments later in exit_mmap(), whose teardown is already the accepted,
+ * transaction-ordered carve-out (corten_arena_mm_exit() drain + legacy
+ * unmap_vmas).  The reaper's actual job -- freeing legacy anonymous
+ * memory of the victim so the OOM can make progress -- is untouched for
+ * every non-corten VMA of the same mm, including the plain mmap()s of a
+ * MODE process; a whole-mm skip was considered and rejected precisely
+ * because it would withhold that relief.
+ *
+ * Counted (reap_skips) so the reclaim-latency report can quantify how
+ * much memory waits for exit under OOM.
+ *
+ * Return: true if @vma is a shadow-VMA and must be skipped.
+ */
+bool corten_oom_reap_skip_vma(struct vm_area_struct *vma)
+{
+	if (!(vma->vm_flags & VM_CORTEN))
+		return false;
+
+	atomic_long_inc(&corten_nr_reap_skips);
+	return true;
+}
+
+/**
+ * corten_rmap_unmap_one - reclaim-walker guard / transaction slow path
+ * for one (folio, shadow-VMA) hit (V2, M6_RMAP_SPEC.md sec 2.1 D1).
+ * @folio: the folio the walker wants to unmap.
+ * @vma: the VMA the anon_vma walk found it in.
+ * @address: the walk's start address inside @vma.
+ * @flags: the walker's ttu_flags (unmap / migration / hwpoison shape).
+ *
+ * Contract (spec D1): return true when this VMA side was fully handled
+ * transactionally and the walker must report success without entering
+ * page_vma_mapped_walk(); return false when the walker must abort this
+ * VMA's walk without having written anything (folio stays resident, its
+ * caller -- shrink_folio_list, migration, hwpoison -- treats it as
+ * still mapped and skips it).  The caller checks
+ * corten_enabled_static() && VM_CORTEN before calling, so a false here
+ * always means "declined".
+ *
+ * Stage 1 (this change) is the refusal arm only, for every flag shape:
+ * the spec's completion arm would install a swap entry, but a plain
+ * unmap-without-swap-entry (transaction zap + metadata INVALID)
+ * *destroys content*, and "reclaim = data loss" is not a Stage-1
+ * semantic -- the correct minimal behaviour is the same kswapd-skips-
+ * it posture the missing LRU anchoring produced, just enforced at the
+ * reachable entry instead of the structural one, so that a future
+ * folio_add_lru() anywhere cannot silently reopen the door (risk
+ * R6-3).  M6.T2 fills in the swap-out transaction (folio_alloc_swap()
+ * + swap cache before the descriptor write lock per DEV-13 D4, PTE
+ * swap-install + metadata CORTEN_SWAPPED inside it) and this function
+ * starts returning true.
+ *
+ * Lock order: the walker holds the folio lock and a reference before
+ * rmap_walk(); the eventual T2 transaction takes desc->lock(W, BH) >
+ * ptl inside the mmu_notifier start/end window, so every new edge is
+ * downstream of [folio_lock] in the DEV-13 sequence, none reversed.
+ * The refusal arm takes no locks at all.
+ *
+ * Counted (rmap_rejects).
+ *
+ * Return: true = handled transactionally (never in Stage 1),
+ * false = declined, walker aborts.
+ */
+bool corten_rmap_unmap_one(struct folio *folio, struct vm_area_struct *vma,
+			   unsigned long address, enum ttu_flags flags)
+{
+	if (!(vma->vm_flags & VM_CORTEN))
+		return false;
+
+	/* The VMA-flag test is the gate: VM_CORTEN is only ever set by
+	 * shadowize on a corten=on kernel, so no separate static-branch
+	 * read is needed in here.
+	 */
+	atomic_long_inc(&corten_nr_rmap_rejects);
+	return false;
 }

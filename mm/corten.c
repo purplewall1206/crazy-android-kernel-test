@@ -1468,7 +1468,12 @@ static int corten_arena_stats_show(struct seq_file *m, void *v)
 }
 DEFINE_SHOW_ATTRIBUTE(corten_arena_stats);
 
-#ifdef CONFIG_CORTEN_MM_KUNIT_TEST
+/* Shared KUnit infrastructure (mm/corten.h): any of the three test
+ * objects may drive the in-memory debugfs render.
+ */
+#if IS_ENABLED(CONFIG_CORTEN_MM_KUNIT_TEST) ||			\
+	IS_ENABLED(CONFIG_CORTEN_MM_ARENA_KUNIT_TEST) ||	\
+	IS_ENABLED(CONFIG_CORTEN_MM_ARENA_FAULT_KUNIT_TEST)
 /*
  * Drive one of the debugfs seq_show functions against an in-memory
  * seq_file and return its output as a NUL-terminated, caller-kfree()

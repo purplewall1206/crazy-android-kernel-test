@@ -243,6 +243,23 @@ long corten_txn_meta_drop(struct corten_txn *txn);
 #ifdef CONFIG_CORTEN_MM_KUNIT_TEST
 void corten_test_inject_alloc_fail(int nr);
 bool corten_alloc_should_fail(void);
+#else
+static inline bool corten_alloc_should_fail(void)
+{
+	return false;
+}
+#endif
+
+/*
+ * The in-memory debugfs render harness (S8 assertions): shared test
+ * infrastructure, not skeleton-test property -- every KUnit object that
+ * must read what the debugfs files would show drives the very same
+ * seq_show functions through it (M6.T1: the fault-path suite reads the
+ * reclaim-guard counters this way).
+ */
+#if IS_ENABLED(CONFIG_CORTEN_MM_KUNIT_TEST) ||			\
+	IS_ENABLED(CONFIG_CORTEN_MM_ARENA_KUNIT_TEST) ||	\
+	IS_ENABLED(CONFIG_CORTEN_MM_ARENA_FAULT_KUNIT_TEST)
 enum corten_dbg_file {
 	CORTEN_DBG_STATS,
 	CORTEN_DBG_DUMP,
@@ -258,11 +275,6 @@ enum corten_dbg_file {
  * it).
  */
 char *corten_test_render_dbg(enum corten_dbg_file which);
-#else
-static inline bool corten_alloc_should_fail(void)
-{
-	return false;
-}
 #endif
 
 #endif /* _MM_CORTEN_H */

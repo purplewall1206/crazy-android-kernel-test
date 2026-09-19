@@ -43,6 +43,7 @@
 #include <linux/kthread.h>
 #include <linux/init.h>
 #include <linux/mmu_notifier.h>
+#include "corten_arena.h"	/* M6.T1 OOM-reaper shadow-VMA skip (V1) */
 #include <linux/cred.h>
 #include <linux/nmi.h>
 
@@ -562,6 +563,22 @@ static bool __oom_reap_task_mm(struct mm_struct *mm)
 	trace_android_vh_oom_swapmem_gather_init(mm);
 	mas_for_each_rev(&mas, vma, 0) {
 		if (vma->vm_flags & (VM_HUGETLB|VM_PFNMAP))
+			continue;
+
+		/*
+		 * CortenMM (M6.T1, M6_RMAP_SPEC.md sec 1.3 V1): shadow-VMA
+		 * PTEs belong to arena transactions -- a bare
+		 * unmap_page_range() here leaves meta=CORTEN_MAPPED behind
+		 * a none PTE (INV6/INV7 broken, a false restore WARN on
+		 * the next fault).  The reaper is best-effort and the
+		 * victim is dying anyway: skip the VMA outright, zero
+		 * tearing by construction; the arena memory is reclaimed
+		 * moments later by the transaction-ordered exit_mmap()
+		 * teardown, and every non-corten VMA of this mm (the
+		 * victim's plain heap included) is reaped as before.
+		 * Counted (reap_skips) for the reclaim-latency report.
+		 */
+		if (corten_oom_reap_skip_vma(vma))
 			continue;
 
 		/*

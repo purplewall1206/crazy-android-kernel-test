@@ -14,6 +14,7 @@
 #include <linux/corten.h>
 #include <linux/corten_arena.h>
 #include <linux/mm_types.h>
+#include <linux/rmap.h>		/* enum ttu_flags (M6.T1 walker guard) */
 
 struct pt_regs;
 struct vm_area_struct;
@@ -368,6 +369,35 @@ long corten_arena_mremap_route(struct mm_struct *mm, unsigned long addr,
  */
 void corten_arena_hwpoison_check(struct folio *folio);
 
+/*
+ * M6.T1 reclaim-path guards (M6_RMAP_SPEC.md sec 1.3 V1/V2, sec 2.1
+ * D1/D3): keep the bare reclaim writers off arena PTEs.  Both are one
+ * flag test on their common paths (VM_CORTEN is only ever set by
+ * shadowize on a corten=on kernel).
+ */
+
+/*
+ * V1: the OOM reaper calls this for each VMA it would unmap_page_range().
+ * Return: true = shadow-VMA, skip it (counted); the arena memory is
+ * reclaimed by the transaction-ordered exit_mmap() teardown instead.
+ */
+bool corten_oom_reap_skip_vma(struct vm_area_struct *vma);
+
+/*
+ * V2: the rmap-walker guard / transaction slow path (spec D1 interface).
+ * Called from try_to_unmap_one()/try_to_migrate_one() behind the
+ * corten_enabled_static() && VM_CORTEN gate, holding the folio lock and
+ * reference, before the notifier invalidation window opens.
+ * Return: true = this VMA side fully handled transactionally, the walker
+ * reports success without entering page_vma_mapped_walk() (the M6.T2
+ * swap-out transaction fills this arm in); false = declined -- the
+ * walker aborts without writing anything and the folio stays resident
+ * (Stage 1 refuses every ttu shape: reclaim without a swap entry would
+ * destroy content).  Counted (rmap_rejects) on every refusal.
+ */
+bool corten_rmap_unmap_one(struct folio *folio, struct vm_area_struct *vma,
+			   unsigned long address, enum ttu_flags flags);
+
 /* Exported for mm/corten_fault_test.c (same translation unit family). */
 struct corten_mm_state *corten_arena_state(struct mm_struct *mm);
 
@@ -453,6 +483,19 @@ static inline long corten_arena_mremap_route(struct mm_struct *mm,
 
 static inline void corten_arena_hwpoison_check(struct folio *folio)
 {
+}
+
+static inline bool corten_oom_reap_skip_vma(struct vm_area_struct *vma)
+{
+	return false;
+}
+
+static inline bool corten_rmap_unmap_one(struct folio *folio,
+					 struct vm_area_struct *vma,
+					 unsigned long address,
+					 enum ttu_flags flags)
+{
+	return false;
 }
 
 static inline int corten_arena_auto_mmap_route(struct mm_struct *mm,

@@ -29,6 +29,7 @@
 #include <linux/mmap_lock.h>
 #include <linux/mm_inline.h>
 #include <linux/pgtable.h>
+#include <linux/rmap.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -2301,6 +2302,203 @@ static void corten_fault_test_untracked_rearm(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, pte_present(pte) && pte_write(pte));
 }
 
+/* ------------------------------------------------------------------ *
+ * M6.T1: reclaim-path guards (M6_RMAP_SPEC.md sec 1.3 V1/V2, D1/D3)
+ * ------------------------------------------------------------------
+ */
+
+/* The named counters are the arena_stats debugfs lines; read them back
+ * through the very renderer the file uses (the S8 assertion pattern),
+ * so the case doubles as the debugfs-content check for the two new
+ * counter lines.
+ */
+static long ft_named_counter(struct kunit *test, const char *name)
+{
+	char *dbg = corten_test_render_dbg(CORTEN_DBG_ARENA_STATS);
+	char *val, *end;
+	long n = -1;
+
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
+	val = strstr(dbg, name);
+	if (val) {
+		val += strlen(name);
+		while (*val == ' ' || *val == '\t')
+			val++;
+		/* kstrtol() wants the whole string: end the line before
+		 * parsing (the render continues past this counter).
+		 */
+		end = strchr(val, '\n');
+		if (end)
+			*end = '\0';
+		if (kstrtol(val, 10, &n))
+			n = -1;
+	}
+	kfree(dbg);
+
+	KUNIT_ASSERT_GE(test, n, 0);
+	return n;
+}
+
+/* One arena page through the real transaction chain (mark + map_anon
+ * fault); hands back the folio and the PTE as installed.
+ */
+static struct folio *ft_populate(struct kunit *test, struct ft_mm *t,
+				 unsigned long addr, pte_t *installed)
+{
+	struct folio *folio;
+	pte_t *ptep, pte;
+
+	KUNIT_ASSERT_EQ_MSG(test, ft_mark(t, addr, PAGE_SIZE, FT_PERM_RW),
+			    0, "ft_mark failed");
+	KUNIT_ASSERT_EQ(test, ft_write_fault(t, addr), 0);
+
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_ASSERT_TRUE(test, pte_present(pte));
+
+	*installed = pte;
+	folio = page_folio(pte_page(pte));
+	/* The production preconditions of the guard: swapbacked anon,
+	 * off the LRU, rmap-anchored in the shadow-VMA.
+	 */
+	KUNIT_ASSERT_TRUE(test, folio_test_anon(folio));
+	KUNIT_ASSERT_TRUE(test, folio_test_swapbacked(folio));
+	KUNIT_ASSERT_FALSE(test, folio_test_lru(folio));
+
+	return folio;
+}
+
+/* V2: try_to_unmap() on an arena folio must be refused at the walker
+ * guard -- counted, PTE/metadata untouched, folio still mapped.  This
+ * drives the real reclaim entry (rmap_walk over the shadow-VMA's
+ * anon_vma -> try_to_unmap_one -> corten_rmap_unmap_one): the path any
+ * future folio_add_lru() would arm (risk R6-3).  The deliberate
+ * Stage-1 semantics: refuse, do NOT transaction-zap -- a zap without a
+ * swap entry destroys content, and reclaim = data loss is not a
+ * semantic (M6_RMAP_SPEC.md sec 2.1 D1 adjusted; the swap-out
+ * transaction is M6.T2).
+ */
+static void corten_fault_test_rmap_guard(struct kunit *test)
+{
+	/*
+	 * try_to_unmap() is the real upstream walker; on a corten=off
+	 * boot the guard gate folds away and nothing is observable here.
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "reclaim guard requires corten=on");
+	struct ft_mm *t = ft_setup(test);
+	unsigned long addr = FT_BASE + 3 * PAGE_SIZE;
+	unsigned long ref_before = ft_named_counter(test, "rmap_rejects");
+	struct vm_area_struct *legacy;
+	struct corten_pte_meta m;
+	struct folio *folio;
+	pte_t *ptep, pte, installed;
+	long after;
+
+	folio = ft_populate(test, t, addr, &installed);
+	KUNIT_ASSERT_EQ(test, folio_ref_count(folio), 1); /* the PTE ref */
+
+	/* The upstream caller contract: folio locked, reference held. */
+	folio_lock(folio);
+	try_to_unmap(folio, 0);
+	folio_unlock(folio);
+
+	after = ft_named_counter(test, "rmap_rejects");
+	KUNIT_EXPECT_EQ(test, after, ref_before + 1);
+
+	/* The refusal is invisible: mapping, content pointer and
+	 * metadata exactly as before -- the INV7 pairing intact.
+	 */
+	KUNIT_EXPECT_EQ(test, folio_mapped(folio), 1);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1);
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_EQ(test, pte_val(pte), pte_val(installed));
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+
+	/* Direct drive of the D1 interface: the refusal arm fires for
+	 * every ttu shape (unmap / sync / migration-era flags are all
+	 * Stage-1 rejections) and each one counts.
+	 */
+	KUNIT_EXPECT_FALSE(test,
+			   corten_rmap_unmap_one(folio, t->vma, addr, 0));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_rmap_unmap_one(folio, t->vma, addr,
+						 TTU_SYNC));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_rmap_unmap_one(folio, t->vma, addr,
+						 TTU_IGNORE_MLOCK));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_rmap_unmap_one(folio, t->vma, addr,
+						 TTU_HWPOISON));
+	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "rmap_rejects"),
+			after + 4);
+
+	/* A plain VMA is none of the guard's business: no refusal, no
+	 * count (the legacy walkers of a MODE process keep working).
+	 */
+	legacy = ft_mkvm(t->mm, FT_BASE + FT_ARENA_LEN + PMD_SIZE,
+			 FT_BASE + FT_ARENA_LEN + 2 * PMD_SIZE,
+			 FT_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, legacy);
+	KUNIT_EXPECT_FALSE(test,
+			   corten_rmap_unmap_one(folio, legacy,
+						 legacy->vm_start, 0));
+	KUNIT_EXPECT_FALSE(test, corten_oom_reap_skip_vma(legacy));
+	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "rmap_rejects"),
+			after + 4);
+}
+
+/* V1, by equivalent injection: __oom_reap_task_mm() is not reachable
+ * from test context, so drive the exact predicate its VMA loop gained
+ * (corten_oom_reap_skip_vma()) and prove the skip is lossless -- the
+ * page a reaper pass declined to touch still restores from its
+ * metadata, byte-for-byte the same translation.
+ */
+static void corten_fault_test_reap_skip(struct kunit *test)
+{
+	/*
+	 * The interesting direction is "a live arena survives the reaper
+	 * pass", which needs the real descriptor/fault machinery.
+	 */
+	if (!corten_enabled_static())
+		kunit_skip(test, "reap skip requires corten=on");
+	struct ft_mm *t = ft_setup(test);
+	unsigned long addr = FT_BASE + 3 * PAGE_SIZE;
+	unsigned long before = ft_named_counter(test, "reap_skips");
+	struct corten_pte_meta m;
+	struct folio *folio;
+	pte_t *ptep, pte, installed;
+
+	/* The reaper pass over the shadow-VMA: skip, counted. */
+	KUNIT_EXPECT_TRUE(test, corten_oom_reap_skip_vma(t->vma));
+	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "reap_skips"),
+			before + 1);
+
+	/* Zero tearing by construction: the arena page is exactly where
+	 * it was, the fault chain still owns it, and a subsequent write
+	 * fault takes the restore path with no WARN and no rebuild
+	 * surprise (same pfn, same protections).
+	 */
+	folio = ft_populate(test, t, addr, &installed);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0); /* restore */
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_EQ(test, pte_val(pte), pte_val(installed));
+	KUNIT_EXPECT_FALSE(test, folio_test_lru(folio));
+}
+
 static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_dispatch),
 	KUNIT_CASE(corten_fault_test_fig8_cow),
@@ -2330,6 +2528,8 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_chunk_unmap),
 	KUNIT_CASE(corten_fault_test_punch_hole),
 	KUNIT_CASE(corten_fault_test_punch_head),
+	KUNIT_CASE(corten_fault_test_rmap_guard),
+	KUNIT_CASE(corten_fault_test_reap_skip),
 	{}
 };
 
