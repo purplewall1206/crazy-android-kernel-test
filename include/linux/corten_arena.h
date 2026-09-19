@@ -96,12 +96,11 @@ enum corten_arena_stat {
 	 */
 	CORTEN_ARENA_STAT_COW_REUSE,
 	CORTEN_ARENA_STAT_COW_COPY,
-	/* M5.T2' (M5_FORK_SPEC.md sec 4.2/OQ-4): the slow-gate forced
-	 * write shapes -- FOLL_FORCE (ptrace/proc poke) against a page
-	 * whose recorded perm lacks WRITE, and the FAULT_FLAG_UNSHARE
-	 * read-pin pre-break mapped onto the COW write dispatch.
+	/* M5.T3 removed the slow-gate forced-write shapes (M5.T2'
+	 * CORTEN_ARENA_STAT_FORCE_WRITES): their read-only survivor was
+	 * only re-followable by FOLL_FORCE callers and livelocked plain
+	 * GUP write pins (results/r07/m5t3-verify.md).
 	 */
-	CORTEN_ARENA_STAT_FORCE_WRITES,
 	CORTEN_ARENA_NR_STATS,
 };
 

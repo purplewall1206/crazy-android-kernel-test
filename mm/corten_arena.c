@@ -178,6 +178,18 @@ static atomic_long_t corten_nr_eagain_leaked;	/* -EAGAIN still escaping */
 static atomic_long_t corten_nr_mremap_release_fail; /* grow RELEASE fails */
 static atomic_long_t corten_nr_mmap_punches;	/* file-MAP_FIXED punch routes */
 static atomic_long_t corten_nr_mmap_punch_rejects; /* unroutable MAP_FIXED */
+/* M5.T3 (M5_FORK_SPEC.md sec 4.3): zap_window() released a PTE whose
+ * folio is FOLL_PIN/DMA-pinned.  The release itself is refcount-native
+ * (the pin reference carries the folio until unpin, exactly like the
+ * legacy zap), so this counts, not refuses: M6 migration/reclaim must
+ * skip pinned pages, and this is the frequency evidence for that gate.
+ */
+static atomic_long_t corten_nr_zap_pinned;	/* zapped while pinned */
+
+static void corten_arena_note_zap_pinned(void)
+{
+	atomic_long_inc(&corten_nr_zap_pinned);
+}
 /* M4.T1 magazine observability: segments claimed (one per cpu per mm,
  * amortized over CORTEN_VA_SEG_FRAMES allocations), frames skipped at
  * allocation because a punch erased their reserve markers (they are
@@ -1151,6 +1163,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_pool_over));
 	seq_printf(m, "pool_ejects         %ld\n",
 		   atomic_long_read(&corten_nr_pool_ejects));
+	seq_printf(m, "zap_pinned          %ld\n",
+		   atomic_long_read(&corten_nr_zap_pinned));
 }
 
 #ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
@@ -3332,17 +3346,10 @@ struct corten_fault_ctx {
 	struct folio		*folio;	/* speculative alloc, NULL if none */
 	unsigned long		addr;	/* page-aligned fault address */
 	bool			write;
+	bool			unshare; /* FAULT_FLAG_UNSHARE: GUP read-pin
+					  * pre-break (M5.T3)
+					  */
 	bool			instruction;
-	/* M5.T2' (sec 4.2/OQ-4): the slow gate's write faults are
-	 * kernel-path COW writes -- user faults enter through the arch
-	 * hook with FAULT_FLAG_USER and never set this.  It is the
-	 * upstream FOLL_FORCE contract: a write fault that reached
-	 * handle_mm_fault() from GUP/ptrace/fixup may be served by
-	 * breaking folio sharing even when the recorded perm lacks
-	 * WRITE (do_wp_page()'s answer), while the recorded contract
-	 * itself stays untouched.
-	 */
-	bool			force;
 	struct pt_regs		*regs;
 };
 
@@ -3814,179 +3821,6 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 }
 
 /*
- * M5.T2' (M5_FORK_SPEC.md sec 4.2, OQ-4): the forced write transaction.
- *
- * Two kernel-only shapes dispatch here from fault_once, both invisible to
- * the paper's fault classifier (Fig.8 has no ptrace):
- *
- *   - FOLL_FORCE (ptrace POKE, /proc/pid/mem, process_vm_writev): the
- *     caller validated the write against the *VMA* contract (sanitize_
- *     fault_flags() allows a write fault on any MAYWRITE COW mapping);
- *     upstream serves it with do_wp_page(), which copies or reuses the
- *     page WITHOUT retiring the VMA permission.
- *
- *   - FAULT_FLAG_UNSHARE: GUP's read-PIN of a fork-shared page (gup_
- *     must_unshare() -> -EMLINK -> faultin_page(unshare=true)) lands in
- *     the slow gate without the write bit; the OQ-4 decision maps it onto
- *     the COW write dispatch (a plain read-fault answer would re-arm the
- *     read-only translation and spin the GUP retry against -EMLINK).
- *
- * What the transaction must NOT do is upgrade the recorded contract: the
- * perm stays, the PTE keeps the perm's encoding (no mkwrite for a perm-RO
- * page -- otherwise the process's own next write would stop faulting and
- * the mprotect contract would silently vanish; PS-B2, the metadata is the
- * source of truth).  What it must do is exactly do_wp_page(): break folio
- * sharing (reuse when map_count==1, copy otherwise), mark the survivor
- * exclusive (OQ-5), leave this process alone on its private page.
- *
- * The dispatch layer already gated the perm (contract read-only) and
- * fault_once gated this handler to VMA !VM_WRITE shapes; this
- * body only owns the folio-sharing decision.
- * Called with the covering desc write lock held, like cow_write.
- */
-static int corten_arena_force_write(struct corten_fault_ctx *ctx,
-				    struct corten_txn *txn,
-				    const struct corten_pte_meta *m)
-{
-	struct mm_struct *mm = ctx->mm;
-	struct vm_area_struct *vma;
-	struct folio *old;
-	struct page *page;
-	pmd_t *pmdp;
-	pte_t *ptep;
-	pte_t cur, entry;
-	spinlock_t *ptl;	/* ptl nests below the desc write lock (R2) */
-	bool reuse;
-	int ret;
-
-	vma = corten_arena_get_vma(ctx);
-	if (!vma)
-		return -EFAULT;
-
-	pmdp = corten_arena_pmd(mm, ctx->addr);
-	if (!pmdp)
-		return -EAGAIN;
-	ptep = pte_offset_map_lock(mm, pmdp, ctx->addr, &ptl);
-	if (!ptep)
-		return -EAGAIN;
-
-	cur = ptep_get(ptep);
-	if (unlikely(!pte_present(cur) || pte_special(cur))) {
-		/* A permission-faulted arena page lost its translation
-		 * (protnone downgrade / zap): nothing is shared through a
-		 * missing PTE and there is nothing to re-arm at the
-		 * recorded perm either -- the external write fails.
-		 */
-		pte_unmap_unlock(ptep, ptl);
-		return -EFAULT;
-	}
-
-	page = pte_page(cur);
-	old = page_folio(page);
-
-	/* The reuse decision mirrors cow_write(): map_count under this
-	 * ptl is >= the live mapper count (removers clear their PTE under
-	 * their ptl before the count drop, R-B), the race direction is
-	 * "copy where a reuse would also have been safe".  OQ-5: the
-	 * survivor becomes exclusive (do_wp_page() reuse shape).
-	 */
-	reuse = folio_mapcount(old) == 1;
-	if (reuse && !PageAnonExclusive(page)) {
-		if (folio_maybe_dma_pinned(old))
-			reuse = false;
-		else
-			SetPageAnonExclusive(page);
-	}
-
-	if (reuse) {
-		if (m->flags & CORTEN_PF_SHARED) {
-			/* Residue of a peer that COW'd away (or a
-			 * fork_skips shape): clear SHARED in the same
-			 * transaction, keep everything else.
-			 */
-			struct corten_pte_meta nm = *m;
-
-			nm.flags = m->flags & ~CORTEN_PF_SHARED;
-			ret = corten_mark(txn, ctx->addr, PAGE_SIZE, &nm);
-			if (unlikely(ret)) {
-				pte_unmap_unlock(ptep, ptl);
-				return ret == -ENOMEM ? -ENOMEM : -EFAULT;
-			}
-		}
-		/* Private already (or just made so): the recorded
-		 * translation is the answer -- the GUP re-follow takes
-		 * can_follow_write_common()'s exclusive+MAYWRITE route.
-		 * No PTE rewrite: the perm's encoding did not change.
-		 */
-		pte_unmap_unlock(ptep, ptl);
-
-		corten_arena_fault_stat(READ_ONCE(mm->corten_state),
-					CORTEN_ARENA_STAT_FORCE_WRITES);
-		return 0;
-	}
-
-	/* Copy branch (Fig.8 L33-34, contract-preserving variant): the
-	 * peer still maps the folio.  The slow gate preallocates for
-	 * every write fault (ctx.write includes the UNSHARE mapping); a
-	 * lost race consumed it -- retry re-arms.
-	 */
-	if (!ctx->folio) {
-		pte_unmap_unlock(ptep, ptl);
-		return -EAGAIN;
-	}
-
-	copy_user_highpage(folio_page(ctx->folio, 0), page, ctx->addr, vma);
-	__folio_mark_uptodate(ctx->folio);
-
-	if (unlikely(check_stable_address_space(mm))) {
-		pte_unmap_unlock(ptep, ptl);
-		return -EAGAIN;
-	}
-
-	/* Break-before-make: the old read-only translation may be cached
-	 * anywhere (cow_write precedent).
-	 */
-	ptep_clear_flush(vma, ctx->addr, ptep);
-
-	/* The recorded perm's encoding, NOT a writable PTE: this fault
-	 * came from an external writer; the process's own contract must
-	 * keep faulting (wp_page_copy()'s pte_maybe_mkwrite() on a
-	 * !VM_WRITE vma lands on the same read-only shape).
-	 */
-	entry = folio_mk_pte(ctx->folio, corten_arena_perm_pgprot(vma,
-								  m->perm));
-	entry = pte_mkyoung(entry);
-
-	add_mm_counter(mm, MM_ANONPAGES, 1);
-	folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr, RMAP_EXCLUSIVE);
-	set_ptes(mm, ctx->addr, ptep, entry, 1);
-	update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
-
-	folio_remove_rmap_pte(old, page, vma);
-	add_mm_counter(mm, MM_ANONPAGES, -1);
-	pte_unmap_unlock(ptep, ptl);
-	folio_put(old);
-
-	if (m->flags & CORTEN_PF_SHARED) {
-		/* MAPPED->MAPPED needs FORCE; the map resets the flags --
-		 * SHARED goes with the shared folio.
-		 */
-		ret = corten_map(txn, ctx->addr, folio_page(ctx->folio, 0),
-				 m->perm, CORTEN_MAP_FORCE);
-		if (WARN_ON_ONCE(ret))
-			return -EFAULT;
-	}
-
-	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
-				CORTEN_ARENA_STAT_FORCE_WRITES);
-
-	/* The speculative reference became the new PTE reference. */
-	ctx->folio = NULL;
-
-	return 0;
-}
-
-/*
  * One transaction attempt (sec 4.3 for(;;) body).  On entry ctx->folio is
  * the speculative allocation or NULL; on any return the epilogue of the
  * caller owns it (success transferred it -- see map_anon).
@@ -4121,29 +3955,20 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 	if (disp == CORTEN_DISP_ZERO_PAGE && ctx->folio)
 		disp = CORTEN_DISP_MAP_ANON;
 
-	/* M5.T2' (sec 4.2, OQ-4 + FOLL_FORCE): the slow gate's write
-	 * faults are kernel-path COW writes -- user faults enter through
-	 * the arch hook with FAULT_FLAG_USER and keep the plain ACCERR
-	 * answer below.  A write against a translated MAPPED page whose
-	 * recorded perm lacks WRITE is the FOLL_FORCE shape (ptrace/
-	 * proc-poke) or the UNSHARE read-pin pre-break; upstream serves
-	 * both with do_wp_page().  Direct them to the forced-write
-	 * transaction when the GUP re-follow can accept a read-only
-	 * survivor (VMA !VM_WRITE + MAYWRITE, the can_follow_write_
-	 * common() route): mkwrite is never produced here -- it would
-	 * silently retire the recorded contract for the process's own
-	 * writes.  The VMA-writable shape (routed-partial downgraded
-	 * commit) keeps the ACCERR answer: loud EIO to the external
-	 * writer beats a silently weakened mprotect contract.
+	/* M5.T2' (sec 4.2, OQ-4): the slow gate's UNSHARE write (the GUP
+	 * read-PIN pre-break of a fork-shared page) is ctx->write without
+	 * the USER bit, exactly like every other kernel-path writer --
+	 * dispatch sends the shared shapes through the COW transaction
+	 * below.  [T3] There is deliberately no FOLL_FORCE redirect here
+	 * any more: the fault flags cannot tell a FOLL_FORCE poke from a
+	 * plain GUP write pin, and a forced copy of a page whose recorded
+	 * perm lacks WRITE arms read-only -- a survivor only a FOLL_FORCE
+	 * caller can re-follow (can_follow_write_common()).  A plain
+	 * writer (pread/O_DIRECT/io_uring zero-copy) would fault, copy
+	 * and retry forever, so every external write against a
+	 * read-only contract answers ACCERR -- the loud EFAULT the
+	 * routed-RO contract ruling (T2' residue 2) chose.
 	 */
-	if (ctx->force && !ctx->instruction && m.state == CORTEN_MAPPED &&
-	    (disp == CORTEN_DISP_ACCERR || disp == CORTEN_DISP_COW_COPY)) {
-		struct vm_area_struct *fvma = corten_arena_get_vma(ctx);
-
-		if (fvma && !(fvma->vm_flags & VM_WRITE) &&
-		    (fvma->vm_flags & VM_MAYWRITE))
-			disp = CORTEN_DISP_FORCE_COPY;
-	}
 
 	switch (disp) {
 	case CORTEN_DISP_MAP_ANON:
@@ -4163,15 +3988,11 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		 * read-only is a genuine permission fault (the page was
 		 * RO before the fork -- the wrprotect changed nothing).
 		 * The STUB-era WARN is gone: this is a normal, legal
-		 * outcome.  The slow-gate forced shapes were redirected
-		 * to FORCE_COPY above (M5.T2'); what survives here is
-		 * the process's own ACCERR.
+		 * outcome.  It answers SIGSEGV for every writer, kernel
+		 * path included -- see the [T3] note above the dispatch.
 		 */
 		corten_unlock(&txn);
 		return CORTEN_F_ACCERR;
-	case CORTEN_DISP_FORCE_COPY:
-		ret = corten_arena_force_write(ctx, &txn, &m);
-		break;
 	case CORTEN_DISP_ACCERR:
 		corten_unlock(&txn);
 		return CORTEN_F_ACCERR;
@@ -4382,17 +4203,22 @@ vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma,
 	 * the next -EMLINK.  FAULT_FLAG_WRITE|UNSHARE never co-exist
 	 * (sanitize_fault_flags() VM_WARNs), so the mapping is total.
 	 */
-	if (flags & FAULT_FLAG_UNSHARE)
-		ctx.write = true;
-	/* FOLL_FORCE (M5.T2'): every write fault that reaches the slow
-	 * gate without FAULT_FLAG_USER is a kernel-path COW write
-	 * (ptrace/proc/get_user/fixup) that upstream would wp_page_copy()
-	 * -- including pages whose recorded perm is read-only.  ctx.force
-	 * lets fault_once redirect those permission failures to the
-	 * forced-write transaction while the arch-hook user faults keep
-	 * the plain ACCERR contract.
+	/* OQ-4 mapping (above) turns the unshare into a write; ctx.unshare
+	 * remembers the origin so a denied read-pin unshare can fall back
+	 * to the legacy body (see the [T3] note at the returns).
 	 */
-	ctx.force = ctx.write && !(flags & FAULT_FLAG_USER);
+	if (flags & FAULT_FLAG_UNSHARE) {
+		ctx.unshare = true;
+		ctx.write = true;
+	}
+	/* [T3] A non-USER write fault (GUP pin, ptrace, get_user) takes
+	 * the same metadata verdicts as the process's own faults: a
+	 * read-only contract denies it with ACCERR (see the fault_once
+	 * note), a writable contract restores or copies re-followably.
+	 * The former FOLL_FORCE forced-write redirect is gone -- its
+	 * read-only survivor was only followable by FOLL_FORCE callers
+	 * and livelocked the plain ones.
+	 */
 	ctx.regs = regs;
 
 	/* Pairs with the smp_store_release() publisher in the DECLARE
@@ -4453,6 +4279,17 @@ vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma,
 	case CORTEN_F_HANDLED:
 		return 0;
 	case CORTEN_F_ACCERR:
+		/* [T3] A read-pin unshare (gup_must_unshare() -> -EMLINK
+		 * -> FAULT_FLAG_UNSHARE) of a page whose recorded perm
+		 * lacks WRITE: the COW dispatch denies the synthesized
+		 * write, but the operation only asks to break folio
+		 * sharing at the recorded perm.  The legacy body owns
+		 * exactly that on the shadow-VMA (do_wp_page() unshare,
+		 * no mkwrite) -- hand it over instead of denying a read.
+		 */
+		if (ctx.unshare)
+			return CORTEN_FAULT_FALLBACK_BIT | VM_FAULT_FALLBACK;
+		return VM_FAULT_SIGSEGV;
 	case CORTEN_F_MAPERR:
 		return VM_FAULT_SIGSEGV;
 	case CORTEN_F_OOM:
@@ -4686,6 +4523,16 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 				    !pte_special(oldpte)) {
 					page = pte_page(oldpte);
 					folio = page_folio(page);
+
+					/* [T3] Observability only: a pinned
+					 * folio survives the zap on its pin
+					 * reference (the batch flush below
+					 * drops the PTE reference, the pin
+					 * carries the folio to unpin --
+					 * M5_FORK_SPEC.md sec 4.3, INV8).
+					 */
+					if (folio_maybe_dma_pinned(folio))
+						corten_arena_note_zap_pinned();
 
 					/* [F-B] A re-punch over an
 					 * already-punched window can find

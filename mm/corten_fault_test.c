@@ -248,7 +248,7 @@ static void corten_fault_test_dispatch(struct kunit *test)
 		 * fault on a shared page is the fork wrprotect artifact
 		 * (contract writable -> the COW transaction) or a genuine
 		 * permission fault (contract read-only -> SEGV_ACCERR via
-		 * COW_COPY; the FOLL_FORCE-forced copy is M5.T2').  Any
+		 * COW_COPY; SIGSEGV answers every writer since M5.T3).  Any
 		 * non-write access on a shared page restores as before --
 		 * but the restore side keeps the hardware read-only (the
 		 * wrprotect guard), which the pure classifier still
@@ -315,11 +315,11 @@ static void corten_fault_test_dispatch(struct kunit *test)
  *        virtual-allocation answer is the registered PS deviation --
  *        covered by the "invalid-*" rows of the dispatch table above.
  *
- * T2' additions with no paper counterpart: the slow-gate forced shapes
- * (FOLL_FORCE poke, FAULT_FLAG_UNSHARE) synthesize CORTEN_DISP_FORCE_
- * COPY in fault_once -- dispatch stays a pure classifier, so the same
- * metadata keeps reporting COW_COPY/ACCERR here (see
- * corten_fault_test_foll_force for the real chain).
+ * T2' addition with no paper counterpart: the FAULT_FLAG_UNSHARE
+ * read-pin pre-break is mapped onto ctx->write in the slow gate, so
+ * the same metadata keeps reporting COW_MAYBE/COW_COPY here (M5.T3
+ * removed the FOLL_FORCE FORCE_COPY synthesis -- see
+ * corten_fault_test_foll_force for the external-writer contract).
  */
 static void corten_fault_test_fig8_cow(struct kunit *test)
 {
@@ -455,9 +455,9 @@ static void corten_fault_test_mmap_classify(struct kunit *test)
  */
 
 /* One write fault through the slow-path entry point.  Without
- * FAULT_FLAG_USER this is the kernel-path shape (FOLL_FORCE contract:
- * a GUP/ptrace write that upstream would wp_page_copy()); see
- * corten_fault_test_foll_force.
+ * FAULT_FLAG_USER this is the kernel-path shape (a GUP/ptrace write);
+ * the metadata verdict is the same either way since M5.T3 removed the
+ * FOLL_FORCE redirect -- see corten_fault_test_foll_force.
  */
 static int ft_write_fault(struct ft_mm *t, unsigned long addr)
 {
@@ -465,10 +465,9 @@ static int ft_write_fault(struct ft_mm *t, unsigned long addr)
 					    NULL);
 }
 
-/* A genuine user-mode write (the arch-hook shape): FAULT_FLAG_USER keeps
- * the fault_once forced-write conversion off, so the recorded perm rules
- * alone.  Every "the process writes a downgraded page" expectation below
- * drives this.
+/* A genuine user-mode write (the arch-hook shape).  Since M5.T3 the
+ * recorded perm rules alone for every writer, user mode included;
+ * the flag distinguishes the entry path, not the verdict.
  */
 static int ft_user_write_fault(struct ft_mm *t, unsigned long addr)
 {
@@ -1002,11 +1001,16 @@ static int corten_fault_test_cow_worker(void *data)
 	return 0;
 }
 
-/* M5.T2' (M5_FORK_SPEC.md sec 4.2/OQ-4): the slow-gate forced write.
- * ft_write_fault() IS the forced shape (no FAULT_FLAG_USER): the same
- * entry a FOLL_FORCE poke or a FAULT_FLAG_UNSHARE read-pin pre-break
- * takes.  The recorded perm must survive untouched and the PTE must
- * never gain a write bit -- only the sharing breaks.
+/* M5.T3 (supersedes the M5.T2' forced-write anchor): the slow gate has
+ * no FOLL_FORCE channel -- FAULT_FLAG_WRITE without FAULT_FLAG_USER is
+ * equally a ptrace poke and a plain GUP write pin (pread/O_DIRECT/
+ * io_uring zero-copy), so a read-only contract must answer both the
+ * same way or one of them livelocks on an unfollowable survivor.  The
+ * ruling (extends the T2' residue-2 principle: an external writer must
+ * not silently repeal the process contract): ACCERR for every external
+ * write against a page whose recorded perm lacks WRITE, kernel path
+ * included; only writable-contract shapes (RESTORE, COW) answer with a
+ * re-followable PTE.
  */
 static void corten_fault_test_foll_force(struct kunit *test)
 {
@@ -1027,8 +1031,8 @@ static void corten_fault_test_foll_force(struct kunit *test)
 	vm_flags_clear(t->vma, VM_WRITE);
 
 	/* A committed page with a fork-shaped residue: SHARED meta
-	 * residue (the peer COW'd away or never existed), read-only
-	 * hardware, and the recorded contract downgraded to read-only.
+	 * residue, read-only hardware, and the recorded contract
+	 * downgraded to read-only.
 	 */
 	KUNIT_EXPECT_EQ(test, ft_mark(t, addr, PAGE_SIZE, FT_PERM_RW), 0);
 	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
@@ -1050,12 +1054,12 @@ static void corten_fault_test_foll_force(struct kunit *test)
 	pfn_before = pte_pfn(ptep_get(ptep));
 	pte_unmap(ptep);
 
-	/* The forced poke: SHARED residue breaks in place (mapcount==1,
-	 * the reuse branch), the PTE stays at the recorded read-only
-	 * encoding, the page becomes exclusive (OQ-5, the do_wp_page
-	 * reuse shape) and the perm does not move.
+	/* The external write (a poke or a plain GUP write pin -- the
+	 * gate cannot tell) dies loudly at the metadata: no copy, no
+	 * reuse, no exclusive mark, the PTE and its recorded perm
+	 * untouched.
 	 */
-	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), VM_FAULT_SIGSEGV);
 
 	ptep = ft_pte(t, addr);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
@@ -1066,36 +1070,26 @@ static void corten_fault_test_foll_force(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, pte_pfn(pte), pfn_before);
 	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
 	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
-	KUNIT_EXPECT_EQ(test, m.flags, 0);
+	KUNIT_EXPECT_EQ(test, m.flags, CORTEN_PF_SHARED);
 	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_USER);
 	{
 		struct page *page = pfn_to_page(pfn_before);
 
+		/* Untouched by the denied write: it keeps the exclusive
+		 * mark its map_anon install gave it (ft_arm_shared()
+		 * only sets the metadata flag).
+		 */
 		KUNIT_EXPECT_TRUE(test, PageAnonExclusive(page));
 	}
 
-	/* The process's own write is still contract-bound: ACCERR. */
+	/* The process's own write: the same ACCERR contract. */
 	KUNIT_EXPECT_EQ(test, ft_user_write_fault(t, addr),
 			VM_FAULT_SIGSEGV);
 
-	/* The second poke: private and exclusive now -- plain handled,
-	 * still no write bit, still no copy.
-	 */
-	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
-	ptep = ft_pte(t, addr);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
-	pte = ptep_get(ptep);
-	pte_unmap(ptep);
-	KUNIT_EXPECT_TRUE(test, pte_present(pte));
-	KUNIT_EXPECT_FALSE(test, pte_write(pte));
-
 	/* The boundary: a VMA the GUP re-follow itself calls writable
-	 * (the routed-partial downgraded commit).  Serving the forced
-	 * write would need mkwrite -- which would silently retire the
-	 * recorded RO contract for the process -- and falling back to
-	 * the legacy body would wp_page_copy() it behind the
-	 * transaction's back.  The fault must die loudly (ACCERR) with
-	 * the hardware shape untouched.
+	 * (the routed-partial downgraded commit).  The recorded perm is
+	 * what rules, not the VMA bits: the write still dies loudly
+	 * with the hardware shape untouched.
 	 */
 	vm_flags_set(t->vma, VM_WRITE);
 	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), VM_FAULT_SIGSEGV);
