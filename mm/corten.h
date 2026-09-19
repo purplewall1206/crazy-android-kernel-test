@@ -227,6 +227,14 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 void corten_txn_finish(struct corten_txn *txn);
 
 /*
+ * [perf1b] Free the covering PT page's whole metadata array (full-reset
+ * drops): the pristine-slot answer comes from corten_query()'s meta==NULL
+ * path instead of a per-slot reset walk.  Returns the number of recorded
+ * slots the array carried.  See mm/corten.c for the caller contract.
+ */
+long corten_txn_meta_drop(struct corten_txn *txn);
+
+/*
  * Allocation-failure injection for the KUnit tests (review gap: the
  * GFP_NOWAIT failure paths were untested).  corten_alloc_should_fail() is
  * consulted by the descriptor and metadata allocators; outside

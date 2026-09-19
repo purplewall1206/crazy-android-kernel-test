@@ -1319,6 +1319,49 @@ int corten_unmap(struct corten_txn *txn, unsigned long start,
 }
 
 /**
+ * corten_txn_meta_drop - free the covering PT page's metadata array wholesale.
+ * @txn: transaction whose covering page's array is dropped (write-locked).
+ *
+ * Returns the number of recorded (non-Invalid) slots the array carried, for
+ * caller-side accounting; 0 when there was no array (nothing was recorded).
+ *
+ * [perf1b] A full-reset drop (zflags without KEEP_PERM: the T1c park) owes
+ * the range pristine slots (Invalid, perm 0).  Resetting them one
+ * transaction operation at a time costs a corten_query() per 4K page of the
+ * window for the unrecorded majority -- a 16KB op on a 2M frame walked 512
+ * slots to reset the ~4 that ever carried content.  Dropping the array
+ * gives every reader the same pristine answer from corten_query()'s
+ * meta==NULL path at O(1); the next mark re-ensures it (GFP_NOWAIT, with
+ * the usual -ENOMEM recovery on the fault path).
+ *
+ * Caller contract: hold the covering write lock (a running transaction)
+ * and have completed every PTE clear for the window -- a live PTE with no
+ * metadata behind it is exactly the r03 defect C shape.
+ */
+long corten_txn_meta_drop(struct corten_txn *txn)
+{
+	struct corten_pte_meta *meta;
+	long nr = 0;
+	int i;
+
+	if (unlikely(!txn->covering)) {
+		WARN_ON_ONCE(1);
+		return 0;
+	}
+
+	meta = txn->covering->meta;
+	if (!meta)
+		return 0;
+
+	for (i = 0; i < CORTEN_PTES_PER_PT_PAGE; i++)
+		nr += meta[i].state != CORTEN_INVALID;
+
+	corten_meta_free(txn->covering);
+
+	return nr;
+}
+
+/**
  * corten_unlock - see include/linux/corten.h.
  */
 void corten_unlock(struct corten_txn *txn)

@@ -4265,9 +4265,12 @@ enum corten_unmap_class corten_arena_release_classify(enum corten_unmap_class
  * span.  The previous explicit flush_tlb_range() here duplicated the
  * gather's flush, doubling the shootdown cost of every content-bearing
  * unmap (the r06-m4t12 diagnosis measured the flush/IPI block at more
- * than half of the MODE-arm samples on the unmap shapes).  The gather is
- * finished on every caller exit -- error paths included -- so the single
- * flush guarantee covers the whole walk.
+ * than half of the MODE-arm samples on the unmap shapes).
+ *
+ * [perf1] The gather is owned by the window itself (opened only when the
+ * window carries a translation, finished -- error paths included -- before
+ * this function returns), so the callers hold no gather across windows and
+ * a PTE-less window costs no tlb_flush_pending traffic at all.
  *
  * @zflags goes to corten_unmap() verbatim: the live-arena chunk zap uses
  * CORTEN_UNMAP_KEEP_PERM (the committed mprotect contract survives the
@@ -4283,6 +4286,9 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 {
 	unsigned long addr = start;
 	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+	struct mmu_gather own;
+	struct mmu_gather *g = tlb;
+	bool have_tlb = false;
 	pmd_t *pmdp;
 	int ret = 0;
 
@@ -4291,27 +4297,75 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 		return -EAGAIN;
 
 	/*
-	 * Drive the walk by PTE content, not metadata: the metadata only
-	 * decides whether a corten_unmap() reset is needed.  A page can
-	 * have a PTE with no (or INVALID) metadata behind it -- the legacy
-	 * fallback body writes PTEs on a shadow-VMA when the transaction
-	 * layer hands a fault over -- and trusting the metadata there
-	 * leaves the old translation live through the munmap (r03 defect
-	 * C: the arena_stress zerocheck read the previous cycle's magic).
-	 * Every producer of an in-arena PTE (arena map/zero page, legacy
-	 * fault, GUP) attaches a private anonymous page with rmap, so the
-	 * present-and-not-special release below is correct for all of
-	 * them; the shared zero page is pte_special()d and owns nothing.
+	 * [perf1] Lazy per-window gather.  The walk now decides under the
+	 * PTE lock whether the window holds any translation at all before
+	 * opening its mmu_gather.  A window of never-touched pages (the
+	 * unmap-virt shape: every refill only recorded metadata) has
+	 * nothing to flush, but the old route-level gather was opened for
+	 * it anyway -- and tlb_finish_mmu() force-upgrades any gather to a
+	 * full-mm shootdown when a second gather on this mm overlaps
+	 * (mm_tlb_flush_nested()), which turned the PTE-less chunk churn
+	 * into a permanent remote-IPI storm (ftrace tlb_flush: ~2 full-mm
+	 * flushes per op vs ~0 legacy, r06/perf1).  Metadata-only drops
+	 * now run with no gather at all; windows with real content behave
+	 * exactly as before, with the gather finished (and the released
+	 * folios flushed) before the covering transaction is dropped.
+	 *
+	 * @tlb (caller-owned, already gathered) skips the lazy logic: every
+	 * non-none PTE is queued into it and the caller owns the finish.
+	 * [perf1c] The T1c park passes its route-level gather this way so
+	 * its flush can run after the write->read downgrade, outside the
+	 * serialized write section -- the same placement
+	 * vms_complete_munmap_vmas() uses for the legacy munmap.
+	 *
+	 * The scan is race-free against every PTE producer: the covering
+	 * desc write lock excludes the fault paths and the other
+	 * transactional zaps, and a tracked window cannot be served by the
+	 * legacy funnel.
+	 *
+	 * The walk itself still decides by PTE content, not metadata: a
+	 * page can have a PTE with no (or INVALID) metadata behind it --
+	 * the legacy fallback body writes PTEs on a shadow-VMA when the
+	 * transaction layer hands a fault over -- and trusting the
+	 * metadata there leaves the old translation live through the
+	 * munmap (r03 defect C: the arena_stress zerocheck read the
+	 * previous cycle's magic).  Any !none PTE in the window routes the
+	 * walk through the clearing path above; the metadata-only branch
+	 * runs only when the scan proved every PTE is none, where a
+	 * translation to leave live cannot exist.  Every producer of an
+	 * in-arena PTE (arena map/zero page, legacy fault, GUP) attaches a
+	 * private anonymous page with rmap, so the present-and-not-special
+	 * release below is correct for all of them; the shared zero page
+	 * is pte_special()d and owns nothing.
 	 */
 	for (;;) {
 		bool force = false;
-
-		pte_t *ptep;
+		bool any_pte = false;
+		pte_t *ptep, *scan;
+		unsigned long a;
 		spinlock_t *ptl;
 
 		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
-		if (!ptep)
-			return -EAGAIN;
+		if (!ptep) {
+			ret = -EAGAIN;
+			goto out;
+		}
+
+		if (!tlb) {
+			for (scan = ptep, a = addr; a < end;
+			     a += PAGE_SIZE, scan++) {
+				if (!pte_none(ptep_get(scan))) {
+					any_pte = true;
+					break;
+				}
+			}
+
+			if (any_pte && !have_tlb) {
+				tlb_gather_mmu(&own, mm);
+				have_tlb = true;
+			}
+			g = have_tlb ? &own : NULL;
+		}
 
 		for (; addr < end; addr += PAGE_SIZE, ptep++) {
 			struct corten_pte_meta m;
@@ -4320,12 +4374,36 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 			pte_t oldpte;
 			bool recorded;
 
-			recorded = corten_query(txn, addr, &m) == 0 &&
+			/* [perf1b] A full-reset drop (no KEEP_PERM: the T1c
+			 * park) owes pristine slots, which the wholesale
+			 * array drop below provides; walking the metadata
+			 * per slot would cost a query per 4K page of the
+			 * window for the unrecorded majority.
+			 */
+			recorded = (zflags & CORTEN_UNMAP_KEEP_PERM) &&
+				   corten_query(txn, addr, &m) == 0 &&
 				   m.state != CORTEN_INVALID;
+
+			if (!g) {
+				/* The scan proved the window carries no
+				 * translation: only the recorded-metadata
+				 * reset remains.  No PTE store, no TLB
+				 * entry, no folio references.
+				 */
+				if (recorded) {
+					ret = corten_unmap(txn, addr,
+							   PAGE_SIZE, zflags);
+					if (WARN_ON_ONCE(ret))
+						break;
+
+					this_cpu_inc(state->stats[CORTEN_ARENA_STAT_UNMAP_PAGES]);
+				}
+				continue;
+			}
 
 			oldpte = ptep_get_and_clear(mm, addr, ptep);
 			if (!pte_none(oldpte))
-				tlb_remove_tlb_entry(tlb, ptep, addr);
+				tlb_remove_tlb_entry(g, ptep, addr);
 
 			if (!pte_none(oldpte)) {
 				/* Zero-page entries are pte_special()d and
@@ -4359,7 +4437,7 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 						add_mm_counter(mm,
 							       MM_FILEPAGES,
 							       -1);
-					force = __tlb_remove_page_size(tlb, page, false, PAGE_SIZE);
+					force = __tlb_remove_page_size(g, page, false, PAGE_SIZE);
 					if (force)
 						break;
 				}
@@ -4403,8 +4481,29 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 		 * failure in tlb_next_batch() would have overflowed the
 		 * batch array.
 		 */
-		tlb_flush_mmu(tlb);
+		tlb_flush_mmu(g);
 		cond_resched();
+	}
+
+out:
+	if (have_tlb)
+		tlb_finish_mmu(&own);
+
+	/* [perf1b] Full-reset drop: the wholesale array free provides the
+	 * pristine-slot contract (Invalid, perm 0) the per-slot
+	 * corten_unmap() walk would have; the count keeps the
+	 * UNMAP_PAGES accounting identical.  Only on a fully successful
+	 * walk (ret == 0: every PTE cleared): a walk that bailed mid-window
+	 * can leave live PTEs, and a live PTE without metadata is the r03
+	 * defect C shape -- the caller's error path (real RELEASE for the
+	 * park) tears the window down completely instead.
+	 */
+	if (!ret && !(zflags & CORTEN_UNMAP_KEEP_PERM)) {
+		long nr = corten_txn_meta_drop(txn);
+
+		if (nr)
+			this_cpu_add(state->stats[CORTEN_ARENA_STAT_UNMAP_PAGES],
+				     nr);
 	}
 
 	return ret;
@@ -4428,16 +4527,17 @@ static int corten_arena_zap_window(struct mm_struct *mm,
  * pages alive through the munmap, so zap whatever is actually there.
  * No transaction and no metadata exist; every present non-special PTE
  * is a private anonymous page with rmap (see corten_arena_zap_window()).
- * M4.T2 batching as there: one PTE-lock section, and the TLB
- * invalidation left to the caller's single tlb_finish_mmu() flush.
+ * M4.T2 batching as there: one PTE-lock section, with the gather owned
+ * by the window ([perf1] and opened only when a translation exists).
  */
 static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 					     struct vm_area_struct *vma,
 					     unsigned long start,
-					     unsigned long end,
-					     struct mmu_gather *tlb)
+					     unsigned long end)
 {
 	unsigned long addr = start;
+	struct mmu_gather tlb;
+	bool have_tlb = false;
 	bool drift = false;
 	pmd_t *pmdp;
 	int ret = 0;
@@ -4450,12 +4550,42 @@ static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 
 	for (;;) {
 		bool force = false;
-		pte_t *ptep;
+		bool any_pte = false;
+		pte_t *ptep, *scan;
+		unsigned long a;
 		spinlock_t *ptl;
 
 		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
-		if (!ptep)
-			return -EAGAIN;
+		if (!ptep) {
+			ret = -EAGAIN;
+			goto out;
+		}
+
+		/* [perf1] Same lazy-gather contract as the tracked zap:
+		 * decide by PTE content whether anything needs flushing
+		 * before opening the gather (and before clearing).  This
+		 * window has no transaction, so the scan does not exclude
+		 * concurrent producers by itself -- but a concurrent
+		 * producer that appears after the scan said "none" either
+		 * writes none PTEs (faults here are diverted to the arena
+		 * transaction layer) or takes the same PTE lock.
+		 */
+		for (scan = ptep, a = addr; a < end; a += PAGE_SIZE, scan++) {
+			if (!pte_none(ptep_get(scan))) {
+				any_pte = true;
+				break;
+			}
+		}
+
+		if (any_pte && !have_tlb) {
+			tlb_gather_mmu(&tlb, mm);
+			have_tlb = true;
+		}
+
+		if (!have_tlb) {
+			pte_unmap_unlock(ptep, ptl);
+			break;		/* nothing was ever mapped here */
+		}
 
 		for (; addr < end; addr += PAGE_SIZE, ptep++) {
 			struct folio *folio;
@@ -4464,7 +4594,7 @@ static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 
 			oldpte = ptep_get_and_clear(mm, addr, ptep);
 			if (!pte_none(oldpte))
-				tlb_remove_tlb_entry(tlb, ptep, addr);
+				tlb_remove_tlb_entry(&tlb, ptep, addr);
 
 			if (!pte_none(oldpte)) {
 				drift = true;
@@ -4489,7 +4619,8 @@ static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 						add_mm_counter(mm,
 							       MM_FILEPAGES,
 							       -1);
-					force = __tlb_remove_page_size(tlb, page, false, PAGE_SIZE);
+					force = __tlb_remove_page_size(&tlb, page,
+								       false, PAGE_SIZE);
 					if (force)
 						break;
 				}
@@ -4500,9 +4631,13 @@ static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 
 		if (!force)
 			break;
-		tlb_flush_mmu(tlb);
+		tlb_flush_mmu(&tlb);
 		cond_resched();
 	}
+
+out:
+	if (have_tlb)
+		tlb_finish_mmu(&tlb);
 
 	if (drift)
 		corten_legacy_drift_inc();
@@ -4511,24 +4646,24 @@ static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 }
 
 /* The chunk-zap driver; @zflags selects the metadata-reset semantics
- * (see corten_arena_zap_window()).  Static: only the chunk routes and
- * the T1c park reach it.
+ * (see corten_arena_zap_window()).  @tlb: caller-owned gather already
+ * initialized with tlb_gather_mmu(), kept open across the whole walk and
+ * finished by the caller ([perf1c]: the T1c park flushes after its
+ * write->read downgrade); NULL makes every window own a lazy gather.
+ * Static: only the chunk routes and the T1c park reach it.
  */
 static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
 					  struct corten_arena *ar,
 					  unsigned long start, unsigned long len,
-					  u8 zflags)
+					  u8 zflags, struct mmu_gather *tlb)
 {
 	unsigned long end = start + len;
 	struct vm_area_struct *vma;
-	struct mmu_gather tlb;
 	int ret = 0;
 
 	vma = corten_arena_shadow_vma(ar);
 	if (!vma)
 		return -EOPNOTSUPP;
-
-	tlb_gather_mmu(&tlb, mm);
 
 	while (start < end) {
 		unsigned long win_end = min((start | (PMD_SIZE - 1)) + 1, end);
@@ -4545,10 +4680,10 @@ static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
 		switch (ret) {
 		case 0:
 			ret = corten_arena_zap_window(mm, vma, &txn, start,
-						      win_end, &tlb, zflags);
+						      win_end, tlb, zflags);
 			corten_unlock(&txn);
 			if (ret)
-				goto out;
+				return ret;
 			this_cpu_inc(READ_ONCE(mm->corten_state)->stats[
 					CORTEN_ARENA_STAT_MUNMAP_TXNS]);
 			break;
@@ -4566,10 +4701,9 @@ static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
 			 * helper re-checks the huge-leaf case itself.
 			 */
 			ret = corten_arena_zap_untracked_window(mm, vma,
-								start, win_end,
-								&tlb);
+								start, win_end);
 			if (ret)
-				goto out;
+				return ret;
 			ret = 0;
 			break;
 		case -EAGAIN:
@@ -4579,15 +4713,12 @@ static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
 			 */
 			fallthrough;
 		default:
-			tlb_finish_mmu(&tlb);
 			return ret == -EOPNOTSUPP ? -EOPNOTSUPP : -EAGAIN;
 		}
 
 		start = win_end;
 	}
 
-out:
-	tlb_finish_mmu(&tlb);
 	return ret;
 }
 
@@ -4599,7 +4730,7 @@ int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
 	 * committed mprotect contract survives a chunk munmap / DONTNEED).
 	 */
 	return corten_arena_unmap_chunk_flags(mm, ar, start, len,
-					      CORTEN_UNMAP_KEEP_PERM);
+					      CORTEN_UNMAP_KEEP_PERM, NULL);
 }
 
 /* ------------------------------------------------------------------ *
@@ -4845,7 +4976,8 @@ static bool corten_arena_pool_parkable(struct mm_struct *mm,
  */
 static bool corten_arena_pool_park_locked(struct mm_struct *mm,
 					  struct corten_mm_state *state,
-					  struct corten_arena *ar)
+					  struct corten_arena *ar,
+					  struct mmu_gather *tlb)
 {
 	struct vm_area_struct *vma;
 	int ret;
@@ -4863,9 +4995,22 @@ static bool corten_arena_pool_park_locked(struct mm_struct *mm,
 	 * pristine window (the FRESH fault gate derives from ar->prot
 	 * after reactivation, which the next mmap re-records -- never
 	 * from a previous incarnation's recorded perm).
+	 *
+	 * [perf1b] The slot reset itself is the wholesale metadata-array
+	 * drop inside the zap (a 16KB op on a 2M frame otherwise walks
+	 * 512 slots to reset the ~4 that ever carried content).
+	 *
+	 * [perf1c] @tlb is the caller's route-level gather and stays open
+	 * across this function: the caller finishes it only after the
+	 * write->read downgrade, so the shootdown wait no longer sits in
+	 * the serialized write section (the placement
+	 * vms_complete_munmap_vmas() uses for the legacy munmap).  The
+	 * downgrade keeps every pool take out until the flush completed --
+	 * a take needs mmap_write, so the parked window cannot be
+	 * re-warmed while its old translations are still being shot down.
 	 */
 	ret = corten_arena_unmap_chunk_flags(mm, ar, ar->start,
-					     ar->end - ar->start, 0);
+					     ar->end - ar->start, 0, tlb);
 	if (ret)
 		return false;
 
@@ -4904,6 +5049,8 @@ static int corten_arena_pool_release(struct mm_struct *mm, unsigned long start,
 {
 	struct corten_mm_state *state;
 	struct corten_arena *arena;
+	struct mmu_gather tlb;
+	bool parked;
 	int ret;
 
 	/* Pairs with the store in corten_arena_state_create(); the route
@@ -4923,13 +5070,24 @@ static int corten_arena_pool_release(struct mm_struct *mm, unsigned long start,
 		return -ENOENT;
 	}
 
-	if (!corten_arena_pool_park_locked(mm, state, arena))
-		ret = corten_arena_release_arena_locked(mm, state, arena);
-	else
+	/* [perf1c] The gather spans the park zap and is finished below,
+	 * after the write->read downgrade -- the flush wait leaves the
+	 * serialized write section (legacy vms_complete_munmap_vmas()
+	 * placement).  The failure path finishes the same gather after
+	 * its own teardown: a partial park zap's queued pages must be
+	 * flushed and freed before this munmap returns either way.
+	 */
+	tlb_gather_mmu(&tlb, mm);
+	parked = corten_arena_pool_park_locked(mm, state, arena, &tlb);
+	if (parked)
 		ret = 0;
+	else
+		ret = corten_arena_release_arena_locked(mm, state, arena);
 
 	mutex_unlock(&state->ctl_lock);
-	mmap_write_unlock(mm);
+	mmap_write_downgrade(mm);
+	tlb_finish_mmu(&tlb);
+	mmap_read_unlock(mm);
 
 	return ret;
 }
@@ -5581,7 +5739,6 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
 	struct corten_arena *ar;
 	enum corten_unmap_class class;
 	struct corten_pte_meta meta = { };
-	struct mmu_gather tlb;
 	struct vm_area_struct *vma;
 	unsigned long a, end = addr + len, start = addr;
 	u8 perm = CORTEN_PERM_USER;
@@ -5635,8 +5792,13 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
 		}
 	}
 
-	tlb_gather_mmu(&tlb, mm);
-
+	/* [perf1] No route-level gather here either: the zap below owns its
+	 * mmu_gather per window and skips it entirely for windows without
+	 * translations, so the MAP_FIXED refill of a never-touched chunk
+	 * (the unmap-virt recycle shape) pays no tlb_flush_pending traffic
+	 * and cannot trigger tlb_finish_mmu()'s mm_tlb_flush_nested()
+	 * full-mm upgrade against a concurrent chunk zap.
+	 */
 	while (start < end) {
 		unsigned long win_end = min((start | (PMD_SIZE - 1)) + 1, end);
 		struct corten_txn txn;
@@ -5655,7 +5817,7 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
 			 * semantics), then mark the fresh allocation.
 			 */
 			ret = corten_arena_zap_window(mm, vma, &txn, start,
-						      win_end, &tlb,
+						      win_end, NULL,
 						      CORTEN_UNMAP_KEEP_PERM);
 			if (ret) {
 				corten_unlock(&txn);
@@ -5681,7 +5843,6 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
 	}
 
 out:
-	tlb_finish_mmu(&tlb);
 	percpu_ref_put(&ar->active);
 
 	return ret ? ret : 1;
