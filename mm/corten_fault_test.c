@@ -289,6 +289,84 @@ static void corten_fault_test_dispatch(struct kunit *test)
 				    cases[i].expect, "%s", cases[i].name);
 }
 
+/* The Fig.8 L26-38 对拍锚 (PAPER_SPEC PS-C3, the paper's page-fault body
+ * for Mapped pages), line by line.  The real-chain legs live in the named
+ * cases -- corten_fault_test_cow_reuse (L28-31) and corten_fault_test_
+ * cow_copy (L33-34) -- this table pins the ROUTING each line maps to.
+ *
+ *   L26: the COW record is the metadata COW bit pair (PS-B3: SHARED plus
+ *        the WRITABLE record), not a hardware PTE bit.
+ *   L27: `reason.is_write() && perm.contains(COW)`:
+ *          contract writable -> COW_MAYBE (the wrprotect artifact),
+ *          contract read-only -> COW_COPY.
+ *   L28-29: `map_count() == 1` -- "no need to COW if parent/child has
+ *        left"; the decision happens inside the transaction (the pure
+ *        classifier cannot see the folio), routing row = COW_MAYBE.
+ *   L30-31: `p -= COW; p |= WRITE` + map -- the reuse branch clears
+ *        SHARED and re-arms the write bit on the SAME folio.
+ *   L33-34: `alloc_copied(&page)` + map -- the copy branch.
+ *   L36: `else { return Err(SEGFAULT) }` -- the unprivileged access
+ *        (the figure's own L25 comment: "Maybe COW or unprivileged
+ *        access") maps to ACCERR.  The privileged read is a port
+ *        extension with no paper counterpart: restore_pte() self-heals
+ *        a protnone/absent translation (the mprotect route's shape),
+ *        hence the RESTORE row below.
+ *   L39 (beyond the range): Invalid -> paper SEGFAULT; our FRESH
+ *        virtual-allocation answer is the registered PS deviation --
+ *        covered by the "invalid-*" rows of the dispatch table above.
+ *
+ * T2' additions with no paper counterpart: the slow-gate forced shapes
+ * (FOLL_FORCE poke, FAULT_FLAG_UNSHARE) synthesize CORTEN_DISP_FORCE_
+ * COPY in fault_once -- dispatch stays a pure classifier, so the same
+ * metadata keeps reporting COW_COPY/ACCERR here (see
+ * corten_fault_test_foll_force for the real chain).
+ */
+static void corten_fault_test_fig8_cow(struct kunit *test)
+{
+	static const struct {
+		const char *name;
+		struct corten_pte_meta m;
+		bool write, instr;
+		enum corten_disp expect;
+	} rows[] = {
+		{ "L26/L27-write-cow-writable",
+		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+				   CORTEN_PERM_USER,
+		    CORTEN_PF_SHARED | CORTEN_PF_WRITABLE, { 0 } },
+		  true, false, CORTEN_DISP_COW_MAYBE },
+		{ "L27-write-cow-ro-contract",
+		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_USER,
+		    CORTEN_PF_SHARED, { 0 } },
+		  true, false, CORTEN_DISP_COW_COPY },
+		{ "L28-31-mapcount1-routing",
+		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+				   CORTEN_PERM_USER,
+		    CORTEN_PF_SHARED | CORTEN_PF_WRITABLE, { 0 } },
+		  true, false, CORTEN_DISP_COW_MAYBE },
+		{ "L33-34-copy-routing",
+		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_USER,
+		    CORTEN_PF_SHARED, { 0 } },
+		  true, false, CORTEN_DISP_COW_COPY },
+		{ "L36-unprivileged",
+		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+				   CORTEN_PERM_USER,
+		    0, { 0 } },
+		  false, true, CORTEN_DISP_ACCERR },
+		{ "L36-read-port-extension",
+		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+				   CORTEN_PERM_USER,
+		    CORTEN_PF_SHARED | CORTEN_PF_WRITABLE, { 0 } },
+		  false, false, CORTEN_DISP_RESTORE },
+	};
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(rows); i++)
+		KUNIT_EXPECT_EQ_MSG(test, corten_arena_dispatch(&rows[i].m,
+								rows[i].write,
+								rows[i].instr),
+				    rows[i].expect, "%s", rows[i].name);
+}
+
 /* ------------------------------------------------------------------ *
  * S6: routing classifiers (pure)
  * ------------------------------------------------------------------
@@ -376,10 +454,26 @@ static void corten_fault_test_mmap_classify(struct kunit *test)
  * ------------------------------------------------------------------
  */
 
-/* One write fault through the slow-path entry point. */
+/* One write fault through the slow-path entry point.  Without
+ * FAULT_FLAG_USER this is the kernel-path shape (FOLL_FORCE contract:
+ * a GUP/ptrace write that upstream would wp_page_copy()); see
+ * corten_fault_test_foll_force.
+ */
 static int ft_write_fault(struct ft_mm *t, unsigned long addr)
 {
 	return corten_arena_handle_mm_fault(t->vma, addr, FAULT_FLAG_WRITE,
+					    NULL);
+}
+
+/* A genuine user-mode write (the arch-hook shape): FAULT_FLAG_USER keeps
+ * the fault_once forced-write conversion off, so the recorded perm rules
+ * alone.  Every "the process writes a downgraded page" expectation below
+ * drives this.
+ */
+static int ft_user_write_fault(struct ft_mm *t, unsigned long addr)
+{
+	return corten_arena_handle_mm_fault(t->vma, addr,
+					    FAULT_FLAG_WRITE | FAULT_FLAG_USER,
 					    NULL);
 }
 
@@ -522,7 +616,8 @@ static void corten_fault_test_sigsegv(struct kunit *test)
 	corten_unlock(&txn);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 
-	KUNIT_EXPECT_EQ(test, ft_write_fault(t, ro_addr), VM_FAULT_SIGSEGV);
+	KUNIT_EXPECT_EQ(test, ft_user_write_fault(t, ro_addr),
+			VM_FAULT_SIGSEGV);
 	KUNIT_EXPECT_EQ(test, corten_arena_handle_mm_fault(t->vma, ro_addr, 0,
 							   NULL), 0);
 	KUNIT_EXPECT_EQ(test,
@@ -905,6 +1000,112 @@ static int corten_fault_test_cow_worker(void *data)
 		schedule_timeout_idle(1);
 
 	return 0;
+}
+
+/* M5.T2' (M5_FORK_SPEC.md sec 4.2/OQ-4): the slow-gate forced write.
+ * ft_write_fault() IS the forced shape (no FAULT_FLAG_USER): the same
+ * entry a FOLL_FORCE poke or a FAULT_FLAG_UNSHARE read-pin pre-break
+ * takes.  The recorded perm must survive untouched and the PTE must
+ * never gain a write bit -- only the sharing breaks.
+ */
+static void corten_fault_test_foll_force(struct kunit *test)
+{
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+	struct ft_mm *t = ft_setup(test);
+	unsigned long addr = FT_BASE + 4 * PAGE_SIZE;
+	unsigned long pfn_before;
+	struct corten_txn txn;
+	struct corten_pte_meta m, nm;
+	pte_t *ptep, pte;
+	int ret;
+
+	/* The routed-whole read-only shape: the VMA itself carries no
+	 * VM_WRITE (whole-area mprotect-RO, or a PROT_NONE reservation);
+	 * the MAYWRITE grant stays, as on every private anonymous VMA.
+	 */
+	vm_flags_clear(t->vma, VM_WRITE);
+
+	/* A committed page with a fork-shaped residue: SHARED meta
+	 * residue (the peer COW'd away or never existed), read-only
+	 * hardware, and the recorded contract downgraded to read-only.
+	 */
+	KUNIT_EXPECT_EQ(test, ft_mark(t, addr, PAGE_SIZE, FT_PERM_RW), 0);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+	KUNIT_EXPECT_EQ(test, ft_arm_shared(t, addr), 0);
+	KUNIT_EXPECT_EQ(test, ft_wrprotect(t, addr), 0);
+
+	KUNIT_ASSERT_EQ(test, ft_meta(t, addr, &m), 0);
+	nm = m;
+	nm.perm &= ~CORTEN_PERM_WRITE;
+	nm.flags &= ~CORTEN_PF_WRITABLE;
+	ret = corten_lock_range(t->mm, addr, PAGE_SIZE, &txn);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	ret = corten_mark(&txn, addr, PAGE_SIZE, &nm);
+	corten_unlock(&txn);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pfn_before = pte_pfn(ptep_get(ptep));
+	pte_unmap(ptep);
+
+	/* The forced poke: SHARED residue breaks in place (mapcount==1,
+	 * the reuse branch), the PTE stays at the recorded read-only
+	 * encoding, the page becomes exclusive (OQ-5, the do_wp_page
+	 * reuse shape) and the perm does not move.
+	 */
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_FALSE(test, pte_write(pte));
+	KUNIT_EXPECT_EQ(test, pte_pfn(pte), pfn_before);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.flags, 0);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_USER);
+	{
+		struct page *page = pfn_to_page(pfn_before);
+
+		KUNIT_EXPECT_TRUE(test, PageAnonExclusive(page));
+	}
+
+	/* The process's own write is still contract-bound: ACCERR. */
+	KUNIT_EXPECT_EQ(test, ft_user_write_fault(t, addr),
+			VM_FAULT_SIGSEGV);
+
+	/* The second poke: private and exclusive now -- plain handled,
+	 * still no write bit, still no copy.
+	 */
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_FALSE(test, pte_write(pte));
+
+	/* The boundary: a VMA the GUP re-follow itself calls writable
+	 * (the routed-partial downgraded commit).  Serving the forced
+	 * write would need mkwrite -- which would silently retire the
+	 * recorded RO contract for the process -- and falling back to
+	 * the legacy body would wp_page_copy() it behind the
+	 * transaction's back.  The fault must die loudly (ACCERR) with
+	 * the hardware shape untouched.
+	 */
+	vm_flags_set(t->vma, VM_WRITE);
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), VM_FAULT_SIGSEGV);
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_FALSE(test, pte_write(pte));
+	KUNIT_EXPECT_EQ(test, ft_user_write_fault(t, addr),
+			VM_FAULT_SIGSEGV);
 }
 
 static void corten_fault_test_cow_race(struct kunit *test)
@@ -1815,8 +2016,11 @@ static void corten_fault_test_mprotect_pte(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, pte_present(pte));
 	KUNIT_EXPECT_FALSE(test, pte_write(pte));
 
-	/* The next write is denied by the metadata gate (ACCERR). */
-	KUNIT_EXPECT_NE(test, ft_write_fault(t, addr), 0);
+	/* The next write is denied by the metadata gate (ACCERR) -- the
+	 * genuine user-mode shape (FAULT_FLAG_USER), exactly what the
+	 * arch hook drives.
+	 */
+	KUNIT_EXPECT_NE(test, ft_user_write_fault(t, addr), 0);
 
 	/* Upgrade back: the fault path rebuilds the writable PTE. */
 	KUNIT_ASSERT_EQ(test,
@@ -2105,6 +2309,7 @@ static void corten_fault_test_untracked_rearm(struct kunit *test)
 
 static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_dispatch),
+	KUNIT_CASE(corten_fault_test_fig8_cow),
 	KUNIT_CASE(corten_fault_test_unmap_classify),
 	KUNIT_CASE(corten_fault_test_mmap_classify),
 	KUNIT_CASE(corten_fault_test_punch_classify),
@@ -2119,6 +2324,7 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_restore),
 	KUNIT_CASE(corten_fault_test_cow_reuse),
 	KUNIT_CASE(corten_fault_test_cow_copy),
+	KUNIT_CASE(corten_fault_test_foll_force),
 	KUNIT_CASE(corten_fault_test_cow_race),
 	KUNIT_CASE(corten_fault_test_mprotect_pte),
 	KUNIT_CASE(corten_fault_test_mprotect_fresh),

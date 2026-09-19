@@ -52,9 +52,20 @@ enum corten_disp {
 	CORTEN_DISP_COW_COPY,	/* M5: write fault on a shared page whose
 				 * contract is read-only -- a genuine
 				 * permission fault, not a wrprotect
-				 * artifact; SIGSEGV in T1a (the
-				 * FOLL_FORCE-forced copy unlock is M5.T2'
-				 * scope, M5_FORK_SPEC.md sec 3.4)
+				 * artifact; SIGSEGV for the process's own
+				 * write, the forced copy for the slow-gate
+				 * kernel shapes (M5.T2')
+				 */
+	CORTEN_DISP_FORCE_COPY,	/* M5.T2' (sec 4.2/OQ-4): the slow-gate
+				 * forced write (FOLL_FORCE poke, or the
+				 * FAULT_FLAG_UNSHARE read-pin pre-break
+				 * mapped onto ctx->write).  Synthesized in
+				 * fault_once -- dispatch is pure and cannot
+				 * see the fault origin.  do_wp_page()'s
+				 * answer: break the folio sharing, keep the
+				 * recorded perm's encoding (never mkwrite a
+				 * perm-RO page: the process's own next
+				 * write must keep faulting)
 				 */
 	CORTEN_DISP_ACCERR,	/* permission mismatch -> SEGV_ACCERR */
 	CORTEN_DISP_STUB,	/* M6/M4+ state -> WARN + SIGSEGV */
