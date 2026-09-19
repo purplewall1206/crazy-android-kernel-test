@@ -1,0 +1,1316 @@
+diff --git a/include/linux/corten_arena.h b/include/linux/corten_arena.h
+index f92b3f34b634..cf415785d256 100644
+--- a/include/linux/corten_arena.h
++++ b/include/linux/corten_arena.h
+@@ -96,6 +96,12 @@ enum corten_arena_stat {
+ 	 */
+ 	CORTEN_ARENA_STAT_COW_REUSE,
+ 	CORTEN_ARENA_STAT_COW_COPY,
++	/* M5.T2' (M5_FORK_SPEC.md sec 4.2/OQ-4): the slow-gate forced
++	 * write shapes -- FOLL_FORCE (ptrace/proc poke) against a page
++	 * whose recorded perm lacks WRITE, and the FAULT_FLAG_UNSHARE
++	 * read-pin pre-break mapped onto the COW write dispatch.
++	 */
++	CORTEN_ARENA_STAT_FORCE_WRITES,
+ 	CORTEN_ARENA_NR_STATS,
+ };
+ 
+diff --git a/mm/corten_arena.c b/mm/corten_arena.c
+index 1f90a06a9baa..0c10020e5edb 100644
+--- a/mm/corten_arena.c
++++ b/mm/corten_arena.c
+@@ -2703,6 +2703,7 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
+ 				    struct corten_pte_meta *snap)
+ {
+ 	struct vm_area_struct *vma, *pvma, *cvma = NULL;
++	pmd_t *cpmdp;
+ 	unsigned long addr;
+ 	bool any_piece = false;
+ 	int ret;
+@@ -2763,6 +2764,26 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
+ 		unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1,
+ 					    ar->end);
+ 
++		/* F2 (STATE D18, the over-SHARED corner): a window with no
++		 * child PT page has no second mapper -- a VM_DONTCOPY piece
++		 * is absent from the child (the dup_mmap loop skips it) and
++		 * a VM_WIPEONFORK piece lost its translations (its copy is
++		 * skipped).  Marking such pages SHARED would leave residue
++		 * whose parent PTE is still writable (copy_page_range never
++		 * wrprotected the piece): exactly the INV7-drift shape,
++		 * plus a needless first-write COW detour the COW reuse
++		 * branch would only have to unwind.  The child replay has
++		 * nothing to mirror either (copy_window() gates on the same
++		 * test): skip the window.  A window that DID get a child PT
++		 * page marks normally -- page-granular piece borders inside
++		 * one 2M window are tolerated as benign residue (they
++		 * self-heal and stay INV7-clean only per-window).
++		 */
++		cpmdp = corten_arena_pmd(mm, addr);
++		if (!cpmdp || !pmd_present(READ_ONCE(*cpmdp)) ||
++		    pmd_leaf(READ_ONCE(*cpmdp)))
++			continue;
++
+ 		ret = corten_arena_fork_mark_window(ar, addr, win_end, snap);
+ 		if (ret)
+ 			return ret;
+@@ -3312,6 +3333,16 @@ struct corten_fault_ctx {
+ 	unsigned long		addr;	/* page-aligned fault address */
+ 	bool			write;
+ 	bool			instruction;
++	/* M5.T2' (sec 4.2/OQ-4): the slow gate's write faults are
++	 * kernel-path COW writes -- user faults enter through the arch
++	 * hook with FAULT_FLAG_USER and never set this.  It is the
++	 * upstream FOLL_FORCE contract: a write fault that reached
++	 * handle_mm_fault() from GUP/ptrace/fixup may be served by
++	 * breaking folio sharing even when the recorded perm lacks
++	 * WRITE (do_wp_page()'s answer), while the recorded contract
++	 * itself stays untouched.
++	 */
++	bool			force;
+ 	struct pt_regs		*regs;
+ };
+ 
+@@ -3640,6 +3671,7 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
+ 	pte_t *ptep;
+ 	pte_t cur, entry;
+ 	spinlock_t *ptl;	/* ptl nests below the desc write lock (R2) */
++	bool reuse;
+ 	int ret;
+ 
+ 	vma = corten_arena_get_vma(ctx);
+@@ -3666,10 +3698,30 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
+ 	page = pte_page(cur);
+ 	old = page_folio(page);
+ 
+-	if (folio_mapcount(old) == 1) {
+-		/* Reuse (paper: map_count==1).  The meta flag clear and
+-		 * the PTE re-arm are one transaction: every observer is
+-		 * excluded by the covering desc write lock.
++	/* Reuse (paper Fig.8 L28-29: "no need to COW if parent/child has
++	 * left") needs the folio exclusively ours under this ptl.  OQ-5
++	 * (M5_FORK_SPEC.md sec 8, resolved per upstream): the reuse answer
++	 * marks the page exclusive -- do_wp_page() does exactly this in
++	 * front of wp_page_reuse(), and a later GUP PIN of the survivor
++	 * demands it (gup.c's VM_WARN_ON_ONCE_PAGE(PIN && !exclusive)
++	 * would fire on the shared survivor).  A DMA-pinned folio takes
++	 * the copy branch instead: wp_can_reuse_anon_folio() refuses
++	 * those upstream, and "copy where a reuse would also have been
++	 * safe" is the bounded race direction (R-B).
++	 */
++	reuse = folio_mapcount(old) == 1;
++	if (reuse && !PageAnonExclusive(page)) {
++		if (folio_maybe_dma_pinned(old)) {
++			reuse = false;
++		} else {
++			SetPageAnonExclusive(page);
++		}
++	}
++
++	if (reuse) {
++		/* The meta flag clear and the PTE re-arm are one
++		 * transaction: every observer is excluded by the covering
++		 * desc write lock.
+ 		 */
+ 		struct corten_pte_meta nm = *m;
+ 
+@@ -3761,6 +3813,179 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
+ 	return 0;
+ }
+ 
++/*
++ * M5.T2' (M5_FORK_SPEC.md sec 4.2, OQ-4): the forced write transaction.
++ *
++ * Two kernel-only shapes dispatch here from fault_once, both invisible to
++ * the paper's fault classifier (Fig.8 has no ptrace):
++ *
++ *   - FOLL_FORCE (ptrace POKE, /proc/pid/mem, process_vm_writev): the
++ *     caller validated the write against the *VMA* contract (sanitize_
++ *     fault_flags() allows a write fault on any MAYWRITE COW mapping);
++ *     upstream serves it with do_wp_page(), which copies or reuses the
++ *     page WITHOUT retiring the VMA permission.
++ *
++ *   - FAULT_FLAG_UNSHARE: GUP's read-PIN of a fork-shared page (gup_
++ *     must_unshare() -> -EMLINK -> faultin_page(unshare=true)) lands in
++ *     the slow gate without the write bit; the OQ-4 decision maps it onto
++ *     the COW write dispatch (a plain read-fault answer would re-arm the
++ *     read-only translation and spin the GUP retry against -EMLINK).
++ *
++ * What the transaction must NOT do is upgrade the recorded contract: the
++ * perm stays, the PTE keeps the perm's encoding (no mkwrite for a perm-RO
++ * page -- otherwise the process's own next write would stop faulting and
++ * the mprotect contract would silently vanish; PS-B2, the metadata is the
++ * source of truth).  What it must do is exactly do_wp_page(): break folio
++ * sharing (reuse when map_count==1, copy otherwise), mark the survivor
++ * exclusive (OQ-5), leave this process alone on its private page.
++ *
++ * The dispatch layer already gated the perm (contract read-only) and
++ * fault_once gated this handler to VMA !VM_WRITE shapes; this
++ * body only owns the folio-sharing decision.
++ * Called with the covering desc write lock held, like cow_write.
++ */
++static int corten_arena_force_write(struct corten_fault_ctx *ctx,
++				    struct corten_txn *txn,
++				    const struct corten_pte_meta *m)
++{
++	struct mm_struct *mm = ctx->mm;
++	struct vm_area_struct *vma;
++	struct folio *old;
++	struct page *page;
++	pmd_t *pmdp;
++	pte_t *ptep;
++	pte_t cur, entry;
++	spinlock_t *ptl;	/* ptl nests below the desc write lock (R2) */
++	bool reuse;
++	int ret;
++
++	vma = corten_arena_get_vma(ctx);
++	if (!vma)
++		return -EFAULT;
++
++	pmdp = corten_arena_pmd(mm, ctx->addr);
++	if (!pmdp)
++		return -EAGAIN;
++	ptep = pte_offset_map_lock(mm, pmdp, ctx->addr, &ptl);
++	if (!ptep)
++		return -EAGAIN;
++
++	cur = ptep_get(ptep);
++	if (unlikely(!pte_present(cur) || pte_special(cur))) {
++		/* A permission-faulted arena page lost its translation
++		 * (protnone downgrade / zap): nothing is shared through a
++		 * missing PTE and there is nothing to re-arm at the
++		 * recorded perm either -- the external write fails.
++		 */
++		pte_unmap_unlock(ptep, ptl);
++		return -EFAULT;
++	}
++
++	page = pte_page(cur);
++	old = page_folio(page);
++
++	/* The reuse decision mirrors cow_write(): map_count under this
++	 * ptl is >= the live mapper count (removers clear their PTE under
++	 * their ptl before the count drop, R-B), the race direction is
++	 * "copy where a reuse would also have been safe".  OQ-5: the
++	 * survivor becomes exclusive (do_wp_page() reuse shape).
++	 */
++	reuse = folio_mapcount(old) == 1;
++	if (reuse && !PageAnonExclusive(page)) {
++		if (folio_maybe_dma_pinned(old))
++			reuse = false;
++		else
++			SetPageAnonExclusive(page);
++	}
++
++	if (reuse) {
++		if (m->flags & CORTEN_PF_SHARED) {
++			/* Residue of a peer that COW'd away (or a
++			 * fork_skips shape): clear SHARED in the same
++			 * transaction, keep everything else.
++			 */
++			struct corten_pte_meta nm = *m;
++
++			nm.flags = m->flags & ~CORTEN_PF_SHARED;
++			ret = corten_mark(txn, ctx->addr, PAGE_SIZE, &nm);
++			if (unlikely(ret)) {
++				pte_unmap_unlock(ptep, ptl);
++				return ret == -ENOMEM ? -ENOMEM : -EFAULT;
++			}
++		}
++		/* Private already (or just made so): the recorded
++		 * translation is the answer -- the GUP re-follow takes
++		 * can_follow_write_common()'s exclusive+MAYWRITE route.
++		 * No PTE rewrite: the perm's encoding did not change.
++		 */
++		pte_unmap_unlock(ptep, ptl);
++
++		corten_arena_fault_stat(READ_ONCE(mm->corten_state),
++					CORTEN_ARENA_STAT_FORCE_WRITES);
++		return 0;
++	}
++
++	/* Copy branch (Fig.8 L33-34, contract-preserving variant): the
++	 * peer still maps the folio.  The slow gate preallocates for
++	 * every write fault (ctx.write includes the UNSHARE mapping); a
++	 * lost race consumed it -- retry re-arms.
++	 */
++	if (!ctx->folio) {
++		pte_unmap_unlock(ptep, ptl);
++		return -EAGAIN;
++	}
++
++	copy_user_highpage(folio_page(ctx->folio, 0), page, ctx->addr, vma);
++	__folio_mark_uptodate(ctx->folio);
++
++	if (unlikely(check_stable_address_space(mm))) {
++		pte_unmap_unlock(ptep, ptl);
++		return -EAGAIN;
++	}
++
++	/* Break-before-make: the old read-only translation may be cached
++	 * anywhere (cow_write precedent).
++	 */
++	ptep_clear_flush(vma, ctx->addr, ptep);
++
++	/* The recorded perm's encoding, NOT a writable PTE: this fault
++	 * came from an external writer; the process's own contract must
++	 * keep faulting (wp_page_copy()'s pte_maybe_mkwrite() on a
++	 * !VM_WRITE vma lands on the same read-only shape).
++	 */
++	entry = folio_mk_pte(ctx->folio, corten_arena_perm_pgprot(vma,
++								  m->perm));
++	entry = pte_mkyoung(entry);
++
++	add_mm_counter(mm, MM_ANONPAGES, 1);
++	folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr, RMAP_EXCLUSIVE);
++	set_ptes(mm, ctx->addr, ptep, entry, 1);
++	update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
++
++	folio_remove_rmap_pte(old, page, vma);
++	add_mm_counter(mm, MM_ANONPAGES, -1);
++	pte_unmap_unlock(ptep, ptl);
++	folio_put(old);
++
++	if (m->flags & CORTEN_PF_SHARED) {
++		/* MAPPED->MAPPED needs FORCE; the map resets the flags --
++		 * SHARED goes with the shared folio.
++		 */
++		ret = corten_map(txn, ctx->addr, folio_page(ctx->folio, 0),
++				 m->perm, CORTEN_MAP_FORCE);
++		if (WARN_ON_ONCE(ret))
++			return -EFAULT;
++	}
++
++	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
++				CORTEN_ARENA_STAT_FORCE_WRITES);
++
++	/* The speculative reference became the new PTE reference. */
++	ctx->folio = NULL;
++
++	return 0;
++}
++
+ /*
+  * One transaction attempt (sec 4.3 for(;;) body).  On entry ctx->folio is
+  * the speculative allocation or NULL; on any return the epilogue of the
+@@ -3896,6 +4121,30 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
+ 	if (disp == CORTEN_DISP_ZERO_PAGE && ctx->folio)
+ 		disp = CORTEN_DISP_MAP_ANON;
+ 
++	/* M5.T2' (sec 4.2, OQ-4 + FOLL_FORCE): the slow gate's write
++	 * faults are kernel-path COW writes -- user faults enter through
++	 * the arch hook with FAULT_FLAG_USER and keep the plain ACCERR
++	 * answer below.  A write against a translated MAPPED page whose
++	 * recorded perm lacks WRITE is the FOLL_FORCE shape (ptrace/
++	 * proc-poke) or the UNSHARE read-pin pre-break; upstream serves
++	 * both with do_wp_page().  Direct them to the forced-write
++	 * transaction when the GUP re-follow can accept a read-only
++	 * survivor (VMA !VM_WRITE + MAYWRITE, the can_follow_write_
++	 * common() route): mkwrite is never produced here -- it would
++	 * silently retire the recorded contract for the process's own
++	 * writes.  The VMA-writable shape (routed-partial downgraded
++	 * commit) keeps the ACCERR answer: loud EIO to the external
++	 * writer beats a silently weakened mprotect contract.
++	 */
++	if (ctx->force && !ctx->instruction && m.state == CORTEN_MAPPED &&
++	    (disp == CORTEN_DISP_ACCERR || disp == CORTEN_DISP_COW_COPY)) {
++		struct vm_area_struct *fvma = corten_arena_get_vma(ctx);
++
++		if (fvma && !(fvma->vm_flags & VM_WRITE) &&
++		    (fvma->vm_flags & VM_MAYWRITE))
++			disp = CORTEN_DISP_FORCE_COPY;
++	}
++
+ 	switch (disp) {
+ 	case CORTEN_DISP_MAP_ANON:
+ 		ret = corten_arena_map_anon(ctx, &txn, &m, ctx->folio);
+@@ -3914,11 +4163,15 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
+ 		 * read-only is a genuine permission fault (the page was
+ 		 * RO before the fork -- the wrprotect changed nothing).
+ 		 * The STUB-era WARN is gone: this is a normal, legal
+-		 * outcome.  The FOLL_FORCE-forced copy (ptrace POKE on
+-		 * such a page) is M5.T2' scope (M5_FORK_SPEC.md sec 3.4).
++		 * outcome.  The slow-gate forced shapes were redirected
++		 * to FORCE_COPY above (M5.T2'); what survives here is
++		 * the process's own ACCERR.
+ 		 */
+ 		corten_unlock(&txn);
+ 		return CORTEN_F_ACCERR;
++	case CORTEN_DISP_FORCE_COPY:
++		ret = corten_arena_force_write(ctx, &txn, &m);
++		break;
+ 	case CORTEN_DISP_ACCERR:
+ 		corten_unlock(&txn);
+ 		return CORTEN_F_ACCERR;
+@@ -4121,6 +4374,25 @@ vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma,
+ 	ctx.addr = address & PAGE_MASK;
+ 	ctx.write = flags & FAULT_FLAG_WRITE;
+ 	ctx.instruction = flags & FAULT_FLAG_INSTRUCTION;
++	/* OQ-4 (M5_FORK_SPEC.md sec 4.2): a GUP read-PIN of a fork-shared
++	 * page (gup_must_unshare() -> -EMLINK) faults in with
++	 * FAULT_FLAG_UNSHARE and no write bit.  Upstream answers it as a
++	 * plain COW write (do_wp_page()); dispatching it as a read would
++	 * re-arm the read-only translation and spin the GUP retry against
++	 * the next -EMLINK.  FAULT_FLAG_WRITE|UNSHARE never co-exist
++	 * (sanitize_fault_flags() VM_WARNs), so the mapping is total.
++	 */
++	if (flags & FAULT_FLAG_UNSHARE)
++		ctx.write = true;
++	/* FOLL_FORCE (M5.T2'): every write fault that reaches the slow
++	 * gate without FAULT_FLAG_USER is a kernel-path COW write
++	 * (ptrace/proc/get_user/fixup) that upstream would wp_page_copy()
++	 * -- including pages whose recorded perm is read-only.  ctx.force
++	 * lets fault_once redirect those permission failures to the
++	 * forced-write transaction while the arch-hook user faults keep
++	 * the plain ACCERR contract.
++	 */
++	ctx.force = ctx.write && !(flags & FAULT_FLAG_USER);
+ 	ctx.regs = regs;
+ 
+ 	/* Pairs with the smp_store_release() publisher in the DECLARE
+diff --git a/mm/corten_arena.h b/mm/corten_arena.h
+index 673cba6e0846..1cb3d7a4e8af 100644
+--- a/mm/corten_arena.h
++++ b/mm/corten_arena.h
+@@ -52,9 +52,20 @@ enum corten_disp {
+ 	CORTEN_DISP_COW_COPY,	/* M5: write fault on a shared page whose
+ 				 * contract is read-only -- a genuine
+ 				 * permission fault, not a wrprotect
+-				 * artifact; SIGSEGV in T1a (the
+-				 * FOLL_FORCE-forced copy unlock is M5.T2'
+-				 * scope, M5_FORK_SPEC.md sec 3.4)
++				 * artifact; SIGSEGV for the process's own
++				 * write, the forced copy for the slow-gate
++				 * kernel shapes (M5.T2')
++				 */
++	CORTEN_DISP_FORCE_COPY,	/* M5.T2' (sec 4.2/OQ-4): the slow-gate
++				 * forced write (FOLL_FORCE poke, or the
++				 * FAULT_FLAG_UNSHARE read-pin pre-break
++				 * mapped onto ctx->write).  Synthesized in
++				 * fault_once -- dispatch is pure and cannot
++				 * see the fault origin.  do_wp_page()'s
++				 * answer: break the folio sharing, keep the
++				 * recorded perm's encoding (never mkwrite a
++				 * perm-RO page: the process's own next
++				 * write must keep faulting)
+ 				 */
+ 	CORTEN_DISP_ACCERR,	/* permission mismatch -> SEGV_ACCERR */
+ 	CORTEN_DISP_STUB,	/* M6/M4+ state -> WARN + SIGSEGV */
+diff --git a/mm/corten_arena_test.c b/mm/corten_arena_test.c
+index 71cfdc573457..b751f15293e6 100644
+--- a/mm/corten_arena_test.c
++++ b/mm/corten_arena_test.c
+@@ -2035,6 +2035,26 @@ static int corten_arena_test_fork_seed_anon(struct mm_struct *mm,
+ 	return ret;
+ }
+ 
++/* Track @addr's window (fill_upper()) without recording anything: the
++ * seed_mapped() lock_range() needs a tracked PT page, which fork_faithful
++ * gets for free by seeding an anon slot first.  The M2a descriptor
++ * install fires inside the pX_alloc hook on a corten=on boot; re-arm
++ * covers a corten=off one.
++ */
++static int corten_arena_test_fill_window(struct mm_struct *mm,
++					 unsigned long addr)
++{
++	struct corten_arena *ar = corten_arena_lookup_get(mm, addr);
++	int ret;
++
++	if (!ar)
++		return -ENOENT;
++	ret = corten_arena_fill_upper(ar, addr);
++	percpu_ref_put(&ar->active);
++
++	return ret;
++}
++
+ /* The child's page-table page for @addr: copy_page_range() pte_allocs
+  * one for every present parent PT page (metadata-only windows included,
+  * which is how routed-mprotect pending perms get a carrier in the
+@@ -2704,6 +2724,600 @@ static void corten_arena_test_fork_perm(struct kunit *test)
+ 						 0, 0),
+ 			0);
+ }
++
++/* ------------------------------------------------------------------ *
++ * M5.T1b/T2' (M5_FORK_SPEC.md sec 2.2/sec 4.2): the fork closure
++ * tests -- the INV7 shared-vs-PTE checker, the F2 over-SHARED gate,
++ * the F3 drain-timeout injection, the OQ-4 UNSHARE mapping and the
++ * OQ-5 exclusive-reuse anchor.
++ * ------------------------------------------------------------------
++ */
++
++/*
++ * INV7 (M5_FORK_SPEC.md sec 8) checker body: every translated arena page
++ * whose metadata carries SHARED must sit read-only in hardware.  The
++ * registered exemption is exactly the checked shape's mirror: a shared
++ * page whose perm carries WRITE is ALLOWED to sit read-only (the fork's
++ * wrprotect, restored only inside the COW transaction); what the
++ * invariant forbids is SHARED together with a writable PTE -- the
++ * cross-process write-through.  Walks every arena of @mm through the
++ * registry xarray with the fork-mirror's pmd presence gate, one covering
++ * transaction per window, and returns the number of violations found
++ * (of @checked pages that actually carried SHARED).  No KUnit asserts
++ * inside: the walk holds an RCU read lock, and the assert macros return.
++ */
++static void corten_arena_test_inv7_walk(struct mm_struct *mm, long *violated,
++					long *checked)
++{
++	struct corten_mm_state *state = corten_arena_state(mm);
++	struct corten_arena *arena;
++	unsigned long frame = 0, seen_until = 0;
++
++	*violated = 0;
++	*checked = 0;
++	if (!state)
++		return;
++
++	rcu_read_lock();
++	xa_for_each(&state->arenas, frame, arena) {
++		unsigned long addr;
++
++		/* M4.T1: reserve markers are not arenas. */
++		if (arena == &corten_va_reserve_sentinel)
++			continue;
++		if (frame < seen_until)
++			continue;
++		seen_until = arena->end >> PMD_SHIFT;
++
++		for (addr = arena->start; addr < arena->end;
++		     addr = min((addr | (PMD_SIZE - 1)) + 1, arena->end)) {
++			unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1,
++						    arena->end);
++			pmd_t *pmdp = corten_arena_test_pmd(mm, addr);
++			struct corten_txn txn;
++			unsigned long a;
++			int ret;
++
++			if (!pmdp || !pmd_present(READ_ONCE(*pmdp)) ||
++			    pmd_leaf(READ_ONCE(*pmdp)))
++				continue;
++			ret = corten_lock_range(mm, addr, win_end - addr,
++						&txn);
++			if (ret == -ENOENT || ret == -EOPNOTSUPP)
++				continue;	/* untracked: nothing live */
++			if (ret)
++				break;		/* counted as not-checked */
++
++			for (a = addr; a < win_end; a += PAGE_SIZE) {
++				struct corten_pte_meta m;
++				pte_t *ptep, pte;
++				spinlock_t *ptl;	/* guards the PTE read */
++
++				if (corten_query(&txn, a, &m))
++					continue;
++				if (m.state != CORTEN_MAPPED ||
++				    !(m.flags & CORTEN_PF_SHARED))
++					continue;
++				ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
++				if (!ptep)
++					break;
++				pte = ptep_get(ptep);
++				pte_unmap_unlock(ptep, ptl);
++				(*checked)++;
++				if (pte_present(pte) && pte_write(pte))
++					(*violated)++;
++			}
++			corten_unlock(&txn);
++		}
++	}
++	rcu_read_unlock();
++}
++
++/* INV7 closure: after the faithful fork both sides hold SHARED marks and
++ * read-only PTEs -- the exemption shape.  A COW write on one side clears
++ * its SHARED and re-arms the write bit; the peer's contract stays.
++ */
++static void corten_arena_test_inv7_shared_ro(struct kunit *test)
++{
++	struct corten_arena_test_mm *t;
++	struct mm_struct *mm, *child;
++	struct vm_area_struct *pvma, *cvma;
++	struct folio *folio;
++	struct corten_pte_meta m;
++	pte_t *ptep, pte;
++	unsigned long addr = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
++	long violated, checked;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "metadata mirror requires corten=on");
++
++	t = corten_arena_test_mm_setup(test);
++	mm = t->mm;
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
++					     CORTEN_ARENA_TEST_LEN),
++			0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, addr), 0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, addr), 0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr),
++			0);
++
++	child = mm_alloc();
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
++	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE,
++				      CORTEN_ARENA_TEST_BASE +
++				      CORTEN_ARENA_TEST_LEN,
++				      CORTEN_ARENA_TEST_FLAGS_OK |
++				      VM_CORTEN | VM_NOHUGEPAGE);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
++	folio = corten_arena_test_fork_copy_pte(test, child, mm, addr);
++	KUNIT_EXPECT_NOT_NULL(test, folio);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
++
++	/* Both sides: SHARED meta, read-only PTE -- zero violations, and
++	 * the walk must actually have seen the shared pages.
++	 */
++	corten_arena_test_inv7_walk(mm, &violated, &checked);
++	KUNIT_EXPECT_EQ(test, violated, 0);
++	KUNIT_EXPECT_GE(test, checked, 1);
++	corten_arena_test_inv7_walk(child, &violated, &checked);
++	KUNIT_EXPECT_EQ(test, violated, 0);
++	KUNIT_EXPECT_GE(test, checked, 1);
++
++	/* The exemption row, explicit: perm carries WRITE, hardware is
++	 * read-only (the fork's wrprotect), metadata flags carry
++	 * SHARED|WRITABLE.
++	 */
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.flags,
++			CORTEN_PF_SHARED | CORTEN_PF_WRITABLE);
++	ptep = corten_arena_test_pmd(mm, addr) ?
++			pte_offset_map(corten_arena_test_pmd(mm, addr),
++				       addr) : NULL;
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
++	pte = ptep_get(ptep);
++	pte_unmap(ptep);
++	KUNIT_EXPECT_TRUE(test, pte_present(pte));
++	KUNIT_EXPECT_FALSE(test, pte_write(pte));
++
++	/* The parent COWs (the peer still maps: copy branch).  The
++	 * parent's SHARED clears and its PTE re-arms; the child keeps
++	 * both shapes.
++	 */
++	pvma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pvma);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_handle_mm_fault(pvma, addr,
++						     FAULT_FLAG_WRITE, NULL),
++			0);
++	/* The peer still maps (mapcount 2): the copy branch, whose
++	 * corten_map() resets the flags -- SHARED gone with the shared
++	 * folio, and the WRITABLE record only has meaning alongside it.
++	 */
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.flags, 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, addr, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.flags,
++			CORTEN_PF_SHARED | CORTEN_PF_WRITABLE);
++	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
++
++	corten_arena_test_inv7_walk(mm, &violated, &checked);
++	KUNIT_EXPECT_EQ(test, violated, 0);
++	corten_arena_test_inv7_walk(child, &violated, &checked);
++	KUNIT_EXPECT_EQ(test, violated, 0);
++	KUNIT_EXPECT_GE(test, checked, 1);
++
++	mmput(child);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_mode_exit,
++						 0, 0),
++			0);
++}
++
++/* F2 (STATE D18, the over-SHARED corner): a window the child never got a
++ * PT page for -- a VM_WIPEONFORK piece (VMA inherited, copy skipped) or a
++ * VM_DONTCOPY piece (VMA absent) -- has no second mapper.  The fork
++ * mirror must NOT mark those pages SHARED on the parent: the parent PTE
++ * stays writable (copy_page_range never wrprotected the piece), so a
++ * SHARED mark there is precisely the INV7-drift shape the checker hunts.
++ */
++static void corten_arena_test_fork_f2_gate(struct kunit *test)
++{
++	struct corten_arena_test_mm *t;
++	struct mm_struct *mm, *child;
++	struct vm_area_struct *cvma;
++	struct corten_pte_meta m;
++	unsigned long addr0 = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
++	unsigned long addr1 = CORTEN_ARENA_TEST_BASE + PMD_SIZE + PAGE_SIZE;
++	long skips_before, violated, checked;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "metadata mirror requires corten=on");
++
++	t = corten_arena_test_mm_setup(test);
++	mm = t->mm;
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
++					     CORTEN_ARENA_TEST_LEN),
++			0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, addr0), 0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, addr1), 0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr0),
++			0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr1),
++			0);
++
++	/* Shape A: the WIPEONFORK piece -- the child's shadow-VMA covers
++	 * the whole arena, but only window 1 receives the copy (window
++	 * 0's translations were wiped: no child PT page there).
++	 */
++	child = mm_alloc();
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
++	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE,
++				      CORTEN_ARENA_TEST_BASE +
++				      CORTEN_ARENA_TEST_LEN,
++				      CORTEN_ARENA_TEST_FLAGS_OK |
++				      VM_CORTEN | VM_NOHUGEPAGE);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
++	KUNIT_EXPECT_NOT_NULL(test,
++			      corten_arena_test_fork_copy_pte(test, child, mm,
++							      addr1));
++	skips_before = corten_arena_test_fork_skips();
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_skips(), skips_before);
++
++	/* Window 0: no SHARED mark (the F2 gate), writable parent PTE,
++	 * unrecorded child slot.  Window 1: the normal mirror.
++	 */
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr0, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
++	KUNIT_EXPECT_EQ(test, m.flags, 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, addr0, &m),
++			-ENOENT);
++	{
++		pte_t *ptep = corten_arena_test_pmd(mm, addr0) ?
++			pte_offset_map(corten_arena_test_pmd(mm, addr0),
++				       addr0) : NULL;
++
++		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
++		KUNIT_EXPECT_TRUE(test, pte_write(ptep_get(ptep)));
++		pte_unmap(ptep);
++	}
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr1, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.flags,
++			CORTEN_PF_SHARED | CORTEN_PF_WRITABLE);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, addr1, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.flags,
++			CORTEN_PF_SHARED | CORTEN_PF_WRITABLE);
++
++	/* The checker agrees: no shared page sits writable anywhere. */
++	corten_arena_test_inv7_walk(mm, &violated, &checked);
++	KUNIT_EXPECT_EQ(test, violated, 0);
++	corten_arena_test_inv7_walk(child, &violated, &checked);
++	KUNIT_EXPECT_EQ(test, violated, 0);
++
++	mmput(child);
++
++	/* Shape B: the DONTCOPY piece -- window 0 has no VMA at all in
++	 * the child (the dup_mmap loop skipped it); window 1's shadow
++	 * piece keeps the arena registered (no skip).
++	 */
++	child = mm_alloc();
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
++	cvma = corten_arena_test_mkvm(child,
++				      CORTEN_ARENA_TEST_BASE + PMD_SIZE,
++				      CORTEN_ARENA_TEST_BASE +
++				      CORTEN_ARENA_TEST_LEN,
++				      CORTEN_ARENA_TEST_FLAGS_OK |
++				      VM_CORTEN | VM_NOHUGEPAGE);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
++	KUNIT_EXPECT_NOT_NULL(test,
++			      corten_arena_test_fork_copy_pte(test, child, mm,
++							      addr1));
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_skips(), skips_before);
++
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr0, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.flags, 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, addr0, &m),
++			-ENOENT);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr1, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.flags,
++			CORTEN_PF_SHARED | CORTEN_PF_WRITABLE);
++
++	corten_arena_test_inv7_walk(mm, &violated, &checked);
++	KUNIT_EXPECT_EQ(test, violated, 0);
++	corten_arena_test_inv7_walk(child, &violated, &checked);
++	KUNIT_EXPECT_EQ(test, violated, 0);
++
++	mmput(child);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_mode_exit,
++						 0, 0),
++			0);
++}
++
++/* F3 (STATE D18, M5_FORK_SPEC.md sec 2.3 E5): a transaction reference
++ * alive across the freeze window makes fork_begin()'s drain time out.
++ * The contract is "continue with the leak": the fork proceeds, the
++ * timeout is counted, the arena stays frozen until the commit's unfreeze
++ * closure re-arms the refcount -- and the straggler's put must land
++ * safely on the resurrected ref.
++ */
++static void corten_arena_test_fork_drain_leak(struct kunit *test)
++{
++	struct corten_arena_test_mm *t;
++	struct mm_struct *mm, *child;
++	struct vm_area_struct *cvma;
++	struct corten_arena *ar;
++	struct corten_pte_meta m;
++	unsigned long addr = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
++	long timeouts_before, faithful_before;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "metadata mirror requires corten=on");
++
++	t = corten_arena_test_mm_setup(test);
++	mm = t->mm;
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
++					     CORTEN_ARENA_TEST_LEN),
++			0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, addr), 0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr),
++			0);
++
++	child = mm_alloc();
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
++	timeouts_before = corten_arena_test_drain_timeouts();
++	faithful_before = corten_arena_test_fork_faithful_count();
++
++	/* The leaked reference: one transaction liveness ref held across
++	 * the freeze (what a straggler transaction holds).  lookup_get
++	 * must run before fork_begin() -- frozen lookups fail.
++	 */
++	ar = corten_arena_lookup_get(mm, addr);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
++
++	/* The drain times out (10*HZ) and is counted; the fork continues
++	 * with the leak and the arena stays frozen.
++	 */
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(),
++			timeouts_before + 1);
++	KUNIT_EXPECT_TRUE(test,
++			  corten_arena_test_arena_frozen(mm,
++							 CORTEN_ARENA_TEST_BASE));
++
++	/* The straggler releases onto the killed ref: the put lands,
++	 * the completion fires, and the commit below re-arms the ref.
++	 */
++	percpu_ref_put(&ar->active);
++
++	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE,
++				      CORTEN_ARENA_TEST_BASE +
++				      CORTEN_ARENA_TEST_LEN,
++				      CORTEN_ARENA_TEST_FLAGS_OK |
++				      VM_CORTEN | VM_NOHUGEPAGE);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
++	KUNIT_EXPECT_NOT_NULL(test,
++			      corten_arena_test_fork_copy_pte(test, child, mm,
++							      addr));
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
++
++	/* The unfreeze closure ran and the fork counted as faithful. */
++	KUNIT_EXPECT_FALSE(test,
++			   corten_arena_test_arena_frozen(mm,
++							  CORTEN_ARENA_TEST_BASE));
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_faithful_count(),
++			faithful_before + 1);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, addr, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.flags,
++			CORTEN_PF_SHARED | CORTEN_PF_WRITABLE);
++
++	mmput(child);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_mode_exit,
++						 0, 0),
++			0);
++}
++
++/* OQ-4 (M5_FORK_SPEC.md sec 4.2): GUP's read-PIN of a fork-shared page
++ * (gup_must_unshare() -> -EMLINK) faults in with FAULT_FLAG_UNSHARE and
++ * no write bit; the slow gate maps it onto the COW write dispatch.  The
++ * pinned side must come out on its own private copy, never spinning
++ * against a re-armed read-only translation.
++ */
++static void corten_arena_test_unshare_pin(struct kunit *test)
++{
++	struct corten_arena_test_mm *t;
++	struct mm_struct *mm, *child;
++	struct vm_area_struct *pvma, *cvma;
++	struct folio *folio;
++	struct page *newpage;
++	struct corten_pte_meta m;
++	pte_t *ptep, pte;
++	unsigned long addr = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
++	unsigned long pfn;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "metadata mirror requires corten=on");
++
++	t = corten_arena_test_mm_setup(test);
++	mm = t->mm;
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
++					     CORTEN_ARENA_TEST_LEN),
++			0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, addr), 0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr),
++			0);
++
++	child = mm_alloc();
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
++	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE,
++				      CORTEN_ARENA_TEST_BASE +
++				      CORTEN_ARENA_TEST_LEN,
++				      CORTEN_ARENA_TEST_FLAGS_OK |
++				      VM_CORTEN | VM_NOHUGEPAGE);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
++	folio = corten_arena_test_fork_copy_pte(test, child, mm, addr);
++	KUNIT_EXPECT_NOT_NULL(test, folio);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
++
++	/* The fork-shared shape: mapcount 2, exclusive cleared on both
++	 * sides (folio_try_dup_anon_rmap_pte), SHARED marks mirrored.
++	 */
++	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 2);
++	KUNIT_EXPECT_FALSE(test,
++			   PageAnonExclusive(folio_page(folio, 0)));
++
++	pvma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pvma);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_handle_mm_fault(pvma, addr,
++						     FAULT_FLAG_UNSHARE, NULL),
++			0);
++
++	/* The parent pinned side now owns a private, exclusive, writable
++	 * copy (the contract perm carries WRITE); the child keeps the
++	 * shared original read-only, and the folio's remaining mapper is
++	 * the child alone.
++	 */
++	ptep = corten_arena_test_pmd(mm, addr) ?
++			pte_offset_map(corten_arena_test_pmd(mm, addr),
++				       addr) : NULL;
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
++	pte = ptep_get(ptep);
++	pte_unmap(ptep);
++	KUNIT_EXPECT_TRUE(test, pte_present(pte) && pte_write(pte));
++	newpage = pte_page(pte);
++	KUNIT_EXPECT_TRUE(test, newpage != folio_page(folio, 0));
++	KUNIT_EXPECT_TRUE(test, PageAnonExclusive(newpage));
++	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
++
++	/* The copy branch's corten_map() reset the flags. */
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.flags, 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, addr, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.flags,
++			CORTEN_PF_SHARED | CORTEN_PF_WRITABLE);
++
++	ptep = corten_arena_test_pmd(child, addr) ?
++			pte_offset_map(corten_arena_test_pmd(child, addr),
++				       addr) : NULL;
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
++	pte = ptep_get(ptep);
++	pte_unmap(ptep);
++	KUNIT_EXPECT_TRUE(test, pte_present(pte));
++	KUNIT_EXPECT_FALSE(test, pte_write(pte));
++	pfn = pte_pfn(pte);
++	KUNIT_EXPECT_EQ(test, pfn, page_to_pfn(folio_page(folio, 0)));
++
++	mmput(child);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_mode_exit,
++						 0, 0),
++			0);
++}
++
++/* OQ-5 (M5_FORK_SPEC.md sec 8), the reuse leg: after the peer leaves
++ * (fork + child exit), the survivor's first write takes the map_count==1
++ * branch -- and marks the page exclusive, exactly like do_wp_page()'s
++ * reuse path in front of wp_page_reuse().  Without the mark a later GUP
++ * PIN of the survivor would trip gup.c's PIN && !PageAnonExclusive WARN.
++ */
++static void corten_arena_test_fork_reuse_exclusive(struct kunit *test)
++{
++	struct corten_arena_test_mm *t;
++	struct mm_struct *mm, *child;
++	struct vm_area_struct *pvma, *cvma;
++	struct folio *folio;
++	struct corten_pte_meta m;
++	pte_t *ptep, pte;
++	unsigned long addr = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
++	unsigned long pfn;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "metadata mirror requires corten=on");
++
++	t = corten_arena_test_mm_setup(test);
++	mm = t->mm;
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
++					     CORTEN_ARENA_TEST_LEN),
++			0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, addr), 0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr),
++			0);
++
++	child = mm_alloc();
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
++	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE,
++				      CORTEN_ARENA_TEST_BASE +
++				      CORTEN_ARENA_TEST_LEN,
++				      CORTEN_ARENA_TEST_FLAGS_OK |
++				      VM_CORTEN | VM_NOHUGEPAGE);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
++	folio = corten_arena_test_fork_copy_pte(test, child, mm, addr);
++	KUNIT_EXPECT_NOT_NULL(test, folio);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
++	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 2);
++
++	/* The peer leaves: mapcount back to 1, the exclusive mark stays
++	 * cleared (fork's dup), the SHARED mark is the residue the COW
++	 * reuse branch exists to clear.
++	 */
++	mmput(child);
++	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
++	KUNIT_EXPECT_FALSE(test, PageAnonExclusive(folio_page(folio, 0)));
++
++	pvma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pvma);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_handle_mm_fault(pvma, addr,
++						     FAULT_FLAG_WRITE, NULL),
++			0);
++
++	ptep = corten_arena_test_pmd(mm, addr) ?
++			pte_offset_map(corten_arena_test_pmd(mm, addr),
++				       addr) : NULL;
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
++	pte = ptep_get(ptep);
++	pte_unmap(ptep);
++	KUNIT_EXPECT_TRUE(test, pte_present(pte) && pte_write(pte));
++	pfn = pte_pfn(pte);
++	KUNIT_EXPECT_EQ(test, pfn, page_to_pfn(folio_page(folio, 0)));
++	KUNIT_EXPECT_TRUE(test, PageAnonExclusive(folio_page(folio, 0)));
++
++	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.flags, CORTEN_PF_WRITABLE);
++
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_mode_exit,
++						 0, 0),
++			0);
++}
+ /* ------------------------------------------------------------------ *
+  * T0b: mprotect / madvise / mremap routing (M4T0_SPEC.md sec 3.3/3.4,
+  * STATE D12).  Decision tables on a real declared arena, the MODE
+@@ -3667,6 +4281,11 @@ static struct kunit_case corten_arena_test_cases[] = {
+ 	KUNIT_CASE(corten_arena_test_fork_unwind),
+ 	KUNIT_CASE(corten_arena_test_fork_multipiece),
+ 	KUNIT_CASE(corten_arena_test_fork_perm),
++	KUNIT_CASE(corten_arena_test_inv7_shared_ro),
++	KUNIT_CASE(corten_arena_test_fork_f2_gate),
++	KUNIT_CASE(corten_arena_test_fork_drain_leak),
++	KUNIT_CASE(corten_arena_test_unshare_pin),
++	KUNIT_CASE(corten_arena_test_fork_reuse_exclusive),
+ 	KUNIT_CASE(corten_arena_test_concurrent),
+ 	KUNIT_CASE(corten_arena_test_concurrent_window),
+ 	KUNIT_CASE(corten_arena_test_obs_ledger),
+diff --git a/mm/corten_fault_test.c b/mm/corten_fault_test.c
+index 6bb890d69de5..b9649679e9f0 100644
+--- a/mm/corten_fault_test.c
++++ b/mm/corten_fault_test.c
+@@ -289,6 +289,84 @@ static void corten_fault_test_dispatch(struct kunit *test)
+ 				    cases[i].expect, "%s", cases[i].name);
+ }
+ 
++/* The Fig.8 L26-38 对拍锚 (PAPER_SPEC PS-C3, the paper's page-fault body
++ * for Mapped pages), line by line.  The real-chain legs live in the named
++ * cases -- corten_fault_test_cow_reuse (L28-31) and corten_fault_test_
++ * cow_copy (L33-34) -- this table pins the ROUTING each line maps to.
++ *
++ *   L26: the COW record is the metadata COW bit pair (PS-B3: SHARED plus
++ *        the WRITABLE record), not a hardware PTE bit.
++ *   L27: `reason.is_write() && perm.contains(COW)`:
++ *          contract writable -> COW_MAYBE (the wrprotect artifact),
++ *          contract read-only -> COW_COPY.
++ *   L28-29: `map_count() == 1` -- "no need to COW if parent/child has
++ *        left"; the decision happens inside the transaction (the pure
++ *        classifier cannot see the folio), routing row = COW_MAYBE.
++ *   L30-31: `p -= COW; p |= WRITE` + map -- the reuse branch clears
++ *        SHARED and re-arms the write bit on the SAME folio.
++ *   L33-34: `alloc_copied(&page)` + map -- the copy branch.
++ *   L36: `else { return Err(SEGFAULT) }` -- the unprivileged access
++ *        (the figure's own L25 comment: "Maybe COW or unprivileged
++ *        access") maps to ACCERR.  The privileged read is a port
++ *        extension with no paper counterpart: restore_pte() self-heals
++ *        a protnone/absent translation (the mprotect route's shape),
++ *        hence the RESTORE row below.
++ *   L39 (beyond the range): Invalid -> paper SEGFAULT; our FRESH
++ *        virtual-allocation answer is the registered PS deviation --
++ *        covered by the "invalid-*" rows of the dispatch table above.
++ *
++ * T2' additions with no paper counterpart: the slow-gate forced shapes
++ * (FOLL_FORCE poke, FAULT_FLAG_UNSHARE) synthesize CORTEN_DISP_FORCE_
++ * COPY in fault_once -- dispatch stays a pure classifier, so the same
++ * metadata keeps reporting COW_COPY/ACCERR here (see
++ * corten_fault_test_foll_force for the real chain).
++ */
++static void corten_fault_test_fig8_cow(struct kunit *test)
++{
++	static const struct {
++		const char *name;
++		struct corten_pte_meta m;
++		bool write, instr;
++		enum corten_disp expect;
++	} rows[] = {
++		{ "L26/L27-write-cow-writable",
++		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_WRITE |
++				   CORTEN_PERM_USER,
++		    CORTEN_PF_SHARED | CORTEN_PF_WRITABLE, { 0 } },
++		  true, false, CORTEN_DISP_COW_MAYBE },
++		{ "L27-write-cow-ro-contract",
++		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_USER,
++		    CORTEN_PF_SHARED, { 0 } },
++		  true, false, CORTEN_DISP_COW_COPY },
++		{ "L28-31-mapcount1-routing",
++		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_WRITE |
++				   CORTEN_PERM_USER,
++		    CORTEN_PF_SHARED | CORTEN_PF_WRITABLE, { 0 } },
++		  true, false, CORTEN_DISP_COW_MAYBE },
++		{ "L33-34-copy-routing",
++		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_USER,
++		    CORTEN_PF_SHARED, { 0 } },
++		  true, false, CORTEN_DISP_COW_COPY },
++		{ "L36-unprivileged",
++		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_WRITE |
++				   CORTEN_PERM_USER,
++		    0, { 0 } },
++		  false, true, CORTEN_DISP_ACCERR },
++		{ "L36-read-port-extension",
++		  { CORTEN_MAPPED, CORTEN_PERM_READ | CORTEN_PERM_WRITE |
++				   CORTEN_PERM_USER,
++		    CORTEN_PF_SHARED | CORTEN_PF_WRITABLE, { 0 } },
++		  false, false, CORTEN_DISP_RESTORE },
++	};
++	size_t i;
++
++	for (i = 0; i < ARRAY_SIZE(rows); i++)
++		KUNIT_EXPECT_EQ_MSG(test, corten_arena_dispatch(&rows[i].m,
++								rows[i].write,
++								rows[i].instr),
++				    rows[i].expect, "%s", rows[i].name);
++}
++
+ /* ------------------------------------------------------------------ *
+  * S6: routing classifiers (pure)
+  * ------------------------------------------------------------------
+@@ -376,13 +454,29 @@ static void corten_fault_test_mmap_classify(struct kunit *test)
+  * ------------------------------------------------------------------
+  */
+ 
+-/* One write fault through the slow-path entry point. */
++/* One write fault through the slow-path entry point.  Without
++ * FAULT_FLAG_USER this is the kernel-path shape (FOLL_FORCE contract:
++ * a GUP/ptrace write that upstream would wp_page_copy()); see
++ * corten_fault_test_foll_force.
++ */
+ static int ft_write_fault(struct ft_mm *t, unsigned long addr)
+ {
+ 	return corten_arena_handle_mm_fault(t->vma, addr, FAULT_FLAG_WRITE,
+ 					    NULL);
+ }
+ 
++/* A genuine user-mode write (the arch-hook shape): FAULT_FLAG_USER keeps
++ * the fault_once forced-write conversion off, so the recorded perm rules
++ * alone.  Every "the process writes a downgraded page" expectation below
++ * drives this.
++ */
++static int ft_user_write_fault(struct ft_mm *t, unsigned long addr)
++{
++	return corten_arena_handle_mm_fault(t->vma, addr,
++					    FAULT_FLAG_WRITE | FAULT_FLAG_USER,
++					    NULL);
++}
++
+ static void corten_fault_test_map_anon(struct kunit *test)
+ {
+ 	/*
+@@ -522,7 +616,8 @@ static void corten_fault_test_sigsegv(struct kunit *test)
+ 	corten_unlock(&txn);
+ 	KUNIT_ASSERT_EQ(test, ret, 0);
+ 
+-	KUNIT_EXPECT_EQ(test, ft_write_fault(t, ro_addr), VM_FAULT_SIGSEGV);
++	KUNIT_EXPECT_EQ(test, ft_user_write_fault(t, ro_addr),
++			VM_FAULT_SIGSEGV);
+ 	KUNIT_EXPECT_EQ(test, corten_arena_handle_mm_fault(t->vma, ro_addr, 0,
+ 							   NULL), 0);
+ 	KUNIT_EXPECT_EQ(test,
+@@ -907,6 +1002,112 @@ static int corten_fault_test_cow_worker(void *data)
+ 	return 0;
+ }
+ 
++/* M5.T2' (M5_FORK_SPEC.md sec 4.2/OQ-4): the slow-gate forced write.
++ * ft_write_fault() IS the forced shape (no FAULT_FLAG_USER): the same
++ * entry a FOLL_FORCE poke or a FAULT_FLAG_UNSHARE read-pin pre-break
++ * takes.  The recorded perm must survive untouched and the PTE must
++ * never gain a write bit -- only the sharing breaks.
++ */
++static void corten_fault_test_foll_force(struct kunit *test)
++{
++	if (!corten_enabled_static())
++		kunit_skip(test, "real fault chain requires corten=on");
++	struct ft_mm *t = ft_setup(test);
++	unsigned long addr = FT_BASE + 4 * PAGE_SIZE;
++	unsigned long pfn_before;
++	struct corten_txn txn;
++	struct corten_pte_meta m, nm;
++	pte_t *ptep, pte;
++	int ret;
++
++	/* The routed-whole read-only shape: the VMA itself carries no
++	 * VM_WRITE (whole-area mprotect-RO, or a PROT_NONE reservation);
++	 * the MAYWRITE grant stays, as on every private anonymous VMA.
++	 */
++	vm_flags_clear(t->vma, VM_WRITE);
++
++	/* A committed page with a fork-shaped residue: SHARED meta
++	 * residue (the peer COW'd away or never existed), read-only
++	 * hardware, and the recorded contract downgraded to read-only.
++	 */
++	KUNIT_EXPECT_EQ(test, ft_mark(t, addr, PAGE_SIZE, FT_PERM_RW), 0);
++	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
++	KUNIT_EXPECT_EQ(test, ft_arm_shared(t, addr), 0);
++	KUNIT_EXPECT_EQ(test, ft_wrprotect(t, addr), 0);
++
++	KUNIT_ASSERT_EQ(test, ft_meta(t, addr, &m), 0);
++	nm = m;
++	nm.perm &= ~CORTEN_PERM_WRITE;
++	nm.flags &= ~CORTEN_PF_WRITABLE;
++	ret = corten_lock_range(t->mm, addr, PAGE_SIZE, &txn);
++	KUNIT_ASSERT_EQ(test, ret, 0);
++	ret = corten_mark(&txn, addr, PAGE_SIZE, &nm);
++	corten_unlock(&txn);
++	KUNIT_ASSERT_EQ(test, ret, 0);
++
++	ptep = ft_pte(t, addr);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
++	pfn_before = pte_pfn(ptep_get(ptep));
++	pte_unmap(ptep);
++
++	/* The forced poke: SHARED residue breaks in place (mapcount==1,
++	 * the reuse branch), the PTE stays at the recorded read-only
++	 * encoding, the page becomes exclusive (OQ-5, the do_wp_page
++	 * reuse shape) and the perm does not move.
++	 */
++	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
++
++	ptep = ft_pte(t, addr);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
++	pte = ptep_get(ptep);
++	pte_unmap(ptep);
++	KUNIT_EXPECT_TRUE(test, pte_present(pte));
++	KUNIT_EXPECT_FALSE(test, pte_write(pte));
++	KUNIT_EXPECT_EQ(test, pte_pfn(pte), pfn_before);
++	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
++	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
++	KUNIT_EXPECT_EQ(test, m.flags, 0);
++	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_USER);
++	{
++		struct page *page = pfn_to_page(pfn_before);
++
++		KUNIT_EXPECT_TRUE(test, PageAnonExclusive(page));
++	}
++
++	/* The process's own write is still contract-bound: ACCERR. */
++	KUNIT_EXPECT_EQ(test, ft_user_write_fault(t, addr),
++			VM_FAULT_SIGSEGV);
++
++	/* The second poke: private and exclusive now -- plain handled,
++	 * still no write bit, still no copy.
++	 */
++	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
++	ptep = ft_pte(t, addr);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
++	pte = ptep_get(ptep);
++	pte_unmap(ptep);
++	KUNIT_EXPECT_TRUE(test, pte_present(pte));
++	KUNIT_EXPECT_FALSE(test, pte_write(pte));
++
++	/* The boundary: a VMA the GUP re-follow itself calls writable
++	 * (the routed-partial downgraded commit).  Serving the forced
++	 * write would need mkwrite -- which would silently retire the
++	 * recorded RO contract for the process -- and falling back to
++	 * the legacy body would wp_page_copy() it behind the
++	 * transaction's back.  The fault must die loudly (ACCERR) with
++	 * the hardware shape untouched.
++	 */
++	vm_flags_set(t->vma, VM_WRITE);
++	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), VM_FAULT_SIGSEGV);
++	ptep = ft_pte(t, addr);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
++	pte = ptep_get(ptep);
++	pte_unmap(ptep);
++	KUNIT_EXPECT_FALSE(test, pte_write(pte));
++	KUNIT_EXPECT_EQ(test, ft_user_write_fault(t, addr),
++			VM_FAULT_SIGSEGV);
++}
++
+ static void corten_fault_test_cow_race(struct kunit *test)
+ {
+ 	if (!corten_enabled_static())
+@@ -1815,8 +2016,11 @@ static void corten_fault_test_mprotect_pte(struct kunit *test)
+ 	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+ 	KUNIT_EXPECT_FALSE(test, pte_write(pte));
+ 
+-	/* The next write is denied by the metadata gate (ACCERR). */
+-	KUNIT_EXPECT_NE(test, ft_write_fault(t, addr), 0);
++	/* The next write is denied by the metadata gate (ACCERR) -- the
++	 * genuine user-mode shape (FAULT_FLAG_USER), exactly what the
++	 * arch hook drives.
++	 */
++	KUNIT_EXPECT_NE(test, ft_user_write_fault(t, addr), 0);
+ 
+ 	/* Upgrade back: the fault path rebuilds the writable PTE. */
+ 	KUNIT_ASSERT_EQ(test,
+@@ -2105,6 +2309,7 @@ static void corten_fault_test_untracked_rearm(struct kunit *test)
+ 
+ static struct kunit_case corten_fault_test_cases[] = {
+ 	KUNIT_CASE(corten_fault_test_dispatch),
++	KUNIT_CASE(corten_fault_test_fig8_cow),
+ 	KUNIT_CASE(corten_fault_test_unmap_classify),
+ 	KUNIT_CASE(corten_fault_test_mmap_classify),
+ 	KUNIT_CASE(corten_fault_test_punch_classify),
+@@ -2119,6 +2324,7 @@ static struct kunit_case corten_fault_test_cases[] = {
+ 	KUNIT_CASE(corten_fault_test_restore),
+ 	KUNIT_CASE(corten_fault_test_cow_reuse),
+ 	KUNIT_CASE(corten_fault_test_cow_copy),
++	KUNIT_CASE(corten_fault_test_foll_force),
+ 	KUNIT_CASE(corten_fault_test_cow_race),
+ 	KUNIT_CASE(corten_fault_test_mprotect_pte),
+ 	KUNIT_CASE(corten_fault_test_mprotect_fresh),
