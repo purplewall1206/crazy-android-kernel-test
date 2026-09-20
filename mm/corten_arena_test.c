@@ -1347,16 +1347,20 @@ static void corten_arena_test_mode(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, corten_arena_mode_get(mm), 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_mode_enter(mm), 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_mode_get(mm), 1);
-	KUNIT_EXPECT_NOT_NULL(test, READ_ONCE(mm->corten_state));
-	/* The registry was created eagerly with the window cursor. */
-	KUNIT_EXPECT_EQ(test,
-			READ_ONCE(mm->corten_state)->next_va,
-			CORTEN_MODE_WINDOW_START);
+	/* A5: ENTER is registry-free -- the mode bit lives in the
+	 * mm_struct and the registry is only built by the first arena
+	 * work (route/DECLARE/fork mirror).  This is the G5 root-cause
+	 * fix: an ENTER-only MODE lifecycle leaves no state behind and
+	 * its exit pays no grace period.
+	 */
+	KUNIT_EXPECT_NULL(test, READ_ONCE(mm->corten_state));
 	/* Re-enter is idempotent. */
 	KUNIT_EXPECT_EQ(test, corten_arena_mode_enter(mm), 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_mode_get(mm), 1);
 
-	/* Exit with no arenas: mode cleared, registry stays. */
+	/* Exit with no arenas (and, since A5, no registry at all): mode
+	 * cleared, the NULL state is a valid no-op.
+	 */
 	KUNIT_EXPECT_EQ(test, corten_arena_mode_exit(mm), 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_mode_get(mm), 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_mode_exit(mm), 0);
@@ -1424,8 +1428,10 @@ static void corten_arena_test_auto_route(struct kunit *test)
 		kunit_skip(test, "auto takeover degraded (OVERCOMMIT_NEVER)");
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
-	state = READ_ONCE(mm->corten_state);
-	KUNIT_ASSERT_NOT_NULL(test, state);
+	/* A5: ENTER created no registry; a declined route must not
+	 * create one either (its gate runs before get_state()).
+	 */
+	KUNIT_EXPECT_NULL(test, READ_ONCE(mm->corten_state));
 
 	/* Non-whitelisted flags: legacy, window untouched. */
 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
@@ -1435,7 +1441,7 @@ static void corten_arena_test_auto_route(struct kunit *test)
 						     PROT_WRITE, &addr, &len,
 						     &flags), 0);
 	KUNIT_EXPECT_EQ(test, addr, 0);
-	KUNIT_EXPECT_EQ(test, state->next_va, CORTEN_MODE_WINDOW_START);
+	KUNIT_EXPECT_NULL(test, READ_ONCE(mm->corten_state));
 
 	/* Plain whitelist hit: rewritten onto the window base, 2M-rounded,
 	 * MAP_FIXED|MAP_NORESERVE forced.  The running cpu's magazine
@@ -1455,6 +1461,9 @@ static void corten_arena_test_auto_route(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, len, PMD_SIZE);
 	KUNIT_EXPECT_EQ(test, flags, MAP_PRIVATE | MAP_ANONYMOUS |
 				     MAP_FIXED | MAP_NORESERVE);
+	/* The whitelist hit built the registry lazily (A5). */
+	state = READ_ONCE(mm->corten_state);
+	KUNIT_ASSERT_NOT_NULL(test, state);
 	/* The claim advanced the global cursor past the whole segment. */
 	KUNIT_EXPECT_EQ(test, state->next_va,
 			CORTEN_MODE_WINDOW_START + CORTEN_VA_SEG_SIZE);
@@ -1766,8 +1775,10 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 	if (!corten_enabled_static())
 		kunit_skip(test, "munmap routing requires corten=on");
 
-	/* The route creates the registry before the real do_mmap attaches;
-	 * mode_enter is the same registry-establishing step (gate-free).
+	/* A5: ENTER creates no registry -- the attach below builds it on
+	 * demand (get_state in the do_mmap tail hook body), exactly the
+	 * shape of a MODE process whose first registry touch is its
+	 * first glibc-shaped mapping.
 	 */
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 
@@ -4775,10 +4786,14 @@ static void corten_arena_test_pool_fork(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
 			0);
 
-	/* The child inherited the MODE bit and an empty registry. */
+	/* The child inherited the MODE bit; with the pool flushed there
+	 * was nothing to mirror, so A5 leaves it registry-free -- query
+	 * answers -ENOENT, the registry-less answer, and its first
+	 * arena work will build the registry then.
+	 */
 	KUNIT_EXPECT_TRUE(test, READ_ONCE(child->corten_mode));
 	KUNIT_EXPECT_EQ(test, corten_arena_query(child, CORTEN_ARENA_TEST_WIN),
-			0);
+			-ENOENT);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(child), 0);
 
 	mmput(child);

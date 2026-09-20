@@ -376,6 +376,19 @@ static void corten_arena_state_free(struct corten_mm_state *state)
 	kfree(state);
 }
 
+/* A5 (G5-fix) deferred shape of the state teardown: the callback body
+ * is the same free (xa_destroy/free_percpu are atomic-safe), it just
+ * runs after the grace period the registry unlink owes the shrinker
+ * readers instead of making the dying process wait for it.
+ */
+static void corten_arena_state_free_rcu(struct rcu_head *rcu)
+{
+	struct corten_mm_state *state;
+
+	state = container_of(rcu, struct corten_mm_state, rcu);
+	corten_arena_state_free(state);
+}
+
 /*
  * Create and publish the registry for @mm.  mm->corten_state is published
  * once (release store) and never replaced or removed while the mm is alive
@@ -1504,6 +1517,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	struct corten_mm_state *state;
 	unsigned long frame = 0, drained_until = 0;
 	struct corten_arena *arena;
+	bool had_arenas;
 
 	/* Pairs with the store in corten_arena_state_create(). */
 	state = smp_load_acquire(&mm->corten_state);
@@ -1511,6 +1525,15 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		return;
 	/* Unpublish; no reader can be racing (mm_users == 0). */
 	smp_store_release(&mm->corten_state, NULL);
+
+	/* A5 (G5-fix): did this registry ever hold arena state?  The
+	 * pool bookkeeping below is reset before the drain, so sample
+	 * it here.  An arena-less registry (the ENTER-only MODE
+	 * lifecycle that used to pay one synchronize_rcu() per mm at
+	 * exit -- the G5 fork/shell regression) takes the deferred
+	 * teardown at the bottom.
+	 */
+	had_arenas = refcount_read(&state->nr) || READ_ONCE(state->nr_pool);
 
 	/* T1c: parked arenas carry no bookkeeping beyond their pool node;
 	 * the walk below drains and frees them like any other descriptor,
@@ -1555,13 +1578,28 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 * grace period before the state memory is reused -- a shrinker
 	 * reader that found this node under RCU either finished (its mm
 	 * reference -- mmget_not_zero -- kept mm->corten_state alive
-	 * through its work) or never got past the RCU section.  This is
-	 * the only synchronize_rcu() on the exit path and it is what lets
-	 * the registry stay a plain RCU list (no per-node refcount).
+	 * through its work) or never got past the RCU section.  The
+	 * arena-bearing branch below pays the wait synchronously (the
+	 * only synchronize_rcu() on the exit path); the A5 arena-less
+	 * fast path defers it to the RCU callback instead.  Either way
+	 * the registry stays a plain RCU list (no per-node refcount).
 	 */
 	spin_lock(&corten_mm_registry_lock);
 	list_del_rcu(&state->shrink_reg);
 	spin_unlock(&corten_mm_registry_lock);
+
+	if (!had_arenas) {
+		/* A5 (G5-fix): the grace period is still owed (an
+		 * in-flight shrinker reader may hold the node pointer),
+		 * but nobody has to stand still for it -- the dying
+		 * process hands the teardown to RCU and returns.  This
+		 * is the fast path for every MODE lifecycle that never
+		 * carried an arena.
+		 */
+		call_rcu(&state->rcu, corten_arena_state_free_rcu);
+		return;
+	}
+
 	synchronize_rcu();
 
 	corten_arena_state_free(state);
@@ -2195,8 +2233,16 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, unsigned long len,
 		return 0;
 
 	state = corten_arena_get_state(mm);
-	if (!state)
-		return -ENOMEM;
+	if (!state) {
+		/* A5: the registry is created lazily at the first
+		 * arena-able mmap now; if that allocation fails the
+		 * request degrades to the legacy mmap path, counted --
+		 * ENTER no longer front-loads it (and no longer fails
+		 * with -ENOMEM either).
+		 */
+		corten_arena_auto_fallback(NULL);
+		return 0;
+	}
 
 	/* The application's page-rounded length is rounded up to the 2M
 	 * arena granularity; the tail is kernel-private padding, invisible
@@ -2262,12 +2308,14 @@ int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
 
 	mmap_assert_write_locked(mm);
 
-	/* Pairs with the store in corten_arena_state_create(); the route
-	 * has created the registry for this MODE mm already.
+	/* A5: the route has normally created the registry for this MODE
+	 * mm already (it placed the window address); get_state() covers
+	 * the direct-attach stragglers so -ENOENT is not a thing here.
+	 * Pairs with the store in corten_arena_state_create().
 	 */
-	state = smp_load_acquire(&mm->corten_state);
+	state = corten_arena_get_state(mm);
 	if (!state)
-		return -ENOENT;
+		return -ENOMEM;
 
 	/* DECLARE's locked body under the write lock the caller (do_mmap)
 	 * already holds -- exactly the nesting the P0 inversion (DEV-13)
@@ -2291,8 +2339,6 @@ int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
 
 int corten_arena_mode_enter(struct mm_struct *mm)
 {
-	struct corten_mm_state *state;
-
 	if (!mm)
 		return -EINVAL;
 
@@ -2302,15 +2348,16 @@ int corten_arena_mode_enter(struct mm_struct *mm)
 		return 0;		/* idempotent */
 	}
 
-	/* The cursor registry must exist before the first auto mmap hits
-	 * the route; creating it here keeps the hot path allocation-free.
+	/* A5 (G5-fix): no registry here.  The mode bit lives in the
+	 * mm_struct (T0a), so ENTER is allocation-free and the registry
+	 * is created on demand by the first arena work -- the auto mmap
+	 * route, a DECLARE or the fork mirror.  A MODE process that
+	 * never arena-maps (the fork/shell churn lat_proc measures) also
+	 * never allocates one, and its exit costs nothing (see
+	 * corten_arena_mm_exit()).  The hot path keeps its
+	 * allocation-free property: get_state() has run by the time the
+	 * route places an arena.
 	 */
-	state = corten_arena_get_state(mm);
-	if (!state) {
-		mmap_write_unlock(mm);
-		return -ENOMEM;
-	}
-
 	WRITE_ONCE(mm->corten_mode, true);
 	mmap_write_unlock(mm);
 
@@ -2531,13 +2578,16 @@ int corten_arena_fork_begin(struct mm_struct *mm, struct mm_struct *oldmm)
 	mmap_assert_write_locked(oldmm);
 	mmap_assert_write_locked(mm);
 
-	/* The child registry is created eagerly so that fork_commit() can
-	 * register the mirrored arenas into it; the child's mmap_write is
-	 * held nested by dup_mmap(), which is the MODE writer contract
-	 * for the cursor copy below (the window cursor must match, or the
-	 * child's new mmaps would collide with the inherited arenas).
+	/* A5 (G5-fix): the child registry is only created when live
+	 * arenas are about to be mirrored into it (fork_commit's
+	 * register_child, plus the cursor that must not regress behind
+	 * them).  An arena-less MODE child -- the fork/shell churn
+	 * lat_proc measures -- inherits just the mode bit and runs
+	 * registry-free like its parent; its first arena work builds the
+	 * registry then.  Parked arenas do not count: the flush below
+	 * releases them, so nothing of them reaches the child either.
 	 */
-	{
+	if (refcount_read(&old_state->nr)) {
 		struct corten_mm_state *state = corten_arena_get_state(mm);
 
 		if (!state)
@@ -3038,9 +3088,12 @@ int corten_arena_fork_commit(struct mm_struct *mm, struct mm_struct *oldmm)
 	old_state = smp_load_acquire(&oldmm->corten_state);
 	if (!old_state)
 		return 0;
-	/* Pairs with the store in corten_arena_state_create(). */
+	/* Pairs with the store in corten_arena_state_create().  NULL also
+	 * covers the A5 arena-less child: fork_begin left the registry
+	 * out because nothing was mirrored.
+	 */
 	state = smp_load_acquire(&mm->corten_state);
-	if (!state)			/* fork_begin created it */
+	if (!state)
 		return 0;
 
 	mmap_assert_write_locked(oldmm);

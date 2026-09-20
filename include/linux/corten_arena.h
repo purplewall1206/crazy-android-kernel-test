@@ -286,8 +286,15 @@ struct corten_va_seg {
  *            as the registry membership survives.
  * @shrink_reg: M6.T3 global shrinker-registry node (corten_mm_registry).
  *            Linked (list_add_tail_rcu) when the registry is published
- *            and unlinked (list_del_rcu + synchronize_rcu) at exit, so
- *            RCU readers (the shrinker) never touch a freed state.
+ *            and unlinked (list_del_rcu) at exit; the state memory is
+ *            freed after a grace period -- synchronously for
+ *            arena-bearing states, deferred via @rcu for arena-less
+ *            ones (A5) -- so RCU readers (the shrinker) never touch a
+ *            freed state.
+ * @rcu: deferred-free handle of the A5 arena-less exit fast path
+ *            (corten_arena_mm_exit() hands the teardown to call_rcu()
+ *            instead of parking the dying process in
+ *            synchronize_rcu()).
  * @shrink_lock: serializes shrinker/evict victim selection per mm (one
  *            picker at a time; two pickers could isolate the same folio
  *            onto two lists).  trylock-only from reclaim context: a
@@ -328,6 +335,7 @@ struct corten_mm_state {
 	unsigned long		shrink_cursor;
 	struct xarray		shrink_aged;
 	unsigned long __percpu	*stats;
+	struct rcu_head		rcu;
 };
 
 /* T1c resident-pool capacity.  The guest benchmark shapes (8 vCPU: the
