@@ -67,9 +67,11 @@
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
+#include <linux/shrinker.h>	/* shrinker_alloc/register (M6.T3) */
 #include <linux/slab.h>
 #include <linux/swap.h>
 #include <linux/swapops.h>	/* swp_entry_to_pte()/pte_swp_* (M6.T2) */
+#include <linux/time.h>		/* ktime (M6.T4 rate lines) */
 #include <linux/uaccess.h>
 
 #include <asm/tlb.h>
@@ -247,6 +249,43 @@ static atomic_long_t corten_nr_pool_misses;
 static atomic_long_t corten_nr_pool_over;
 static atomic_long_t corten_nr_pool_ejects;
 
+/* M6.T3 shrinker pressure channel (M6_RMAP_SPEC.md sec 2.1 D2):
+ * shrink_scans counts scan_objects() invocations, aging_passes the
+ * pass-1 window ages (each is one two-pass aging transaction opening),
+ * shrink_swapped the pages that reached swap through the shrinker
+ * (subset of swapped_out), shrink_skipped the folio-level refusals of
+ * the victim walker (pin/writeback/order -- the same gate families the
+ * ttu guard counts as rmap_rejects upstream of it), and evict_busy the
+ * evict-vs-shrinker mutual exclusions (the per-mm shrink trylock).
+ * Global atomics like every reclaim-path counter: the scanned mm may
+ * die at any moment and debugfs cannot enumerate states.
+ */
+static atomic_long_t corten_nr_shrink_scans;
+static atomic_long_t corten_nr_aging_passes;
+static atomic_long_t corten_nr_shrink_swapped;
+static atomic_long_t corten_nr_shrink_skipped;
+static atomic_long_t corten_nr_evict_busy;
+
+/* M6.T4 swap-rate lines: arena_stats readers get pages/s deltas between
+ * consecutive reads.  The snapshot is guarded because readers are not
+ * serialized against each other.
+ */
+static atomic_long_t corten_rate_last_out;
+static atomic_long_t corten_rate_last_in;
+static ktime_t corten_rate_ts;
+static DEFINE_SPINLOCK(corten_rate_lock);
+
+/* The M6.T3 per-mm shrinker registry (spec D2/OQ-M6-1): one global RCU
+ * list of the published corten_mm_state nodes.  Membership is created
+ * in corten_arena_state_create() (under corten_arena_alloc_lock, so it
+ * is atomic with the mm->corten_state publication) and removed at the
+ * start of the exit teardown; the kfree of the state waits for a grace
+ * period after the unlink, so shrinker readers can carry the node
+ * pointer across their own RCU sections safely.
+ */
+static DEFINE_SPINLOCK(corten_mm_registry_lock);
+static LIST_HEAD(corten_mm_registry);
+
 /* Reserve sentinel for claimed-but-unallocated magazine frames (see
  * include/linux/corten_arena.h).  Never published as an arena: it has no
  * start/end/refs and is filtered at lookup; every other xarray walker
@@ -325,6 +364,11 @@ static void corten_va_lists_free(struct corten_mm_state *state)
 static void corten_arena_state_free(struct corten_mm_state *state)
 {
 	xa_destroy(&state->arenas);
+	/* Pass-1 aging flags: xa_store(GFP_NOWAIT) by the shrinker
+	 * leaves xarray nodes behind for every mm that ever ran a
+	 * scan, so the exit path must release them too.
+	 */
+	xa_destroy(&state->shrink_aged);
 	free_percpu(state->va_segs);
 	corten_va_lists_free(state);
 	free_percpu(state->stats);
@@ -359,6 +403,12 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 	INIT_LIST_HEAD(&state->va_free);
 	INIT_LIST_HEAD(&state->seg_list);
 	INIT_LIST_HEAD(&state->arena_pool);
+	/* M6.T3 shrinker registry node (see the registry lock comment). */
+	state->owner_mm = mm;
+	INIT_LIST_HEAD(&state->shrink_reg);
+	spin_lock_init(&state->shrink_lock);
+	state->shrink_cursor = 0;
+	xa_init(&state->shrink_aged);
 	state->va_segs = __alloc_percpu(sizeof(struct corten_va_seg),
 					__alignof__(unsigned long));
 	state->stats = __alloc_percpu(sizeof(unsigned long) *
@@ -372,9 +422,17 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 	mutex_lock(&corten_arena_alloc_lock);
 	/* Pairs with the stores below and in corten_arena_mm_exit(). */
 	raced = smp_load_acquire(&mm->corten_state);
-	if (!raced)
-		/* Publish the registry; readers pair with this store. */
+	if (!raced) {
+		/* Publish the registry; readers pair with this store.
+		 * The shrinker node joins atomically with the publish
+		 * (same alloc_lock): a state is either fully invisible
+		 * or fully a shrinker victim.
+		 */
 		smp_store_release(&mm->corten_state, state);
+		spin_lock(&corten_mm_registry_lock);
+		list_add_tail_rcu(&state->shrink_reg, &corten_mm_registry);
+		spin_unlock(&corten_mm_registry_lock);
+	}
 	mutex_unlock(&corten_arena_alloc_lock);
 
 	if (raced) {
@@ -1124,6 +1182,13 @@ void corten_arena_arenas_report(struct seq_file *m)
  * (corten_stats_lines() in mm/corten.c), so this file alone gives the
  * full picture.
  */
+/* M6.T3 helpers used by the stats renderer below; defined with the
+ * shrinker section (the renderer walks the same registry the shrinker
+ * scans).
+ */
+static int corten_registry_pin(struct mm_struct **mms, int max, long *skip);
+static long corten_mm_state_pages(struct mm_struct *mm, long *swapped_out);
+
 void corten_arena_stats_report(struct seq_file *m)
 {
 	struct corten_arena *ar;
@@ -1214,6 +1279,70 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_swapin_heals));
 	seq_printf(m, "zap_swap_frees      %ld\n",
 		   atomic_long_read(&corten_nr_zap_swap_frees));
+	/* M6.T3 shrinker pressure channel + M6.T4 observability. */
+	seq_printf(m, "shrink_scans        %ld\n",
+		   atomic_long_read(&corten_nr_shrink_scans));
+	seq_printf(m, "aging_passes        %ld\n",
+		   atomic_long_read(&corten_nr_aging_passes));
+	seq_printf(m, "shrink_swapped      %ld\n",
+		   atomic_long_read(&corten_nr_shrink_swapped));
+	seq_printf(m, "shrink_skipped      %ld\n",
+		   atomic_long_read(&corten_nr_shrink_skipped));
+	seq_printf(m, "evict_busy          %ld\n",
+		   atomic_long_read(&corten_nr_evict_busy));
+	/* M6.T4: live per-desc slot totals over the registry (resident
+	 * content vs recorded swap entries) and the pages/s deltas since
+	 * the previous arena_stats read (the rate evidence the guest
+	 * run greps).
+	 */
+	{
+		long skip = 0, resident = 0, swapped = 0;
+
+		for (;;) {
+			struct mm_struct *mms[16];
+			int i, found;
+
+			found = corten_registry_pin(mms, ARRAY_SIZE(mms),
+						    &skip);
+			if (!found)
+				break;
+			for (i = 0; i < found; i++) {
+				struct mm_struct *mm = mms[i];
+				long sw;
+
+				resident += corten_mm_state_pages(mm, &sw);
+				swapped += sw;
+				mmput(mm);
+			}
+			skip += found;
+		}
+		seq_printf(m, "resident_pages      %ld\n", resident);
+		seq_printf(m, "swapped_pages       %ld\n", swapped);
+
+		spin_lock(&corten_rate_lock);
+		{
+			ktime_t now = ktime_get();
+			long out = atomic_long_read(&corten_nr_swapped_out);
+			long in = atomic_long_read(&corten_nr_swapins);
+			long rate_out = 0, rate_in = 0;
+			s64 ms = ktime_to_ms(ktime_sub(now, corten_rate_ts));
+
+			if (ms > 0) {
+				rate_out = div64_s64((s64)(out -
+					atomic_long_read(&corten_rate_last_out)) *
+					MSEC_PER_SEC, ms);
+				rate_in = div64_s64((s64)(in -
+					atomic_long_read(&corten_rate_last_in)) *
+					MSEC_PER_SEC, ms);
+			}
+			seq_printf(m, "swapout_rate        %ld\n", rate_out);
+			seq_printf(m, "swapin_rate         %ld\n", rate_in);
+			atomic_long_set(&corten_rate_last_out, out);
+			atomic_long_set(&corten_rate_last_in, in);
+			corten_rate_ts = now;
+		}
+		spin_unlock(&corten_rate_lock);
+	}
 }
 
 #ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
@@ -1421,6 +1550,19 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	}
 
 	mutex_unlock(&state->ctl_lock);
+
+	/* M6.T3: leave the shrinker registry first, then wait out the
+	 * grace period before the state memory is reused -- a shrinker
+	 * reader that found this node under RCU either finished (its mm
+	 * reference -- mmget_not_zero -- kept mm->corten_state alive
+	 * through its work) or never got past the RCU section.  This is
+	 * the only synchronize_rcu() on the exit path and it is what lets
+	 * the registry stay a plain RCU list (no per-node refcount).
+	 */
+	spin_lock(&corten_mm_registry_lock);
+	list_del_rcu(&state->shrink_reg);
+	spin_unlock(&corten_mm_registry_lock);
+	synchronize_rcu();
 
 	corten_arena_state_free(state);
 }
@@ -2724,6 +2866,30 @@ static int corten_arena_fork_copy_window(struct mm_struct *mm,
 			if (!ret)
 				ret = corten_mark(&txn, a, PAGE_SIZE, &nm);
 			break;
+		case CORTEN_SWAPPED:
+			/* The child's swap PTE was installed by
+			 * copy_nonpresent_pte() (the entry duplicated
+			 * there); mirror the slot payload directly.
+			 * mark() cannot express Invalid->SWAPPED (the
+			 * state machine routes swap-outs through
+			 * corten_swap_out(), a MAPPED-slot operation),
+			 * so this is the replay arm -- before M6.T3 the
+			 * only swapped-slot producer was the evict
+			 * stub, and a fork after a swap-out aborted
+			 * here (found by the M6.T3 pressure channel,
+			 * which makes swapped slots the common shape).
+			 * A child PTE that is not the mirrored entry
+			 * (a WIPEONFORK piece: none; anything else:
+			 * foreign) leaves the slot unrecorded, the
+			 * clean-slate contract.
+			 */
+			if (pte_none(cur) || pte_present(cur) ||
+			    non_swap_entry(pte_to_swp_entry(cur)) ||
+			    pte_to_swp_entry(cur).val !=
+			    corten_swap_decode(&m).val)
+				continue;
+			ret = corten_swap_replay(&txn, a, &m);
+			break;
 		case CORTEN_INVALID:
 			/* Dropped-content slot: re-express as PRIVATE_ANON
 			 * + perm (see the comment).
@@ -3142,6 +3308,21 @@ static bool corten_arena_txn_owned(struct corten_arena *ar,
  * mm/memory.c:1190 with need_zero forced (a fresh anonymous page must not
  * leak stale kernel memory).
  */
+static struct shrinker *corten_shrinker_handle;
+
+/* M6.T3: announce an arena page to the memcg shrinker map (the same
+ * post-charge announcement THP's deferred splitter does).  Without the
+ * bit, memcg-targeted reclaim skips the corten-arena shrinker for that
+ * cgroup entirely -- a cgroup under pressure would OOM with
+ * swap-outable arena pages in it.  Cheap when the bit is already set.
+ */
+static void corten_shrinker_arm_memcg(struct folio *folio)
+{
+	if (corten_shrinker_handle)
+		set_shrinker_bit(folio_memcg(folio), folio_nid(folio),
+				 corten_shrinker_handle->id);
+}
+
 static struct folio *corten_arena_folio_prealloc(struct mm_struct *mm,
 						 struct vm_area_struct *vma,
 						 unsigned long addr)
@@ -3156,6 +3337,7 @@ static struct folio *corten_arena_folio_prealloc(struct mm_struct *mm,
 		folio_put(folio);
 		return NULL;
 	}
+	corten_shrinker_arm_memcg(folio);
 
 	folio_throttle_swaprate(folio, GFP_KERNEL);
 
@@ -4011,6 +4193,11 @@ retry:
 		put_swap_device(si);
 		return -ENOMEM;
 	}
+	/* Re-arm the memcg shrinker bit: an all-swapped cgroup had its
+	 * bit cleared (SHRINK_EMPTY) and the swap-in is the charge event
+	 * that brings resident pages back.
+	 */
+	corten_shrinker_arm_memcg(folio);
 	__folio_set_locked(folio);
 	__folio_set_swapbacked(folio);
 
@@ -4185,6 +4372,17 @@ retry:
 		newpte = pte_mksoft_dirty(newpte);
 	if (exclusive && ctx->write && (m2.perm & CORTEN_PERM_WRITE))
 		newpte = pte_mkwrite(pte_mkdirty(newpte), vma);
+	/* Refault grace (OQ-M6-8): x86's pte_sw_mkyoung() is a no-op, so a
+	 * bare install starts not-young and the T3 two-pass aging would
+	 * swap the page right back out before its first reuse under
+	 * sustained pressure -- a swap-in/swap-out livelock with no LRU
+	 * workingset protection to lean on (arena pages are never LRU'd).
+	 * The young bit here is the swap-in's access record: the page gets
+	 * one full aging epoch before the shrinker may reclaim it again
+	 * (the same grace upstream's folio_mark_accessed() gives a refault
+	 * on the swap cache).
+	 */
+	newpte = pte_mkyoung(newpte);
 
 	/* No folio_add_lru(): arena pages stay off the LRU (DEV-10).
 	 * The fresh folio gets the new-anon rmap shape (upstream's
@@ -4822,6 +5020,23 @@ enum corten_unmap_class corten_arena_release_classify(enum corten_unmap_class
 }
 
 /*
+ * Driver-owned state of one window's zap ([atomic-sleep fix]).  The lazy
+ * gather ([perf1], valid iff @have_tlb) and the walk cursor with its batch
+ * overflow flag live here, not in corten_arena_zap_window(), because the
+ * driver must drop the covering desc write lock before every flush and
+ * before the final finish: tlb_flush_mmu()/tlb_finish_mmu() free batched
+ * pages through sleeping paths and may not run inside the write_lock_bh
+ * critical section.  All flushes and the finish therefore happen at the
+ * driver, outside the lock; see corten_arena_zap_window().
+ */
+struct corten_zap_win {
+	struct mmu_gather tlb;
+	bool have_tlb;
+	unsigned long addr;	/* in: walk resume point; out: stop on force */
+	bool force;		/* out: batch overflowed -- flush, then resume */
+};
+
+/*
  * Zap the PTEs of the recorded pages in [start, end) (at most one PMD
  * window; the caller holds the covering desc write lock obtained through
  * @txn) and flip the recorded metadata back to CORTEN_INVALID.  Page
@@ -4841,9 +5056,21 @@ enum corten_unmap_class corten_arena_release_classify(enum corten_unmap_class
  * than half of the MODE-arm samples on the unmap shapes).
  *
  * [perf1] The gather is owned by the window itself (opened only when the
- * window carries a translation, finished -- error paths included -- before
- * this function returns), so the callers hold no gather across windows and
- * a PTE-less window costs no tlb_flush_pending traffic at all.
+ * window carries a translation), so the callers hold no gather across
+ * windows and a PTE-less window costs no tlb_flush_pending traffic at all.
+ *
+ * [atomic-sleep fix] The gather is never finished -- and never flushed --
+ * inside this function: tlb_flush_mmu()/tlb_finish_mmu() free the batched
+ * pages through paths that sleep (__tlb_batch_free_encoded_pages(),
+ * mm/mmu_gather.c), which may not run inside the covering desc write lock
+ * (a write_lock_bh critical section).  The walk instead reports a batch
+ * overflow through @zw->force with @zw->addr parked on the overflow page,
+ * and the driver drops the desc write lock before its tlb_flush_mmu() and
+ * finishes the lazy gather after the last round (same placement pattern as
+ * the park's post-downgrade finish, [perf1c]).  The lock is only ever
+ * dropped at a round boundary, where every cleared PTE is already written
+ * and each released folio reference sits in the gather -- flush ordering
+ * (after the PTE clear, before the folio put) stays inside the mmu_gather.
  *
  * @zflags goes to corten_unmap() verbatim: the live-arena chunk zap uses
  * CORTEN_UNMAP_KEEP_PERM (the committed mprotect contract survives the
@@ -4865,18 +5092,17 @@ enum corten_unmap_class corten_arena_release_classify(enum corten_unmap_class
 static int corten_arena_zap_window(struct mm_struct *mm,
 				   struct vm_area_struct *vma,
 				   struct corten_txn *txn,
-				   unsigned long start, unsigned long end,
+				   struct corten_zap_win *zw,
+				   unsigned long end,
 				   struct mmu_gather *tlb, u8 zflags)
 {
-	unsigned long addr = start;
+	unsigned long addr = zw->addr;
 	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
-	struct mmu_gather own;
 	struct mmu_gather *g = tlb;
-	bool have_tlb = false;
 	pmd_t *pmdp;
 	int ret = 0;
 
-	pmdp = corten_arena_pmd(mm, start);
+	pmdp = corten_arena_pmd(mm, addr);
 	if (WARN_ON_ONCE(!pmdp))
 		return -EAGAIN;
 
@@ -4900,7 +5126,27 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 	 * [perf1c] The T1c park passes its route-level gather this way so
 	 * its flush can run after the write->read downgrade, outside the
 	 * serialized write section -- the same placement
-	 * vms_complete_munmap_vmas() uses for the legacy munmap.
+	 * vms_complete_munmap_vmas() uses for the legacy munmap.  The park's
+	 * mid-walk batch overflows come back through @zw->force like every
+	 * other round: the driver (corten_arena_unmap_chunk_flags()) flushes
+	 * the caller-owned gather after dropping the desc write lock, and
+	 * the pool keeps its post-downgrade finish.
+	 *
+	 * Between rounds (@zw->force) the desc write lock is dropped, so a
+	 * fault can refill an already-zapped VA before the walk resumes.
+	 * That refill is a transactional FRESH fault (PTE + metadata under
+	 * the desc write lock), i.e. indistinguishable from a fault landing
+	 * one instruction after the munmap/DONTNEED returned -- the same
+	 * shape the legacy munmap/DONTNEED of a kept-VA arena admits.  The
+	 * driver's flush can therefore also shoot down such a refill's
+	 * translation; a spurious flush is always safe (the PTE is live,
+	 * the next access re-walks).  The unprocessed tail of the window is
+	 * re-scanned by VA on resume, so a refill there is zapped by the
+	 * later round as intended.
+	 *
+	 * tlb_gather_mmu() itself stays under the desc write lock: it is a
+	 * plain initializer plus an atomic pending counter, no sleeping
+	 * path.
 	 *
 	 * The scan is race-free against every PTE producer: the covering
 	 * desc write lock excludes the fault paths and the other
@@ -4944,11 +5190,15 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 				}
 			}
 
-			if (any_pte && !have_tlb) {
-				tlb_gather_mmu(&own, mm);
-				have_tlb = true;
+			if (any_pte && !zw->have_tlb) {
+				/* Atomic-safe initializer (plain stores plus
+				 * an atomic pending counter) -- legal inside
+				 * the desc write lock, unlike the flushes.
+				 */
+				tlb_gather_mmu(&zw->tlb, mm);
+				zw->have_tlb = true;
 			}
-			g = have_tlb ? &own : NULL;
+			g = zw->have_tlb ? &zw->tlb : NULL;
 		}
 
 		for (; addr < end; addr += PAGE_SIZE, ptep++) {
@@ -5095,33 +5345,40 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 
 		if (!force)
 			break;
-		/* Batch overflow (MMU_GATHER_BUNDLE): flush + free now --
-		 * one shootdown per full batch -- then retry the page
-		 * whose removal filled the batch (its PTE is already
-		 * cleared; the retry only re-runs its metadata reset).
-		 * This is the zap_pte_range() force_flush convention,
-		 * which the previous code silently ignored: an allocation
-		 * failure in tlb_next_batch() would have overflowed the
-		 * batch array.
+		/* Batch overflow (MMU_GATHER_BUNDLE): hand the flush to the
+		 * driver.  [atomic-sleep fix] tlb_flush_mmu() frees the
+		 * batched pages through sleeping paths and must not run
+		 * inside the desc write lock; the driver drops the lock,
+		 * flushes, re-locks and resumes at the overflow page (its
+		 * PTE is already cleared; the resumed round only re-runs its
+		 * metadata reset -- the page reference itself was queued and
+		 * is flushed + freed by the driver's flush).  This is the
+		 * zap_pte_range() force_flush convention, which the previous
+		 * code silently ignored: an allocation failure in
+		 * tlb_next_batch() would have overflowed the batch array.
 		 */
-		tlb_flush_mmu(g);
-		cond_resched();
+		zw->addr = addr;
+		zw->force = true;
+		goto out;
 	}
 
 out:
-	if (have_tlb)
-		tlb_finish_mmu(&own);
+	/* [atomic-sleep fix] No tlb_finish_mmu() here: the lazy gather stays
+	 * open across rounds and the driver finishes it -- outside the desc
+	 * write lock -- once this function reports the walk done (or failed).
+	 */
 
 	/* [perf1b] Full-reset drop: the wholesale array free provides the
 	 * pristine-slot contract (Invalid, perm 0) the per-slot
 	 * corten_unmap() walk would have; the count keeps the
 	 * UNMAP_PAGES accounting identical.  Only on a fully successful
-	 * walk (ret == 0: every PTE cleared): a walk that bailed mid-window
-	 * can leave live PTEs, and a live PTE without metadata is the r03
+	 * walk (ret == 0 and no pending overflow round: every PTE cleared,
+	 * metadata resettable wholesale): a walk that bailed mid-window can
+	 * leave live PTEs, and a live PTE without metadata is the r03
 	 * defect C shape -- the caller's error path (real RELEASE for the
 	 * park) tears the window down completely instead.
 	 */
-	if (!ret && !(zflags & CORTEN_UNMAP_KEEP_PERM)) {
+	if (!ret && !zw->force && !(zflags & CORTEN_UNMAP_KEEP_PERM)) {
 		long nr = corten_txn_meta_drop(txn);
 
 		if (nr)
@@ -5274,6 +5531,14 @@ out:
  * finished by the caller ([perf1c]: the T1c park flushes after its
  * write->read downgrade); NULL makes every window own a lazy gather.
  * Static: only the chunk routes and the T1c park reach it.
+ *
+ * [atomic-sleep fix] Every flush and the per-window lazy-gather finish
+ * run here, outside the desc write lock: each window is processed in
+ * rounds -- zap under the covering write lock, drop it for the
+ * tlb_flush_mmu() a batch overflow demands, re-lock, resume -- and the
+ * lazy gather is finished only after the last round dropped the lock
+ * (the write_lock_bh critical section may not sleep; batched page
+ * freeing does).
  */
 static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
 					  struct corten_arena *ar,
@@ -5290,54 +5555,82 @@ static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
 
 	while (start < end) {
 		unsigned long win_end = min((start | (PMD_SIZE - 1)) + 1, end);
+		struct corten_zap_win zw = { .addr = start, };
 		struct corten_txn txn;
-		int tries = 0;
+		bool tracked = false;
+		int tries;
 
 		for (;;) {
-			ret = corten_lock_range(mm, start, win_end - start,
-						&txn);
-			if (ret != -EAGAIN || ++tries >= 2)
+			zw.force = false;
+			tries = 0;
+			for (;;) {
+				ret = corten_lock_range(mm, start,
+							win_end - start,
+							&txn);
+				if (ret != -EAGAIN || ++tries >= 2)
+					break;
+			}
+
+			switch (ret) {
+			case 0:
+				tracked = true;
+				ret = corten_arena_zap_window(mm, vma, &txn,
+							      &zw, win_end,
+							      tlb, zflags);
+				corten_unlock(&txn);
+				/* [atomic-sleep fix] flush after the lock
+				 * drop, before the walk resumes.
+				 */
+				if (zw.force)
+					tlb_flush_mmu(tlb ? tlb : &zw.tlb);
+				if (!ret && zw.force)
+					continue;	/* resume the walk */
 				break;
+			case -ENOENT:
+			case -EOPNOTSUPP:
+				/* No tracked PT page in this window.  Both codes
+				 * mean "nothing transactional here": -ENOENT is a
+				 * hole, -EOPNOTSUPP a PT page whose descriptor
+				 * install failed (or a huge leaf).  The old
+				 * assumption -- "nothing tracked: nothing mapped"
+				 * -- is false for the first two: the legacy fault
+				 * fallback writes plain PTEs on untracked windows
+				 * (r03 defect C).  Zap by PTE content so the
+				 * munmap drops whatever is actually there; the
+				 * helper re-checks the huge-leaf case itself.
+				 * No desc write lock is held on this path, so
+				 * the helper's own flush/finish are already
+				 * outside it.
+				 */
+				ret = corten_arena_zap_untracked_window(mm, vma,
+									start, win_end);
+				break;
+			case -EAGAIN:
+				/* Exhausted retries: PT page retiring; nothing may
+				 * be zapped through the legacy funnel while the
+				 * descriptor is stale.
+				 */
+				fallthrough;
+			default:
+				ret = ret == -EOPNOTSUPP ? -EOPNOTSUPP : -EAGAIN;
+				break;
+			}
+
+			break;
 		}
 
-		switch (ret) {
-		case 0:
-			ret = corten_arena_zap_window(mm, vma, &txn, start,
-						      win_end, tlb, zflags);
-			corten_unlock(&txn);
-			if (ret)
-				return ret;
+		/* [atomic-sleep fix] The window's lazy gather is finished
+		 * here -- every round above dropped the desc write lock
+		 * before reaching this point.
+		 */
+		if (!tlb && zw.have_tlb)
+			tlb_finish_mmu(&zw.tlb);
+
+		if (ret)
+			return ret;
+		if (tracked)
 			this_cpu_inc(READ_ONCE(mm->corten_state)->stats[
 					CORTEN_ARENA_STAT_MUNMAP_TXNS]);
-			break;
-		case -ENOENT:
-		case -EOPNOTSUPP:
-			/* No tracked PT page in this window.  Both codes
-			 * mean "nothing transactional here": -ENOENT is a
-			 * hole, -EOPNOTSUPP a PT page whose descriptor
-			 * install failed (or a huge leaf).  The old
-			 * assumption -- "nothing tracked: nothing mapped"
-			 * -- is false for the first two: the legacy fault
-			 * fallback writes plain PTEs on untracked windows
-			 * (r03 defect C).  Zap by PTE content so the
-			 * munmap drops whatever is actually there; the
-			 * helper re-checks the huge-leaf case itself.
-			 */
-			ret = corten_arena_zap_untracked_window(mm, vma,
-								start, win_end);
-			if (ret)
-				return ret;
-			ret = 0;
-			break;
-		case -EAGAIN:
-			/* Exhausted retries: PT page retiring; nothing may
-			 * be zapped through the legacy funnel while the
-			 * descriptor is stale.
-			 */
-			fallthrough;
-		default:
-			return ret == -EOPNOTSUPP ? -EOPNOTSUPP : -EAGAIN;
-		}
 
 		start = win_end;
 	}
@@ -6421,46 +6714,88 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
 	 * (the unmap-virt recycle shape) pays no tlb_flush_pending traffic
 	 * and cannot trigger tlb_finish_mmu()'s mm_tlb_flush_nested()
 	 * full-mm upgrade against a concurrent chunk zap.
+	 *
+	 * [atomic-sleep fix] The flush rounds and the per-window finish run
+	 * outside the desc write lock, same as the chunk-zap driver.
 	 */
 	while (start < end) {
 		unsigned long win_end = min((start | (PMD_SIZE - 1)) + 1, end);
+		struct corten_zap_win zw = { .addr = start, };
 		struct corten_txn txn;
-		int tries = 0;
+		int tries;
 
 		for (;;) {
-			ret = corten_lock_range(mm, start, win_end - start,
-						&txn);
-			if (ret != -EAGAIN || ++tries >= 2)
-				break;
+			zw.force = false;
+			tries = 0;
+			for (;;) {
+				ret = corten_lock_range(mm, start,
+							win_end - start,
+							&txn);
+				if (ret != -EAGAIN || ++tries >= 2)
+					break;
+			}
+
+			switch (ret) {
+			case 0:
+				/* Discard whatever the range held (legacy MAP_FIXED
+				 * semantics); the fresh allocation is marked
+				 * below, under the lock of the final round.
+				 */
+				ret = corten_arena_zap_window(mm, vma, &txn,
+							      &zw, win_end,
+							      NULL,
+							      CORTEN_UNMAP_KEEP_PERM);
+				if (!ret && !zw.force) {
+					/* Window fully zapped under this
+					 * lock: mark it now (the round's
+					 * transaction covers the window).
+					 */
+					int mret;
+
+					mret = corten_mark(&txn, start,
+							   win_end - start,
+							   &meta);
+					corten_unlock(&txn);
+					if (mret) {
+						ret = mret;
+						goto out_win;
+					}
+					this_cpu_inc(READ_ONCE(mm->corten_state)->stats[
+							CORTEN_ARENA_STAT_MMAP_MARK_TXNS]);
+					break;
+				}
+				corten_unlock(&txn);
+				/* [atomic-sleep fix] flush after the lock
+				 * drop, before the walk resumes.
+				 */
+				if (zw.force)
+					tlb_flush_mmu(&zw.tlb);
+				if (ret)
+					goto out_win;
+				continue;	/* resume the walk */
+			case -ENOENT:
+				/* Cannot happen after the fill pass above. */
+				WARN_ON_ONCE(1);
+				ret = -EOPNOTSUPP;
+				fallthrough;
+			default:
+				goto out_win;
+			}
+
+			break;
 		}
 
-		switch (ret) {
-		case 0:
-			/* Discard whatever the range held (legacy MAP_FIXED
-			 * semantics), then mark the fresh allocation.
-			 */
-			ret = corten_arena_zap_window(mm, vma, &txn, start,
-						      win_end, NULL,
-						      CORTEN_UNMAP_KEEP_PERM);
-			if (ret) {
-				corten_unlock(&txn);
-				goto out;
-			}
-			ret = corten_mark(&txn, start, win_end - start, &meta);
-			corten_unlock(&txn);
-			if (ret)
-				goto out;
-			this_cpu_inc(READ_ONCE(mm->corten_state)->stats[
-					CORTEN_ARENA_STAT_MMAP_MARK_TXNS]);
-			break;
-		case -ENOENT:
-			/* Cannot happen after the fill pass above. */
-			WARN_ON_ONCE(1);
-			ret = -EOPNOTSUPP;
-			fallthrough;
-		default:
+out_win:
+		/* [atomic-sleep fix] The window's lazy gather is finished
+		 * here -- outside the desc write lock (the last round
+		 * dropped it before reaching this point), on every exit
+		 * path.
+		 */
+		if (zw.have_tlb)
+			tlb_finish_mmu(&zw.tlb);
+
+		if (ret)
 			goto out;
-		}
 
 		start = win_end;
 	}
@@ -7706,47 +8041,638 @@ int corten_swapin_sync_meta(struct mm_struct *mm, unsigned long addr,
  * kept by the reclaim, not corrupted -- the ttu transaction re-checks
  * everything under the covering lock).
  */
-/* Pick one eviction candidate at @a: metadata CORTEN_MAPPED (content,
- * not the shared zero page), COW-unshared (OQ-M6-2), not DMA-pinned,
- * present PTE.  Returns the folio with a reference taken, or NULL.
+/* ------------------------------------------------------------------ *
+ * M6.T3 shrinker pressure channel (M6_RMAP_SPEC.md sec 2.1 D2)
+ *
+ * Arena pages are reclaim-invisible by design (DEV-10: never anchored
+ * on any LRU), so the pressure-side consumer of the M6.T2 swap
+ * transaction is a shrinker -- the kernel's native reclaim channel for
+ * non-LRU memory.  kswapd and direct reclaim both drive it through
+ * shrink_slab(), which brings memcg scoping and priority for free;
+ * what this code feeds it is the arena population of the registered
+ * mms (the corten_mm_registry above).
+ *
+ * Victim selection is the two-pass young-bit aging transaction (spec
+ * T3): pass 1 clears the accessed bits of one victim-window set -- the
+ * PTE write mirrored from vmscan.c:3717's ptep_clear_young_notify(),
+ * but under the covering desc write lock, because every arena PTE
+ * write is a transaction (spec red line 1); pass 2, a later slice or
+ * scan, swaps out the windows whose bits did NOT come back -- pages
+ * nobody touched in between.  The per-window pass-1 flags live in
+ * state->shrink_aged, so aging spans scan invocations: a window aged
+ * by scan N is an evaluation candidate for scan N+1 (a linger-list
+ * equivalent for a non-LRU population).  MGLRU keeps its structural
+ * skip (spec sec 1.2 P2/P3): arena folios stay invisible to walk_mm
+ * and eviction because folio_lru_gen() < 0, and nothing here adds any
+ * folio_add_lru -- the shrinker is the only reclaim entry, and the
+ * lru_gen walker has no arena-side hook to trip over.
+ *
+ * Batch shape (the T2 evict lesson, spec sec 2.2): victim selection
+ * runs under the per-mm shrink trylock -- one picker per mm; two
+ * pickers could isolate the same folio onto two lists -- in bounded
+ * slices so no spinlock hold is long, and every pick of a scan feeds
+ * ONE __reclaim_pages() list.  Everything after the pick (folio_alloc_
+ * swap, try_to_unmap -- the ttu guard, then the corten_rmap_swap_out
+ * transaction inside its notifier window -- swap_writeout and the
+ * final unmap/free) is upstream's, batched exactly like kswapd's.  The
+ * T2 stub was per-page slow because it re-scanned from frame 0 on
+ * every debugfs call and paid a full window transaction per pick; the
+ * rotation cursor and the shared walker amortize that to one lock per
+ * window and one reclaim per scan.
  */
-static struct folio *corten_arena_evict_pick(struct mm_struct *mm,
-					     struct corten_txn *txn,
-					     pmd_t *pmdp, unsigned long a)
+
+/* Victim-walk bounds: a shrink_lock hold spans one slice, capped by
+ * both windows and candidate pages (each page costs one short ptl
+ * section); the reclaim itself runs with the lock dropped.  The slice
+ * count bounds one scan_objects() invocation.
+ */
+#define CORTEN_SHRINK_SLICE_WINDOWS	16
+#define CORTEN_SHRINK_SLICE_PAGES	512
+#define CORTEN_SHRINK_MAX_SLICES	2
+
+/* One shrinker victim walk over a window set.  @list collects the
+ * isolated folios (with references); @budget counts candidate pages
+ * (MAPPED slots with a present PTE), not raw slots, so sparse windows
+ * do not burn the scan allowance.
+ */
+struct corten_shrink_walk {
+	struct list_head *list;
+	int budget;
+	int nr_scanned;
+	int nr_young;
+	int nr_picked;
+	/* pass 2: pick the pages whose young bit did not come back. */
+	bool eval;
+	/* evict driver: pick regardless of age; no epoch clearing. */
+	bool force;
+};
+
+/* The pinned PT-page descriptor of @mm's 2M window at @addr, or NULL.
+ * Caller holds rcu_read_lock() (the pin protocol); count-time use only
+ * -- the counters are read as a READ_ONCE() snapshot.
+ */
+static struct corten_ptdesc *corten_arena_window_desc(struct mm_struct *mm,
+						      unsigned long addr)
 {
-	struct corten_pte_meta m;
-	struct folio *folio = NULL;
-	pte_t *ptep, cur;
-	spinlock_t *ptl;
+	struct corten_ptdesc *desc;
+	pmd_t *pmdp, pmd;
 
-	if (corten_query(txn, a, &m) || m.state != CORTEN_MAPPED ||
-	    (m.flags & CORTEN_PF_SHARED))
+	pmdp = corten_arena_pmd(mm, addr);
+	if (!pmdp)
 		return NULL;
-
-	ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
-	if (!ptep)
+	pmd = READ_ONCE(*pmdp);
+	if (!pmd_present(pmd) || pmd_leaf(pmd))
 		return NULL;
-	cur = ptep_get(ptep);
-	if (pte_present(cur) && !pte_special(cur)) {
-		folio = page_folio(pte_page(cur));
-		if (folio_nr_pages(folio) == 1 &&
-		    !folio_maybe_dma_pinned(folio))
-			folio_get(folio);
-		else
-			folio = NULL;
+	desc = corten_ptdesc_get(page_to_pfn(pmd_page(pmd)));
+	if (desc && (READ_ONCE(desc->stale) || desc->mm != mm)) {
+		corten_ptdesc_put(desc);
+		return NULL;
 	}
-	pte_unmap_unlock(ptep, ptl);
-
-	return folio;
+	return desc;
 }
 
+/* Live resident/swapped totals of one registered mm (the M6.T3
+ * count_objects basis and the M6.T4 swapped-page accounting).  One
+ * short RCU section per window -- the T2 lesson: no long preempt-off
+ * spans over a whole arena.
+ */
+static long corten_mm_state_pages(struct mm_struct *mm, long *swapped_out)
+{
+	struct corten_mm_state *state;
+	unsigned long idx = 0;
+	long resident = 0, swapped = 0;
+
+	/* Pairs with the smp_store_release() publisher in
+	 * corten_arena_state_create() (the same acquire every reader of
+	 * the published registry uses).
+	 */
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state)
+		goto out;
+
+	for (;;) {
+		struct corten_arena *arena;
+		unsigned long wstart;
+		struct corten_ptdesc *desc;
+
+		rcu_read_lock();
+		arena = xa_find(&state->arenas, &idx, ULONG_MAX, XA_PRESENT);
+		if (!arena || arena == &corten_va_reserve_sentinel) {
+			rcu_read_unlock();
+			if (!arena)
+				break;
+			idx++;
+			continue;
+		}
+		wstart = max(idx << PMD_SHIFT, READ_ONCE(arena->start));
+		desc = corten_arena_window_desc(mm, wstart);
+		if (desc) {
+			resident += READ_ONCE(desc->nr_mapped);
+			swapped += READ_ONCE(desc->nr_swapped);
+			corten_ptdesc_put(desc);
+		}
+		rcu_read_unlock();
+		idx++;
+		cond_resched();
+	}
+
+out:
+	if (swapped_out)
+		*swapped_out = swapped;
+	return resident;
+}
+
+/* The aging/pick transaction over one 2M window slice: candidate pages
+ * get their young bit cleared (pass 1 and pass 2 -- vmscan.c:3717
+ * mirrored, ptl nested under the covering desc write lock, same order
+ * the MGLRU walker establishes for its ptep_clear_young_notify()) and,
+ * in the pass-2/evict shapes, the cold (or any) ones are isolated onto
+ * @w->list.  Lock failures skip the window: a -EAGAIN is the Fig.7
+ * descriptor transition, retried on a later pass.
+ */
+static void corten_arena_shrink_walk(struct mm_struct *mm,
+				     struct corten_arena *ar,
+				     unsigned long fstart, unsigned long fend,
+				     struct corten_shrink_walk *w)
+{
+	struct vm_area_struct *vma = READ_ONCE(ar->vma);
+	struct corten_txn txn;
+	pmd_t *pmdp;
+	unsigned long a;
+	int ret;
+
+	if (!vma)
+		return;
+
+	ret = corten_lock_range(mm, fstart, fend - fstart, &txn);
+	if (ret)
+		return;	/* untracked / transitioning / -ENOMEM: next pass */
+
+	pmdp = corten_arena_pmd(mm, fstart);
+	if (pmdp) {
+		for (a = fstart; a < fend && w->budget > 0; a += PAGE_SIZE) {
+			struct corten_pte_meta m;
+			pte_t *ptep, cur;
+			spinlock_t *ptl;
+			bool young;
+
+			if (corten_query(&txn, a, &m) ||
+			    m.state != CORTEN_MAPPED ||
+			    (m.flags & CORTEN_PF_SHARED))
+				continue;
+
+			ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
+			if (!ptep)
+				continue;
+			cur = ptep_get(ptep);
+			if (!pte_present(cur) || pte_special(cur)) {
+				pte_unmap_unlock(ptep, ptl);
+				continue;
+			}
+			/* The aging PTE write inside the transaction.  In
+			 * the evict shape (@force) the young bit is left
+			 * alone: eviction does not consume epochs.
+			 */
+			young = false;
+			if (!w->force)
+				young = ptep_clear_young_notify(vma, a, ptep);
+			pte_unmap_unlock(ptep, ptl);
+
+			w->nr_scanned++;
+			w->budget--;
+			if (young) {
+				w->nr_young++;
+				continue;
+			}
+			if (!w->eval && !w->force)
+				continue;
+
+			/* Isolation criteria (spec sec 3 red line 3,
+			 * OQ-M6-2): unshared (checked above), unpinned,
+			 * order-0, no writeback in flight.  A pick that
+			 * loses its mapping before the reclaim is kept by
+			 * __reclaim_pages(), not corrupted -- the ttu
+			 * transaction re-checks everything under the
+			 * covering lock.
+			 */
+			{
+				struct folio *folio = page_folio(pte_page(cur));
+
+				if (folio_nr_pages(folio) != 1 ||
+				    folio_maybe_dma_pinned(folio) ||
+				    folio_test_writeback(folio)) {
+					atomic_long_inc(&corten_nr_shrink_skipped);
+					continue;
+				}
+				folio_get(folio);
+				list_add_tail(&folio->lru, w->list);
+				w->nr_picked++;
+			}
+		}
+	}
+	corten_unlock(&txn);
+}
+
+/* Pass 2 slice: evaluate up to @max_windows windows whose pass-1 flag
+ * is set -- pick the pages that stayed cold, erase the flag (a hot
+ * window is re-aged by a later pass 1; a swapped-out window has
+ * nothing left).  Caller holds state->shrink_lock.
+ */
+static void corten_shrink_eval_slice(struct mm_struct *mm,
+				     struct corten_mm_state *state,
+				     struct corten_shrink_walk *w,
+				     int max_windows)
+{
+	unsigned long idx = 0;
+	int windows = 0;
+
+	while (windows < max_windows && w->budget > 0) {
+		struct corten_arena *arena;
+		unsigned long key, fstart, fend;
+		void *v;
+
+		rcu_read_lock();
+		v = xa_find(&state->shrink_aged, &idx, ULONG_MAX, XA_PRESENT);
+		if (!v) {
+			rcu_read_unlock();
+			break;
+		}
+		key = idx;
+		arena = xa_load(&state->arenas, key);
+		if (!arena || arena == &corten_va_reserve_sentinel ||
+		    !percpu_ref_tryget_live(&arena->active)) {
+			rcu_read_unlock();
+			xa_erase(&state->shrink_aged, key);
+			idx = key + 1;
+			windows++;
+			continue;
+		}
+		rcu_read_unlock();
+
+		xa_erase(&state->shrink_aged, key);
+		w->eval = true;
+		if (!READ_ONCE(arena->frozen) && !READ_ONCE(arena->idle)) {
+			fstart = max(key << PMD_SHIFT, READ_ONCE(arena->start));
+			fend = min((key << PMD_SHIFT) + PMD_SIZE,
+				   READ_ONCE(arena->end));
+			if (fstart < fend)
+				corten_arena_shrink_walk(mm, arena, fstart,
+							 fend, w);
+		}
+		percpu_ref_put(&arena->active);
+		idx = key + 1;
+		windows++;
+	}
+	w->eval = false;
+}
+
+/* Pass-1 rotation slice: age up to @max_windows fresh windows from the
+ * per-mm rotation cursor, clear their young bits and flag them for a
+ * later pass-2 evaluation.  The cursor wraps ACROSS scans only: when
+ * the rotation is exhausted it restarts from frame 0 on a later slice
+ * or scan, so one scan never ages a window twice (a window evaluated
+ * in this scan is not re-flagged by the scan's own tail).  Caller holds
+ * state->shrink_lock.
+ */
+static void corten_shrink_age_slice(struct mm_struct *mm,
+				    struct corten_mm_state *state,
+				    struct corten_shrink_walk *w,
+				    int max_windows)
+{
+	unsigned long idx = state->shrink_cursor;
+	int windows = 0;
+
+	while (windows < max_windows && w->budget > 0) {
+		struct corten_arena *arena;
+		unsigned long key, fstart, fend;
+
+		rcu_read_lock();
+		arena = xa_find(&state->arenas, &idx, ULONG_MAX, XA_PRESENT);
+		if (!arena) {
+			/* Rotation exhausted: restart from frame 0 on the
+			 * next slice/scan (no same-scan wrap).
+			 */
+			rcu_read_unlock();
+			state->shrink_cursor = 0;
+			return;
+		}
+		key = idx;
+		if (arena == &corten_va_reserve_sentinel ||
+		    !percpu_ref_tryget_live(&arena->active)) {
+			rcu_read_unlock();
+			idx = key + 1;
+			continue;
+		}
+		rcu_read_unlock();
+
+		if (!READ_ONCE(arena->frozen) && !READ_ONCE(arena->idle)) {
+			fstart = max(key << PMD_SHIFT, READ_ONCE(arena->start));
+			fend = min((key << PMD_SHIFT) + PMD_SIZE,
+				   READ_ONCE(arena->end));
+			if (fstart < fend) {
+				corten_arena_shrink_walk(mm, arena, fstart,
+							 fend, w);
+				/* The flag is the pass-2 handoff; a
+				 * GFP_NOWAIT store failure just means the
+				 * window is aged again next rotation.
+				 * The evict shape never consumes epochs
+				 * and never feeds the aging bookkeeping.
+				 */
+				if (!w->force) {
+					if (!xa_store(&state->shrink_aged, key,
+						      xa_mk_value(1),
+						      GFP_NOWAIT))
+						atomic_long_inc(&corten_nr_aging_passes);
+				}
+				windows++;
+			}
+		}
+		percpu_ref_put(&arena->active);
+		idx = key + 1;
+	}
+
+	state->shrink_cursor = idx;
+}
+
+/* One batched reclaim pass over the picked folios: upstream machinery
+ * end to end (folio_alloc_swap -> try_to_unmap -- the ttu guard, then
+ * the M6.T2 swap-out transaction inside its notifier window -- ->
+ * swap_writeout -> __remove_mapping).  Leftovers come back on @list
+ * (the private-cookie form: folio_putback_lru() is forbidden for arena
+ * pages, DEV-10) and their pick references are dropped here; their
+ * count goes to *@nr_kept when the caller wants the picked-minus-kept
+ * swap-out attribution (T4 shrink_swapped, exact under concurrency).
+ */
+static unsigned long corten_shrink_reclaim(struct list_head *list,
+					   int *nr_kept)
+{
+	unsigned long reclaimed = __reclaim_pages(list, &corten_nr_swapped_out);
+	int kept = 0;
+
+	while (!list_empty(list)) {
+		struct folio *folio = lru_to_folio(list);
+
+		list_del(&folio->lru);
+		folio_put(folio);
+		kept++;
+	}
+	if (nr_kept)
+		*nr_kept = kept;
+	return reclaimed;
+}
+
+/* The per-mm scan: alternating pass-2/pass-1 slices under the per-mm
+ * shrink trylock, one reclaim per slice with the lock dropped.  Returns
+ * the pages freed; *@scanned_out reports the candidate-page budget used.
+ */
+static unsigned long corten_shrink_mm(struct mm_struct *mm,
+				      struct corten_mm_state *state,
+				      int budget, int *scanned_out)
+{
+	unsigned long freed = 0;
+	int picked = 0, kept = 0;
+	int scanned = 0, rounds = 0;
+
+	while (budget > 0 && rounds++ < CORTEN_SHRINK_MAX_SLICES) {
+		struct corten_shrink_walk w;
+		LIST_HEAD(list);
+
+		w.list = &list;
+		w.budget = min(budget, CORTEN_SHRINK_SLICE_PAGES);
+		w.nr_scanned = w.nr_young = w.nr_picked = 0;
+		w.eval = false;
+		w.force = false;
+
+		if (!spin_trylock(&state->shrink_lock))
+			break;
+
+		corten_shrink_eval_slice(mm, state, &w,
+					 CORTEN_SHRINK_SLICE_WINDOWS);
+		if (w.budget > 0)
+			corten_shrink_age_slice(mm, state, &w,
+						CORTEN_SHRINK_SLICE_WINDOWS);
+
+		spin_unlock(&state->shrink_lock);
+
+		scanned += w.nr_scanned;
+		budget -= w.nr_scanned;
+		picked += w.nr_picked;
+
+		if (!list_empty(&list)) {
+			int slice_kept = 0;
+
+			freed += corten_shrink_reclaim(&list, &slice_kept);
+			kept += slice_kept;
+		}
+		if (!w.nr_scanned)
+			break;	/* nothing left to age or evaluate */
+		cond_resched();
+	}
+
+	/* Exact shrinker swap-out attribution: every freed pick of an
+	 * anonymous arena page reached swap through the M6.T2 transaction
+	 * (picked minus kept), race-free by construction.
+	 */
+	if (picked > kept)
+		atomic_long_add(picked - kept, &corten_nr_shrink_swapped);
+	*scanned_out = scanned;
+	return freed;
+}
+
+/* Pin up to @max registered mms in one RCU section: mmget inside the
+ * section makes them safe to use after it (mm_users > 0 keeps
+ * exit_mmap -- and with it the registry unlink and the state free --
+ * from running).  *@skip resumes the walk; entries appearing or
+ * vanishing between rounds only skew the rotation, never the
+ * correctness (every scanned mm is a pinned, consistent registry
+ * member).  An exiting mm (mm_users == 0) is skipped: its teardown
+ * drains the arenas itself.
+ */
+static int corten_registry_pin(struct mm_struct **mms, int max, long *skip)
+{
+	struct corten_mm_state *state;
+	int found = 0;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(state, &corten_mm_registry, shrink_reg) {
+		struct mm_struct *mm = READ_ONCE(state->owner_mm);
+
+		if (*skip > 0) {
+			(*skip)--;
+			continue;
+		}
+		if (!mm || !mmget_not_zero(mm))
+			continue;
+		mms[found++] = mm;
+		if (found == max)
+			break;
+	}
+	rcu_read_unlock();
+
+	return found;
+}
+
+/* Does @mm belong to @target's cgroup subtree?  Coarse scan-time
+ * filter (spec D2): the live per-mm memcg, not a stale recorded
+ * pointer, so cgroup moves are honored.
+ */
+static bool corten_mm_in_cgroup(struct mm_struct *mm,
+				struct mem_cgroup *target)
+{
+	struct mem_cgroup *memcg;
+	bool match;
+
+	if (mem_cgroup_disabled())
+		return true;
+	memcg = get_mem_cgroup_from_mm(mm);
+	if (!memcg)
+		return true;
+	match = mem_cgroup_is_descendant(memcg, target);
+	mem_cgroup_put(memcg);
+	return match;
+}
+
+static unsigned long corten_shrink_mms(int budget, struct mem_cgroup *target)
+{
+	unsigned long freed = 0;
+	long skip = 0;
+
+	while (budget > 0) {
+		struct mm_struct *mms[16];
+		int i, found;
+
+		found = corten_registry_pin(mms, ARRAY_SIZE(mms), &skip);
+		if (!found)
+			break;
+
+		for (i = 0; i < found && budget > 0; i++) {
+			struct mm_struct *mm = mms[i];
+			struct corten_mm_state *state;
+			int scanned = 0;
+
+			/* Pairs with the smp_store_release() publisher
+			 * in corten_arena_state_create(); NULL means the
+			 * owner's exit teardown already unpublished it.
+			 */
+			state = smp_load_acquire(&mm->corten_state);
+			if (state && (!target || corten_mm_in_cgroup(mm, target))) {
+				freed += corten_shrink_mm(mm, state, budget,
+							  &scanned);
+				budget -= min(scanned, budget);
+			}
+			mmput(mm);
+			cond_resched();
+		}
+		skip += found;
+	}
+
+	return freed;
+}
+
+static unsigned long corten_count_mms(struct mem_cgroup *target)
+{
+	long skip = 0;
+	unsigned long total = 0;
+
+	for (;;) {
+		struct mm_struct *mms[16];
+		int i, found;
+
+		found = corten_registry_pin(mms, ARRAY_SIZE(mms), &skip);
+		if (!found)
+			break;
+		for (i = 0; i < found; i++) {
+			struct mm_struct *mm = mms[i];
+
+			if (!target || corten_mm_in_cgroup(mm, target))
+				total += corten_mm_state_pages(mm, NULL);
+			mmput(mm);
+			cond_resched();
+		}
+		skip += found;
+	}
+
+	return total;
+}
+
+static unsigned long corten_shrink_count_objects(struct shrinker *shrinker,
+						 struct shrink_control *sc)
+{
+	if (!corten_enabled_static())
+		return 0;
+	return corten_count_mms(sc->memcg);
+}
+
+static unsigned long corten_shrink_scan_objects(struct shrinker *shrinker,
+						struct shrink_control *sc)
+{
+	if (!corten_enabled_static() || !sc->nr_to_scan)
+		return 0;
+
+	/* The scan's whole point is swap-out I/O (a synchronous zram
+	 * write per page), so a caller without __GFP_IO has nothing
+	 * useful for us to do -- bail without counting a scan, the
+	 * way the superblock shrinker bails on missing __GFP_FS.
+	 */
+	if (!(sc->gfp_mask & __GFP_IO))
+		return 0;
+
+	atomic_long_inc(&corten_nr_shrink_scans);
+
+	return corten_shrink_mms((int)min(sc->nr_to_scan, INT_MAX), sc->memcg);
+}
+
+/* Registered only on a corten=on boot (spec red line 6): with the
+ * static key off the shrinker must not exist at all -- an empty count
+ * would still put scan pressure bookkeeping on every reclaim cycle.
+ */
+static int __init corten_shrinker_init(void)
+{
+	if (!corten_enabled_static())
+		return 0;
+
+	corten_shrinker_handle = shrinker_alloc(SHRINKER_MEMCG_AWARE,
+						"corten-arena");
+	if (!corten_shrinker_handle)
+		return -ENOMEM;
+
+	corten_shrinker_handle->count_objects = corten_shrink_count_objects;
+	corten_shrinker_handle->scan_objects = corten_shrink_scan_objects;
+	corten_shrinker_handle->seeks = DEFAULT_SEEKS;
+
+	shrinker_register(corten_shrinker_handle);
+	return 0;
+}
+late_initcall(corten_shrinker_init);
+
+/*
+ * M6.T2 eviction driver, M6.T3 batch shape: the debugfs "evict N pages"
+ * entry now rides the same machinery as the shrinker -- the shared
+ * victim walker, the per-mm shrink trylock (mutual exclusion with a
+ * concurrent scan; a busy mm means the shrinker is already doing this
+ * batch's work) and the rotation cursor (no from-frame-0 rescan per
+ * call).  Candidates are metadata CORTEN_MAPPED (content, not the zero
+ * page), COW-unshared (OQ-M6-2), not DMA-pinned, not in writeback,
+ * present PTE -- handed to __reclaim_pages() as ONE batch (zram is a
+ * synchronous-write device, so the batch settles inline).
+ *
+ * Lock order: shrink trylock > [lookup_get active ref implicitly via
+ * the arenas walk] > corten_lock_range > ptl for the pick.  All of
+ * those are released before the reclaim runs -- and so is the shrink
+ * lock itself: the reclaim sleeps (folio_trylock inside, zram's
+ * synchronous submit_bio_wait), so each slice drops the lock before
+ * reclaiming and spin_trylock()s it again for the next slice, exactly
+ * like corten_shrink_mm(); a busy reacquire ends this batch early
+ * (counted in evict_busy -- the concurrent scan is doing this work
+ * anyway).  A pick that lost its mapping by reclaim time is kept by
+ * the reclaim, not corrupted -- the ttu transaction re-checks
+ * everything under the covering lock.
+ */
 static int corten_arena_evict_mm(struct mm_struct *mm, int nr)
 {
-	LIST_HEAD(list);
 	struct corten_mm_state *state;
-	unsigned long frame, nr_frames;
 	unsigned long swapped_before;
-	int picked = 0, reclaimed;
+	int scanned = 0, reclaimed;
 
 	/* Pairs with the smp_store_release() publisher in
 	 * corten_arena_state_create() (the other two readers use the
@@ -7758,98 +8684,52 @@ static int corten_arena_evict_mm(struct mm_struct *mm, int nr)
 
 	swapped_before = atomic_long_read(&corten_nr_swapped_out);
 
-	/* The walk must NOT sit in one rcu_read_lock() section (=
-	 * preemption off) for the whole candidate scan: a 512M arena is
-	 * 256 windows and the guest wedged its RCU grace period on it
-	 * (first boot of the T2 guest run).  Enumerate frames with a
-	 * short RCU section per frame -- the reference taken under it
-	 * (or the descriptor's own liveness) is what the slow work
-	 * below relies on -- and drop the CPU between windows.
-	 */
-	nr_frames = DIV_ROUND_UP(state->next_va, PMD_SIZE);
-	for (frame = 0; frame < nr_frames && picked < nr; frame++) {
-		struct corten_arena *arena;
-		unsigned long fstart = (unsigned long)frame << PMD_SHIFT;
-		unsigned long fend = fstart + PMD_SIZE;
-		unsigned long win_end;
-		struct corten_txn txn;
-		pmd_t *pmdp;
-		unsigned long a;
-		int ret;
-
-		rcu_read_lock();
-		arena = xa_load(&state->arenas, frame);
-		/* M4.T1: reserve markers are not arenas. */
-		if (!arena || arena == &corten_va_reserve_sentinel) {
-			rcu_read_unlock();
-			continue;
-		}
-		if (!percpu_ref_tryget_live(&arena->active)) {
-			rcu_read_unlock();
-			continue;
-		}
-		rcu_read_unlock();
-
-		/* One frame = exactly one 2M window of @arena.  The
-		 * descriptor is aliased by every frame it covers -- the
-		 * whole-arena walk here would re-pick every page once
-		 * per frame (a cycle in the pick list, the spin of the
-		 * first T2 guest run) -- so this frame's slice only.
-		 */
-		if (fstart < arena->start)
-			fstart = arena->start;
-		if (fend > arena->end)
-			fend = arena->end;
-		if (fstart >= fend || READ_ONCE(arena->frozen)) {
-			percpu_ref_put(&arena->active);
-			continue;
-		}
-		win_end = fend;
-
-		ret = corten_lock_range(mm, fstart, fend - fstart, &txn);
-		if (ret == -ENOENT || ret == -EOPNOTSUPP) {
-			percpu_ref_put(&arena->active);
-			continue;		/* untracked window */
-		}
-		if (ret == -EAGAIN) {
-			percpu_ref_put(&arena->active);
-			continue;		/* Fig.7: retry next pass */
-		}
-		if (ret) {
-			percpu_ref_put(&arena->active);
-			break;			/* -ENOMEM: give up */
-		}
-
-		pmdp = corten_arena_pmd(mm, fstart);
-		if (pmdp) {
-			for (a = fstart; a < win_end && picked < nr;
-			     a += PAGE_SIZE) {
-				struct folio *folio;
-
-				folio = corten_arena_evict_pick(mm, &txn,
-								pmdp, a);
-				if (!folio)
-					continue;
-				list_add_tail(&folio->lru, &list);
-				picked++;
-			}
-		}
-		corten_unlock(&txn);
-		percpu_ref_put(&arena->active);
-		cond_resched();
+	if (!spin_trylock(&state->shrink_lock)) {
+		atomic_long_inc(&corten_nr_evict_busy);
+		return -EBUSY;
 	}
 
-	if (!picked)
-		return 0;
+	/* The lock is held across a slice's aging only.  Every exit
+	 * from this loop happens with it already dropped: the break
+	 * paths run after the unlock, and the reacquire below is the
+	 * last statement before the loop re-tests.
+	 */
+	for ( ; ; ) {
+		struct corten_shrink_walk w;
+		LIST_HEAD(list);
 
-	reclaimed = (int)__reclaim_pages(&list, &corten_nr_swapped_out);
+		w.list = &list;
+		w.budget = min(nr - scanned, CORTEN_SHRINK_SLICE_PAGES);
+		w.nr_scanned = w.nr_young = w.nr_picked = 0;
+		w.eval = false;
+		w.force = true;
 
-	/* Kept folios come back unlocked with our pick reference. */
-	while (!list_empty(&list)) {
-		struct folio *folio = lru_to_folio(&list);
+		corten_shrink_age_slice(mm, state, &w,
+					CORTEN_SHRINK_SLICE_WINDOWS);
+		/* Drop the lock before the reclaim: it sleeps (folio
+		 * trylock, synchronous zram writeout), so holding the
+		 * spinlock across it is an atomic-sleep bug, not an
+		 * optimisation.
+		 */
+		spin_unlock(&state->shrink_lock);
 
-		list_del(&folio->lru);
-		folio_put(folio);
+		scanned += w.nr_scanned;
+		if (!list_empty(&list))
+			corten_shrink_reclaim(&list, NULL);
+		if (!w.nr_scanned || scanned >= nr)
+			break;
+		cond_resched();
+
+		/* Re-acquire for the next slice, same shape as
+		 * corten_shrink_mm(): a busy reacquire means a
+		 * concurrent scan owns this mm and is doing this
+		 * batch's work -- end ours here; the swap delta below
+		 * still reports the slices reclaimed so far.
+		 */
+		if (!spin_trylock(&state->shrink_lock)) {
+			atomic_long_inc(&corten_nr_evict_busy);
+			break;
+		}
 	}
 
 	/* Report what actually reached swap (the reclaim count also
@@ -7858,6 +8738,8 @@ static int corten_arena_evict_mm(struct mm_struct *mm, int nr)
 	 */
 	if (atomic_long_read(&corten_nr_swapped_out) == swapped_before)
 		return 0;
+	reclaimed = (int)(atomic_long_read(&corten_nr_swapped_out) -
+			  swapped_before);
 	return reclaimed;
 }
 
@@ -7886,3 +8768,110 @@ int corten_arena_evict_pid(pid_t pid, int nr)
 
 	return ret;
 }
+
+#ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
+/*
+ * M6.T3/T4 hooks (the shrinker bodies are defined above; the shrinker
+ * itself is only registered on a corten=on boot, so the suite drives
+ * the same functions with a synthetic target instead).
+ */
+unsigned long corten_arena_test_shrink_count(void)
+{
+	return corten_count_mms(NULL);
+}
+
+unsigned long corten_arena_test_shrink_scan(int nr)
+{
+	atomic_long_inc(&corten_nr_shrink_scans);
+
+	return corten_shrink_mms(nr, NULL);
+}
+
+long corten_arena_test_registry_nr(void)
+{
+	struct corten_mm_state *state;
+	long nr = 0;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(state, &corten_mm_registry, shrink_reg)
+		nr++;
+	rcu_read_unlock();
+
+	return nr;
+}
+
+long corten_arena_test_shrink_scans(void)
+{
+	return atomic_long_read(&corten_nr_shrink_scans);
+}
+
+long corten_arena_test_aging_passes(void)
+{
+	return atomic_long_read(&corten_nr_aging_passes);
+}
+
+long corten_arena_test_shrink_swapped(void)
+{
+	return atomic_long_read(&corten_nr_shrink_swapped);
+}
+
+long corten_arena_test_shrink_skipped(void)
+{
+	return atomic_long_read(&corten_nr_shrink_skipped);
+}
+
+bool corten_arena_test_window_aged(struct mm_struct *mm, unsigned long addr)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+
+	if (!state)
+		return false;
+
+	return xa_load(&state->shrink_aged, addr >> PMD_SHIFT) != NULL;
+}
+
+long corten_arena_test_resident_pages(void)
+{
+	long skip = 0, total = 0;
+
+	for (;;) {
+		struct mm_struct *mms[16];
+		int i, found;
+
+		found = corten_registry_pin(mms, ARRAY_SIZE(mms), &skip);
+		if (!found)
+			break;
+		for (i = 0; i < found; i++) {
+			total += corten_mm_state_pages(mms[i], NULL);
+			mmput(mms[i]);
+		}
+		skip += found;
+	}
+
+	return total;
+}
+
+long corten_arena_test_swapped_pages(void)
+{
+	long skip = 0, total = 0;
+
+	for (;;) {
+		struct mm_struct *mms[16];
+		int i, found;
+
+		found = corten_registry_pin(mms, ARRAY_SIZE(mms), &skip);
+		if (!found)
+			break;
+		for (i = 0; i < found; i++) {
+			long sw = 0;
+
+			corten_mm_state_pages(mms[i], &sw);
+			total += sw;
+			mmput(mms[i]);
+		}
+		skip += found;
+	}
+
+	return total;
+}
+#endif

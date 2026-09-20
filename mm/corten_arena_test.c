@@ -3933,13 +3933,15 @@ static void corten_arena_test_gup_state4_pin_zap(struct kunit *test)
 			zaps + 1);
 
 	/* Unpin: the folio is back to the holder reference only, and
-	 * the last put frees it (the refcount reaching zero through the
-	 * zap's own release path is what no-WARN looks like).
+	 * that single reference is what the last put frees (the
+	 * refcount reaching zero here is what no-WARN looks like).
+	 * The zap dropped the PTE reference, so exactly ONE put
+	 * remains -- a second would over-put a freed folio (the
+	 * r07 M5.T3 follow-up).
 	 */
 	folio_ref_sub(folio, GUP_PIN_COUNTING_BIAS);
 	KUNIT_EXPECT_FALSE(test, folio_maybe_dma_pinned(folio));
 	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1);
-	folio_put(folio);
 	folio_put(folio);
 }
 
@@ -4788,6 +4790,451 @@ static void corten_arena_test_pool_fork(struct kunit *test)
 						 0, 0), 0);
 }
 
+/* ------------------------------------------------------------------ *
+ * M6.T3: the shrinker pressure channel (M6_RMAP_SPEC.md sec 2.1 D2)
+ * and M6.T4 observability.  The KUnit side pins the machinery up to
+ * the isolation boundary -- registry membership, the per-desc resident
+ * totals behind count_objects, the two-pass young-bit aging state
+ * machine, the victim-rotation cursor and the pick-gate counters.
+ * A real swap device round-trip (data consistency, batch throughput)
+ * needs zram and is the guest criterion (spec T5), exactly like the
+ * M6.T2 split.
+ * ------------------------------------------------------------------
+ */
+
+/* Registry membership + count_objects + the live per-desc totals
+ * (resident vs recorded-swap slots, M6.T4).
+ */
+static void corten_arena_test_shrink_registry_count(struct kunit *test)
+{
+	struct corten_arena_test_mm *t;
+	struct mm_struct *mm;
+	struct vm_area_struct *vma;
+	struct folio *folio;
+	struct corten_txn txn;
+	struct corten_pte_meta sm;
+	pte_t *ptep, pte, swp_pte;
+	spinlock_t *ptl;
+	pmd_t *pmdp;
+	unsigned long addr1 = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
+	unsigned long addr2 = CORTEN_ARENA_TEST_BASE + 2 * PAGE_SIZE;
+	swp_entry_t entry = swp_entry(1, 0x77);
+	long reg0, cnt0, res0, swp0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "shrinker bodies require corten=on");
+
+	reg0 = corten_arena_test_registry_nr();
+	cnt0 = corten_arena_test_shrink_count();
+	res0 = corten_arena_test_resident_pages();
+	swp0 = corten_arena_test_swapped_pages();
+
+	t = corten_arena_test_mm_setup(test);
+	mm = t->mm;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, addr1), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr1),
+			0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr2),
+			0);
+
+	/* Registry: the published state joined; count sees the two
+	 * resident content pages (per-desc nr_mapped, exact).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_nr(), reg0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_shrink_count(), cnt0 + 2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_resident_pages(), res0 + 2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_swapped_pages(), swp0);
+
+	/* Convert addr2 to the synthetic swapped shape (the M6.T2
+	 * inv7 hand-rolled swap-out): the resident total drops by one,
+	 * the swapped-slot total rises by one -- the __resv slot
+	 * accounting the T4 report reads.
+	 */
+	vma = vma_lookup(mm, addr2);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	pmdp = corten_arena_test_pmd(mm, addr2);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, addr2, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get_and_clear(mm, addr2, ptep);
+	KUNIT_ASSERT_TRUE(test, pte_present(pte));
+	swp_pte = swp_entry_to_pte(entry);
+	set_pte_at(mm, addr2, ptep, swp_pte);
+	pte_unmap_unlock(ptep, ptl);
+	folio = page_folio(pte_page(pte));
+	folio_remove_rmap_pte(folio, folio_page(folio, 0), vma);
+	add_mm_counter(mm, MM_ANONPAGES, -1);
+	folio_put(folio);
+
+	KUNIT_ASSERT_EQ(test, corten_lock_range(mm, addr2, PAGE_SIZE, &txn),
+			0);
+	memset(&sm, 0, sizeof(sm));
+	sm.state = CORTEN_SWAPPED;
+	sm.perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER;
+	corten_swap_encode(&sm, entry);
+	KUNIT_EXPECT_EQ(test, corten_swap_out(&txn, addr2, &sm), 0);
+	corten_unlock(&txn);
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_resident_pages(), res0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_swapped_pages(), swp0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_shrink_count(), cnt0 + 1);
+
+	/* The T4 render carries the new lines (named-counter reads are
+	 * the same strings the DoD evidence greps).
+	 */
+	KUNIT_EXPECT_GE(test,
+			corten_arena_test_named_counter(test, "resident_pages"),
+			0);
+	KUNIT_EXPECT_GE(test,
+			corten_arena_test_named_counter(test, "swapped_pages"),
+			0);
+	KUNIT_EXPECT_GE(test,
+			corten_arena_test_named_counter(test, "shrink_scans"),
+			0);
+	KUNIT_EXPECT_GE(test,
+			corten_arena_test_named_counter(test, "aging_passes"),
+			0);
+	KUNIT_EXPECT_GE(test,
+			corten_arena_test_named_counter(test, "swapout_rate"),
+			0);
+
+	/* Scrub the synthetic entry's slot before teardown (no zap: the
+	 * fabricated entry must not reach free_swap_and_cache()).
+	 */
+	KUNIT_ASSERT_EQ(test, corten_lock_range(mm, addr2, PAGE_SIZE, &txn),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_unmap(&txn, addr2, PAGE_SIZE,
+					   CORTEN_UNMAP_KEEP_PERM), 0);
+	corten_unlock(&txn);
+}
+
+/* Two-pass young-bit aging: pass 1 flags the window, a "touched" page
+ * is spared by pass 2 and a cold page reaches the pick gate (observed
+ * through the DMA-pin skip: KUnit has no swap device, so the pick ends
+ * as a kept folio -- the guest round-trip is the T5 criterion).
+ */
+static void corten_arena_test_shrink_aging_two_pass(struct kunit *test)
+{
+	struct corten_arena_test_mm *t;
+	struct mm_struct *mm;
+	struct vm_area_struct *vma;
+	struct folio *fb;
+	struct corten_pte_meta m;
+	pte_t *ptep, pte;
+	spinlock_t *ptl;
+	pmd_t *pmdp;
+	unsigned long base = CORTEN_ARENA_TEST_BASE;
+	unsigned long addr_a = base + PAGE_SIZE;
+	unsigned long addr_b = base + 2 * PAGE_SIZE;
+	long scans0, aging0, skipped0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "shrinker bodies require corten=on");
+
+	t = corten_arena_test_mm_setup(test);
+	mm = t->mm;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, addr_a), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr_a),
+			0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr_b),
+			0);
+
+	scans0 = corten_arena_test_shrink_scans();
+	aging0 = corten_arena_test_aging_passes();
+	skipped0 = corten_arena_test_shrink_skipped();
+
+	/* Pass 1: the scan ages the window's two candidates and swaps
+	 * nothing (budget == candidate count: one slice, no re-aging).
+	 */
+	KUNIT_EXPECT_EQ(test, (int)corten_arena_test_shrink_scan(2), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_shrink_scans(), scans0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_aging_passes(), aging0 + 1);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_window_aged(mm, base));
+
+	/* A was touched between the passes: its young bit comes back. */
+	vma = vma_lookup(mm, addr_a);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	pmdp = corten_arena_test_pmd(mm, addr_a);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, addr_a, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	set_pte_at(mm, addr_a, ptep, pte_mkyoung(pte));
+	pte_unmap_unlock(ptep, ptl);
+
+	/* B stays cold and gets DMA-pinned: pass 2 evaluates the window,
+	 * spares A (young), and B reaches the pick path where the pin
+	 * gate counts the skip.
+	 */
+	pmdp = corten_arena_test_pmd(mm, addr_b);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, addr_b, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	fb = page_folio(pte_page(pte));
+	folio_get(fb);
+	folio_ref_add(fb, GUP_PIN_COUNTING_BIAS);
+	pte_unmap_unlock(ptep, ptl);
+
+	corten_arena_test_shrink_scan(2);
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_shrink_skipped(),
+			skipped0 + 1);
+	/* Evaluated windows leave the aging set and the rotation has
+	 * nothing new to age (two windows' worth of candidates, one
+	 * window: the cursor restarts at frame 0 for the next scan).
+	 */
+	KUNIT_EXPECT_FALSE(test, corten_arena_test_window_aged(mm, base));
+
+	/* Neither page left its resident shape (no swap device here):
+	 * spared A keeps its young bit, skipped B keeps its pin.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr_a, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr_b, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_TRUE(test, folio_maybe_dma_pinned(fb));
+
+	pmdp = corten_arena_test_pmd(mm, addr_a);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, addr_a, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	/* The pass-2 evaluation CONSUMED A's young bit -- that is the
+	 * epoch clear (the page was spared because it was young at
+	 * evaluation time, proven above: only B reached the pick gate).
+	 */
+	KUNIT_EXPECT_FALSE(test, pte_young(ptep_get(ptep)));
+	pte_unmap_unlock(ptep, ptl);
+
+	/* Unpin: the test hold goes back, the PTE reference survives
+	 * until the mm teardown (one put only -- the r07 folio_put
+	 * lesson).
+	 */
+	folio_ref_sub(fb, GUP_PIN_COUNTING_BIAS);
+	folio_put(fb);
+}
+
+/* Rotation across windows: one candidate per window, one page of scan
+ * budget per invocation -- the two windows age and evaluate on
+ * alternating scans (the cursor round-robin that replaced the T2
+ * from-frame-0 rescan).
+ */
+static void corten_arena_test_shrink_rotation(struct kunit *test)
+{
+	struct corten_arena_test_mm *t;
+	struct mm_struct *mm;
+	unsigned long base = CORTEN_ARENA_TEST_BASE;
+	unsigned long w1 = base + PAGE_SIZE;
+	unsigned long w2 = base + PMD_SIZE + PAGE_SIZE;
+	long aging0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "shrinker bodies require corten=on");
+
+	t = corten_arena_test_mm_setup(test);
+	mm = t->mm;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, w1), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, w1), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, w2), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, w2), 0);
+
+	aging0 = corten_arena_test_aging_passes();
+
+	/* Scan 1: pass 1 ages window 1 (budget spent on its candidate).
+	 * Scan 2: pass 2 evaluates window 1, budget leaves nothing for
+	 * pass 1.  Scans 3/4 do the same for window 2.
+	 */
+	corten_arena_test_shrink_scan(1);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_window_aged(mm, base));
+	KUNIT_EXPECT_FALSE(test, corten_arena_test_window_aged(mm, w2));
+
+	corten_arena_test_shrink_scan(1);
+	KUNIT_EXPECT_FALSE(test, corten_arena_test_window_aged(mm, base));
+
+	corten_arena_test_shrink_scan(1);
+	KUNIT_EXPECT_FALSE(test, corten_arena_test_window_aged(mm, base));
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_window_aged(mm, w2));
+
+	corten_arena_test_shrink_scan(1);
+	KUNIT_EXPECT_FALSE(test, corten_arena_test_window_aged(mm, w2));
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_aging_passes(), aging0 + 2);
+}
+
+/* The child-leg swap-PTE copy (the copy_nonpresent_pte() shape).  The
+ * entry duplication is upstream's and needs a real swap device; this
+ * harness entry is synthetic (bits only, like inv7_swapped), so only
+ * the PTE install and the MM_SWAPENTS move are simulated -- the fork
+ * mirror under test consumes the child PTE, not the entry count.
+ */
+static int corten_arena_test_fork_copy_swap_pte(struct kunit *test,
+						struct mm_struct *dst,
+						struct mm_struct *src,
+						unsigned long addr)
+{
+	pte_t *sptep, *dptep, pte;
+	spinlock_t *sptl, *dptl;
+	pmd_t *pmdp;
+
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_ensure_pt(test, dst,
+							       addr), 0);
+
+	pmdp = corten_arena_test_pmd(src, addr);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	sptep = pte_offset_map_lock(src, pmdp, addr, &sptl);
+	KUNIT_ASSERT_NOT_NULL(test, sptep);
+	pte = ptep_get(sptep);
+	pte_unmap_unlock(sptep, sptl);
+	KUNIT_ASSERT_FALSE(test, pte_present(pte));
+	KUNIT_ASSERT_FALSE(test, pte_none(pte));
+
+	pmdp = corten_arena_test_pmd(dst, addr);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	dptep = pte_offset_map_lock(dst, pmdp, addr, &dptl);
+	KUNIT_ASSERT_NOT_NULL(test, dptep);
+	set_ptes(dst, addr, dptep, pte, 1);
+	add_mm_counter(dst, MM_SWAPENTS, 1);
+	pte_unmap_unlock(dptep, dptl);
+
+	return 0;
+}
+
+/* Fork after a swap-out (the T2 replay-arm gap the M6.T3 pressure
+ * channel closes): the child mirrors the CORTEN_SWAPPED slot with the
+ * entry payload, both sides stay INV7-clean and both slots count in
+ * the registry totals.
+ */
+static void corten_arena_test_fork_swapped(struct kunit *test)
+{
+	struct corten_arena_test_mm *t;
+	struct mm_struct *mm, *child;
+	struct vm_area_struct *vma, *cvma;
+	struct folio *folio;
+	struct corten_txn txn;
+	struct corten_pte_meta m, sm;
+	pte_t *ptep, pte, swp_pte;
+	spinlock_t *ptl;
+	pmd_t *pmdp;
+	unsigned long addr = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
+	swp_entry_t entry = swp_entry(1, 0x77);
+	long swp0, violated, checked;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "fork mirror requires corten=on");
+
+	t = corten_arena_test_mm_setup(test);
+	mm = t->mm;
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, addr), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr),
+			0);
+
+	swp0 = corten_arena_test_swapped_pages();
+
+	/* Hand-rolled swap-out shape (the inv7_swapped sequence). */
+	vma = vma_lookup(mm, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	pmdp = corten_arena_test_pmd(mm, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get_and_clear(mm, addr, ptep);
+	KUNIT_ASSERT_TRUE(test, pte_present(pte));
+	swp_pte = swp_entry_to_pte(entry);
+	set_pte_at(mm, addr, ptep, swp_pte);
+	pte_unmap_unlock(ptep, ptl);
+	folio = page_folio(pte_page(pte));
+	folio_remove_rmap_pte(folio, folio_page(folio, 0), vma);
+	add_mm_counter(mm, MM_ANONPAGES, -1);
+	folio_put(folio);
+
+	KUNIT_ASSERT_EQ(test, corten_lock_range(mm, addr, PAGE_SIZE, &txn),
+			0);
+	memset(&sm, 0, sizeof(sm));
+	sm.state = CORTEN_SWAPPED;
+	sm.perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER;
+	corten_swap_encode(&sm, entry);
+	KUNIT_EXPECT_EQ(test, corten_swap_out(&txn, addr, &sm), 0);
+	corten_unlock(&txn);
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_swapped_pages(), swp0 + 1);
+
+	/* The fork window (dup_mmap() shape). */
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+
+	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE,
+				      CORTEN_ARENA_TEST_BASE +
+				      CORTEN_ARENA_TEST_LEN,
+				      CORTEN_ARENA_TEST_FLAGS_OK |
+				      VM_CORTEN | VM_NOHUGEPAGE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_fork_copy_swap_pte(test, child, mm,
+							     addr), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+
+	/* The child replayed the swapped slot: same state, same entry
+	 * payload; the parent is unchanged.  Both count in the totals.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_SWAPPED);
+	KUNIT_EXPECT_EQ(test, corten_swap_decode(&m).val, entry.val);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_SWAPPED);
+	KUNIT_EXPECT_EQ(test, corten_swap_decode(&m).val, entry.val);
+	KUNIT_EXPECT_EQ(test, m.perm,
+			CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+			CORTEN_PERM_USER);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_swapped_pages(), swp0 + 2);
+
+	/* INV7 both sides: the swapped half of the checker walks both
+	 * descriptor trees with zero violations.
+	 */
+	corten_arena_test_inv7_walk(mm, &violated, &checked);
+	KUNIT_EXPECT_EQ(test, violated, 0);
+	corten_arena_test_inv7_walk(child, &violated, &checked);
+	KUNIT_EXPECT_EQ(test, violated, 0);
+	KUNIT_EXPECT_GE(test, checked, 1);
+
+	/* Child exit: zap frees the (synthetic) entry shape -- the same
+	 * tolerated teardown inv7_swapped exercises).
+	 */
+	mmput(child);
+
+	/* Scrub the parent's slot before teardown (no zap path for the
+	 * fabricated entry from this side either).
+	 */
+	KUNIT_ASSERT_EQ(test, corten_lock_range(mm, addr, PAGE_SIZE, &txn),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_unmap(&txn, addr, PAGE_SIZE,
+					   CORTEN_UNMAP_KEEP_PERM), 0);
+	corten_unlock(&txn);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
@@ -4820,6 +5267,10 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_fork_perm),
 	KUNIT_CASE(corten_arena_test_inv7_shared_ro),
 	KUNIT_CASE(corten_arena_test_inv7_swapped),
+	KUNIT_CASE(corten_arena_test_shrink_registry_count),
+	KUNIT_CASE(corten_arena_test_shrink_aging_two_pass),
+	KUNIT_CASE(corten_arena_test_shrink_rotation),
+	KUNIT_CASE(corten_arena_test_fork_swapped),
 	KUNIT_CASE(corten_arena_test_fork_f2_gate),
 	KUNIT_CASE(corten_arena_test_fork_drain_leak),
 	KUNIT_CASE(corten_arena_test_unshare_pin),

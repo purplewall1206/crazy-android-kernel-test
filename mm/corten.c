@@ -1195,6 +1195,14 @@ int corten_map(struct corten_txn *txn, unsigned long addr, struct page *page,
 	 * hardware PTE (set_pte_at + TLB bookkeeping) here, inside the same
 	 * covering write lock, and records the page identity in __resv.
 	 */
+	if (m->state != CORTEN_MAPPED) {
+		/* Shrinker resident bookkeeping (M6.T3): a fresh install
+		 * or a swap-in makes the slot resident content again.
+		 */
+		if (m->state == CORTEN_SWAPPED)
+			txn->covering->nr_swapped--;
+		txn->covering->nr_mapped++;
+	}
 	m->state = CORTEN_MAPPED;
 	m->perm = perm;
 	m->flags = 0;
@@ -1312,6 +1320,67 @@ int corten_swap_out(struct corten_txn *txn, unsigned long addr,
 	if (unlikely(!m))
 		return -ENOMEM;
 
+	/* Shrinker resident bookkeeping (M6.T3): MAPPED -> SWAPPED. */
+	txn->covering->nr_mapped--;
+	txn->covering->nr_swapped++;
+	*m = *meta;
+	return 0;
+}
+
+/**
+ * corten_swap_replay - record a CORTEN_SWAPPED slot payload verbatim
+ *                      (M6.T3 fork replay arm).
+ * @txn: locked transaction handle.
+ * @addr: virtual address to update (page aligned, inside the range).
+ * @meta: the payload to record: %CORTEN_SWAPPED + the entry encoding,
+ *        no COW flags (the fork-shared shape never swaps out).
+ *
+ * The fork mirror's child replay: the child's swap PTE was installed
+ * by copy_nonpresent_pte() (the entry duplicated there), so the slot
+ * records the snapshot payload directly instead of transitioning from
+ * CORTEN_MAPPED -- the only transition corten_swap_out() allows.  Only
+ * a non-resident slot (Invalid / virtually allocated, the fresh child
+ * shapes) can be replayed into; every live-content shape must go
+ * through the state machine.
+ *
+ * Return: 0 on success, -EEXIST if the slot holds resident content or
+ * a recorded entry, -EINVAL on a bad payload shape, -ERANGE/-EINVAL
+ * for an out-of-range or misaligned @addr, -ENOMEM when the metadata
+ * array cannot be ensured.
+ */
+int corten_swap_replay(struct corten_txn *txn, unsigned long addr,
+		       const struct corten_pte_meta *meta)
+{
+	struct corten_pte_meta *m;
+	unsigned long end;
+	int ret;
+
+	if (unlikely(!meta))
+		return -EINVAL;
+	if (unlikely(meta->state != CORTEN_SWAPPED))
+		return -EINVAL;
+	if (unlikely(meta->perm & ~CORTEN_PERM_ALL))
+		return -EINVAL;
+	if (unlikely(meta->flags))
+		return -EINVAL;
+
+	ret = corten_txn_subrange(txn, addr, PAGE_SIZE, &end);
+	if (unlikely(ret))
+		return ret;
+
+	ret = corten_meta_ensure_locked(txn->covering);
+	if (unlikely(ret))
+		return ret;
+
+	m = corten_txn_meta(txn, addr);
+	if (IS_ERR(m))
+		return PTR_ERR(m);
+	if (unlikely(!m))
+		return -ENOMEM;
+	if (unlikely(m->state == CORTEN_MAPPED || m->state == CORTEN_SWAPPED))
+		return -EEXIST;
+
+	txn->covering->nr_swapped++;
 	*m = *meta;
 	return 0;
 }
@@ -1345,23 +1414,28 @@ int corten_unmap(struct corten_txn *txn, unsigned long start,
 	for (addr = start; addr < end; addr += PAGE_SIZE) {
 		struct corten_pte_meta *m = corten_txn_meta(txn, addr);
 
-		if (IS_ERR(m))
-			return PTR_ERR(m);
-		if (unlikely(!m))
-			return -ENOMEM;
-		/* Dropping the physical page / swap-slot references
-		 * recorded in the metadata payload is wired in by M3 (page
-		 * refs) and M6 (swap).  2b flips the state back to Invalid
-		 * and scrubs the payload bytes (__resv): the slot may be
-		 * re-marked later and must not resurrect stale payload
-		 * fields that the state machine no longer validates.
-		 * KEEP_PERM (the arena content-drop path) keeps the
-		 * permission bits instead: the mprotect contract committed
-		 * on the VA survives the drop, so the FRESH fault gate
-		 * re-derives it rather than the DECLARE bound (the r06
-		 * "rogue" ACCERR family).
-		 */
-		m->state = CORTEN_INVALID;
+			if (IS_ERR(m))
+				return PTR_ERR(m);
+			if (unlikely(!m))
+				return -ENOMEM;
+			/* Shrinker resident bookkeeping (M6.T3). */
+			if (m->state == CORTEN_MAPPED)
+				txn->covering->nr_mapped--;
+			else if (m->state == CORTEN_SWAPPED)
+				txn->covering->nr_swapped--;
+			/* Dropping the physical page / swap-slot references
+			 * recorded in the metadata payload is wired in by M3 (page
+			 * refs) and M6 (swap).  2b flips the state back to Invalid
+			 * and scrubs the payload bytes (__resv): the slot may be
+			 * re-marked later and must not resurrect stale payload
+			 * fields that the state machine no longer validates.
+			 * KEEP_PERM (the arena content-drop path) keeps the
+			 * permission bits instead: the mprotect contract committed
+			 * on the VA survives the drop, so the FRESH fault gate
+			 * re-derives it rather than the DECLARE bound (the r06
+			 * "rogue" ACCERR family).
+			 */
+			m->state = CORTEN_INVALID;
 		if (!(flags & CORTEN_UNMAP_KEEP_PERM))
 			m->perm = 0;
 		m->flags = 0;
@@ -1406,8 +1480,16 @@ long corten_txn_meta_drop(struct corten_txn *txn)
 	if (!meta)
 		return 0;
 
-	for (i = 0; i < CORTEN_PTES_PER_PT_PAGE; i++)
+	for (i = 0; i < CORTEN_PTES_PER_PT_PAGE; i++) {
 		nr += meta[i].state != CORTEN_INVALID;
+		/* Shrinker resident bookkeeping (M6.T3): the array (and
+		 * with it every recorded state) goes away wholesale.
+		 */
+		if (meta[i].state == CORTEN_MAPPED)
+			txn->covering->nr_mapped--;
+		else if (meta[i].state == CORTEN_SWAPPED)
+			txn->covering->nr_swapped--;
+	}
 
 	corten_meta_free(txn->covering);
 

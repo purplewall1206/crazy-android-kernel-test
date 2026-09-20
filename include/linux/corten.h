@@ -320,6 +320,19 @@ struct corten_ptdesc {
 	 * protocol itself only reads it (debugfs).  Protected by @lock.
 	 */
 	u16			nr_children;
+	/*
+	 * M6.T3 shrinker bookkeeping: number of slots in the
+	 * CORTEN_MAPPED (resident content, swap-out candidate) and
+	 * CORTEN_SWAPPED (entry recorded) states, maintained by
+	 * corten_map()/corten_swap_out()/corten_unmap()/
+	 * corten_txn_meta_drop() under the covering write lock -- every
+	 * state transition of those two shapes goes through exactly
+	 * those operations, so the counts are exact by construction.
+	 * Written under @lock; lockless readers use READ_ONCE() and
+	 * treat the result as a snapshot (debugfs, shrinker count).
+	 */
+	long			nr_mapped;
+	long			nr_swapped;
 	/* Debug: always CORTEN_PTDESC_MAGIC while alive. */
 	u32			magic;
 	/* Deferred free of the descriptor itself (kfree_rcu). */
@@ -456,6 +469,30 @@ int corten_swap_out(struct corten_txn *txn, unsigned long addr,
 		    const struct corten_pte_meta *meta);
 
 /**
+ * corten_swap_replay - record a CORTEN_SWAPPED slot payload verbatim
+ *                      (M6.T3 fork replay arm).
+ * @txn: locked transaction handle.
+ * @addr: virtual address to update (page aligned, inside the range).
+ * @meta: the payload to record: %CORTEN_SWAPPED + the entry encoding,
+ *        no COW flags (the fork-shared shape never swaps out).
+ *
+ * The fork mirror's child replay: the child's swap PTE was installed
+ * by copy_nonpresent_pte() (the entry duplicated there), so the slot
+ * records the snapshot payload directly instead of transitioning from
+ * CORTEN_MAPPED -- the only transition corten_swap_out() allows.  Only
+ * a non-resident slot (Invalid / virtually allocated, the fresh child
+ * shapes) can be replayed into; every live-content shape must go
+ * through the state machine.
+ *
+ * Return: 0 on success, -EEXIST if the slot holds resident content or
+ * a recorded entry, -EINVAL on a bad payload shape, -ERANGE/-EINVAL
+ * for an out-of-range or misaligned @addr, -ENOMEM when the metadata
+ * array cannot be ensured.
+ */
+int corten_swap_replay(struct corten_txn *txn, unsigned long addr,
+		       const struct corten_pte_meta *meta);
+
+/**
  * corten_unmap - remove the mapping of a VA range in a transaction
  *                (paper: RCursor::unmap; retiring emptied PT pages and
  *                marking them stale, paper Figure 6, is M4 scope).
@@ -530,6 +567,13 @@ static inline int corten_mark(struct corten_txn *txn, unsigned long start,
 
 static inline int corten_swap_out(struct corten_txn *txn, unsigned long addr,
 				  const struct corten_pte_meta *meta)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int corten_swap_replay(struct corten_txn *txn,
+				     unsigned long addr,
+				     const struct corten_pte_meta *meta)
 {
 	return -EOPNOTSUPP;
 }

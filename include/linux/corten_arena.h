@@ -275,8 +275,31 @@ struct corten_va_seg {
  *            pool flush); the only reader fast path (corten_arena_pool_
  *            pick) holds the same locks.
  * @nr_pool: arenas currently parked in @arena_pool; bounded by
- *            CORTEN_ARENA_POOL_MAX (overflow releases the LRU victim,
- *            counted).
+ *            CORTEN_ARENA_POOL_MAX (overflow degrades to the pre-pool
+ *            behaviour, counted).
+ * @owner_mm: back-link to the owning address space (M6.T3 shrinker
+ *            registry walk).  Never taken by reference: the state is
+ *            created and destroyed by the mm's own lifecycle paths
+ *            (state_create here, corten_arena_mm_exit()) and the
+ *            shrinker pins the mm with mmget_not_zero() before any use
+ *            past the RCU section, so the pointer is stable for as long
+ *            as the registry membership survives.
+ * @shrink_reg: M6.T3 global shrinker-registry node (corten_mm_registry).
+ *            Linked (list_add_tail_rcu) when the registry is published
+ *            and unlinked (list_del_rcu + synchronize_rcu) at exit, so
+ *            RCU readers (the shrinker) never touch a freed state.
+ * @shrink_lock: serializes shrinker/evict victim selection per mm (one
+ *            picker at a time; two pickers could isolate the same folio
+ *            onto two lists).  trylock-only from reclaim context: a
+ *            busy mm is skipped, never waited on.
+ * @shrink_cursor: per-mm victim rotation cursor over the frame-index
+ *            keyspace of @arenas (written only under @shrink_lock).
+ *            Gives the shrinker and the evict driver window-level
+ *            round-robin instead of T2's from-frame-0 rescan.
+ * @shrink_aged: M6.T3 two-pass aging bookkeeping: frame-index ->
+ *            xa_mk_value(1) marks windows whose young bits pass 1
+ *            already cleared (they are pass-2 evaluation candidates).
+ *            Written only under @shrink_lock; GFP_NOWAIT stores.
  * @stats: percpu counters, indexed by enum corten_arena_stat.  Relaxed;
  *         the debugfs readers land with the observability slice (S8,
  *         M3B_DESIGN.md sec 7.4).
@@ -299,6 +322,11 @@ struct corten_mm_state {
 	struct list_head	seg_list;
 	struct list_head	arena_pool;
 	unsigned long		nr_pool;
+	struct mm_struct	*owner_mm;
+	struct list_head	shrink_reg;
+	spinlock_t		shrink_lock;
+	unsigned long		shrink_cursor;
+	struct xarray		shrink_aged;
 	unsigned long __percpu	*stats;
 };
 
@@ -455,6 +483,27 @@ long corten_arena_test_pool_over(void);
 long corten_arena_test_pool_ejects(void);
 long corten_arena_test_pool_nr(struct mm_struct *mm);
 bool corten_arena_test_pool_idle(struct mm_struct *mm, unsigned long addr);
+
+/* M6.T3 shrinker hooks: drive the count/scan bodies directly (the
+ * shrinker is only registered on a corten=on boot; the bodies are the
+ * same functions the shrinker calls, with a synthetic shrink_control),
+ * the registry occupancy, and the T4 observability counters.
+ */
+unsigned long corten_arena_test_shrink_count(void);
+unsigned long corten_arena_test_shrink_scan(int nr);
+long corten_arena_test_registry_nr(void);
+long corten_arena_test_shrink_scans(void);
+long corten_arena_test_aging_passes(void);
+long corten_arena_test_shrink_swapped(void);
+long corten_arena_test_shrink_skipped(void);
+/* M6.T3 two-pass aging probe: is @addr's window flagged pass-1-done? */
+bool corten_arena_test_window_aged(struct mm_struct *mm, unsigned long addr);
+
+/* M6.T4: live per-desc resident/swapped totals over the registry (the
+ * same walker the shrinker count uses).
+ */
+long corten_arena_test_resident_pages(void);
+long corten_arena_test_swapped_pages(void);
 #endif
 
 #else /* !CONFIG_CORTEN_MM_ARENA */
