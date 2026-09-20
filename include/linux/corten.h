@@ -433,6 +433,29 @@ int corten_mark(struct corten_txn *txn, unsigned long start, unsigned long len,
 		const struct corten_pte_meta *meta);
 
 /**
+ * corten_swap_out - record the Swapped state of one virtual page in a
+ *                   transaction (M6.T2, M6_RMAP_SPEC.md sec 2.1 D1/D6).
+ * @txn: locked transaction handle.
+ * @addr: virtual address to update (page aligned, inside the locked range).
+ * @meta: the state to record: @meta->state must be %CORTEN_SWAPPED, its
+ *        @perm is the contract that survives the swap-out and its
+ *        @__resv bytes carry the swap entry encoding of the caller
+ *        (corten_swap_encode(), mm/corten_arena.h).
+ *
+ * Dedicated operation (corten_mark() deliberately refuses the Swapped
+ * state): the only legal transition is from %CORTEN_MAPPED -- a page with
+ * content, already installed by a fault -- to %CORTEN_SWAPPED, performed
+ * by the reclaim-side transaction while it rewrites the hardware PTE to
+ * the swap entry.  %CORTEN_PRIVATE_ANON slots (zero-page reads) have no
+ * content to swap and stay out of the swap-out path.
+ *
+ * Return: 0 on success, -EINVAL on a bad state/permission shape,
+ * -ERANGE/-EINVAL for an out-of-range or misaligned @addr.
+ */
+int corten_swap_out(struct corten_txn *txn, unsigned long addr,
+		    const struct corten_pte_meta *meta);
+
+/**
  * corten_unmap - remove the mapping of a VA range in a transaction
  *                (paper: RCursor::unmap; retiring emptied PT pages and
  *                marking them stale, paper Figure 6, is M4 scope).
@@ -501,6 +524,12 @@ static inline int corten_map(struct corten_txn *txn, unsigned long addr,
 static inline int corten_mark(struct corten_txn *txn, unsigned long start,
 			      unsigned long len,
 			      const struct corten_pte_meta *meta)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int corten_swap_out(struct corten_txn *txn, unsigned long addr,
+				  const struct corten_pte_meta *meta)
 {
 	return -EOPNOTSUPP;
 }

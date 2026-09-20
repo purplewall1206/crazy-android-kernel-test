@@ -33,8 +33,11 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/swap.h>
+#include <linux/swapops.h>
 
 #include "corten_arena.h"
+#include "swap.h"		/* swap_writeout/swapin (M6.T2) */
 #include "corten.h"		/* corten_ptdesc_install() (gate-free) */
 #include "internal.h"
 #include "vma.h"
@@ -273,9 +276,12 @@ static void corten_fault_test_dispatch(struct kunit *test)
 		{ "shared-none-write", { CORTEN_MAPPED, 0, CORTEN_PF_SHARED,
 					 { 0 } },
 		  true, false, CORTEN_DISP_COW_COPY },
-		/* Producer states M3 never creates: refuse loudly. */
+		/* M6.T2: the Swapped state routes to the swap-in
+		 * transaction; the file/shared-anon producers are still
+		 * M4+ and refuse loudly.
+		 */
 		{ "swapped", { CORTEN_SWAPPED, CORTEN_PERM_ALL, 0, { 0 } },
-		  false, false, CORTEN_DISP_STUB },
+		  false, false, CORTEN_DISP_SWAPIN },
 		{ "file", { CORTEN_FILE_MAPPED, CORTEN_PERM_ALL, 0, { 0 } },
 		  false, false, CORTEN_DISP_STUB },
 		{ "shared-anon", { CORTEN_SHARED_ANON, CORTEN_PERM_ALL, 0, { 0 } },
@@ -2428,16 +2434,16 @@ static void corten_fault_test_rmap_guard(struct kunit *test)
 	 * Stage-1 rejections) and each one counts.
 	 */
 	KUNIT_EXPECT_FALSE(test,
-			   corten_rmap_unmap_one(folio, t->vma, addr, 0));
+			   corten_rmap_unmap_one(folio, t->vma, addr, 0, false));
 	KUNIT_EXPECT_FALSE(test,
 			   corten_rmap_unmap_one(folio, t->vma, addr,
-						 TTU_SYNC));
+						 TTU_SYNC, false));
 	KUNIT_EXPECT_FALSE(test,
 			   corten_rmap_unmap_one(folio, t->vma, addr,
-						 TTU_IGNORE_MLOCK));
+						 TTU_IGNORE_MLOCK, false));
 	KUNIT_EXPECT_FALSE(test,
 			   corten_rmap_unmap_one(folio, t->vma, addr,
-						 TTU_HWPOISON));
+						 TTU_HWPOISON, false));
 	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "rmap_rejects"),
 			after + 4);
 
@@ -2450,7 +2456,8 @@ static void corten_fault_test_rmap_guard(struct kunit *test)
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, legacy);
 	KUNIT_EXPECT_FALSE(test,
 			   corten_rmap_unmap_one(folio, legacy,
-						 legacy->vm_start, 0));
+						 legacy->vm_start, 0,
+						 false));
 	KUNIT_EXPECT_FALSE(test, corten_oom_reap_skip_vma(legacy));
 	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "rmap_rejects"),
 			after + 4);
@@ -2499,6 +2506,378 @@ static void corten_fault_test_reap_skip(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, folio_test_lru(folio));
 }
 
+
+/* ------------------------------------------------------------------ *
+ * M6.T2: swap out/in transactions (M6_RMAP_SPEC.md sec 2.1 D1/D5-D7)
+ * ------------------------------------------------------------------
+ */
+
+/* The encode/decode pair is pure (no swap device touched): the u8 type
+ * plus the little-endian u32 offset must roundtrip through the 5
+ * payload bytes and leave byte 5 pristine.  Type boundaries cover the
+ * MAX_SWAPFILES range; offset boundaries cover a 4G/4K swap (1M slots,
+ * far below 2^32) and the field wrap.
+ */
+static void corten_fault_test_swap_encode(struct kunit *test)
+{
+	static const unsigned long types[] = { 0, 1, 31, 128, 255 };
+	static const unsigned long offsets[] = {
+		0, 1, 0x12345678, 0xffffffff
+	};
+	struct corten_pte_meta m = { };
+	size_t i, j;
+
+	for (i = 0; i < ARRAY_SIZE(types); i++) {
+		for (j = 0; j < ARRAY_SIZE(offsets); j++) {
+			swp_entry_t e = swp_entry(types[i], offsets[j]);
+			swp_entry_t d;
+
+			memset(&m, 0, sizeof(m));
+			corten_swap_encode(&m, e);
+			KUNIT_EXPECT_EQ_MSG(test, m.__resv[5], 0,
+					    "type %lu off %lu: byte 5",
+					    types[i], offsets[j]);
+			d = corten_swap_decode(&m);
+			KUNIT_EXPECT_EQ_MSG(test, d.val, e.val,
+					    "type %lu off %lu", types[i],
+					    offsets[j]);
+		}
+	}
+
+	/* A zeroed slot decodes to entry 0: the "no entry" answer. */
+	memset(&m, 0, sizeof(m));
+	KUNIT_EXPECT_EQ(test, corten_swap_decode(&m).val, 0);
+}
+
+/* Swap presence gate for the real-chain swap cases: KUnit boots have no
+ * swap area by default, and folio_alloc_swap() would just fail there.
+ * The guest acceptance drives the same paths against zram with a real
+ * device; these cases join in wherever a swap area is up (the guest
+ * suite re-run after swapon).
+ */
+static bool ft_swap_up(void)
+{
+	struct sysinfo val;
+
+	si_swapinfo(&val);
+
+	return val.totalswap != 0;
+}
+
+/* One arena page through the real swap-out transaction: populate,
+ * write a pattern, add the folio to the swap cache (the
+ * shrink_folio_list() preamble) and run the real try_to_unmap() -- the
+ * guard's completion arm does the rest.  Returns the swap entry.
+ */
+static swp_entry_t ft_swap_out(struct kunit *test, struct ft_mm *t,
+			       unsigned long addr, struct folio **out_folio)
+{
+	struct folio *folio;
+	void *kaddr;
+	pte_t *ptep, pte;
+	swp_entry_t zero = { };
+	bool ok = true;
+
+	folio = ft_populate(test, t, addr, &pte);
+
+	/* The pattern the round-trip must preserve. */
+	kaddr = kmap_local_page(folio_page(folio, 0));
+	memset(kaddr, 0x5c, PAGE_SIZE);
+	kunmap_local(kaddr);
+	__folio_mark_uptodate(folio);
+
+	KUNIT_ASSERT_EQ(test, folio_lock_killable(folio), 0);
+	/* folio_alloc_swap(): entry + swapcache + the swap-side memcg
+	 * charge -- exactly shrink_folio_list()'s preamble.  EXPECT
+	 * only from here on: an ASSERT abort while the folio lock (or
+	 * a transaction lock) is held would leak it into the teardown.
+	 */
+	if (folio_alloc_swap(folio, GFP_KERNEL))
+		ok = false;
+	if (ok) {
+		folio_mark_dirty(folio);
+
+		/* The reclaim shape: the plain unmap family (this
+		 * tree's ttu has no TTU_IGNORE_ACCESS any more --
+		 * aging lives in folio_referenced()), no
+		 * TTU_BATCH_FLUSH (the test is the whole "batch",
+		 * flush included).
+		 */
+		try_to_unmap(folio, TTU_IGNORE_MLOCK);
+
+		/* The transaction happened: folio unmapped, PTE a swap
+		 * entry, metadata CORTEN_SWAPPED with the entry
+		 * encoded.
+		 */
+		KUNIT_EXPECT_EQ(test, folio_mapped(folio), 0);
+		ptep = ft_pte(t, addr);
+		if (!ptep) {
+			ok = false;
+		} else {
+			struct corten_pte_meta m;
+
+			pte = ptep_get(ptep);
+			pte_unmap(ptep);
+			KUNIT_EXPECT_TRUE(test,
+					  !pte_present(pte) && !pte_none(pte));
+			if (ft_meta(t, addr, &m) == 0) {
+				KUNIT_EXPECT_EQ(test, m.state, CORTEN_SWAPPED);
+				KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+				KUNIT_EXPECT_EQ(test,
+						corten_swap_decode(&m).val,
+						folio->swap.val);
+				KUNIT_EXPECT_EQ(test,
+						pte_to_swp_entry(pte).val,
+						folio->swap.val);
+			}
+		}
+	}
+	folio_unlock(folio);
+
+	if (!ok)
+		return zero;
+	*out_folio = folio;
+
+	return folio->swap;
+}
+
+/* Round-trip: swap-out through the real guard, read the pattern back
+ * through a real fault (the CORTEN_DISP_SWAPIN transaction).  Requires
+ * a swap device; design-skips on KUnit boots without one.
+ */
+static void corten_fault_test_swap_roundtrip(struct kunit *test)
+{
+	struct ft_mm *t;
+	unsigned long addr = FT_BASE + 3 * PAGE_SIZE;
+	struct folio *folio;
+	swp_entry_t entry;
+	struct corten_pte_meta m;
+	pte_t *ptep, pte;
+	void *kaddr;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "swap transaction requires corten=on");
+	if (!ft_swap_up())
+		kunit_skip(test, "swap round-trip requires a swap area");
+
+	t = ft_setup(test);
+
+	entry = ft_swap_out(test, t, addr, &folio);
+	KUNIT_ASSERT_TRUE(test, entry.val != 0);
+
+	/* Writeback through the swap path (the folio is dirty).
+	 * swap_writeout() unlocks the folio on every path, like the
+	 * shrink's pageout() does.
+	 */
+	{
+		struct swap_iocb *plug = NULL;
+
+		folio_lock(folio);
+		KUNIT_ASSERT_EQ(test, swap_writeout(folio, &plug), 0);
+		if (plug)
+			swap_write_unplug(plug);
+		folio_wait_writeback(folio);
+	}
+
+	/* The readback fault: dispatch CORTEN_SWAPPED -> SWAPIN. */
+	ret = ft_write_fault(t, addr);
+	KUNIT_EXPECT_EQ(test, ret, 0);
+
+	/* Resident again, content intact, metadata MAPPED with the
+	 * contract perm, LRU still untouched (DEV-10).
+	 */
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	kaddr = kmap_local_page(pte_page(pte));
+	KUNIT_EXPECT_EQ(test, ((u8 *)kaddr)[0], 0x5c);
+	KUNIT_EXPECT_EQ(test, ((u8 *)kaddr)[PAGE_SIZE / 2], 0x5c);
+	kunmap_local(kaddr);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+	KUNIT_EXPECT_GE(test, ft_named_counter(test, "swapins"), 1);
+
+	/* A write fault takes the RESTORE path (perm W, !SHARED), not a
+	 * fresh allocation: the readback page is the one serving.
+	 */
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+}
+
+/* The consumer face (spec D7): a zap over a swapped-out slot releases
+ * the entry (free_swap_and_cache) and scrubs the metadata.  The
+ * proof-of-release is swap_duplicate() failing on the freed entry.
+ */
+static void corten_fault_test_swap_zap_free(struct kunit *test)
+{
+	struct ft_mm *t;
+	unsigned long addr = FT_BASE + 4 * PAGE_SIZE;
+	struct folio *folio;
+	swp_entry_t entry;
+	struct corten_arena *ar;
+	struct corten_pte_meta m;
+
+	(void)folio;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "swap transaction requires corten=on");
+	if (!ft_swap_up())
+		kunit_skip(test, "swap zap test requires a swap area");
+
+	t = ft_setup(test);
+	entry = ft_swap_out(test, t, addr, &folio);
+	KUNIT_ASSERT_TRUE(test, entry.val != 0);
+	/* The swapcache owns the folio now (the PTE reference was the
+	 * transaction's drop); the test holds no reference.
+	 */
+
+	/* munmap-route the window (chunk unmap, KEEP_PERM). */
+	ar = corten_arena_lookup_get(t->mm, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_unmap_chunk(t->mm, ar, addr, PAGE_SIZE),
+			0);
+	percpu_ref_put(&ar->active);
+
+	/* Entry gone (no leak), SWAPENTS back to zero, metadata reset
+	 * with the KEEP_PERM contract.
+	 */
+	KUNIT_EXPECT_LT(test, swap_duplicate(entry), 0);
+	KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 0);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+	KUNIT_EXPECT_TRUE(test, corten_swap_decode(&m).val == 0);
+	KUNIT_EXPECT_GE(test, ft_named_counter(test, "zap_swap_frees"), 1);
+}
+
+/* The mprotect consumer over a Swapped slot (spec D7): pure-metadata
+ * perm rewrite, the swap PTE untouched, the pending perm recorded for
+ * the swap-in to honor.  Synthetic entry bits only -- nothing here
+ * dereferences the swap device, so the case runs without swap.
+ */
+/* Teardown for the hand-shaped swapped slot: runs from the kunit
+ * action list, so it executes even when an assertion aborts the body
+ * mid-shape (a leftover swap PTE would reach the mm teardown's zap and
+ * free_swap_and_cache() the synthetic entry).
+ */
+struct ft_swap_shape {
+	struct ft_mm *t;
+	unsigned long addr;
+	bool pte_swapped;
+	bool meta_swapped;
+};
+
+static void ft_swap_shape_cleanup(void *ctxp)
+{
+	struct ft_swap_shape *c = ctxp;
+	struct corten_txn txn;
+	pte_t *ptep;
+
+	if (c->pte_swapped) {
+		ptep = ft_pte(c->t, c->addr);
+		if (ptep) {
+			ptep_get_and_clear(c->t->mm, c->addr, ptep);
+			pte_unmap(ptep);
+		}
+		add_mm_counter(c->t->mm, MM_SWAPENTS, -1);
+	}
+	if (c->meta_swapped &&
+	    !corten_lock_range(c->t->mm, c->addr, PAGE_SIZE, &txn)) {
+		corten_unmap(&txn, c->addr, PAGE_SIZE, CORTEN_UNMAP_KEEP_PERM);
+		corten_unlock(&txn);
+	}
+}
+
+static void corten_fault_test_swap_mprotect_pending(struct kunit *test)
+{
+	struct ft_swap_shape *c;
+	unsigned long addr = FT_BASE + 5 * PAGE_SIZE;
+	pte_t *ptep, pte, swp_pte;
+	struct corten_txn txn;
+	struct corten_pte_meta sm, m;
+	struct folio *folio;
+	swp_entry_t entry = swp_entry(1, 0x23);
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "real fault chain requires corten=on");
+	c = kunit_kzalloc(test, sizeof(*c), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, c);
+	c->addr = addr;
+	c->t = ft_setup(test);
+	/* Registered AFTER ft_setup(): cleanup actions run in reverse
+	 * registration order, so this runs while the test mm is still
+	 * alive (ft_mm_destroy runs last).
+	 */
+	kunit_add_action(test, ft_swap_shape_cleanup, c);
+
+	/* The route serves MODE-process takeover (mode_enter first, the
+	 * same gate the mprotect_pte case uses).
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(c->t->mm), 0);
+	KUNIT_ASSERT_EQ(test, ft_mark(c->t, addr, PAGE_SIZE, FT_PERM_RW), 0);
+	KUNIT_ASSERT_EQ(test, ft_write_fault(c->t, addr), 0);
+
+	/* Shape the swapped slot by hand: resident PTE out, synthetic
+	 * swap PTE in, metadata CORTEN_SWAPPED.  In production only the
+	 * swap-out transaction produces this pair; the single thread
+	 * needs no ptl.  The synthetic entry is never dereferenced by
+	 * the kernel while the shape is up.
+	 */
+	ptep = ft_pte(c->t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get_and_clear(c->t->mm, addr, ptep);
+	pte_unmap(ptep);
+	KUNIT_ASSERT_TRUE(test, pte_present(pte));
+	swp_pte = swp_entry_to_pte(entry);
+	ptep = ft_pte(c->t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	set_pte_at(c->t->mm, addr, ptep, swp_pte);
+	pte_unmap(ptep);
+	add_mm_counter(c->t->mm, MM_SWAPENTS, 1);
+	c->pte_swapped = true;
+
+	folio = page_folio(pte_page(pte));
+	folio_remove_rmap_pte(folio, folio_page(folio, 0), c->t->vma);
+	add_mm_counter(c->t->mm, MM_ANONPAGES, -1);
+	folio_put(folio);
+
+	KUNIT_ASSERT_EQ(test, corten_lock_range(c->t->mm, addr, PAGE_SIZE,
+						&txn), 0);
+	memset(&sm, 0, sizeof(sm));
+	sm.state = CORTEN_SWAPPED;
+	sm.perm = FT_PERM_RW;
+	corten_swap_encode(&sm, entry);
+	KUNIT_EXPECT_EQ(test, corten_swap_out(&txn, addr, &sm), 0);
+	corten_unlock(&txn);
+	c->meta_swapped = true;
+
+	/* The mprotect route records the pending perm on the Swapped
+	 * slot and never touches the PTE (spec D7).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mprotect_route(c->t->mm, addr, PAGE_SIZE,
+						    PROT_READ, -1), 1);
+	KUNIT_EXPECT_EQ(test, ft_meta(c->t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_SWAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_USER);
+	KUNIT_EXPECT_EQ(test, corten_swap_decode(&m).val, entry.val);
+
+	ptep = ft_pte(c->t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_EQ(test, pte_val(pte), pte_val(swp_pte));
+
+	/* Swap-in parity spot check: the SWAPIN classifier would read
+	 * the pending perm -- covered by the dispatch table; here the
+	 * mprotect route is the consumer under test.
+	 */
+}
+
 static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_dispatch),
 	KUNIT_CASE(corten_fault_test_fig8_cow),
@@ -2530,6 +2909,10 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_punch_head),
 	KUNIT_CASE(corten_fault_test_rmap_guard),
 	KUNIT_CASE(corten_fault_test_reap_skip),
+	KUNIT_CASE(corten_fault_test_swap_encode),
+	KUNIT_CASE(corten_fault_test_swap_roundtrip),
+	KUNIT_CASE(corten_fault_test_swap_zap_free),
+	KUNIT_CASE(corten_fault_test_swap_mprotect_pending),
 	{}
 };
 

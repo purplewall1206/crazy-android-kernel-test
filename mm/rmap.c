@@ -1874,23 +1874,43 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 	int ptes = 0;
 
 	/*
-	 * CortenMM (M6.T1, M6_RMAP_SPEC.md sec 2.1 D1 / sec 1.3 V2): arena
-	 * PTEs are transaction property and reclaim must never write them
-	 * bare -- the metadata records what a zap does not (INV6/INV7).
-	 * Hand every shadow-VMA hit to the transaction slow path: false
-	 * means declined, so refuse the folio -- try_to_unmap() reports
-	 * "still mapped" and the caller (shrink_folio_list, hwpoison)
-	 * keeps the page resident, the same kswapd-skips-it posture the
-	 * missing LRU anchor produced, now enforced at the reachable
-	 * entry.  M6.T2's swap-out transaction returns true here and the
-	 * walk then reports success for this VMA without touching
-	 * page_vma_mapped_walk().  Checked before the notifier range:
-	 * the refusal writes nothing, so secondary-MMU users see nothing.
+	 * CortenMM (M6.T1/M6.T2, M6_RMAP_SPEC.md sec 2.1 D1 / sec 1.3 V2):
+	 * arena PTEs are transaction property and reclaim must never write
+	 * them bare -- the metadata records what a zap does not (INV6/INV7).
+	 * The prefilter refuses every shape the swap-out transaction
+	 * cannot take (hwpoison, mlock, pin, no swap entry, order != 0);
+	 * the walker then reports "still mapped" and the caller keeps the
+	 * page resident.  The completion arm (M6.T2) swaps the page out
+	 * transactionally and reports success for this VMA without
+	 * touching page_vma_mapped_walk().  The prefilter writes nothing,
+	 * so it stays ahead of the notifier range and secondary-MMU users
+	 * see nothing on a decline; the completion arm writes PTEs and
+	 * therefore runs INSIDE the invalidate window (R6-2), with the
+	 * deferred-flush bookkeeping done after it returns (R6-1: the
+	 * batching statics are rmap.c-local; registering after the
+	 * transaction preserves the upstream happens-after order, both
+	 * flushes are address-keyed, and the swap PTE installed in
+	 * between is read only under the ptl the transaction holds).
 	 */
 	if (corten_enabled_static() && (vma->vm_flags & VM_CORTEN)) {
-		if (corten_rmap_unmap_one(folio, vma, address, flags))
-			return true;
-		return false;
+		pte_t corten_pte;
+		bool swapped;
+
+		if (!corten_rmap_unmap_one(folio, vma, address, flags, false))
+			return false;
+
+		range.end = vma_address_end(&pvmw);
+		mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, mm,
+					address, range.end);
+		mmu_notifier_invalidate_range_start(&range);
+		swapped = corten_rmap_swap_out(folio, vma, address,
+					       should_defer_flush(mm, flags),
+					       &corten_pte);
+		mmu_notifier_invalidate_range_end(&range);
+		if (swapped && should_defer_flush(mm, flags))
+			set_tlb_ubc_flush_pending(mm, corten_pte, address,
+						  address + PAGE_SIZE);
+		return swapped;
 	}
 
 	/*
@@ -2329,7 +2349,12 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 	 * future door-opener, counted in rmap_rejects.
 	 */
 	if (corten_enabled_static() && (vma->vm_flags & VM_CORTEN)) {
-		if (corten_rmap_unmap_one(folio, vma, address, flags))
+		/* The migrate caller has no completion arm: the ttu flags
+		 * cannot distinguish it from a plain unmap (migrate.c
+		 * passes TTU_BATCH_FLUSH/0), so the caller says so.
+		 * corten_rmap_unmap_one() refuses it (OQ-M6-3), counted.
+		 */
+		if (corten_rmap_unmap_one(folio, vma, address, flags, true))
 			return true;
 		return false;
 	}

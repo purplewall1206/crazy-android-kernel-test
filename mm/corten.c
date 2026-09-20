@@ -42,6 +42,7 @@
 #include <linux/xarray.h>
 
 #include "corten.h"
+#include "corten_arena.h"	/* corten_arena_evict_pid() (M6.T2) */
 
 /*
  * corten=on enables the hooks at boot (default off).  There is deliberately
@@ -1264,6 +1265,58 @@ int corten_mark(struct corten_txn *txn, unsigned long start, unsigned long len,
 }
 
 /**
+ * corten_swap_out - see include/linux/corten.h (M6.T2, spec D1/D6).
+ */
+int corten_swap_out(struct corten_txn *txn, unsigned long addr,
+		    const struct corten_pte_meta *meta)
+{
+	struct corten_pte_meta *m;
+	unsigned long end;
+	int ret;
+
+	if (unlikely(!meta))
+		return -EINVAL;
+	if (unlikely(meta->state != CORTEN_SWAPPED))
+		return -EINVAL;
+	if (unlikely(meta->perm & ~CORTEN_PERM_ALL))
+		return -EINVAL;
+	/* The swap-out scrubs the COW flags: the fork-shared shape is
+	 * refused by the caller (OQ-M6-2), so a Swapped slot never
+	 * carries SHARED/WRITABLE and corten_mark()'s WRITABLE rule
+	 * cannot apply.
+	 */
+	if (unlikely(meta->flags))
+		return -EINVAL;
+
+	ret = corten_txn_subrange(txn, addr, PAGE_SIZE, &end);
+	if (unlikely(ret))
+		return ret;
+
+	/* Validate before writing (transaction = all-or-nothing). */
+	m = corten_txn_meta(txn, addr);
+	if (IS_ERR(m))
+		return PTR_ERR(m);
+	if (!m)
+		return -ENOENT;
+	/* Only a content-carrying slot can swap out. */
+	if (m->state != CORTEN_MAPPED)
+		return -EINVAL;
+
+	ret = corten_meta_ensure_locked(txn->covering);
+	if (unlikely(ret))
+		return ret;
+
+	m = corten_txn_meta(txn, addr);
+	if (IS_ERR(m))
+		return PTR_ERR(m);
+	if (unlikely(!m))
+		return -ENOMEM;
+
+	*m = *meta;
+	return 0;
+}
+
+/**
  * corten_unmap - see include/linux/corten.h.
  */
 int corten_unmap(struct corten_txn *txn, unsigned long start,
@@ -1468,6 +1521,62 @@ static int corten_arena_stats_show(struct seq_file *m, void *v)
 }
 DEFINE_SHOW_ATTRIBUTE(corten_arena_stats);
 
+/*
+ * M6.T2 eviction driver control (spec slice table: the debugfs
+ * "evict N pages" entry).  Write "<pid> <nr>": pick up to @nr resident,
+ * unshared arena pages of @pid and push them through the upstream
+ * reclaim list (folio_alloc_swap -> try_to_unmap -> the swap-out
+ * transaction -> swap_writeout).  The result is read back from the
+ * swapped_out line of arena_stats.  Write-only, root-only (debugfs is
+ * mode 0700); the real pressure channel is M6.T3's shrinker.
+ */
+static ssize_t corten_evict_write(struct file *file, const char __user *ubuf,
+				  size_t count, loff_t *ppos)
+{
+	char kbuf[32];
+	unsigned long long pid, nr;
+	char *end;
+	int ret;
+
+	if (*ppos || count >= sizeof(kbuf))
+		return count >= sizeof(kbuf) ? -EINVAL : 0;
+	if (copy_from_user(kbuf, ubuf, count))
+		return -EFAULT;
+	kbuf[count] = '\0';
+
+	/* "<pid> <nr>": two decimal fields separated by one blank
+	 * (kstrtoull is strict, so split before parsing and drop the
+	 * trailing newline).
+	 */
+	strreplace(kbuf, '\n', '\0');
+	end = strchr(kbuf, ' ');
+	if (!end)
+		return -EINVAL;
+	*end = '\0';
+	pid = 0;
+	nr = 0;
+	if (kstrtoull(kbuf, 10, &pid))
+		return -EINVAL;
+	end++;
+	while (*end == ' ')
+		end++;
+	if (kstrtoull(end, 10, &nr) || nr == 0 || nr > INT_MAX)
+		return -EINVAL;
+
+	ret = corten_arena_evict_pid((pid_t)pid, (int)nr);
+	if (ret < 0)
+		return ret;
+
+	*ppos += count;
+	return count;
+}
+
+static const struct file_operations corten_evict_fops = {
+	.owner		= THIS_MODULE,
+	.write		= corten_evict_write,
+	.llseek		= noop_llseek,
+};
+
 /* Shared KUnit infrastructure (mm/corten.h): any of the three test
  * objects may drive the in-memory debugfs render.
  */
@@ -1549,6 +1658,10 @@ static int __init corten_debugfs_init(void)
 	debugfs_create_file("arenas", 0444, dir, NULL, &corten_arenas_fops);
 	debugfs_create_file("arena_stats", 0444, dir, NULL,
 			    &corten_arena_stats_fops);
+	/* M6.T2: the minimal shrink stub -- manual eviction of arena
+	 * pages (spec slice table; the pressure channel is M6.T3).
+	 */
+	debugfs_create_file("evict", 0200, dir, NULL, &corten_evict_fops);
 
 	return 0;
 }

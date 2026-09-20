@@ -51,6 +51,7 @@
 #include <linux/errno.h>
 #include <linux/hugetlb.h>
 #include <linux/memcontrol.h>
+#include <linux/mempolicy.h>
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
 #include <linux/mman.h>
@@ -68,6 +69,7 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/swap.h>
+#include <linux/swapops.h>	/* swp_entry_to_pte()/pte_swp_* (M6.T2) */
 #include <linux/uaccess.h>
 
 #include <asm/tlb.h>
@@ -77,6 +79,7 @@
 
 #include "corten.h"		/* corten_meta_ensure_locked() */
 #include "corten_arena.h"	/* S4-S7 internal interface */
+#include "swap.h"		/* swap_writeout/readahead (M6.T2) */
 #include "vma.h"		/* __split_vma() (punch surgery, D-G'' B1) */
 
 #ifdef CONFIG_ANON_VMA_NAME
@@ -195,13 +198,31 @@ static void corten_arena_note_zap_pinned(void)
  * walkers that found an arena page and were refused.  Global aggregates
  * like the route counters above: the walker's mm may die at any moment
  * and debugfs cannot enumerate per-mm states.  A non-zero reap_skips is
- * the OOM-pressure evidence; rmap_rejects must stay zero on every boot
- * where reclaim cannot reach arena folios -- it counting on a kswapd/
- * migration run means the structural "never on the LRU" gate was opened
- * by someone and the guard caught it (risk R6-3's tripwire).
+ * the OOM-pressure evidence.
+ *
+ * M6.T2 re-scopes rmap_rejects: the ttu guard gained the swap-out
+ * completion arm, so reclaim legitimately reaches arena folios now
+ * (swapped_out is the evidence).  The counter is the per-shape
+ * refuse-and-keep tally -- hwpoison, migration caller, mlock, pin,
+ * folio without a swap entry, order != 0 -- where the walker declines
+ * the folio and it stays resident.
  */
 static atomic_long_t corten_nr_reap_skips;	/* oom_reaper shadow-VMA skips */
 static atomic_long_t corten_nr_rmap_rejects;	/* ttu walker refusals (V2) */
+/* M6.T2 swap transaction observability (M6_RMAP_SPEC.md sec 2.1 D1/D5):
+ * swapped_out/swapins are the zram round-trip evidence the guest
+ * acceptance reads; swapin_retries counts unlock/relock re-queries of
+ * the swap-in transaction (every "world changed while unlocked" race),
+ * swapin_heals the "a bare writer already installed a present PTE"
+ * self-repair (the swapoff-parity shape), zap_swap_frees the entries
+ * released by the consumer-side zaps.  Global atomics like the
+ * reclaim-path counters: the walker's mm may die at any moment.
+ */
+static atomic_long_t corten_nr_swapped_out;
+static atomic_long_t corten_nr_swapins;
+static atomic_long_t corten_nr_swapin_retries;
+static atomic_long_t corten_nr_swapin_heals;
+static atomic_long_t corten_nr_zap_swap_frees;
 /* M4.T1 magazine observability: segments claimed (one per cpu per mm,
  * amortized over CORTEN_VA_SEG_FRAMES allocations), frames skipped at
  * allocation because a punch erased their reserve markers (they are
@@ -1182,6 +1203,17 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_reap_skips));
 	seq_printf(m, "rmap_rejects        %ld\n",
 		   atomic_long_read(&corten_nr_rmap_rejects));
+	/* M6.T2 swap transaction (spec sec 2.1 D1/D5). */
+	seq_printf(m, "swapped_out         %ld\n",
+		   atomic_long_read(&corten_nr_swapped_out));
+	seq_printf(m, "swapins             %ld\n",
+		   atomic_long_read(&corten_nr_swapins));
+	seq_printf(m, "swapin_retries      %ld\n",
+		   atomic_long_read(&corten_nr_swapin_retries));
+	seq_printf(m, "swapin_heals        %ld\n",
+		   atomic_long_read(&corten_nr_swapin_heals));
+	seq_printf(m, "zap_swap_frees      %ld\n",
+		   atomic_long_read(&corten_nr_zap_swap_frees));
 }
 
 #ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
@@ -3178,8 +3210,16 @@ enum corten_disp corten_arena_dispatch(const struct corten_pte_meta *m,
 		if (write && (m->flags & CORTEN_PF_SHARED))
 			return CORTEN_DISP_COW_MAYBE;
 		return CORTEN_DISP_RESTORE;
-	case CORTEN_SWAPPED:			/* M6 producer: unreachable */
-	case CORTEN_FILE_MAPPED:		/* M4+ producers: unreachable */
+	case CORTEN_SWAPPED:
+		/* M6.T2 (spec D5): the page lives behind a swap entry --
+		 * the fault reads it back.  The handler needs the __resv
+		 * payload and its own unlock/relock cycle (swap cache
+		 * lookups and I/O sleeps, INV3 forbids both under the
+		 * desc lock), so the classifier only routes; see
+		 * corten_arena_swap_in().
+		 */
+		return CORTEN_DISP_SWAPIN;
+	case CORTEN_FILE_MAPPED:	/* M4+ producers: unreachable */
 	case CORTEN_SHARED_ANON:
 		/* Deliberately silent here: this is a pure classifier and
 		 * the dispatch-table KUnit case drives it with every state
@@ -3367,6 +3407,13 @@ struct corten_fault_ctx {
 					  * pre-break (M5.T3)
 					  */
 	bool			instruction;
+	bool			swapin;	/* a swap-in ran in some attempt:
+					 * widens the Fig.7 retry budget to
+					 * 2+2 (spec D5): the unlocked
+					 * re-validation of the swap-in
+					 * transaction spends one extra
+					 * round when it loses a race
+					 */
 	struct pt_regs		*regs;
 };
 
@@ -3847,6 +3894,376 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 }
 
 /*
+ * M6.T2 swap-in (spec sec 2.1 D5): the fault-side reverse of the
+ * swap-out transaction.  fault_once() calls it right after releasing the
+ * covering desc write lock: reading the page back sleeps (swap cache,
+ * readahead, zram I/O, folio lock) and the desc lock is a BH rwlock --
+ * no sleeping under it (INV3).  The handler runs its own lock cycles:
+ *
+ *   lookup/read the entry's folio (swap cache, cluster readahead) ->
+ *   folio_lock -> re-lock the range -> re-query -> commit PTE + rmap +
+ *   counters + metadata under ONE transaction -> unlock -> swap_free().
+ *
+ * Every "the world changed while unlocked" outcome (the entry replaced
+ * or freed by a concurrent zap, the PTE written by a racing fault, the
+ * window re-punched) re-queries to a different metadata shape and
+ * answers -EAGAIN: the fault_once retry budget re-dispatches from the
+ * query (Fig. 7), so a stale entry is never dereferenced past the
+ * re-validation.  Counted (swapin_retries).
+ *
+ * Why the full transaction instead of falling back to the legacy
+ * do_swap_page(): the fallback would need a post-legacy metadata sync
+ * glue site INSIDE handle_mm_fault(), and even with it the Swapped
+ * metadata would trail the legacy PTE store -- a window (and, if the
+ * legacy funnel takes the do_anonymous_page branch, a permanent shape)
+ * of Swapped-meta over a none PTE whose next fault answers a zero page
+ * over swapped-out content.  The transaction keeps the metadata and the
+ * PTE in one critical section, so every lock boundary exposes a
+ * consistent pair (PS-B2; the swap PTE stays intact until the commit).
+ *
+ * Mirrors do_swap_page() (mm/memory.c) for the order-0, non-KSM,
+ * uffd-less, through-the-swap-cache shape.  Arena-specific deviations,
+ * each deliberate:
+ *   - the SWP_SYNCHRONOUS direct shape (alloc + memcg charge +
+ *     swapcache_prepare serialization + swap_read_folio) instead of the
+ *     swap-cache/readahead flavor: __read_swap_cache_async() batches
+ *     its folios onto the LRU (folio_add_lru(), swap_state.c:498) and
+ *     the legacy machinery expects swapin folios to be
+ *     LRU-reclaimable -- arena pages are never LRU-anchored (DEV-10)
+ *     and the reclaim guards refuse them, so a batched cache folio
+ *     became a reclaim-invisible zombie the MGLRU still aged (the
+ *     lru_gen/freelist poison of the first T2 guest run).  zram is a
+ *     synchronous device and the full-reclaim shape leaves exactly the
+ *     PTE's reference on the entry, so the direct read covers the
+ *     common case without touching page tables (no fabricated
+ *     vm_fault, no PT-pinning problem in the lock-free phase).
+ *   - the folio is never added to the LRU (the DEV-10 red line, the
+ *     same omission as map_anon(); do_swap_page() adds it).
+ *   - exclusivity comes from the swap PTE's exclusive bit (recorded by
+ *     the swap-out transaction; fork's copy_nonpresent_pte() clears it
+ *     on one side, exactly as upstream).  A non-exclusive swap-in
+ *     re-arms the metadata SHARED record so every later write fault
+ *     takes the M5 COW transaction instead of a bare re-arm -- two
+ *     fork sharers of one entry can never both hold the write bit.
+ *   - the cache-copy try-free runs even on read faults: an arena folio
+ *     is off the LRU, so a swapcache copy left behind would be
+ *     uncollectable (upstream leaves the copy for LRU reclaim).
+ */
+static int corten_arena_swap_in(struct corten_fault_ctx *ctx,
+				const struct corten_pte_meta *m)
+{
+	struct mm_struct *mm = ctx->mm;
+	struct vm_area_struct *vma;
+	struct folio *folio;
+	struct swap_info_struct *si;
+	void *shadow;
+	struct corten_txn txn;
+	struct corten_pte_meta m2, nm;
+	struct page *page;
+	swp_entry_t entry;
+	unsigned long deadline;
+	pmd_t *pmdp;
+	pte_t *ptep, cur, newpte;
+	spinlock_t *ptl;
+	rmap_t rmap_flags = RMAP_NONE;
+	bool need_clear_cache = false;
+	bool exclusive = true;
+	int ret;
+
+	vma = ctx->vma ? ctx->vma : corten_arena_shadow_vma(ctx->ar);
+	if (!vma)
+		return -EFAULT;
+
+	entry = corten_swap_decode(m);
+	if (unlikely(!entry.val))
+		return -EFAULT;
+
+	/* Prevent swapoff from happening to us (do_swap_page()). */
+	si = get_swap_device(entry);
+	if (unlikely(!si))
+		return -EFAULT;
+
+	/*
+	 * Lock-free phase: the DIRECT swapin of do_swap_page()'s
+	 * SWP_SYNCHRONOUS_IO branch (zram is a synchronous device and the
+	 * full-reclaim shape leaves exactly the PTE's reference on the
+	 * entry, __swap_count() == 1).  The swap-cache/readahead flavor
+	 * is NOT usable for arena pages: __read_swap_cache_async()
+	 * batches its folios onto the LRU (folio_add_lru(),
+	 * swap_state.c:498) and the whole legacy machinery expects
+	 * swapin folios to be LRU-reclaimable -- arena pages are never
+	 * LRU-anchored (DEV-10) and the reclaim guards refuse them, so
+	 * a batched cache folio turned into a reclaim-invisible zombie
+	 * the MGLRU still aged (the lru_gen/freelist poison of the first
+	 * T2 guest run).  The direct folio is charged with the swap
+	 * entry's memcg charge (memcg1_swapin()) and never LRU'd.
+	 */
+	deadline = jiffies + 5 * HZ;
+retry:
+	folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE | __GFP_CMA, 0, vma,
+				ctx->addr);
+	if (!folio) {
+		put_swap_device(si);
+		return -ENOMEM;
+	}
+	if (mem_cgroup_swapin_charge_folio(folio, mm, GFP_KERNEL, entry)) {
+		folio_put(folio);
+		put_swap_device(si);
+		return -ENOMEM;
+	}
+	__folio_set_locked(folio);
+	__folio_set_swapbacked(folio);
+
+	/* Serialize against a parallel swapin of the same entry (fork
+	 * shares swap entries between mm's): the cache flag doubles as
+	 * the in-flight mark, swapcache_clear() releases it below.
+	 */
+	if (swapcache_prepare(entry, 1)) {
+		folio_unlock(folio);
+		folio_put(folio);
+		if (time_after(jiffies, deadline)) {
+			put_swap_device(si);
+			return -EAGAIN;
+		}
+		schedule_timeout_uninterruptible(1);
+		goto retry;
+	}
+	need_clear_cache = true;
+
+	memcg1_swapin(entry, 1);
+	shadow = swap_cache_get_shadow(entry);
+	if (shadow)
+		workingset_refault(folio, shadow);
+
+	/* No folio_add_lru(): arena pages stay off the LRU (DEV-10) --
+	 * the deliberate omission upstream's sync branch does make.
+	 */
+	/* Provide the entry for swap_read_folio(). */
+	folio->swap = entry;
+	swap_read_folio(folio, NULL);
+	folio->private = NULL;
+
+	count_vm_event(PGMAJFAULT);
+	count_memcg_event_mm(mm, PGMAJFAULT);
+
+	/* The folio is ours end-to-end (allocated, locked and read in the
+	 * direct phase above); only the poisoned-read answer remains.
+	 */
+	page = folio_page(folio, 0);
+	if (unlikely(PageHWPoison(page))) {
+		/* Poisoned swap-in pages are kept to kill their owner
+		 * (do_swap_page()); answer the loud fault.
+		 */
+		ret = -EFAULT;
+		goto out_clear;
+	}
+
+	folio_throttle_swaprate(folio, GFP_KERNEL);
+
+	/* Re-lock: everything past here runs inside one transaction. */
+	ret = corten_lock_range(mm, ctx->addr, PAGE_SIZE, &txn);
+	if (ret) {
+		ret = ret == -EAGAIN ? -EAGAIN : -ENOMEM;
+		goto out_put;
+	}
+	if (corten_query(&txn, ctx->addr, &m2)) {
+		ret = -EAGAIN;
+		goto out_unlock_txn;
+	}
+	if (m2.state != CORTEN_SWAPPED ||
+	    corten_swap_decode(&m2).val != entry.val) {
+		/* The slot moved while unlocked (zap/other fault). */
+		atomic_long_inc(&corten_nr_swapin_retries);
+		ret = -EAGAIN;
+		goto out_unlock_txn;
+	}
+
+	if (corten_meta_ensure_locked(txn.covering)) {
+		ret = -ENOMEM;
+		goto out_unlock_txn;
+	}
+
+	pmdp = corten_arena_pmd(mm, ctx->addr);
+	if (!pmdp) {
+		ret = -EAGAIN;
+		goto out_unlock_txn;
+	}
+	ptep = pte_offset_map_lock(mm, pmdp, ctx->addr, &ptl);
+	if (!ptep) {
+		ret = -EAGAIN;
+		goto out_unlock_txn;
+	}
+
+	cur = ptep_get(ptep);
+	if (unlikely(pte_none(cur))) {
+		/* No producer of this shape: the swap PTE the swap-out
+		 * transaction installed cannot vanish without the zap
+		 * that also resets the metadata.
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		WARN_ON_ONCE(1);
+		ret = -EFAULT;
+		goto out_unlock_txn;
+	}
+	if (pte_present(cur)) {
+		if (!pte_special(cur) && pte_pfn(cur) == page_to_pfn(page)) {
+			/* A bare writer already installed the resident
+			 * page over our swap PTE: the swapoff parity
+			 * shape (unuse_pte() raced the unlocked phase).
+			 * Heal the metadata only -- the writer moved the
+			 * counters and the rmap -- and let the fault
+			 * re-dispatch against CORTEN_MAPPED.
+			 */
+			nm = m2;
+			nm.state = CORTEN_MAPPED;
+			ret = corten_map(&txn, ctx->addr, page, m2.perm,
+					 CORTEN_MAP_FORCE);
+			if (!ret)
+				ret = corten_mark(&txn, ctx->addr, PAGE_SIZE,
+						  &nm);
+			pte_unmap_unlock(ptep, ptl);
+			if (ret) {
+				WARN_ON_ONCE(1);
+				ret = -EFAULT;
+				goto out_unlock_txn;
+			}
+			atomic_long_inc(&corten_nr_swapin_heals);
+			ret = -EAGAIN;
+			goto out_unlock_txn;
+		}
+		/* Some other translation (zero page / foreign page):
+		 * re-dispatch from the query, the pure classifier owns
+		 * those shapes.
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		atomic_long_inc(&corten_nr_swapin_retries);
+		ret = -EAGAIN;
+		goto out_unlock_txn;
+	}
+	if (pte_to_swp_entry(cur).val != entry.val) {
+		/* A different (or re-encoded) swap entry: the slot was
+		 * re-swapped under us; re-dispatch.
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		atomic_long_inc(&corten_nr_swapin_retries);
+		ret = -EAGAIN;
+		goto out_unlock_txn;
+	}
+
+	if (unlikely(!folio_test_uptodate(folio))) {
+		/* The read failed (do_swap_page() answers SIGBUS).  The
+		 * arena fault layer has no SIGBUS action; MAPERR is the
+		 * loud counterpart (documented deviation).
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		ret = -EFAULT;
+		goto out_unlock_txn;
+	}
+
+	/* A fresh folio never exposed to the swapcache -> certainly
+	 * exclusive (do_swap_page()'s sync shape).  The write arming and
+	 * the SHARED re-arm below follow do_swap_page()'s exclusive
+	 * branch.
+	 */
+	exclusive = true;
+	rmap_flags |= RMAP_EXCLUSIVE;
+
+	/* Restore architecture metadata before swap_free() (upstream
+	 * ordering); a PTE reference is kept until the metadata commit
+	 * below, so the entry cannot be reused under the pair.
+	 */
+	/* Order-0 only (the swap-out transaction enforces it): @entry is
+	 * the folio entry; folio_swap() would be the identity here.
+	 */
+	arch_swap_restore(entry, folio);
+
+	add_mm_counter(mm, MM_ANONPAGES, 1);
+	add_mm_counter(mm, MM_SWAPENTS, -1);
+
+	newpte = mk_pte(page, corten_arena_perm_pgprot(vma, m2.perm));
+	if (pte_swp_soft_dirty(cur))
+		newpte = pte_mksoft_dirty(newpte);
+	if (exclusive && ctx->write && (m2.perm & CORTEN_PERM_WRITE))
+		newpte = pte_mkwrite(pte_mkdirty(newpte), vma);
+
+	/* No folio_add_lru(): arena pages stay off the LRU (DEV-10).
+	 * The fresh folio gets the new-anon rmap shape (upstream's
+	 * non-swapcache branch).
+	 */
+	folio_add_new_anon_rmap(folio, vma, ctx->addr, rmap_flags);
+	/* No TLB invalidate: the PTE was a swap entry (non-present), so
+	 * no CPU can hold a translation for it.
+	 */
+	set_ptes(mm, ctx->addr, ptep, newpte, 1);
+	update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
+	pte_unmap_unlock(ptep, ptl);
+
+	/* Metadata transition in the same transaction (Swapped -> Mapped
+	 * is the paper's legal fault transition).  corten_map() scrubs
+	 * the flags, so the non-exclusive shape re-arms SHARED (+ the
+	 * WRITABLE record the M5 mark rule demands) through corten_mark().
+	 */
+	nm = m2;
+	nm.state = CORTEN_MAPPED;
+	nm.flags = 0;
+	if (!exclusive) {
+		nm.flags = CORTEN_PF_SHARED;
+		if (nm.perm & CORTEN_PERM_WRITE)
+			nm.flags |= CORTEN_PF_WRITABLE;
+	}
+	ret = corten_map(&txn, ctx->addr, page, m2.perm, 0);
+	if (!ret && nm.flags)
+		ret = corten_mark(&txn, ctx->addr, PAGE_SIZE, &nm);
+	if (WARN_ON_ONCE(ret)) {
+		/* Impossible (the array was ensured above): the PTE and
+		 * counters are committed, the metadata still says
+		 * Swapped -- the heal branch of the next fault repairs
+		 * the pair.  No folio_put: the lookup reference IS the
+		 * PTE reference now (do_swap_page() accounting,
+		 * nr_pages - 1 == 0).
+		 */
+		corten_unlock(&txn);
+		folio_unlock(folio);
+		if (need_clear_cache)
+			swapcache_clear(si, entry, 1);
+		put_swap_device(si);
+		return -EFAULT;
+	}
+	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
+				CORTEN_ARENA_STAT_MAPPED);
+	corten_unlock(&txn);
+	atomic_long_inc(&corten_nr_swapins);
+
+	folio_unlock(folio);
+	/* The PTE's reference on the entry (upstream frees it under the
+	 * ptl before the install; the arena holds it through the
+	 * metadata commit instead -- strictly stronger, see above).
+	 */
+	swap_free(entry);
+
+	/* No folio_put(): the allocation reference IS the PTE reference
+	 * now (do_swap_page() accounting, nr_pages - 1 == 0); dropping it
+	 * would strip a reference from a still-mapped folio -- the
+	 * freelist-poison panic of the first T2 guest run.
+	 */
+	if (need_clear_cache)
+		swapcache_clear(si, entry, 1);
+	put_swap_device(si);
+	return 0;
+
+out_unlock_txn:
+	corten_unlock(&txn);
+out_clear:
+	if (need_clear_cache)
+		swapcache_clear(si, entry, 1);
+out_put:
+	folio_unlock(folio);
+	folio_put(folio);
+	put_swap_device(si);
+	return ret;
+}
+
+/*
  * One transaction attempt (sec 4.3 for(;;) body).  On entry ctx->folio is
  * the speculative allocation or NULL; on any return the epilogue of the
  * caller owns it (success transferred it -- see map_anon).
@@ -4009,6 +4426,20 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 	case CORTEN_DISP_COW_MAYBE:
 		ret = corten_arena_cow_write(ctx, &txn, &m);
 		break;
+	case CORTEN_DISP_SWAPIN:
+		/* M6.T2 (spec D5): the swap-in owns its lock cycles --
+		 * it releases @txn itself (I/O sleeps) and re-locks
+		 * inside.  -EFAULT is the loud broken-pair answer
+		 * (MAPERR), not a legacy fallback: falling back on a
+		 * Swapped slot would let the legacy funnel install a
+		 * zero page over swapped-out content.
+		 */
+		ctx->swapin = true;
+		corten_unlock(&txn);
+		ret = corten_arena_swap_in(ctx, &m);
+		if (ret == -EFAULT)
+			return CORTEN_F_MAPERR;
+		break;
 	case CORTEN_DISP_COW_COPY:
 		/* T1a: a write against a shared page whose contract is
 		 * read-only is a genuine permission fault (the page was
@@ -4023,7 +4454,7 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		corten_unlock(&txn);
 		return CORTEN_F_ACCERR;
 	case CORTEN_DISP_STUB:
-		/* M6 swap / M4+ shared-anon: M3 refuses loudly. */
+		/* M4+ shared-anon: M3 refuses loudly. */
 		WARN_ONCE(1, "corten: unhandled arena metadata state %u\n",
 			  m.state);
 		corten_unlock(&txn);
@@ -4142,8 +4573,14 @@ enum corten_fault_action corten_arena_user_fault(struct mm_struct *mm,
 
 	for (;;) {
 		st = corten_arena_fault_once(&ctx);
-		if (st != CORTEN_F_RETRY || ++tries >= 2)
-			break;	/* Fig.7 retry cap, x86 fault.c:1408 style */
+		if (st != CORTEN_F_RETRY ||
+		    ++tries >= (ctx.swapin ? 4 : 2))
+			break;	/* Fig.7 retry cap, x86 fault.c:1408 style;
+				 * the swap-in shape gets 2+2 (spec D5):
+				 * its unlocked re-validation spends one
+				 * extra round per lost race (counted:
+				 * swapin_retries)
+				 */
 
 		if (need_folio && !ctx.folio) {
 			struct folio *folio;
@@ -4269,8 +4706,9 @@ vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma,
 	if (st == CORTEN_F_HANDLED) {
 		for (;;) {
 			st = corten_arena_fault_once(&ctx);
-			if (st != CORTEN_F_RETRY || ++tries >= 2)
-				break;
+			if (st != CORTEN_F_RETRY ||
+			    ++tries >= (ctx.swapin ? 4 : 2))
+				break;	/* same swap-in budget as above */
 			if (need_folio && !ctx.folio) {
 				struct folio *folio;
 
@@ -4553,8 +4991,7 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 
 			if (!pte_none(oldpte)) {
 				/* Zero-page entries are pte_special()d and
-				 * not ours to release; swap entries cannot
-				 * exist in M3.
+				 * not ours to release.
 				 */
 				if (pte_present(oldpte) &&
 				    !pte_special(oldpte)) {
@@ -4596,6 +5033,36 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 					force = __tlb_remove_page_size(g, page, false, PAGE_SIZE);
 					if (force)
 						break;
+				} else if (!pte_present(oldpte)) {
+					/* M6.T2 (spec D7): a swap entry
+					 * the swap-out transaction
+					 * installed.  Release it --
+					 * free_swap_and_cache() also
+					 * reclaims a no-longer-shared
+					 * cache copy (R6-4: the
+					 * upstream primitive owns the
+					 * count symmetry) -- and drop
+					 * the SWAPENTS side; the
+					 * metadata reset below scrubs
+					 * the __resv payload.  Non-swap
+					 * !present entries (migration/
+					 * hwpoison markers) cannot be
+					 * produced on a shadow-VMA --
+					 * the ttu guard refuses those
+					 * shapes -- so warn loudly.
+					 */
+					swp_entry_t sentry;
+
+					sentry = pte_to_swp_entry(oldpte);
+					if (!non_swap_entry(sentry)) {
+						free_swap_and_cache(sentry);
+						add_mm_counter(mm,
+							       MM_SWAPENTS,
+							       -1);
+						atomic_long_inc(&corten_nr_zap_swap_frees);
+					} else {
+						WARN_ON_ONCE(1);
+					}
 				}
 			}
 
@@ -6056,12 +6523,18 @@ static int corten_arena_protect_window(struct mm_struct *mm,
 		 * the new perm -- the spec's "pending perm": the FRESH
 		 * fault gate must not resurrect the pre-mprotect arena
 		 * upper bound for pages nothing has faulted in yet.
-		 * STUB-family states (no M3 producer) are left alone.
+		 * CORTEN_SWAPPED joins the recorded set in M6.T2 (spec
+		 * D7): the perm rewrite is pure metadata (a swap PTE
+		 * carries no hardware permission bits), and the pending
+		 * perm takes effect when the swap-in transaction re-arms
+		 * the PTE from m2.perm.  STUB-family states (no M3
+		 * producer) are left alone.
 		 */
 		recorded = corten_query(txn, addr, &m) == 0;
 		if (recorded && (m.state == CORTEN_INVALID ||
 				 m.state == CORTEN_PRIVATE_ANON ||
-				 m.state == CORTEN_MAPPED)) {
+				 m.state == CORTEN_MAPPED ||
+				 m.state == CORTEN_SWAPPED)) {
 			nm = m;
 			if (nm.state == CORTEN_INVALID)
 				nm.state = CORTEN_PRIVATE_ANON;
@@ -6121,8 +6594,10 @@ flush_this:
 			}
 			*flush_end = addr + PAGE_SIZE;
 		}
-		/* !pte_present: no swap entries exist in M3; nothing to
-		 * re-protect.
+		/* !pte_present: M6.T2 -- a swap PTE has no permission
+		 * bits to rewrite; the pending perm is already recorded
+		 * above and takes effect at swap-in.  Nothing to
+		 * re-protect here.
 		 */
 		pte_unmap_unlock(ptep, ptl);
 	}
@@ -6917,49 +7392,28 @@ bool corten_oom_reap_skip_vma(struct vm_area_struct *vma)
 	return true;
 }
 
-/**
- * corten_rmap_unmap_one - reclaim-walker guard / transaction slow path
- * for one (folio, shadow-VMA) hit (V2, M6_RMAP_SPEC.md sec 2.1 D1).
- * @folio: the folio the walker wants to unmap.
- * @vma: the VMA the anon_vma walk found it in.
- * @address: the walk's start address inside @vma.
- * @flags: the walker's ttu_flags (unmap / migration / hwpoison shape).
+/*
+ * The M6.T2 prefilter for the ttu walkers (V2, spec sec 2.1 D1): refuse
+ * every shape the swap-out transaction cannot or must not take, before
+ * any lock or notifier traffic (the refusal writes nothing, so
+ * secondary-MMU users see nothing -- the T1 posture for the declined
+ * shapes is unchanged).
  *
- * Contract (spec D1): return true when this VMA side was fully handled
- * transactionally and the walker must report success without entering
- * page_vma_mapped_walk(); return false when the walker must abort this
- * VMA's walk without having written anything (folio stays resident, its
- * caller -- shrink_folio_list, migration, hwpoison -- treats it as
- * still mapped and skips it).  The caller checks
- * corten_enabled_static() && VM_CORTEN before calling, so a false here
- * always means "declined".
+ * @migrate distinguishes the try_to_migrate_one() caller: the ttu_flags
+ * alone cannot (migrate.c passes plain TTU_BATCH_FLUSH/0, the same
+ * encoding an unmap uses).  Migration semantics (remap the PTE to a
+ * migration entry) is Stage-3 scope (OQ-M6-3) and is refused here; the
+ * isolation side of kernel migration never sees arena folios anyway
+ * (no LRU, compaction skips !LRU, migrate_pages is routed off).
  *
- * Stage 1 (this change) is the refusal arm only, for every flag shape:
- * the spec's completion arm would install a swap entry, but a plain
- * unmap-without-swap-entry (transaction zap + metadata INVALID)
- * *destroys content*, and "reclaim = data loss" is not a Stage-1
- * semantic -- the correct minimal behaviour is the same kswapd-skips-
- * it posture the missing LRU anchoring produced, just enforced at the
- * reachable entry instead of the structural one, so that a future
- * folio_add_lru() anywhere cannot silently reopen the door (risk
- * R6-3).  M6.T2 fills in the swap-out transaction (folio_alloc_swap()
- * + swap cache before the descriptor write lock per DEV-13 D4, PTE
- * swap-install + metadata CORTEN_SWAPPED inside it) and this function
- * starts returning true.
- *
- * Lock order: the walker holds the folio lock and a reference before
- * rmap_walk(); the eventual T2 transaction takes desc->lock(W, BH) >
- * ptl inside the mmu_notifier start/end window, so every new edge is
- * downstream of [folio_lock] in the DEV-13 sequence, none reversed.
- * The refusal arm takes no locks at all.
- *
- * Counted (rmap_rejects).
- *
- * Return: true = handled transactionally (never in Stage 1),
- * false = declined, walker aborts.
+ * Return: true = the shape is the plain exclusive-unmap swap-out and the
+ * walker must open its notifier window and call corten_rmap_swap_out();
+ * false = declined, the walker aborts this VMA without writing
+ * anything.  Counted (rmap_rejects) on every refusal.
  */
 bool corten_rmap_unmap_one(struct folio *folio, struct vm_area_struct *vma,
-			   unsigned long address, enum ttu_flags flags)
+			   unsigned long address, enum ttu_flags flags,
+			   bool migrate)
 {
 	if (!(vma->vm_flags & VM_CORTEN))
 		return false;
@@ -6968,6 +7422,467 @@ bool corten_rmap_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 	 * shadowize on a corten=on kernel, so no separate static-branch
 	 * read is needed in here.
 	 */
-	atomic_long_inc(&corten_nr_rmap_rejects);
-	return false;
+	if (migrate || (flags & TTU_HWPOISON) ||
+	    (!(flags & TTU_IGNORE_MLOCK) && (vma->vm_flags & VM_LOCKED)) ||
+	    folio_maybe_dma_pinned(folio) ||
+	    folio_nr_pages(folio) != 1 ||
+	    !folio_test_swapcache(folio)) {
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * The M6.T2 completion arm (spec sec 2.1 D1 steps 4-6): swap one arena
+ * page out transactionally.  Called from try_to_unmap_one() inside its
+ * mmu_notifier invalidate window (R6-2), still under the walker's folio
+ * lock and reference; the swap entry and its cache membership were
+ * created by the caller before try_to_unmap() (shrink_folio_list's
+ * folio_alloc_swap(), or the eviction driver's), so the transaction
+ * itself only takes desc->lock(W, BH) > ptl -- DEV-13 direction, zero
+ * new lock classes inside the critical section (D4), no allocation
+ * except the GFP_NOWAIT-proof metadata (already ensured by the
+ * producing fault).
+ *
+ * The PTE work mirrors try_to_unmap_one()'s swap-entry branch
+ * (rmap.c:2120-2201) bit for bit -- swap_duplicate(), arch_unmap_one(),
+ * the anon-exclusive try-share, the mmlist registration, the
+ * ANONPAGES/SWAPENTS counter move, the exclusive/soft-dirty/uffd-wp
+ * encoding -- with one deliberate ordering difference: the metadata
+ * transition (corten_swap_out()) commits under the same ptl, before the
+ * entry's PTE reference is shared with anybody.  The set_pte_at() below
+ * is the corten_glue_pte_write whitelist entry #2 (docs/DESIGN.md sec 3):
+ * a legacy-path writer, accepted because every write it makes is
+ * mirrored into the metadata by the transaction that contains it.
+ *
+ * @defer/@old_pte carry the walker's should_defer_flush() verdict out:
+ * when batching, the flush_tlb_range() is skipped and the walker does
+ * the upstream set_tlb_ubc_flush_pending() bookkeeping with the cleared
+ * PTE.  Registering after the transaction (instead of between the clear
+ * and the swap-PTE store as upstream does) is safe: both operations
+ * flush by address, the ordering requirement is
+ * register-happens-after-clear, and the swap PTE installed in between is
+ * read only through the ptl this function holds (R6-1).
+ *
+ * Every abort path restores the original PTE under the same ptl and
+ * reports false -- the folio stays resident, exactly the T1 posture.
+ *
+ * Return: true = swapped out (PTE holds @entry, metadata =
+ * CORTEN_SWAPPED with the entry encoded in __resv).
+ */
+bool corten_rmap_swap_out(struct folio *folio, struct vm_area_struct *vma,
+			  unsigned long address, bool defer, pte_t *old_pte)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	struct page *page = folio_page(folio, 0);
+	struct corten_pte_meta m, sm;
+	struct corten_txn txn;
+	bool anon_exclusive;
+	pmd_t *pmdp;
+	pte_t *ptep, pteval, swp_pte;
+	spinlock_t *ptl;
+	swp_entry_t entry = folio->swap;
+	int ret;
+
+	ret = corten_lock_range(mm, address, PAGE_SIZE, &txn);
+	if (unlikely(ret)) {
+		/* -EAGAIN/-ENOMEM/-ENOENT: the descriptor tree is in
+		 * transition (or the window was never tracked).  Not
+		 * ours to fix under reclaim; leave the folio mapped.
+		 */
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return false;
+	}
+	if (unlikely(corten_query(&txn, address, &m))) {
+		corten_unlock(&txn);
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return false;
+	}
+
+	/* The fork-shared shape is OQ-M6-2: both sides' entries would
+	 * need coordinated swap-out with COW-fault convergence.  A
+	 * shared slot keeps its page resident until the COW
+	 * transactions resolve it (or exit zaps it).
+	 */
+	if (m.state != CORTEN_MAPPED || (m.flags & CORTEN_PF_SHARED)) {
+		corten_unlock(&txn);
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return false;
+	}
+
+	pmdp = corten_arena_pmd(mm, address);
+	if (unlikely(!pmdp)) {
+		corten_unlock(&txn);
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return false;
+	}
+	ptep = pte_offset_map_lock(mm, pmdp, address, &ptl);
+	if (unlikely(!ptep)) {
+		corten_unlock(&txn);
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return false;
+	}
+
+	pteval = ptep_get(ptep);
+	if (unlikely(!pte_present(pteval) || pte_special(pteval) ||
+		     pte_pfn(pteval) != folio_pfn(folio))) {
+		/* Race loser: the page moved under the walker's feet
+		 * between the rmap walk and the transaction (fault
+		 * retry, zap, COW copy).  The metadata and whatever PTE
+		 * is there now form their own consistent pair -- just
+		 * get out.
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		corten_unlock(&txn);
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return false;
+	}
+
+	/* --- committed to the swap-out from here (mirrors rmap.c) --- */
+	anon_exclusive = PageAnonExclusive(page);
+
+	flush_cache_range(vma, address, address + PAGE_SIZE);
+	pteval = ptep_get_and_clear(mm, address, ptep);
+	if (!defer)
+		flush_tlb_range(vma, address, address + PAGE_SIZE);
+	/* @defer: the walker registers the deferred flush after this
+	 * transaction returns (set_tlb_ubc_flush_pending() is an
+	 * rmap.c static; see the R6-1 note in the header comment).
+	 */
+	if (pte_dirty(pteval))
+		folio_mark_dirty(folio);
+
+	if (unlikely(swap_duplicate(entry) < 0)) {
+		set_pte_at(mm, address, ptep, pteval);
+		pte_unmap_unlock(ptep, ptl);
+		corten_unlock(&txn);
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return false;
+	}
+	if (unlikely(arch_unmap_one(mm, vma, address, pteval) < 0)) {
+		swap_free(entry);
+		set_pte_at(mm, address, ptep, pteval);
+		pte_unmap_unlock(ptep, ptl);
+		corten_unlock(&txn);
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return false;
+	}
+	/* See folio_try_share_anon_rmap(): clear PTE first (done). */
+	if (unlikely(anon_exclusive &&
+		     folio_try_share_anon_rmap_pte(folio, page))) {
+		swap_free(entry);
+		set_pte_at(mm, address, ptep, pteval);
+		pte_unmap_unlock(ptep, ptl);
+		corten_unlock(&txn);
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return false;
+	}
+	if (unlikely(list_empty(&mm->mmlist))) {
+		spin_lock(&mmlist_lock);
+		if (list_empty(&mm->mmlist))
+			list_add(&mm->mmlist, &init_mm.mmlist);
+		spin_unlock(&mmlist_lock);
+	}
+	update_hiwater_rss(mm);
+	dec_mm_counter(mm, MM_ANONPAGES);
+	inc_mm_counter(mm, MM_SWAPENTS);
+
+	swp_pte = swp_entry_to_pte(entry);
+	if (anon_exclusive)
+		swp_pte = pte_swp_mkexclusive(swp_pte);
+	if (likely(pte_present(pteval))) {
+		if (pte_soft_dirty(pteval))
+			swp_pte = pte_swp_mksoft_dirty(swp_pte);
+		if (pte_uffd_wp(pteval))
+			swp_pte = pte_swp_mkuffd_wp(swp_pte);
+	}
+	/* Glue whitelist entry #2 (docs/DESIGN.md sec 3, DEV-11(b)): the
+	 * reclaim walker's swap-PTE install, contained and mirrored by
+	 * this transaction.
+	 */
+	set_pte_at(mm, address, ptep, swp_pte);
+	/* No pte_install_uffd_wp_if_needed(): userfaultfd is excluded at
+	 * shadowize (VM_UFFD_* rejected, arena.c:535), so no marker can
+	 * be pending for a shadow-VMA.
+	 */
+
+	folio_remove_rmap_ptes(folio, page, 1, vma);
+	folio_put_refs(folio, 1);
+
+	/* The metadata transition, same critical section: state
+	 * MAPPED -> SWAPPED, perm kept (the contract survives), COW
+	 * flags scrubbed (no shared page reaches this arm), the entry
+	 * encoded into __resv (spec D6).  corten_swap_out() cannot fail
+	 * here (the slot is MAPPED and the array was ensured by the
+	 * fault that mapped the page).
+	 */
+	sm.state = CORTEN_SWAPPED;
+	sm.perm = m.perm;
+	sm.flags = 0;
+	corten_swap_encode(&sm, entry);
+	if (WARN_ON_ONCE(corten_swap_out(&txn, address, &sm))) {
+		/* Unreachable; the PTE/counters are committed and the
+		 * metadata still says MAPPED -- the next fault of the
+		 * swap-in path heals the pair (counted), the reclaim
+		 * side still reports success.
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		corten_unlock(&txn);
+		*old_pte = pteval;
+		return true;
+	}
+	pte_unmap_unlock(ptep, ptl);
+	corten_unlock(&txn);
+
+	*old_pte = pteval;
+	atomic_long_inc(&corten_nr_swapped_out);
+	return true;
+}
+
+/*
+ * M6.T2 swapoff parity (spec sec 1.2 P12): unuse_pte() (swapfile.c) is a
+ * legacy PTE writer on shadow-VMAs -- the glue whitelist entry #3.  It
+ * reads a swap PTE, reads the page back from the device and re-installs
+ * a present PTE; without a metadata mirror the slot would stay
+ * CORTEN_SWAPPED behind a resident page (the swap-in path would then
+ * re-read an entry the PTE no longer references).  This helper commits
+ * the mirror BEFORE unuse_pte() takes its ptl, so the DEV-13 direction
+ * (desc write lock > ptl) holds and the swap-in self-heal below covers
+ * only the tiny race window between the two.
+ */
+int corten_swapin_sync_meta(struct mm_struct *mm, unsigned long addr,
+			    swp_entry_t entry, struct folio *folio)
+{
+	struct corten_txn txn;
+	struct corten_pte_meta m, nm;
+	int ret;
+
+	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+	if (ret)
+		return ret == -EAGAIN ? -EAGAIN : -ENOMEM;
+
+	if (corten_query(&txn, addr, &m) ||
+	    m.state != CORTEN_SWAPPED ||
+	    corten_swap_decode(&m).val != entry.val) {
+		/* Not a swapped arena slot (or already healed): the PTE
+		 * below belongs to a shape the legacy code fully owns.
+		 */
+		corten_unlock(&txn);
+		return 0;
+	}
+
+	nm = m;
+	nm.state = CORTEN_MAPPED;
+	nm.flags = 0;
+	ret = corten_map(&txn, addr, folio_page(folio, 0), m.perm,
+			 CORTEN_MAP_FORCE);
+	corten_unlock(&txn);
+	return ret;
+}
+
+/*
+ * M6.T2 eviction driver (spec slice table: the debugfs "evict N pages"
+ * entry -- T2's minimal shrink stub; the pressure channel, mm registry
+ * and victim aging are M6.T3 per spec D2).  Candidate selection walks
+ * the arenas' windows: metadata CORTEN_MAPPED (content, not the zero
+ * page), COW-unshared (OQ-M6-2), not DMA-pinned, present PTE -- and
+ * hands the picked folios to the upstream reclaim machinery
+ * (__reclaim_pages(): folio_alloc_swap -> try_to_unmap -> the swap-out
+ * transaction above -> swap_writeout -> __remove_mapping).  Reusing the
+ * upstream list-reclaim keeps every refcount/memcg/writeback detail on
+ * the battle-tested path; the only corten-specific logic is the
+ * candidate pick and the ttu guard inside.
+ *
+ * __reclaim_pages()'s leftovers normally go back to the LRU via
+ * folio_putback_lru() -- forbidden here (DEV-10: arena pages are never
+ * LRU-anchored), so the private-cookie form is used and the kept folios
+ * come back on @list for the caller to release.
+ *
+ * Lock order: lookup_get (active ref, honors the fork freeze) >
+ * corten_lock_range > ptl for the pick, all released before the reclaim
+ * runs (folio_trylock inside; a pick that lost its mapping by then is
+ * kept by the reclaim, not corrupted -- the ttu transaction re-checks
+ * everything under the covering lock).
+ */
+/* Pick one eviction candidate at @a: metadata CORTEN_MAPPED (content,
+ * not the shared zero page), COW-unshared (OQ-M6-2), not DMA-pinned,
+ * present PTE.  Returns the folio with a reference taken, or NULL.
+ */
+static struct folio *corten_arena_evict_pick(struct mm_struct *mm,
+					     struct corten_txn *txn,
+					     pmd_t *pmdp, unsigned long a)
+{
+	struct corten_pte_meta m;
+	struct folio *folio = NULL;
+	pte_t *ptep, cur;
+	spinlock_t *ptl;
+
+	if (corten_query(txn, a, &m) || m.state != CORTEN_MAPPED ||
+	    (m.flags & CORTEN_PF_SHARED))
+		return NULL;
+
+	ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
+	if (!ptep)
+		return NULL;
+	cur = ptep_get(ptep);
+	if (pte_present(cur) && !pte_special(cur)) {
+		folio = page_folio(pte_page(cur));
+		if (folio_nr_pages(folio) == 1 &&
+		    !folio_maybe_dma_pinned(folio))
+			folio_get(folio);
+		else
+			folio = NULL;
+	}
+	pte_unmap_unlock(ptep, ptl);
+
+	return folio;
+}
+
+static int corten_arena_evict_mm(struct mm_struct *mm, int nr)
+{
+	LIST_HEAD(list);
+	struct corten_mm_state *state;
+	unsigned long frame, nr_frames;
+	unsigned long swapped_before;
+	int picked = 0, reclaimed;
+
+	/* Pairs with the smp_store_release() publisher in
+	 * corten_arena_state_create() (the other two readers use the
+	 * same acquire in the fault and exit paths).
+	 */
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state || nr <= 0)
+		return -EINVAL;
+
+	swapped_before = atomic_long_read(&corten_nr_swapped_out);
+
+	/* The walk must NOT sit in one rcu_read_lock() section (=
+	 * preemption off) for the whole candidate scan: a 512M arena is
+	 * 256 windows and the guest wedged its RCU grace period on it
+	 * (first boot of the T2 guest run).  Enumerate frames with a
+	 * short RCU section per frame -- the reference taken under it
+	 * (or the descriptor's own liveness) is what the slow work
+	 * below relies on -- and drop the CPU between windows.
+	 */
+	nr_frames = DIV_ROUND_UP(state->next_va, PMD_SIZE);
+	for (frame = 0; frame < nr_frames && picked < nr; frame++) {
+		struct corten_arena *arena;
+		unsigned long fstart = (unsigned long)frame << PMD_SHIFT;
+		unsigned long fend = fstart + PMD_SIZE;
+		unsigned long win_end;
+		struct corten_txn txn;
+		pmd_t *pmdp;
+		unsigned long a;
+		int ret;
+
+		rcu_read_lock();
+		arena = xa_load(&state->arenas, frame);
+		/* M4.T1: reserve markers are not arenas. */
+		if (!arena || arena == &corten_va_reserve_sentinel) {
+			rcu_read_unlock();
+			continue;
+		}
+		if (!percpu_ref_tryget_live(&arena->active)) {
+			rcu_read_unlock();
+			continue;
+		}
+		rcu_read_unlock();
+
+		/* One frame = exactly one 2M window of @arena.  The
+		 * descriptor is aliased by every frame it covers -- the
+		 * whole-arena walk here would re-pick every page once
+		 * per frame (a cycle in the pick list, the spin of the
+		 * first T2 guest run) -- so this frame's slice only.
+		 */
+		if (fstart < arena->start)
+			fstart = arena->start;
+		if (fend > arena->end)
+			fend = arena->end;
+		if (fstart >= fend || READ_ONCE(arena->frozen)) {
+			percpu_ref_put(&arena->active);
+			continue;
+		}
+		win_end = fend;
+
+		ret = corten_lock_range(mm, fstart, fend - fstart, &txn);
+		if (ret == -ENOENT || ret == -EOPNOTSUPP) {
+			percpu_ref_put(&arena->active);
+			continue;		/* untracked window */
+		}
+		if (ret == -EAGAIN) {
+			percpu_ref_put(&arena->active);
+			continue;		/* Fig.7: retry next pass */
+		}
+		if (ret) {
+			percpu_ref_put(&arena->active);
+			break;			/* -ENOMEM: give up */
+		}
+
+		pmdp = corten_arena_pmd(mm, fstart);
+		if (pmdp) {
+			for (a = fstart; a < win_end && picked < nr;
+			     a += PAGE_SIZE) {
+				struct folio *folio;
+
+				folio = corten_arena_evict_pick(mm, &txn,
+								pmdp, a);
+				if (!folio)
+					continue;
+				list_add_tail(&folio->lru, &list);
+				picked++;
+			}
+		}
+		corten_unlock(&txn);
+		percpu_ref_put(&arena->active);
+		cond_resched();
+	}
+
+	if (!picked)
+		return 0;
+
+	reclaimed = (int)__reclaim_pages(&list, &corten_nr_swapped_out);
+
+	/* Kept folios come back unlocked with our pick reference. */
+	while (!list_empty(&list)) {
+		struct folio *folio = lru_to_folio(&list);
+
+		list_del(&folio->lru);
+		folio_put(folio);
+	}
+
+	/* Report what actually reached swap (the reclaim count also
+	 * covers non-swap frees); the arena_stats swapped_out delta is
+	 * the exact transaction number.
+	 */
+	if (atomic_long_read(&corten_nr_swapped_out) == swapped_before)
+		return 0;
+	return reclaimed;
+}
+
+int corten_arena_evict_pid(pid_t pid, int nr)
+{
+	struct task_struct *task;
+	struct mm_struct *mm;
+	int ret;
+
+	if (!corten_enabled_static())
+		return -EOPNOTSUPP;
+
+	rcu_read_lock();
+	task = find_get_task_by_vpid(pid);
+	rcu_read_unlock();
+	if (!task)
+		return -ESRCH;
+
+	mm = get_task_mm(task);
+	put_task_struct(task);
+	if (!mm)
+		return -EINVAL;
+
+	ret = corten_arena_evict_mm(mm, nr);
+	mmput(mm);
+
+	return ret;
 }

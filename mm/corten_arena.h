@@ -15,11 +15,36 @@
 #include <linux/corten_arena.h>
 #include <linux/mm_types.h>
 #include <linux/rmap.h>		/* enum ttu_flags (M6.T1 walker guard) */
+#include <linux/swap.h>		/* MAX_SWAPFILES (swapops prerequisite) */
+#include <linux/swapops.h>	/* swp_type/offset/entry (M6.T2 encode) */
+#include <linux/unaligned.h>	/* corten_swap_encode/decode (M6.T2) */
 
 struct pt_regs;
 struct vm_area_struct;
 
 #ifdef CONFIG_CORTEN_MM_ARENA
+
+/*
+ * Swapped payload encoding in corten_pte_meta.__resv (M6.T2, spec D6):
+ * __resv[0] = swap type (u8 -- MAX_SWAPFILES is far below 256; zram is a
+ * single type), __resv[1..4] = swap offset, little-endian u32 (a 4G/4K
+ * device is 1M slots, three orders below the field), __resv[5] stays
+ * zero.  The paper's Swapped(BlockDev, BlockNum, Perm) maps to
+ * (type, offset) here: Linux abstracts the block device into the swap
+ * type and the perm rides in corten_pte_meta.perm.
+ */
+static inline void corten_swap_encode(struct corten_pte_meta *m,
+				      swp_entry_t entry)
+{
+	m->__resv[0] = (u8)swp_type(entry);
+	put_unaligned_le32(swp_offset(entry), &m->__resv[1]);
+	m->__resv[5] = 0;
+}
+
+static inline swp_entry_t corten_swap_decode(const struct corten_pte_meta *m)
+{
+	return swp_entry(m->__resv[0], get_unaligned_le32(&m->__resv[1]));
+}
 
 /*
  * ------------------------------------------------------------------ *
@@ -58,7 +83,15 @@ enum corten_disp {
 				 * alike (M5.T3: no FOLL_FORCE survivor)
 				 */
 	CORTEN_DISP_ACCERR,	/* permission mismatch -> SEGV_ACCERR */
-	CORTEN_DISP_STUB,	/* M6/M4+ state -> WARN + SIGSEGV */
+	CORTEN_DISP_SWAPIN,	/* M6.T2: CORTEN_SWAPPED -- the fault is a
+				 * swap-in (M6_RMAP_SPEC.md sec 2.1 D5).  The
+				 * handler drops the covering lock (I/O and
+				 * folio waits sleep), reads the entry back
+				 * through the swap cache, re-locks and
+				 * commits PTE + rmap + metadata in one
+				 * transaction
+				 */
+	CORTEN_DISP_STUB,	/* M4+ state -> WARN + SIGSEGV */
 	CORTEN_DISP_MAPERR,	/* undecodable state -> SEGV_MAPERR */
 };
 
@@ -388,15 +421,72 @@ bool corten_oom_reap_skip_vma(struct vm_area_struct *vma);
  * Called from try_to_unmap_one()/try_to_migrate_one() behind the
  * corten_enabled_static() && VM_CORTEN gate, holding the folio lock and
  * reference, before the notifier invalidation window opens.
- * Return: true = this VMA side fully handled transactionally, the walker
- * reports success without entering page_vma_mapped_walk() (the M6.T2
- * swap-out transaction fills this arm in); false = declined -- the
- * walker aborts without writing anything and the folio stays resident
- * (Stage 1 refuses every ttu shape: reclaim without a swap entry would
- * destroy content).  Counted (rmap_rejects) on every refusal.
+ * Return: true = the shape can be taken transactionally -- the walker
+ * opens its notifier window and calls corten_rmap_swap_out() (M6.T2);
+ * false = declined -- the walker aborts without writing anything and
+ * the folio stays resident (hwpoison/migration shapes, mlocked VMAs,
+ * pinned folios, folios without a swap entry: reclaim without an entry
+ * would destroy content).  Counted (rmap_rejects) on every refusal.
  */
 bool corten_rmap_unmap_one(struct folio *folio, struct vm_area_struct *vma,
-			   unsigned long address, enum ttu_flags flags);
+			   unsigned long address, enum ttu_flags flags,
+			   bool migrate);
+
+/*
+ * The M6.T2 completion arm (spec D1 steps 4-6): swap the arena page out
+ * transactionally.  Called from try_to_unmap_one() INSIDE its
+ * mmu_notifier invalidate window, still holding the folio lock and
+ * reference.  Runs corten_lock_range() > ptl (DEV-13 direction), installs
+ * the swap PTE, moves the counters, removes the rmap and rewrites the
+ * metadata to CORTEN_SWAPPED with the entry encoded in __resv -- all
+ * under the covering desc write lock.
+ *
+ * @defer: the caller's should_defer_flush() verdict.  When true the
+ * transaction skips flush_tlb_range() and hands the cleared PTE back in
+ * *@old_pte so the walker can do the upstream set_tlb_ubc_flush_pending()
+ * bookkeeping (R6-1: the batching statics are rmap.c-local; registering
+ * after the transaction is a happens-after strengthening of the upstream
+ * clear-before-register order -- both flush by address, and the swap PTE
+ * installed in between is read only through the ptl the transaction
+ * holds).
+ *
+ * Return: true = this VMA side is swapped out (PTE holds the entry,
+ * metadata = CORTEN_SWAPPED); false = declined inside the transaction
+ * (metadata shape, PTE mismatch, -EAGAIN/-ENOMEM), nothing written.
+ */
+bool corten_rmap_swap_out(struct folio *folio, struct vm_area_struct *vma,
+			  unsigned long address, bool defer, pte_t *old_pte);
+
+/*
+ * M6.T2 swapoff parity (spec 1.2 P12): unuse_pte() replaces a swap PTE
+ * with a present PTE holding @folio (already locked, I/O settled).  On a
+ * shadow-VMA the metadata must follow (CORTEN_SWAPPED -> CORTEN_MAPPED)
+ * or the next fault would dispatch a swap-in for a resident page.
+ * Called from unuse_pte() before its pte_offset_map_lock() so the
+ * DEV-13 direction (desc write lock > ptl) is preserved; @entry
+ * identifies the page in the metadata payload.
+ *
+ * Return: 0 on success (or nothing to do), -EAGAIN on a transient race
+ * (the caller ignores it; the fault path self-heals the leftover shape),
+ * -ENOMEM when the transaction cannot be locked.
+ */
+int corten_swapin_sync_meta(struct mm_struct *mm, unsigned long addr,
+			    swp_entry_t entry, struct folio *folio);
+
+/*
+ * M6.T2 eviction driver (spec slice table: "debugfs evict N pages
+ * entry, T2 ships a minimal shrink stub"): pick up to @nr resident,
+ * unshared, unpinned arena pages of the process @pid and push them
+ * through the upstream reclaim machinery (folio_alloc_swap ->
+ * try_to_unmap -> the swap-out transaction above -> swap_writeout).
+ * The real pressure channel (shrinker + aging) is M6.T3; this entry is
+ * the correctness driver for the swap round-trip and the guest
+ * acceptance path.
+ *
+ * Called from the debugfs "evict" control file.  Return: the number of
+ * pages that reached CORTEN_SWAPPED, or a negative error.
+ */
+int corten_arena_evict_pid(pid_t pid, int nr);
 
 /* Exported for mm/corten_fault_test.c (same translation unit family). */
 struct corten_mm_state *corten_arena_state(struct mm_struct *mm);
@@ -493,9 +583,30 @@ static inline bool corten_oom_reap_skip_vma(struct vm_area_struct *vma)
 static inline bool corten_rmap_unmap_one(struct folio *folio,
 					 struct vm_area_struct *vma,
 					 unsigned long address,
-					 enum ttu_flags flags)
+					 enum ttu_flags flags, bool migrate)
 {
 	return false;
+}
+
+static inline bool corten_rmap_swap_out(struct folio *folio,
+					struct vm_area_struct *vma,
+					unsigned long address, bool defer,
+					pte_t *old_pte)
+{
+	return false;
+}
+
+static inline int corten_swapin_sync_meta(struct mm_struct *mm,
+					  unsigned long addr,
+					  swp_entry_t entry,
+					  struct folio *folio)
+{
+	return 0;
+}
+
+static inline int corten_arena_evict_pid(pid_t pid, int nr)
+{
+	return -EOPNOTSUPP;
 }
 
 static inline int corten_arena_auto_mmap_route(struct mm_struct *mm,

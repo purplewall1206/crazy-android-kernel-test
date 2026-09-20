@@ -26,6 +26,8 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/swap.h>
+#include <linux/swapops.h>
 #include <linux/uaccess.h>
 #include <uapi/linux/mman.h>
 #include <uapi/linux/prctl.h>
@@ -2795,7 +2797,10 @@ static void corten_arena_test_inv7_walk(struct mm_struct *mm, long *violated,
 
 				if (corten_query(&txn, a, &m))
 					continue;
-				if (m.state != CORTEN_MAPPED ||
+				if (m.state != CORTEN_MAPPED &&
+				    m.state != CORTEN_SWAPPED)
+					continue;
+				if (m.state == CORTEN_MAPPED &&
 				    !(m.flags & CORTEN_PF_SHARED))
 					continue;
 				ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
@@ -2804,8 +2809,26 @@ static void corten_arena_test_inv7_walk(struct mm_struct *mm, long *violated,
 				pte = ptep_get(ptep);
 				pte_unmap_unlock(ptep, ptl);
 				(*checked)++;
-				if (pte_present(pte) && pte_write(pte))
-					(*violated)++;
+				if (m.state == CORTEN_MAPPED) {
+					/* The fork shape: shared page read-
+					 * only in hardware.
+					 */
+					if (pte_present(pte) && pte_write(pte))
+						(*violated)++;
+				} else {
+					/* M6.T2 (spec D6) swapped half:
+					 * CORTEN_SWAPPED <=> the PTE is a
+					 * non-present, non-none swap entry
+					 * holding exactly the __resv
+					 * encoding; a none PTE behind a
+					 * Swapped slot is the lost-content
+					 * shape.
+					 */
+					if (pte_none(pte) || pte_present(pte) ||
+					    pte_to_swp_entry(pte).val !=
+					    corten_swap_decode(&m).val)
+						(*violated)++;
+				}
 			}
 			corten_unlock(&txn);
 		}
@@ -2911,6 +2934,111 @@ static void corten_arena_test_inv7_shared_ro(struct kunit *test)
 	KUNIT_EXPECT_GE(test, checked, 1);
 
 	mmput(child);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+}
+
+/* M6.T2 (spec D6): the swapped half of the INV7 checker.  Seed a
+ * CORTEN_SWAPPED slot with a synthetic entry (bits only -- the case
+ * never dereferences a swap device, so it runs on swap-less boots),
+ * then verify both directions: the intact shape passes, a none PTE
+ * behind the Swapped slot is flagged.
+ */
+static void corten_arena_test_inv7_swapped(struct kunit *test)
+{
+	struct corten_arena_test_mm *t;
+	struct mm_struct *mm;
+	struct vm_area_struct *vma;
+	unsigned long addr = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
+	struct folio *folio;
+	struct corten_txn txn;
+	struct corten_pte_meta sm, m;
+	pte_t *ptep, pte, swp_pte;
+	spinlock_t *ptl;
+	pmd_t *pmdp;
+	swp_entry_t entry = swp_entry(1, 0x77);
+	long violated, checked;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "metadata mirror requires corten=on");
+
+	t = corten_arena_test_mm_setup(test);
+	mm = t->mm;
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, addr), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, addr),
+			0);
+
+	/* Hand-rolled swap-out shape: PTE -> synthetic swap entry, the
+	 * metadata -> CORTEN_SWAPPED with the encoding; the resident
+	 * folio reference goes back (the shape no longer holds it).
+	 */
+	vma = vma_lookup(mm, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	pmdp = corten_arena_test_pmd(mm, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get_and_clear(mm, addr, ptep);
+	KUNIT_ASSERT_TRUE(test, pte_present(pte));
+	swp_pte = swp_entry_to_pte(entry);
+	set_pte_at(mm, addr, ptep, swp_pte);
+	pte_unmap_unlock(ptep, ptl);
+	folio = page_folio(pte_page(pte));
+	folio_remove_rmap_pte(folio, folio_page(folio, 0), vma);
+	add_mm_counter(mm, MM_ANONPAGES, -1);
+	folio_put(folio);
+
+	/* Inside the transaction only EXPECT: an ASSERT abort would
+	 * return with the desc write lock held and self-deadlock the
+	 * mm teardown (the lesson this case taught the hard way).
+	 */
+	KUNIT_ASSERT_EQ(test, corten_lock_range(mm, addr, PAGE_SIZE, &txn),
+			0);
+	memset(&sm, 0, sizeof(sm));
+	sm.state = CORTEN_SWAPPED;
+	sm.perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER;
+	corten_swap_encode(&sm, entry);
+	KUNIT_EXPECT_EQ(test, corten_swap_out(&txn, addr, &sm), 0);
+	corten_unlock(&txn);
+
+	/* Intact shape: no violation, the walker saw the slot. */
+	corten_arena_test_inv7_walk(mm, &violated, &checked);
+	KUNIT_EXPECT_EQ(test, violated, 0);
+	KUNIT_EXPECT_GE(test, checked, 1);
+
+	/* Break it (the lost-content shape: none PTE, Swapped slot) --
+	 * the walker must flag exactly one violation.
+	 */
+	pmdp = corten_arena_test_pmd(mm, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	ptep_get_and_clear(mm, addr, ptep);
+	pte_unmap_unlock(ptep, ptl);
+
+	corten_arena_test_inv7_walk(mm, &violated, &checked);
+	KUNIT_EXPECT_EQ(test, violated, 1);
+	KUNIT_EXPECT_GE(test, checked, 1);
+
+	/* Cleanup: scrub the slot (no zap: the synthetic entry must not
+	 * reach free_swap_and_cache()).
+	 */
+	KUNIT_ASSERT_EQ(test, corten_lock_range(mm, addr, PAGE_SIZE, &txn),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_unmap(&txn, addr, PAGE_SIZE,
+					   CORTEN_UNMAP_KEEP_PERM), 0);
+	corten_unlock(&txn);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
 						 corten_arena_test_op_mode_exit,
@@ -4691,6 +4819,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_fork_multipiece),
 	KUNIT_CASE(corten_arena_test_fork_perm),
 	KUNIT_CASE(corten_arena_test_inv7_shared_ro),
+	KUNIT_CASE(corten_arena_test_inv7_swapped),
 	KUNIT_CASE(corten_arena_test_fork_f2_gate),
 	KUNIT_CASE(corten_arena_test_fork_drain_leak),
 	KUNIT_CASE(corten_arena_test_unshare_pin),

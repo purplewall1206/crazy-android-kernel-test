@@ -50,6 +50,7 @@
 #include "swap_table.h"
 #include "internal.h"
 #include "swap.h"
+#include "corten_arena.h"	/* M6.T2 swapoff metadata sync (P12) */
 #include <trace/hooks/mm.h>
 #include <trace/hooks/bl_hib.h>
 
@@ -2203,6 +2204,24 @@ static int unuse_pte(struct vm_area_struct *vma, pmd_t *pmd,
 	page = folio_file_page(folio, swp_offset(entry));
 	if (PageHWPoison(page))
 		hwpoisoned = true;
+
+	/*
+	 * CortenMM (M6.T2, M6_RMAP_SPEC.md sec 1.2 P12): this store is a
+	 * legacy PTE write on a shadow-VMA -- the corten_glue_pte_write
+	 * whitelist entry #3 (docs/DESIGN.md sec 3).  Mirror the metadata
+	 * (CORTEN_SWAPPED -> CORTEN_MAPPED) before the ptl is taken, so
+	 * the DEV-13 direction (desc write lock > ptl) holds.  The
+	 * poisoned shapes skip the sync: the swap entry dies into a
+	 * poison marker, the Swapped metadata still matches the entry
+	 * (the marker is a non-swap !present PTE) and the swap-in path
+	 * re-dispatches into the legacy poison answer instead of
+	 * re-reading a dead entry.  A fault racing the tiny window
+	 * between this sync and the PTE store self-heals (counted:
+	 * swapin_heals).
+	 */
+	if (corten_enabled_static() && (vma->vm_flags & VM_CORTEN) &&
+	    !hwpoisoned && folio_test_uptodate(folio))
+		corten_swapin_sync_meta(vma->vm_mm, addr, entry, folio);
 
 	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
 	if (unlikely(!pte || !pte_same_as_swp(ptep_get(pte),
