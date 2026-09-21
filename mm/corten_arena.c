@@ -3371,9 +3371,11 @@ static struct shrinker *corten_shrinker_handle;
  */
 static void corten_shrinker_arm_memcg(struct folio *folio)
 {
+#ifdef CONFIG_MEMCG
 	if (corten_shrinker_handle)
 		set_shrinker_bit(folio_memcg(folio), folio_nid(folio),
 				 corten_shrinker_handle->id);
+#endif
 }
 
 static struct folio *corten_arena_folio_prealloc(struct mm_struct *mm,
@@ -8580,7 +8582,14 @@ static bool corten_mm_in_cgroup(struct mm_struct *mm,
 	memcg = get_mem_cgroup_from_mm(mm);
 	if (!memcg)
 		return true;
+#ifdef CONFIG_MEMCG
 	match = mem_cgroup_is_descendant(memcg, target);
+#else
+	/* !MEMCG: the cgroup-subtree filter degenerates to match-all, the
+	 * same answer the mem_cgroup_disabled() bail above gives.
+	 */
+	match = true;
+#endif
 	mem_cgroup_put(memcg);
 	return match;
 }
