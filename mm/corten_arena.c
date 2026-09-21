@@ -5257,21 +5257,29 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 		}
 
 		for (; addr < end; addr += PAGE_SIZE, ptep++) {
-			struct corten_pte_meta m;
+			struct corten_pte_meta *slot;
 			struct folio *folio;
 			struct page *page;
 			pte_t oldpte;
 			bool recorded;
 
-			/* [perf1b] A full-reset drop (no KEEP_PERM: the T1c
-			 * park) owes pristine slots, which the wholesale
-			 * array drop below provides; walking the metadata
-			 * per slot would cost a query per 4K page of the
-			 * window for the unrecorded majority.
+			/* [perf2a] One pointer read per slot finds the
+			 * recorded minority (a NULL array is the pristine
+			 * nothing-ever-recorded answer); only those slots
+			 * pay the corten_unmap() transition.  The reset is
+			 * bounded by the walked range, and the array
+			 * survives the park -- a 16KB pool arena stopped
+			 * paying the [perf1b] wholesale drop's O(PT page)
+			 * count loop plus the kfree/kmalloc+memset churn
+			 * per take/park pair.  The pristine contract is
+			 * unchanged: every recorded slot in the walk leaves
+			 * here Invalid/perm-0, and slots outside an arena's
+			 * own range were never recorded (arenas are
+			 * PMD-aligned: exclusive owners of their PT pages).
 			 */
-			recorded = (zflags & CORTEN_UNMAP_KEEP_PERM) &&
-				   corten_query(txn, addr, &m) == 0 &&
-				   m.state != CORTEN_INVALID;
+			slot = corten_txn_slot(txn, addr);
+			recorded = !IS_ERR(slot) && slot &&
+				   slot->state != CORTEN_INVALID;
 
 			if (!g) {
 				/* The scan proved the window carries no
@@ -5423,23 +5431,14 @@ out:
 	 * write lock -- once this function reports the walk done (or failed).
 	 */
 
-	/* [perf1b] Full-reset drop: the wholesale array free provides the
-	 * pristine-slot contract (Invalid, perm 0) the per-slot
-	 * corten_unmap() walk would have; the count keeps the
-	 * UNMAP_PAGES accounting identical.  Only on a fully successful
-	 * walk (ret == 0 and no pending overflow round: every PTE cleared,
-	 * metadata resettable wholesale): a walk that bailed mid-window can
-	 * leave live PTEs, and a live PTE without metadata is the r03
-	 * defect C shape -- the caller's error path (real RELEASE for the
-	 * park) tears the window down completely instead.
+	/* [perf2a] The per-slot reset inside the walk provides the pristine
+	 * contract on every fully-successful pass; there is no wholesale
+	 * array drop any more (see the slot loop above).  A walk that bailed
+	 * mid-window can leave live PTEs, and a live PTE without metadata
+	 * behind it is the r03 defect C shape -- the caller's error path
+	 * (real RELEASE for the park) tears the window down completely
+	 * instead, exactly as the [perf1b] drop's success-gate did.
 	 */
-	if (!ret && !zw->force && !(zflags & CORTEN_UNMAP_KEEP_PERM)) {
-		long nr = corten_txn_meta_drop(txn);
-
-		if (nr)
-			this_cpu_add(state->stats[CORTEN_ARENA_STAT_UNMAP_PAGES],
-				     nr);
-	}
 
 	return ret;
 }

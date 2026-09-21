@@ -227,12 +227,14 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 void corten_txn_finish(struct corten_txn *txn);
 
 /*
- * [perf1b] Free the covering PT page's whole metadata array (full-reset
- * drops): the pristine-slot answer comes from corten_query()'s meta==NULL
- * path instead of a per-slot reset walk.  Returns the number of recorded
- * slots the array carried.  See mm/corten.c for the caller contract.
+ * [perf2a] Resolve @addr to its metadata slot pointer inside a running
+ * transaction (no payload copy): NULL = no array (nothing recorded),
+ * ERR_PTR = range/alignment violation.  The full-reset zap uses it to
+ * bound the per-slot reset to the recorded minority of its range.
+ * Caller contract: the covering write lock (see mm/corten.c).
  */
-long corten_txn_meta_drop(struct corten_txn *txn);
+struct corten_pte_meta *corten_txn_slot(struct corten_txn *txn,
+					unsigned long addr);
 
 /*
  * Allocation-failure injection for the KUnit tests (review gap: the

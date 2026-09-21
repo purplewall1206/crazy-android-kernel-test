@@ -1446,54 +1446,22 @@ int corten_unmap(struct corten_txn *txn, unsigned long start,
 }
 
 /**
- * corten_txn_meta_drop - free the covering PT page's metadata array wholesale.
- * @txn: transaction whose covering page's array is dropped (write-locked).
+ * corten_txn_slot - resolve @addr to its metadata slot pointer, no copy.
+ * @txn: running transaction (covering write lock held).
+ * @addr: page-aligned address inside the locked range.
  *
- * Returns the number of recorded (non-Invalid) slots the array carried, for
- * caller-side accounting; 0 when there was no array (nothing was recorded).
- *
- * [perf1b] A full-reset drop (zflags without KEEP_PERM: the T1c park) owes
- * the range pristine slots (Invalid, perm 0).  Resetting them one
- * transaction operation at a time costs a corten_query() per 4K page of the
- * window for the unrecorded majority -- a 16KB op on a 2M frame walked 512
- * slots to reset the ~4 that ever carried content.  Dropping the array
- * gives every reader the same pristine answer from corten_query()'s
- * meta==NULL path at O(1); the next mark re-ensures it (GFP_NOWAIT, with
- * the usual -ENOMEM recovery on the fault path).
- *
- * Caller contract: hold the covering write lock (a running transaction)
- * and have completed every PTE clear for the window -- a live PTE with no
- * metadata behind it is exactly the r03 defect C shape.
+ * Returns the slot pointer, NULL when the page's metadata array does not
+ * exist (nothing was ever recorded: pristine by absence), or an ERR_PTR
+ * for a range/alignment violation.  [perf2a] The full-reset zap uses this
+ * to find the recorded minority of its slots with one pointer read each
+ * instead of a payload copy (corten_query()) or a wholesale array drop
+ * ([perf1b], now retired): the reset is bounded by the walked range and
+ * the array survives the park for the next take to mark.
  */
-long corten_txn_meta_drop(struct corten_txn *txn)
+struct corten_pte_meta *corten_txn_slot(struct corten_txn *txn,
+					unsigned long addr)
 {
-	struct corten_pte_meta *meta;
-	long nr = 0;
-	int i;
-
-	if (unlikely(!txn->covering)) {
-		WARN_ON_ONCE(1);
-		return 0;
-	}
-
-	meta = txn->covering->meta;
-	if (!meta)
-		return 0;
-
-	for (i = 0; i < CORTEN_PTES_PER_PT_PAGE; i++) {
-		nr += meta[i].state != CORTEN_INVALID;
-		/* Shrinker resident bookkeeping (M6.T3): the array (and
-		 * with it every recorded state) goes away wholesale.
-		 */
-		if (meta[i].state == CORTEN_MAPPED)
-			txn->covering->nr_mapped--;
-		else if (meta[i].state == CORTEN_SWAPPED)
-			txn->covering->nr_swapped--;
-	}
-
-	corten_meta_free(txn->covering);
-
-	return nr;
+	return corten_txn_meta(txn, addr);
 }
 
 /**

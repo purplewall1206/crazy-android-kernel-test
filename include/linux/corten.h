@@ -324,8 +324,8 @@ struct corten_ptdesc {
 	 * M6.T3 shrinker bookkeeping: number of slots in the
 	 * CORTEN_MAPPED (resident content, swap-out candidate) and
 	 * CORTEN_SWAPPED (entry recorded) states, maintained by
-	 * corten_map()/corten_swap_out()/corten_unmap()/
-	 * corten_txn_meta_drop() under the covering write lock -- every
+	 * corten_map()/corten_swap_out()/corten_unmap() under the
+	 * covering write lock -- every
 	 * state transition of those two shapes goes through exactly
 	 * those operations, so the counts are exact by construction.
 	 * Written under @lock; lockless readers use READ_ONCE() and
