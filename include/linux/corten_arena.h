@@ -36,6 +36,7 @@
 #ifndef _LINUX_CORTEN_ARENA_H
 #define _LINUX_CORTEN_ARENA_H
 
+#include <linux/bits.h>
 #include <linux/completion.h>
 #include <linux/corten.h>
 #include <linux/list.h>
@@ -46,6 +47,7 @@
 #include <linux/types.h>
 #include <linux/xarray.h>
 
+struct file;
 struct mm_struct;
 struct pt_regs;
 struct seq_file;
@@ -104,6 +106,50 @@ enum corten_arena_stat {
 	CORTEN_ARENA_NR_STATS,
 };
 
+/*
+ * Region record classes (MV_VMA_FREE_SPEC.md sec 2.1): the mmap-unit
+ * semantic carrier the VMA used to provide.  A region is embedded 1:1 in
+ * its arena descriptor (region bounds == arena bounds, DEV-12's per-mmap
+ * auto-arena shape); the page-level state stays in the per-PTE metadata
+ * (the sole source of truth), the region record only carries the
+ * mapping-level semantics that do not fit in the metadata.
+ *
+ *	CORTEN_REGION_ANON	MODE auto-mmap private anonymous (V-A
+ *				coverage; the only producer today);
+ *	CORTEN_REGION_FILE	private file mapping of a MODE process
+ *				(V-B): enum and fields in place, no
+ *				producer yet;
+ *	CORTEN_REGION_RESERVED	special region -- the park-pool reservation
+ *				window (content zapped, no live mapping
+ *				semantics) and the conceptual home of the
+ *				magazine reserve sentinels.  Delegated-domain
+ *				exec/stack/vdso VMAs are NOT regions.
+ */
+enum corten_region_class {
+	CORTEN_REGION_ANON = 0,
+	CORTEN_REGION_FILE,
+	CORTEN_REGION_RESERVED,
+};
+
+/*
+ * CORTEN_RF_*: recorded leftover VMA-flag semantics (MV_VMA_FREE_SPEC.md
+ * sec 2.6, the INV-MV3 closed encoding table).  The T0/M4T0 flag whitelist
+ * rejects all of these on the mapping paths today except VM_SOFTDIRTY
+ * (transient dirty-tracking bookkeeping, tolerated); the bits exist so
+ * that consumers can ask "what did the mapping flags say" once the VMA is
+ * gone, and so that a future whitelist widening only grows producers, not
+ * the encoding.  A new VM_* bit must be given a row in that table
+ * (RF/PERM/REJECT/DELEG) -- review checklist item.
+ */
+#define CORTEN_RF_SOFTDIRTY	_BITUL(0)	/* VM_SOFTDIRTY was set */
+#define CORTEN_RF_DONTCOPY	_BITUL(1)	/* VM_DONTCOPY (fork reservation) */
+#define CORTEN_RF_WIPEONFORK	_BITUL(2)	/* VM_WIPEONFORK (fork reservation) */
+#define CORTEN_RF_SEQ_READ	_BITUL(3)	/* VM_SEQ_READ access hint */
+#define CORTEN_RF_RAND_READ	_BITUL(4)	/* VM_RAND_READ access hint */
+#define CORTEN_RF_ALL							\
+	(CORTEN_RF_SOFTDIRTY | CORTEN_RF_DONTCOPY | CORTEN_RF_WIPEONFORK | \
+	 CORTEN_RF_SEQ_READ | CORTEN_RF_RAND_READ)
+
 /**
  * struct corten_arena - descriptor of one declared arena.
  * @start: first VA of the arena (PMD_SIZE aligned).
@@ -155,6 +201,30 @@ enum corten_arena_stat {
  * @pool: the per-mm pool's LRU node (valid only while @idle is set;
  *          INIT_LIST_HEAD()d at DECLARE so the membership test is
  *          exactly the @idle flag).
+ * @rclass: region record class (MV_VMA_FREE_SPEC.md sec 2, V-A.0):
+ *          %CORTEN_REGION_ANON while live, %CORTEN_REGION_RESERVED while
+ *          parked (@idle set).  %CORTEN_REGION_FILE has no producer yet
+ *          (V-B).  Written under the owner mm's mmap_lock for writing
+ *          (the same writers that flip @idle/@prot); read locklessly.
+ * @may_prot: CORTEN_PERM_* upper bound of the region's mprotect upgrade
+ *          space (MAY semantics: always a superset of @prot).  Closes the
+ *          M4T0 gap where the mprotect route guessed the bound from
+ *          @prot; no reader consumes it yet (V-A.3 routes it into
+ *          protect_range).
+ * @rflags: CORTEN_RF_* recording of the mapping's surviving VMA-flag
+ *          semantics at attach time (sec 2.6 encoding table).
+ * @rfile: FILE-class backing file, held by reference (get_file).  Always
+ *          NULL in V-A.0 (no FILE producer).
+ * @rpoff: FILE-class mapping start page offset.  Always 0 in V-A.0.
+ * @npieces: punch-shape marker: <= 1 single-piece (the region itself),
+ *          > 1 punched multi-piece.  The pieces table has no producer in
+ *          V-A.0 (the punch route still owns its VMA surgery).
+ * @rpieces: {start,end} piece list; empty while @npieces <= 1 (which it
+ *          always is in V-A.0).  Re-initialised at every region
+ *          registration.
+ * @carrier: detached, not-in-tree VMA that will host rmap/PTE-API
+ *          semantics for the region (sec 2.3).  Field only in V-A.0 --
+ *          no producer, stays NULL; the semantics land in V-A.2b.
  */
 struct corten_arena {
 	unsigned long		start;
@@ -186,6 +256,22 @@ struct corten_arena {
 	 * lookup structure and the fault path never touches this list.
 	 */
 	struct list_head	obs;
+
+	/* Region record (MV_VMA_FREE_SPEC.md sec 2.2, V-A.0): the
+	 * mmap-unit semantics the VMA used to carry, embedded 1:1.  All
+	 * writers run under the owner mm's mmap_lock for writing next to
+	 * the existing @prot/@idle write points (sec 2.7: no new lock --
+	 * mmap_lock is the region record's lock).
+	 */
+	enum corten_region_class rclass;  /* ANON / FILE / RESERVED */
+	u8			may_prot; /* CORTEN_PERM_* MAY bound */
+	u32			rflags;	  /* CORTEN_RF_* (sec 2.6) */
+	struct file		*rfile;	  /* FILE class: refcounted */
+	loff_t			rpoff;	  /* FILE class: start page offset */
+	unsigned int		npieces;  /* >1 = punched multi-piece */
+	struct list_head	rpieces;  /* piece list; empty if <=1 */
+	struct vm_area_struct	*carrier; /* sec 2.3 detached VMA (V-A.2b) */
+
 	struct rcu_head		rcu;
 };
 
@@ -341,10 +427,11 @@ struct corten_mm_state {
 /* T1c resident-pool capacity.  The guest benchmark shapes (8 vCPU: the
  * t8 mmbench legs, tcmalloc's 8 per-thread caches) churn at most a couple
  * of distinct PMD-rounded sizes per process, so 16 slots cover the whole
- * working set with headroom; the cost of a parked arena is its ~150-byte
- * descriptor plus one 4K PT page per 2M window (~70KB worst case).  A
- * >MAX-size round-robin simply degrades to the pre-pool behaviour (the
- * overflowing park releases the LRU victim, counted as pool_over).
+ * working set with headroom; the cost of a parked arena is its ~200-byte
+ * descriptor (V-A.0 added the embedded region record, sec 2.2) plus one
+ * 4K PT page per 2M window (~70KB worst case).  A >MAX-size round-robin
+ * simply degrades to the pre-pool behaviour (the overflowing park
+ * releases the LRU victim, counted as pool_over).
  */
 #define CORTEN_ARENA_POOL_MAX	16
 
@@ -405,6 +492,92 @@ void corten_arena_mm_exit(struct mm_struct *mm);
  */
 struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
 					 unsigned long addr);
+
+/*
+ * ------------------------------------------------------------------ *
+ * Region registry (MV_VMA_FREE_SPEC.md sec 2.4, V-A.0): the per-mm 2M
+ * frame xarray doubles as the region registry -- a region is embedded
+ * 1:1 in its arena, so no second structure exists.  All consumers go
+ * through the two functions below (never xa_load/xa_for_each directly)
+ * so the internal implementation can change (e.g. a page-granular
+ * augmented rbtree, OQ-MV-13) without touching them.
+ * ------------------------------------------------------------------
+ */
+
+/**
+ * struct corten_region_iter - enumeration cursor of the region registry.
+ * @frame: next 2M frame index to examine.
+ * @last: arena pointer produced by the previous corten_region_next()
+ *        call (the pointer-dedup key: one region spans several frame
+ *        slots and must be produced exactly once).
+ *
+ * Stack-allocate, zero with corten_region_iter_init().
+ */
+struct corten_region_iter {
+	unsigned long frame;
+	struct corten_arena *last;
+};
+
+static inline void corten_region_iter_init(struct corten_region_iter *it)
+{
+	it->frame = 0;
+	it->last = NULL;
+}
+
+/**
+ * corten_region_lookup - resolve the region covering @addr, if any.
+ * @mm: address space to look in.
+ * @addr: address to resolve (any alignment; granularity is PMD_SIZE).
+ *
+ * The registry's point-query form: identical semantics to
+ * corten_arena_lookup() (reserve markers and parked/RESERVED regions are
+ * not covering regions -- a parked window was munmapped and keeps legacy
+ * semantics).  Same RCU/pinning contract: caller holds rcu_read_lock(),
+ * pin with percpu_ref_tryget_live() to use past the critical section.
+ *
+ * Return: the arena/region containing @addr or NULL.
+ */
+struct corten_arena *corten_region_lookup(struct mm_struct *mm,
+					  unsigned long addr);
+
+/**
+ * corten_region_next - enumerate the region registry in address order.
+ * @mm: address space whose regions to walk.
+ * @it: the caller's cursor (advanced by the call).
+ *
+ * Produces each region exactly once (frame slots of one region are
+ * pointer-deduplicated), in ascending [start) order, skipping the
+ * magazine reserve markers (they are not regions).  Unlike the point
+ * lookup this is the full-registry view: parked (RESERVED) regions are
+ * produced too -- rendering/visibility decisions belong to the consumer.
+ *
+ * Locking contract (sec 2.4): caller holds mmap_lock for read, or holds
+ * rcu_read_lock() and pins what it wants to keep (kfree_rcu() release).
+ * Writers hold mmap_lock for writing (sec 2.7).
+ *
+ * Return: the next region or NULL when the walk is exhausted.
+ */
+struct corten_arena *corten_region_next(struct mm_struct *mm,
+					struct corten_region_iter *it);
+
+/**
+ * corten_region_register - stamp @ar's region record (the registry's
+ *                          write side).
+ * @ar: the arena whose embedded region to (re)initialise.
+ * @rclass: the class to record.
+ * @may_prot: CORTEN_PERM_* MAY bound to record; @ar->prot is ORed in so
+ *            that the may_prot >= prot invariant holds by construction.
+ * @rflags: CORTEN_RF_* to record.
+ *
+ * Callers are the arena lifecycle write points (DECLARE/auto-attach,
+ * fork child registration, park, reactivation), all under the owner mm's
+ * mmap_lock for writing.  A registration of the FILE class is not
+ * producible yet (V-B): @rfile/@rpoff stay clear until that slice gives
+ * register a file/pgoff producer.
+ */
+void corten_region_register(struct corten_arena *ar,
+			    enum corten_region_class rclass, u8 may_prot,
+			    u32 rflags);
 
 /**
  * corten_prctl_arena - prctl(PR_CORTEN_ARENA) dispatcher.
@@ -547,6 +720,26 @@ static inline struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
 						       unsigned long addr)
 {
 	return NULL;
+}
+
+static inline struct corten_arena *corten_region_lookup(struct mm_struct *mm,
+							unsigned long addr)
+{
+	return NULL;
+}
+
+struct corten_region_iter;
+
+static inline struct corten_arena *
+corten_region_next(struct mm_struct *mm, struct corten_region_iter *it)
+{
+	return NULL;
+}
+
+static inline void corten_region_register(struct corten_arena *ar,
+					  enum corten_region_class rclass,
+					  u8 may_prot, u32 rflags)
+{
 }
 
 static inline enum corten_fault_action

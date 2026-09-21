@@ -634,6 +634,76 @@ static void corten_arena_unshadow(struct corten_arena *arena,
 }
 
 /* ------------------------------------------------------------------ *
+ * region record (MV_VMA_FREE_SPEC.md sec 2, V-A.0)
+ * ------------------------------------------------------------------
+ */
+
+/*
+ * The MAY upper bound of @vma's flag word, in CORTEN_PERM_* encoding:
+ * the region record's mprotect-upgrade contract (sec 2.2).  VM_MAY* are
+ * the flags the whitelist admits alongside the access bits, so every
+ * attach shape can record a bound.
+ */
+static u8 corten_region_may_from_vma(struct vm_area_struct *vma)
+{
+	u8 may = CORTEN_PERM_USER;
+
+	if (vma->vm_flags & VM_MAYREAD)
+		may |= CORTEN_PERM_READ;
+	if (vma->vm_flags & VM_MAYWRITE)
+		may |= CORTEN_PERM_WRITE;
+	if (vma->vm_flags & VM_MAYEXEC)
+		may |= CORTEN_PERM_EXEC;
+
+	return may;
+}
+
+/*
+ * The CORTEN_RF_* reflection of @vma's surviving flag-word semantics
+ * (sec 2.6 encoding table).  Only VM_SOFTDIRTY passes today's whitelist;
+ * the other rows are the reserved encodings for a future whitelist
+ * widening (the flags are reject-reasons at attach, never carried).
+ */
+static u32 corten_region_rflags_from_vma(struct vm_area_struct *vma)
+{
+	u32 rflags = 0;
+
+	if (vma->vm_flags & VM_SOFTDIRTY)
+		rflags |= CORTEN_RF_SOFTDIRTY;
+	if (vma->vm_flags & VM_DONTCOPY)
+		rflags |= CORTEN_RF_DONTCOPY;
+	if (vma->vm_flags & VM_WIPEONFORK)
+		rflags |= CORTEN_RF_WIPEONFORK;
+	if (vma->vm_flags & VM_SEQ_READ)
+		rflags |= CORTEN_RF_SEQ_READ;
+	if (vma->vm_flags & VM_RAND_READ)
+		rflags |= CORTEN_RF_RAND_READ;
+
+	return rflags;
+}
+
+void corten_region_register(struct corten_arena *ar,
+			    enum corten_region_class rclass, u8 may_prot,
+			    u32 rflags)
+{
+	/* may_prot >= ar->prot holds by construction: the bound absorbs
+	 * the recorded access contract (sec 2.2's superset rule).
+	 */
+	WRITE_ONCE(ar->rclass, rclass);
+	WRITE_ONCE(ar->may_prot, may_prot | ar->prot);
+	WRITE_ONCE(ar->rflags, rflags);
+
+	/* FILE-class payload has no producer yet (V-B): the fields stay
+	 * clear; the pieces table is born single-piece.
+	 */
+	ar->rfile = NULL;
+	ar->rpoff = 0;
+	ar->npieces = 1;
+	INIT_LIST_HEAD(&ar->rpieces);
+	WRITE_ONCE(ar->carrier, NULL);
+}
+
+/* ------------------------------------------------------------------ *
  * validation (DECLARE contract, sec 2.1)
  * ------------------------------------------------------------------
  */
@@ -859,6 +929,13 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 		goto out_free_arena;
 
 	arena->prot = corten_arena_prot_from_vma(vma);
+	/* The region record is born with the arena (V-A.0 sec 3.1.0):
+	 * live == CORTEN_REGION_ANON, MAY bound and flag semantics
+	 * reflected off the declaring VMA.
+	 */
+	corten_region_register(arena, CORTEN_REGION_ANON,
+			       corten_region_may_from_vma(vma),
+			       corten_region_rflags_from_vma(vma));
 	ret = corten_arena_shadowize(vma);
 	if (ret)
 		goto out_free_arena;
@@ -1160,6 +1237,23 @@ int corten_arena_query(struct mm_struct *mm, unsigned long addr)
  */
 
 /*
+ * Region class label for the observability renderers (a parked arena
+ * shows "rsvd", the V-B class has no producer yet).
+ */
+static const char *corten_region_class_name(enum corten_region_class rclass)
+{
+	switch (rclass) {
+	case CORTEN_REGION_ANON:
+		return "anon";
+	case CORTEN_REGION_FILE:
+		return "file";
+	case CORTEN_REGION_RESERVED:
+		return "rsvd";
+	}
+	return "????";
+}
+
+/*
  * One line per live arena across every mm: owning mm, cached shadow-VMA,
  * range, recorded prot and the liveness of the transaction refcount
  * (active: transactions may enter; dying: kill issued, draining).  In
@@ -1168,21 +1262,29 @@ int corten_arena_query(struct mm_struct *mm, unsigned long addr)
  * percpu transaction count itself has no race-free reader by design, so
  * the observable liveness states are what the file reports.  RCU walk:
  * arenas unlinked concurrently simply do not show up.
+ *
+ * V-A.0 appends the embedded region record's summary (sec 3.1.0): class,
+ * CORTEN_RF_* reflection and the piece count.  The region fields are
+ * written under the owner mm's mmap_write next to prot/idle; this walker
+ * reads them locklessly, so each column is a racing snapshot by design.
  */
 void corten_arena_arenas_report(struct seq_file *m)
 {
 	struct corten_arena *ar;
 
-	seq_puts(m, "              mm              vma [start,end)                prot status\n");
+	seq_puts(m, "              mm              vma [start,end)                prot cls  rflg pcs status\n");
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(ar, &corten_arena_list, obs) {
-		seq_printf(m, "%016lx %016lx [%lx,%lx)           %02x %s\n",
+		seq_printf(m,
+			   "%016lx %016lx [%lx,%lx)           %02x %-4s %04x %-3u %s\n",
 			   (unsigned long)READ_ONCE(ar->mm),
 			   (unsigned long)READ_ONCE(ar->vma),
 			   ar->start, ar->end, ar->prot,
+			   corten_region_class_name(READ_ONCE(ar->rclass)),
+			   READ_ONCE(ar->rflags), READ_ONCE(ar->npieces),
 			   percpu_ref_is_dying(&ar->active) ?
-					"dying" : "active");
+				"dying" : "active");
 	}
 	rcu_read_unlock();
 }
@@ -1644,6 +1746,51 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
 		return NULL;
 
 	return ar;
+}
+
+struct corten_arena *corten_region_lookup(struct mm_struct *mm,
+					  unsigned long addr)
+{
+	/* The registry's point query (sec 2.4) has exactly the existing
+	 * lookup's semantics: reserve markers and parked (RESERVED)
+	 * windows are not covering regions.
+	 */
+	return corten_arena_lookup(mm, addr);
+}
+
+struct corten_arena *corten_region_next(struct mm_struct *mm,
+					struct corten_region_iter *it)
+{
+	struct corten_mm_state *state;
+	struct corten_arena *ar;
+
+	/* Locking contract (sec 2.4): the caller holds mmap_lock for
+	 * read or RCU (see the header).  The walk only reads frame slots
+	 * -- the same shape the fork/exit registry walks run.
+	 */
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state)
+		return NULL;
+
+	for (;;) {
+		ar = xa_find(&state->arenas, &it->frame, ULONG_MAX,
+			     XA_PRESENT);
+		if (!ar)
+			return NULL;
+		it->frame++;
+		/* Magazine reserve markers are not regions. */
+		if (ar == &corten_va_reserve_sentinel)
+			continue;
+		/* Pointer dedup: later frame slots of the region just
+		 * produced are skipped, so each region is produced exactly
+		 * once (a punched hole's NULL frames are skipped by
+		 * xa_find; the pieces table carries the split, sec 2.1).
+		 */
+		if (ar == it->last)
+			continue;
+		it->last = ar;
+		return ar;
+	}
 }
 
 int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,
@@ -2757,6 +2904,16 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	child->end = ar->end;
 	child->mm = mm;
 	child->prot = READ_ONCE(ar->prot);
+	/* Region record deep-copy (sec 2.2 lifecycle): the child's region
+	 * mirrors the parent's class/MAY bound/flag record (the parent is
+	 * always live here: the fork-begin pool flush released every
+	 * parked arena).  The FILE and pieces payloads are always
+	 * clear/empty in V-A.0, so the single-piece register stamp below
+	 * IS the copy; the child carrier is a V-A.2b concern.
+	 */
+	corten_region_register(child, READ_ONCE(ar->rclass),
+			       READ_ONCE(ar->may_prot),
+			       READ_ONCE(ar->rflags));
 	mutex_init(&child->fill_lock);
 	init_completion(&child->drained);
 	WRITE_ONCE(child->frozen, false);
@@ -5801,6 +5958,12 @@ static int corten_arena_pool_reactivate(struct mm_struct *mm,
 		return ret;
 
 	ar->prot = corten_arena_prot_from_vma(vma);
+	/* Reservation -> live region again (sec 2.5): the reactivate
+	 * arm of the idle<=>RESERVED pairing.
+	 */
+	corten_region_register(ar, CORTEN_REGION_ANON,
+			       corten_region_may_from_vma(vma),
+			       corten_region_rflags_from_vma(vma));
 	/* [FAIL-2] order: the cached shadow-VMA publishes before the
 	 * arena becomes lookup-visible again.
 	 */
@@ -5999,6 +6162,14 @@ static bool corten_arena_pool_park_locked(struct mm_struct *mm,
 	 * zero-fill-succeeding through the legacy funnel.
 	 */
 	vm_flags_clear(vma, VM_READ | VM_WRITE | VM_EXEC);
+	/* idle <=> rclass=RESERVED (sec 2.5): the park is the second
+	 * rclass write point.  The record keeps the surviving MAY bound
+	 * and flag reflection of the reservation the surgery above left
+	 * behind; the reactivation stamps the record back to ANON.
+	 */
+	corten_region_register(ar, CORTEN_REGION_RESERVED,
+			       corten_region_may_from_vma(vma),
+			       corten_region_rflags_from_vma(vma));
 
 	list_add_tail(&ar->pool, &state->arena_pool);
 	state->nr_pool++;
@@ -6176,6 +6347,13 @@ found:
 	WRITE_ONCE(vma->vm_page_prot, corten_arena_perm_pgprot(vma, perm));
 
 	ar->prot = (u8)perm;
+	/* Reservation -> live region (the pool-take arm of the
+	 * idle<=>RESERVED pairing); the MAY bound and flag record follow
+	 * the same vma state the R/W/X re-encoding above committed.
+	 */
+	corten_region_register(ar, CORTEN_REGION_ANON,
+			       corten_region_may_from_vma(vma),
+			       corten_region_rflags_from_vma(vma));
 	WRITE_ONCE(ar->vma, vma);
 	WRITE_ONCE(ar->idle, false);
 	list_del(&ar->pool);

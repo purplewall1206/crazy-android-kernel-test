@@ -4806,6 +4806,336 @@ static void corten_arena_test_pool_fork(struct kunit *test)
 }
 
 /* ------------------------------------------------------------------ *
+ * V-A.0 region record (MV_VMA_FREE_SPEC.md sec 2/3.1.0): the register
+ * truth table, the attach-time reflection off the declaring VMA, the
+ * registry iterator's dedup/sentinel/exhaustion contract, the park
+ * RESERVED class and the fork's record copy.  Zero behaviour change is
+ * the slice's red line: these tests only observe the new fields.
+ * ------------------------------------------------------------------
+ */
+
+/* Register truth table + the DECLARE attach reflection (the live
+ * write point) + the point-lookup alias.
+ */
+static void corten_arena_test_region_record(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_arena synth;
+	struct corten_arena *ar, *ar2;
+	struct vm_area_struct *vma;
+
+	/* Truth table on a detached holder (no registry involvement):
+	 * the class lands, the MAY bound absorbs the recorded prot (the
+	 * superset rule, sec 2.2), the flag reflection round-trips, the
+	 * record is born single-piece with clear FILE/carrier payloads.
+	 */
+	memset(&synth, 0, sizeof(synth));
+	synth.prot = CORTEN_PERM_USER | CORTEN_PERM_READ | CORTEN_PERM_WRITE;
+	corten_region_register(&synth, CORTEN_REGION_ANON,
+			       CORTEN_PERM_USER | CORTEN_PERM_READ, 0);
+	KUNIT_EXPECT_EQ(test, synth.rclass, CORTEN_REGION_ANON);
+	KUNIT_EXPECT_EQ(test, synth.may_prot,
+			CORTEN_PERM_USER | CORTEN_PERM_READ |
+			CORTEN_PERM_WRITE);
+	KUNIT_EXPECT_EQ(test, synth.rflags, 0);
+	KUNIT_EXPECT_EQ(test, synth.npieces, 1);
+	KUNIT_EXPECT_TRUE(test, list_empty(&synth.rpieces));
+	KUNIT_EXPECT_NULL(test, synth.rfile);
+	KUNIT_EXPECT_NULL(test, synth.carrier);
+
+	/* Every CORTEN_RF_* round-trips; the empty-MAY park shape still
+	 * satisfies may_prot >= prot by construction.
+	 */
+	corten_region_register(&synth, CORTEN_REGION_RESERVED, 0,
+			       CORTEN_RF_ALL);
+	KUNIT_EXPECT_EQ(test, synth.rclass, CORTEN_REGION_RESERVED);
+	KUNIT_EXPECT_EQ(test, synth.rflags, CORTEN_RF_ALL);
+	KUNIT_EXPECT_EQ(test, synth.may_prot,
+			CORTEN_PERM_USER | CORTEN_PERM_READ |
+			CORTEN_PERM_WRITE);
+
+	/* The DECLARE write point: the declaring VMA's access/MAY bits
+	 * land in the record; the region lookup answers exactly what the
+	 * arena lookup answers.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+	rcu_read_lock();
+	ar = corten_region_lookup(mm, CORTEN_ARENA_TEST_BASE + PAGE_SIZE);
+	KUNIT_EXPECT_NOT_NULL(test, ar);
+	if (ar) {
+		KUNIT_EXPECT_EQ(test, ar->rclass, CORTEN_REGION_ANON);
+		KUNIT_EXPECT_EQ(test, ar->prot,
+				CORTEN_PERM_USER | CORTEN_PERM_READ |
+				CORTEN_PERM_WRITE);
+		KUNIT_EXPECT_EQ(test, ar->may_prot,
+				CORTEN_PERM_USER | CORTEN_PERM_READ |
+				CORTEN_PERM_WRITE);
+		KUNIT_EXPECT_EQ(test, ar->rflags, 0);
+		KUNIT_EXPECT_EQ(test, ar->npieces, 1);
+		KUNIT_EXPECT_TRUE(test, list_empty(&ar->rpieces));
+		KUNIT_EXPECT_PTR_EQ(test, ar,
+				    corten_arena_lookup(mm,
+							CORTEN_ARENA_TEST_BASE));
+	}
+	KUNIT_EXPECT_NULL(test,
+			  corten_region_lookup(mm, CORTEN_ARENA_TEST_NOWHERE));
+	rcu_read_unlock();
+
+#ifdef CONFIG_MEM_SOFT_DIRTY
+	/* The whitelist-tolerated VM_SOFTDIRTY is the one RF row with a
+	 * live producer: it must land in the record's flag reflection.
+	 */
+	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_START2,
+				     CORTEN_ARENA_TEST_START2 +
+				     CORTEN_ARENA_TEST_LEN2,
+				     CORTEN_ARENA_TEST_FLAGS_OK |
+				     VM_SOFTDIRTY);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_START2,
+					     CORTEN_ARENA_TEST_LEN2),
+			0);
+	rcu_read_lock();
+	ar2 = corten_region_lookup(mm, CORTEN_ARENA_TEST_START2);
+	KUNIT_EXPECT_NOT_NULL(test, ar2);
+	if (ar2)
+		KUNIT_EXPECT_EQ(test, ar2->rflags, CORTEN_RF_SOFTDIRTY);
+	rcu_read_unlock();
+#else
+	/* Without soft-dirty tracking the RF rows are reservation-only:
+	 * the truth table above is the whole encoding coverage.
+	 */
+	(void)vma;
+	(void)ar2;
+#endif
+}
+
+/* The registry iterator (sec 2.4): pointer dedup across one region's
+ * frame slots, reserve-marker skipping, address order, exhaustion and
+ * cursor restart.  The sentinel span comes from a real magazine claim
+ * (the M4.T1 hook), the regions from plain gate-free DECLAREs.
+ */
+static void corten_arena_test_region_iter(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_region_iter it;
+	struct corten_arena *r1, *r2;
+	struct vm_area_struct *vma;
+	unsigned long addr = 0;
+	int ret;
+
+	/* A registry-less mm enumerates empty. */
+	corten_region_iter_init(&it);
+	rcu_read_lock();
+	KUNIT_EXPECT_NULL(test, corten_region_next(mm, &it));
+	rcu_read_unlock();
+
+	/* Arena A: four frame slots -- produced exactly once. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+
+	/* Claimed magazine frames between (address-wise: far above) the
+	 * arenas: 512 reserve markers the walk must skip.  One PMD frame
+	 * is served from the fresh segment; the served frame keeps its
+	 * marker (allocation is bump-pointer bookkeeping only).
+	 */
+	ret = corten_arena_test_mag_alloc_cpu(mm, 0, PMD_SIZE, &addr);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_frame_reserved(mm, addr));
+
+	/* Arena B: two frame slots. */
+	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_START2,
+				     CORTEN_ARENA_TEST_START2 +
+				     CORTEN_ARENA_TEST_LEN2,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_START2,
+					     CORTEN_ARENA_TEST_LEN2),
+			0);
+
+	rcu_read_lock();
+	corten_region_iter_init(&it);
+	r1 = corten_region_next(mm, &it);
+	KUNIT_EXPECT_NOT_NULL(test, r1);
+	if (r1) {
+		KUNIT_EXPECT_EQ(test, r1->start, CORTEN_ARENA_TEST_BASE);
+		/* Mid-region frames resolve to the same region. */
+		KUNIT_EXPECT_PTR_EQ(test, r1,
+				    corten_region_lookup(mm,
+							 CORTEN_ARENA_TEST_BASE +
+							 3 * PMD_SIZE +
+							 PAGE_SIZE));
+	}
+	r2 = corten_region_next(mm, &it);
+	KUNIT_EXPECT_NOT_NULL(test, r2);
+	if (r2)
+		KUNIT_EXPECT_EQ(test, r2->start, CORTEN_ARENA_TEST_START2);
+	/* Exhaustion: the sentinel span is not regions. */
+	KUNIT_EXPECT_NULL(test, corten_region_next(mm, &it));
+
+	/* A fresh cursor replays the same two regions in the same order
+	 * (exactly one region per arena, ascending).
+	 */
+	corten_region_iter_init(&it);
+	KUNIT_EXPECT_PTR_EQ(test, corten_region_next(mm, &it), r1);
+	KUNIT_EXPECT_PTR_EQ(test, corten_region_next(mm, &it), r2);
+	KUNIT_EXPECT_NULL(test, corten_region_next(mm, &it));
+	rcu_read_unlock();
+}
+
+/* The park write point: idle <=> CORTEN_REGION_RESERVED, and the
+ * visibility split of sec 2.4 -- the point lookup treats a parked
+ * window as not-covering (legacy semantics) while the registry
+ * enumeration still produces it.  Reactivation (the pool take) flips
+ * the record back to ANON.
+ */
+static void corten_arena_test_region_park(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_region_iter it;
+	struct corten_arena *ar;
+	struct vm_area_struct *vma;
+	unsigned long addr = 0, len = PMD_SIZE, flags;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "park routing requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
+				     CORTEN_ARENA_TEST_WIN + PMD_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	mmap_write_lock(mm);
+	ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_WIN, PMD_SIZE);
+	mmap_write_unlock(mm);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+
+	/* The glibc free() shape: full-coverage munmap parks. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE),
+			1);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pool_idle(mm,
+						      CORTEN_ARENA_TEST_WIN));
+
+	rcu_read_lock();
+	KUNIT_EXPECT_NULL(test, corten_region_lookup(mm,
+						     CORTEN_ARENA_TEST_WIN));
+	corten_region_iter_init(&it);
+	ar = corten_region_next(mm, &it);
+	KUNIT_EXPECT_NOT_NULL(test, ar);
+	if (ar) {
+		KUNIT_EXPECT_EQ(test, ar->start, CORTEN_ARENA_TEST_WIN);
+		KUNIT_EXPECT_EQ(test, ar->rclass, CORTEN_REGION_RESERVED);
+		KUNIT_EXPECT_TRUE(test, READ_ONCE(ar->idle));
+	}
+	KUNIT_EXPECT_NULL(test, corten_region_next(mm, &it));
+	rcu_read_unlock();
+
+	/* The pool take: the reservation becomes a live region again,
+	 * record and visibility both.
+	 */
+	flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, len,
+							    PROT_READ |
+							    PROT_WRITE,
+							    &addr, &len,
+							    &flags),
+			2);
+	KUNIT_EXPECT_EQ(test, addr, CORTEN_ARENA_TEST_WIN);
+	rcu_read_lock();
+	ar = corten_region_lookup(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_NOT_NULL(test, ar);
+	if (ar) {
+		KUNIT_EXPECT_EQ(test, ar->rclass, CORTEN_REGION_ANON);
+		KUNIT_EXPECT_EQ(test, ar->prot,
+				CORTEN_PERM_USER | CORTEN_PERM_READ |
+				CORTEN_PERM_WRITE);
+		KUNIT_EXPECT_FALSE(test, READ_ONCE(ar->idle));
+	}
+	rcu_read_unlock();
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+}
+
+/* The fork write point: the child's region record is the parent's copy
+ * (register_child's deep-copy), one region per mirrored arena.  The
+ * registry mirror runs gate-free -- the metadata walk below it has
+ * nothing to observe on an off-boot kernel (untracked PT pages skip the
+ * window loop), the child registration is the assertion target.
+ */
+static void corten_arena_test_region_fork(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm, *child;
+	struct corten_region_iter it;
+	struct corten_arena *par = NULL, *car;
+	struct vm_area_struct *cvma;
+
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	/* The dup_mmap loop's vm_area_dup shape: the child inherits the
+	 * shadow piece (the mirror's child-side skip test needs it).
+	 */
+	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_BASE,
+				      CORTEN_ARENA_TEST_BASE +
+				      CORTEN_ARENA_TEST_LEN,
+				      CORTEN_ARENA_TEST_FLAGS_OK |
+				      VM_CORTEN | VM_NOHUGEPAGE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+
+	rcu_read_lock();
+	par = corten_region_lookup(mm, CORTEN_ARENA_TEST_BASE);
+	car = corten_region_lookup(child, CORTEN_ARENA_TEST_BASE);
+	KUNIT_EXPECT_NOT_NULL(test, par);
+	KUNIT_EXPECT_NOT_NULL(test, car);
+	if (par && car) {
+		KUNIT_EXPECT_PTR_NE(test, par, car);
+		KUNIT_EXPECT_EQ(test, car->rclass, CORTEN_REGION_ANON);
+		KUNIT_EXPECT_EQ(test, car->prot, par->prot);
+		KUNIT_EXPECT_EQ(test, car->may_prot, par->may_prot);
+		KUNIT_EXPECT_EQ(test, car->rflags, par->rflags);
+		KUNIT_EXPECT_EQ(test, car->npieces, 1);
+	}
+	/* Exactly one region on the child side: one arena, one region,
+	 * the registry's 1:1 shape.
+	 */
+	corten_region_iter_init(&it);
+	KUNIT_EXPECT_PTR_EQ(test, corten_region_next(child, &it), car);
+	KUNIT_EXPECT_NULL(test, corten_region_next(child, &it));
+	rcu_read_unlock();
+
+	mmput(child);
+}
+
+/* ------------------------------------------------------------------ *
  * M6.T3: the shrinker pressure channel (M6_RMAP_SPEC.md sec 2.1 D2)
  * and M6.T4 observability.  The KUnit side pins the machinery up to
  * the isolation boundary -- registry membership, the per-desc resident
@@ -5272,6 +5602,10 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_pool_limit),
 	KUNIT_CASE(corten_arena_test_pool_mode_exit),
 	KUNIT_CASE(corten_arena_test_pool_fork),
+	KUNIT_CASE(corten_arena_test_region_record),
+	KUNIT_CASE(corten_arena_test_region_iter),
+	KUNIT_CASE(corten_arena_test_region_park),
+	KUNIT_CASE(corten_arena_test_region_fork),
 	KUNIT_CASE(corten_arena_test_mprotect_route),
 	KUNIT_CASE(corten_arena_test_protect_flags_kernel_gate),
 	KUNIT_CASE(corten_arena_test_madvise_route),
