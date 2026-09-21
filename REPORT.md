@@ -623,17 +623,38 @@ g1-consolidation.md §4）；固化班 metis +35.92% 判冷缓存伪影剔除（
 - **处置闭环**: G5 门实测→根因→修复→复测全链在一夜内完成，修复方向 §7-A5（v1.0 登记）
   全部落地（①+②+③三选组合全实施）。
 
-**G2（竞争消退 perfetto 定量）— 计划中（未执行）**: M8.T2 的
-mmap_lock_contention/fault_latency/sched_breakdown SQL 对照未跑（夜窗产能让位）。已有的定性
-替代: ①M3 头条主张（perf 367K 样本 VMA/mmap_lock 零命中, results/r03/final-smoke/）为竞争面
-最强证据; ②M1 基线 PER_VMA_LOCK 发现（30s PF trace 50 mmap_lock 事件 vs 1,013,798 PF）仍
-成立; ③perf1 §4 终态 profile 两臂同形、corten 侧仅 zap_window 1.84% 在榜（机制成本地板定量）。
-**G7（PT+metadata 内存开销定量）— 定性在档, 定量计划中**: 已有: M6.T4 三方口径一致性核对
-（memory.swap.current == smaps Swap == ledger swapped_out, Δ32 页 < 容差 1643,
-m6t34-verify.md §3）+ arena_stats 快照（meta_bytes 1,372,160 B / 335 阵列 ≈ 4KB/阵列,
-ptdescs 335）+ DEV-12 每-16KB-mmap 一 descriptor 的结构性上界（T1c 池后 descriptor 随
-mmap+munmap 往返复用, 稳态驻留 = 窗口数）。vs 论文理论上界（PT 页同量级 metadata array）
-的正式对照测量未执行, 登记 §8。
+**G2（竞争消退 perfetto 定量）— ✓ 完成（2026-09-21 当日闭环, results/r06/g2-trace/）**:
+M8.T2 三件套在 run5 同一终验件（#93 b9541335a554, vm-t5run5 复启）上采集: tracebox v58.2
+（sched + mmap_lock/tlb_flush/mm_page + corten kprobe×7）×5 trace + perf --call-graph fp 干净腿
+×2 配对 + trace_processor SQL（mmap_lock_contention/fault_latency/sched_breakdown, sql/q01-q07）。
+①mmap-pf low t8 残差两配对 -26.4%/-17.3%（家族带宽内），且 **T0−BASE 绝对差两配对均 ≈+207µs/op（per-thread 墙钟）**
+（BASE 两腿 574.7/990.6µs/op 漂移 1.72× 而差恒定）= **加性地板**，非乘性回退——这就是家族
+"比率漂移、判定稳定"的机理解释; 事件归因 = 每 op 4.7 事务 + 3.79 mark + 0.95 zapw + 写锁段
+1.9 vs 1.55 + ranged(4) flush 2.0 vs 1.6，corten 侧 profile self 仅 3.5pp（zap_window 2.56 +
+xas_load 0.61 + txn_meta_drop 0.33），top-4 块两臂同函数（IPI/唤醒/切换）→ §4.6 地板的事件级
+实证。②unmap-virt low t4 复现 **+1125.0%/+1142.3%**（run5 +1156 同级）; trace 实证 tlb_flush
+仅 34 次/3.14s 窗（≈0.0001/op，风暴已灭、与 TLB 无关），机制 = 池命中把 mmap_lock 写获取从
+**2.02 次/op 砍到 0.27 次/op（7.6×）**（g2c_map 全窗 20 次 vs 5.1M ops = VMA 层从 per-op 路径
+消失），T0 仍余 52% osq/rwsem 旋等（锁未消灭，是关键区缩短 5-7×）。登记边界: B 格
+munmap_releases/pool_parks 计数器在该 bench 形态不走数（以 g2c_map≈0 + misses≈0 为池命中
+判据）; 单 boot 单镜像、邻道负载未隔离（同 boot 相对口径判定）。
+**G7（PT+metadata 内存开销定量）— ✓ 定量完成（2026-09-21 当日闭环, results/r07/g7-mem.md）**:
+受控 MODE 负载（g7load, strict hook 双验证）× 三态 × 三档（64/256/1024 MB）× 同 bzImage
+corten=off 对照（重启仅换 boot 参数, THP 未编译=天然同粒度）。**常驻态实测开销 = 8,288 B/2M 窗
+= 映射内存的 0.3952%（三档同值恒定; 理论 8,272 B = 0.3944%, 宣称 0.4% 成立）**, resident_pages
+= 映射页数零误差（16,384/65,536/262,144）, smaps arena VMA Rss = 映射字节精确, 窗口数经 dump
+逐 ptdesc 计数验证（@1GB = 512 窗; 32/128 档同法）。**换出态**（memory.max=512M, shrinker 通道）:
+ledger swapped_pages 261,223 页 = memory.swap.current = smaps Swap **三方闭合到字节**
+（1,069,969,408 B; 较 M6.T4 先例 Δ32 页加强为 Δ0）; metadata 4.24 MB 换出中全额驻留不变
+（swap entry 复用 meta `__resv` 载荷零边际）; 同压 legacy 对照臂 OOM-kill、corten 臂 0 OOM
+（单腿观察如实登记）。**池 idle 态**: park 保留 PT 页、释放 meta array（开销减半 0.1998%）,
+maps 呈现 = `---p` 零 Rss 保留 VMA; 池上限 16 = arena（chunk）数上限而非窗口数——17 个不同
+size 阶梯实测第 17 个 park 被拒整块释放（pool_over=1, pool_ejects=0, ptdescs 算术精确闭合）,
+单 1GB chunk park 实测最大驻留 2.15 MB（T1c 注释"~70KB worst case"语义据此修正登记）。
+**异常开销全排**: desc 实收 96 B（kmalloc-96 桶; sizeof 计算值 80 B, pahole 不可用=vmlinux 无
+BTF/DWARF）、双 xarray ≤18.3 B/窗、per-mm state <1.5 KB 一次——理论外净开销 <0.003%/窗;
+arena PT 页计入 meminfo PageTables 无会计旁路; exit 两轮 free_untracked=0/legacy_drift=0 精确回落。
+同负载 legacy = 4,096 B/2M（0.195%）→ 页表侧基础设施 ×2.02（+4,192 B/窗 = +0.20% of mapped）。
 **G6（稳定性）— 部分（首轮完成 + 第二轮挂机中）**: syzkaller 首夜 17.8h/1.42M execs 零内存安全
 crash（首轮 corten=off 面, v1.2 已如实缩限并撤回误归因旁证, §3-M7/§5.4）+ lockdep 全家族首检
 零 splat + DEBUG_ATOMIC_SLEEP 47→0 + KUnit 102 用例 0 fail +
@@ -660,6 +681,10 @@ G8（诚实性）: 本报告内嵌口径已齐（§1.1 8vCPU 方向性 D4、§1.
   t4 0.012→0.791 ops/µs；mmap-pf t8 0.00033→0.00114（-74%→-14%）（perf1.md §2 表）。
   失败尝试 perf1a-v1（write 锁序列化 gather）把 unmap t8 +113% 打成 -56%，完整回滚
   记录在案——touched 形态的 flush 并行性是 T0 反超 legacy 的第一来源（perf1.md §2/§4）。
+- G2 trace 复验（#93, results/r06/g2-trace/ §3）: 风暴保持已灭——unmap-virt t4 T0 窗内
+  tlb_flush 仅 34 次/3.14s（≈0.0001/op，BASE 同为 ≈0），+1125~+1142% 大胜的机制来源实证为
+  **池命中砍 VMA 层**: mmap_lock 写获取 2.02→0.27 次/op（7.6×）、g2c_map 全窗 20 次 vs 5.1M ops、
+  BASE 侧 maple-tree/kmem_cache/rcu_preempt VMA 机器从 per-op 路径消失。
 
 **② RELEASE drain 的 RCU GP 放大（D15，commit ba77046c78fe）**
 - 发现: T5 首跑 dedup_eq tcmalloc 档 -91.84%（wall 311s vs ~23s）。
@@ -745,6 +770,15 @@ ftrace 实证相等）; 同一份代码残差比率随 boot 漂移 −15%~−31%
 跨度）——该格比率读数以多 boot 网格中位口径登记, 并入 §4.3 的 -14~-22% 家族带宽
 （上沿到 −31）; 纯 fault 通道净胜（pf low t8 +7~+22%）。杠杆与 §7-C1 同归:
 批 mark/窗粒度重构。
+
+**G2 trace 补强（2026-09-21, results/r06/g2-trace/）**: 本地板得到事件级形态与**加性度量**。
+同 boot #93 两干净配对: T0−BASE = **+206.2 / +207.8 µs/op（per-thread）恒定**（BASE 两腿 574.7/990.6 µs/op
+漂移 1.72×，差不动）→ 残差是每 op ≈0.21ms（per-thread）的常数税而非乘性回退，解释了家族"比率漂移、判定
+稳定"。构成（trace, 每 op）: 4.7 事务 + 3.79 mark + 0.95 zapw（懒路径）+ 写锁段 1.9（BASE
+1.55）+ ranged(4) flush 2.0（BASE 1.6）; profile 侧 corten self 仅 3.5pp（zap_window 2.56 +
+xas_load 0.61 + txn_meta_drop 0.33），do_user_addr_fault self 两臂持平（1.68/1.65）、page
+allocs 3.4 vs 3.1/op、mmap_lock success 100% vs 读 75.6%——fault 送达通道等价、无竞争劣化，
+税在路由层（take/park 生命周期 + 每fault事务），与上文 §4.6-1/2 拆解逐项对上。
 
 ---
 
@@ -937,7 +971,7 @@ MAPERR；mprotect/mlock 作用于预约范围由 ENOMEM 变为 legacy 成功/拒
 | 4 | M6.T1-T4 | **✓ 完成** | T1/T2/T3+T4 全提交; guest 判据闭合（69164/69356 roundtrip、RSS 281→3.8MB、三方口径一致、DEBUG_ATOMIC_SLEEP 47→0）（§3-M6）; G7 定量除外 → A7（下表） |
 | 5 | M7 周期 | **首轮 ✓ + 第二轮挂机中** | syz 首轮 1 夜 + lockdep 首检 + DEBUG_ATOMIC_SLEEP 扩容修复 + 每切片 lockdep 变体全绿（首轮 corten=off 面更正见 §3-M7/§5.4）；**第二轮 09-21 08:02 挂机中**（corten=on + PR_CORTEN prctl 描述 = corten 面首次覆盖 + vm.count=2 + corpus 769, m7-round2.md）→ 09-22 晨收数; KCSAN/B4 裁定 → A8 |
 | 6 | M8.T1（G1 固化）+ run5 终验 | **✓ 完成** | 与工作项 1 同夜窗合并执行 |
-| 7 | M8.T2 perfetto G2 | **计划中 → A6** | 定性替代已在 §4.4-G2 引用 |
+| 7 | M8.T2 perfetto G2 | **✓ 完成（2026-09-21）** | results/r06/g2-trace/（tracebox×5 + perf 配对×4 + SQL 三件套）; §4.4-G2 已更新为定量结论 |
 | 8 | M8.T3 报告终稿 | **✓ 本报告 v1.3** | G1-G8 全 gate 对账（§3-M8）、LoC 终态账（§2.4, HEAD b9541335a554 实测 19,305 行）、G8 声明内嵌（§1.4-8）; ARM64_PORTING.md 已定稿（publish/）; v1.2 增量 = JTB 闭环 + M5.T3 入库入账补全 + M7 二轮挂机/首轮面更正; v1.3 增量 = M9-P2/perf2a/defconfig 守卫三件入库（头部; §3-M9/§4.6/§7-0） |
 | 9 | **M8 终版数字冻结** | **✓ 本报告即冻结口径** | G1 = 五轮固化 + run5 双口径（§4.2-4.3）；G4/G5 = run5 正式数；M6 = 69164/69356 对账；MODE 兼容 = 六件套全 rc=0；此后上游投稿/对外引用一律以本版数字为准 |
 | 10 | M9 P2/P3 | **P2 ✓（v1.3）→ P3 计划中（C4）** | P2 = arm64 热钩子接线完成（93f834060cd1 tag corten-r07-m9p2, §3-M9）; P3 = contpte/BBM 决议（OQ1/P3）+ access_error 等价门, 未动 |
@@ -950,8 +984,8 @@ MAPERR；mprotect/mlock 作用于预约范围由 ENOMEM 变为 legacy 成功/拒
 
 | # | 问题 | 根因锚 | 建议 |
 |---|---|---|---|
-| A6 | G2 perfetto 定量（M8.T2）未执行 | §4.4-G2（定性替代已引用: M3 头条 + M1 PER_VMA_LOCK + perf1 §4 profile） | SQL 固化三件套（mmap_lock_contention/fault_latency/sched_breakdown），1 日窗 |
-| A7 | G7 内存开销定量 vs 论文上界未执行 | §4.4-G7（定性 + 三方口径核对在档） | 常驻/换出两态 × 窗口数扫描（meta_bytes/ptdescs/desc 行数 vs 理论 array 上界），半天 |
+| ~~A6~~ | ~~G2 perfetto 定量（M8.T2）~~ **✓ 已闭环（2026-09-21）** | results/r06/g2-trace/（§4.4-G2 定量结论已入） | SQL 固化三件套已交付（sql/q02 mmap_lock_contention / q06+g2c fault_latency / q04 sched_breakdown）; 待办余量: 多 boot 复采（非阻塞） |
+| ~~A7~~ | ~~G7 内存开销定量 vs 论文上界未执行~~ **✓ 已闭环（2026-09-21）** | results/r07/g7-mem.md（§4.4-G7 定量结论已入: 三态×三档 0.3952%/窗、换出三方 Δ0 闭合、池上限 16 实测、异常项全排、legacy 对照 ×2.02/窗） | 原建议"常驻/换出两态×窗口数扫描"已超额完成（含 16 池上限阶梯与 corten=off 对照重启）; 余量: 多 boot 复采（非阻塞） |
 | A8 | M7 第二轮收数+判定 + KCSAN（G6 完整口径） | §3-M7（第二轮 09-21 08:02 已挂机、corten=on 面首次覆盖, 09-22 08:00 收; corpus 769 种子在用; rcu_stall_timeout 放宽与非 KASAN 快内核验证 hang 类视第二轮结果定） | 第二轮收数判定（"连续 2 夜无可复现 crash"完整口径）+ KCSAN 构建短跑（伴随）+ B4 lockdep corten=on 复跑裁定 |
 
 ---

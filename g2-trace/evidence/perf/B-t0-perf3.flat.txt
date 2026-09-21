@@ -1,0 +1,472 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 50K of event 'task-clock:ppp'
+# Event count (approx.): 25407697500
+#
+# Overhead  Command      Shared Object         Symbol                            
+# ........  ...........  ....................  ..................................
+#
+    34.04%  mmbench_dyn  [kernel.kallsyms]     [k] osq_lock
+            |
+            ---osq_lock
+               rwsem_down_write_slowpath
+               down_write_killable
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+    15.27%  mmbench_dyn  [kernel.kallsyms]     [k] rwsem_spin_on_owner
+            |
+            ---rwsem_spin_on_owner
+               rwsem_down_write_slowpath
+               down_write_killable
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     3.56%  mmbench_dyn  [vdso]                [.] __vdso_clock_gettime
+            |
+            ---__vdso_clock_gettime
+               |          
+                --3.49%--clock_gettime
+
+     3.52%  mmbench_dyn  [kernel.kallsyms]     [k] do_syscall_64
+            |
+            ---do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               |          
+               |--1.81%--__munmap
+               |          
+                --1.71%--__mmap
+
+     2.76%  mmbench_dyn  [kernel.kallsyms]     [k] xas_load
+            |
+            ---xas_load
+               xa_load
+               |          
+               |--1.39%--corten_ptdesc_get
+               |          corten_real_root
+               |          corten_txn_begin
+               |          |          
+               |          |--0.98%--corten_arena_unmap_chunk_flags
+               |          |          corten_arena_munmap_route
+               |          |          __do_sys_munmap
+               |          |          do_syscall_64
+               |          |          entry_SYSCALL_64_after_hwframe
+               |          |          __munmap
+               |          |          
+               |           --0.41%--corten_arena_mmap_route
+               |                     do_mmap
+               |                     vm_mmap_pgoff
+               |                     do_syscall_64
+               |                     entry_SYSCALL_64_after_hwframe
+               |                     __mmap
+               |          
+               |--1.04%--corten_arena_lookup
+               |          corten_arena_lookup_get
+               |          |          
+               |          |--0.54%--corten_arena_mmap_route
+               |          |          do_mmap
+               |          |          vm_mmap_pgoff
+               |          |          do_syscall_64
+               |          |          entry_SYSCALL_64_after_hwframe
+               |          |          __mmap
+               |          |          
+               |           --0.50%--corten_arena_munmap_route
+               |                     __do_sys_munmap
+               |                     do_syscall_64
+               |                     entry_SYSCALL_64_after_hwframe
+               |                     __munmap
+               |          
+                --0.33%--corten_ptdesc_rearm
+                          corten_arena_fill_upper
+                          corten_arena_mmap_route
+                          do_mmap
+                          vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     2.65%  mmbench_dyn  [kernel.kallsyms]     [k] down_write_killable
+            |
+            ---down_write_killable
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     2.26%  mmbench_dyn  [kernel.kallsyms]     [k] corten_txn_begin
+            |
+            ---corten_txn_begin
+               |          
+               |--1.22%--corten_arena_mmap_route
+               |          do_mmap
+               |          vm_mmap_pgoff
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __mmap
+               |          
+                --1.04%--corten_arena_unmap_chunk_flags
+                          corten_arena_munmap_route
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     2.17%  mmbench_dyn  mmbench_dyn           [.] worker
+            |
+            ---worker
+
+     2.14%  mmbench_dyn  [kernel.kallsyms]     [k] rwsem_down_write_slowpath
+            |
+            ---rwsem_down_write_slowpath
+               down_write_killable
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     1.84%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_zap_window
+            |
+            ---corten_arena_zap_window
+               |          
+               |--1.35%--corten_arena_unmap_chunk_flags
+               |          corten_arena_munmap_route
+               |          __do_sys_munmap
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __munmap
+               |          
+                --0.49%--corten_arena_mmap_route
+                          do_mmap
+                          vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     1.81%  mmbench_dyn  [kernel.kallsyms]     [k] corten_txn_meta
+            |
+            ---corten_txn_meta
+               |          
+               |--0.61%--corten_unmap
+               |          corten_arena_zap_window
+               |          corten_arena_unmap_chunk_flags
+               |          corten_arena_munmap_route
+               |          __do_sys_munmap
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __munmap
+               |          
+               |--0.61%--corten_query
+               |          |          
+               |           --0.60%--corten_arena_zap_window
+               |                     |          
+               |                      --0.31%--corten_arena_unmap_chunk_flags
+               |                                corten_arena_munmap_route
+               |                                __do_sys_munmap
+               |                                do_syscall_64
+               |                                entry_SYSCALL_64_after_hwframe
+               |                                __munmap
+               |          
+                --0.59%--corten_mark
+                          corten_arena_mmap_route
+                          do_mmap
+                          vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     1.69%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_mmap_route
+            |
+            ---corten_arena_mmap_route
+               do_mmap
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     1.67%  mmbench_dyn  [kernel.kallsyms]     [k] corten_txn_finish
+            |
+            ---corten_txn_finish
+               |          
+               |--0.86%--corten_arena_mmap_route
+               |          do_mmap
+               |          vm_mmap_pgoff
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __mmap
+               |          
+                --0.81%--corten_arena_unmap_chunk_flags
+                          corten_arena_munmap_route
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     1.53%  mmbench_dyn  libc.so.6             [.] __munmap
+            |
+            ---__munmap
+
+     1.49%  mmbench_dyn  libc.so.6             [.] __mmap
+            |
+            ---__mmap
+
+     1.44%  mmbench_dyn  [kernel.kallsyms]     [k] osq_unlock
+            |
+            ---osq_unlock
+               rwsem_down_write_slowpath
+               down_write_killable
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     1.32%  mmbench_dyn  [kernel.kallsyms]     [k] up_write
+            |
+            ---up_write
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     1.09%  mmbench_dyn  [kernel.kallsyms]     [k] vm_mmap_pgoff
+            |
+            ---vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     1.05%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_unmap_chunk_flags
+            |
+            ---corten_arena_unmap_chunk_flags
+               corten_arena_munmap_route
+               __do_sys_munmap
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __munmap
+
+     0.99%  mmbench_dyn  [kernel.kallsyms]     [k] corten_ptdesc_get
+            |
+            ---corten_ptdesc_get
+               corten_real_root
+               corten_txn_begin
+               |          
+               |--0.63%--corten_arena_unmap_chunk_flags
+               |          corten_arena_munmap_route
+               |          __do_sys_munmap
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __munmap
+               |          
+                --0.36%--corten_arena_mmap_route
+                          do_mmap
+                          vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     0.91%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_lookup_get
+            |
+            ---corten_arena_lookup_get
+               |          
+               |--0.59%--corten_arena_munmap_route
+               |          __do_sys_munmap
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __munmap
+               |          
+                --0.31%--corten_arena_mmap_route
+                          do_mmap
+                          vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     0.90%  mmbench_dyn  [kernel.kallsyms]     [k] corten_unmap
+            |
+            ---corten_unmap
+               corten_arena_zap_window
+               corten_arena_unmap_chunk_flags
+               corten_arena_munmap_route
+               __do_sys_munmap
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __munmap
+
+     0.86%  mmbench_dyn  [kernel.kallsyms]     [k] arch_get_unmapped_area_topdown
+            |
+            ---arch_get_unmapped_area_topdown
+               __get_unmapped_area
+               do_mmap
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     0.85%  mmbench_dyn  [kernel.kallsyms]     [k] corten_slot_index
+            |
+            ---corten_slot_index
+               corten_txn_meta
+               |          
+                --0.32%--corten_unmap
+                          corten_arena_zap_window
+                          corten_arena_unmap_chunk_flags
+                          corten_arena_munmap_route
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     0.82%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_spin_lock
+            |
+            ---_raw_spin_lock
+               __pte_offset_map_lock
+               |          
+                --0.81%--corten_arena_zap_window
+                          |          
+                           --0.57%--corten_arena_unmap_chunk_flags
+                                     corten_arena_munmap_route
+                                     __do_sys_munmap
+                                     do_syscall_64
+                                     entry_SYSCALL_64_after_hwframe
+                                     __munmap
+
+     0.78%  mmbench_dyn  [kernel.kallsyms]     [k] corten_real_root
+            |
+            ---corten_real_root
+               corten_txn_begin
+               |          
+               |--0.44%--corten_arena_unmap_chunk_flags
+               |          corten_arena_munmap_route
+               |          __do_sys_munmap
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __munmap
+               |          
+                --0.34%--corten_arena_mmap_route
+                          do_mmap
+                          vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     0.77%  mmbench_dyn  [kernel.kallsyms]     [k] do_mmap
+            |
+            ---do_mmap
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     0.72%  mmbench_dyn  [kernel.kallsyms]     [k] corten_query
+            |
+            ---corten_query
+               corten_arena_zap_window
+               |          
+                --0.58%--corten_arena_unmap_chunk_flags
+                          corten_arena_munmap_route
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     0.56%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_write_lock_bh
+            |
+            ---_raw_write_lock_bh
+               |          
+                --0.56%--corten_txn_begin
+
+     0.54%  mmbench_dyn  [kernel.kallsyms]     [k] corten_mark
+            |
+            ---corten_mark
+               |          
+                --0.54%--corten_arena_mmap_route
+                          do_mmap
+                          vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     0.53%  mmbench_dyn  [kernel.kallsyms]     [k] __get_unmapped_area
+            |
+            ---__get_unmapped_area
+               do_mmap
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     0.51%  mmbench_dyn  [kernel.kallsyms]     [k] corten_ptdesc_put
+            |
+            ---corten_ptdesc_put
+               corten_txn_finish
+
+     0.50%  mmbench_dyn  [kernel.kallsyms]     [k] xa_load
+            |
+            ---xa_load
+
+     0.50%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_read_unlock_bh
+            |
+            ---_raw_read_unlock_bh
+               corten_txn_begin
+
+     0.50%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_read_lock_bh
+            |
+            ---_raw_read_lock_bh
+               corten_txn_begin
+
+     0.43%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_munmap_route
+            |
+            ---corten_arena_munmap_route
+               __do_sys_munmap
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __munmap
+
+     0.38%  mmbench_dyn  [kernel.kallsyms]     [k] __pte_offset_map_lock
+            |
+            ---__pte_offset_map_lock
+               |          
+                --0.38%--corten_arena_zap_window
+
+     0.38%  mmbench_dyn  [kernel.kallsyms]     [k] xas_start
+            |
+            ---xas_start
+               xas_load
+               xa_load
+
+     0.36%  mmbench_dyn  [kernel.kallsyms]     [k] __rcu_read_unlock
+            |
+            ---__rcu_read_unlock
+
+     0.30%  mmbench_dyn  [kernel.kallsyms]     [k] mutex_lock
+            |
+            ---mutex_lock
+               corten_arena_fill_upper
+               corten_arena_mmap_route
+               do_mmap
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     0.30%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_fill_upper
+            |
+            ---corten_arena_fill_upper
+               corten_arena_mmap_route
+               do_mmap
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+
+
+#
+# (Tip: To compute metrics for samples use perf record -e '{cycles,instructions}' ... ; perf script -F +metric)
+#

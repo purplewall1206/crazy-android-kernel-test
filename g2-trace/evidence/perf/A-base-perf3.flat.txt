@@ -1,0 +1,309 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 31K of event 'task-clock:ppp'
+# Event count (approx.): 15657324750
+#
+# Overhead  Command      Shared Object         Symbol                                       
+# ........  ...........  ....................  .............................................
+#
+    28.80%  mmbench_dyn  [kernel.kallsyms]     [k] x2apic_send_IPI
+            |
+            ---x2apic_send_IPI
+               smp_call_function_many_cond
+               on_each_cpu_cond_mask
+               flush_tlb_mm_range
+               tlb_finish_mmu
+               vms_clear_ptes.part.0
+               vms_complete_munmap_vmas
+               do_vmi_align_munmap
+               do_vmi_munmap
+               __vm_munmap
+               __do_sys_munmap
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __munmap
+
+    25.95%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_spin_unlock_irqrestore
+            |
+            ---_raw_spin_unlock_irqrestore
+               |          
+               |--24.95%--try_to_wake_up
+               |          |          
+               |          |--22.54%--wake_up_q
+               |          |          |          
+               |          |          |--20.84%--rwsem_wake.isra.0
+               |          |          |          |          
+               |          |          |          |--16.58%--up_read
+               |          |          |          |          |          
+               |          |          |          |          |--15.64%--vms_complete_munmap_vmas
+               |          |          |          |          |          do_vmi_align_munmap
+               |          |          |          |          |          do_vmi_munmap
+               |          |          |          |          |          __vm_munmap
+               |          |          |          |          |          __do_sys_munmap
+               |          |          |          |          |          do_syscall_64
+               |          |          |          |          |          entry_SYSCALL_64_after_hwframe
+               |          |          |          |          |          __munmap
+               |          |          |          |          |          
+               |          |          |          |           --0.94%--do_user_addr_fault
+               |          |          |          |                     exc_page_fault
+               |          |          |          |                     asm_exc_page_fault
+               |          |          |          |                     worker
+               |          |          |          |          
+               |          |          |           --4.26%--up_write
+               |          |          |                     vm_mmap_pgoff
+               |          |          |                     do_syscall_64
+               |          |          |                     entry_SYSCALL_64_after_hwframe
+               |          |          |                     __mmap
+               |          |          |          
+               |          |           --1.55%--downgrade_write
+               |          |                     vms_complete_munmap_vmas
+               |          |                     do_vmi_align_munmap
+               |          |                     do_vmi_munmap
+               |          |                     __vm_munmap
+               |          |                     __do_sys_munmap
+               |          |                     do_syscall_64
+               |          |                     entry_SYSCALL_64_after_hwframe
+               |          |                     __munmap
+               |          |          
+               |          |--2.03%--rcuwait_wake_up
+               |          |          |          
+               |          |           --2.02%--do_user_addr_fault
+               |          |                     exc_page_fault
+               |          |                     asm_exc_page_fault
+               |          |                     worker
+               |          |          
+               |           --0.38%--call_timer_fn
+               |                     __run_timers
+               |          
+                --0.34%--rcu_core
+                          handle_softirqs
+                          irq_exit_rcu
+                          sysvec_apic_timer_interrupt
+                          asm_sysvec_apic_timer_interrupt
+
+    17.83%  mmbench_dyn  [kernel.kallsyms]     [k] finish_task_switch.isra.0
+            |
+            ---finish_task_switch.isra.0
+               __schedule
+               |          
+                --17.82%--schedule
+                          |          
+                          |--16.76%--schedule_preempt_disabled
+                          |          |          
+                          |          |--14.48%--rwsem_down_write_slowpath
+                          |          |          down_write_killable
+                          |          |          |          
+                          |          |          |--9.97%--__vm_munmap
+                          |          |          |          __do_sys_munmap
+                          |          |          |          do_syscall_64
+                          |          |          |          entry_SYSCALL_64_after_hwframe
+                          |          |          |          __munmap
+                          |          |          |          
+                          |          |           --4.51%--vm_mmap_pgoff
+                          |          |                     do_syscall_64
+                          |          |                     entry_SYSCALL_64_after_hwframe
+                          |          |                     __mmap
+                          |          |          
+                          |           --2.28%--rwsem_down_read_slowpath
+                          |                     down_read_killable
+                          |                     lock_mm_and_find_vma
+                          |                     do_user_addr_fault
+                          |                     exc_page_fault
+                          |                     asm_exc_page_fault
+                          |                     worker
+                          |          
+                           --1.05%--__vma_start_write
+                                     |          
+                                     |--0.64%--vma_expand
+                                     |          vma_merge_new_range
+                                     |          __mmap_region
+                                     |          do_mmap
+                                     |          vm_mmap_pgoff
+                                     |          do_syscall_64
+                                     |          entry_SYSCALL_64_after_hwframe
+                                     |          __mmap
+                                     |          
+                                      --0.41%--__split_vma
+                                                vms_gather_munmap_vmas
+                                                do_vmi_align_munmap
+                                                do_vmi_munmap
+                                                __vm_munmap
+                                                __do_sys_munmap
+                                                do_syscall_64
+                                                entry_SYSCALL_64_after_hwframe
+                                                __munmap
+
+     7.28%  mmbench_dyn  [kernel.kallsyms]     [k] smp_call_function_many_cond
+            |
+            ---smp_call_function_many_cond
+               on_each_cpu_cond_mask
+               flush_tlb_mm_range
+               tlb_finish_mmu
+               |          
+                --7.24%--vms_clear_ptes.part.0
+                          vms_complete_munmap_vmas
+                          do_vmi_align_munmap
+                          do_vmi_munmap
+                          __vm_munmap
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     2.10%  mmbench_dyn  [kernel.kallsyms]     [k] osq_lock
+            |
+            ---osq_lock
+               rwsem_down_write_slowpath
+               down_write_killable
+               |          
+               |--1.34%--__vm_munmap
+               |          __do_sys_munmap
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __munmap
+               |          
+                --0.75%--vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     1.67%  mmbench_dyn  [kernel.kallsyms]     [k] handle_softirqs
+            |
+            ---handle_softirqs
+               irq_exit_rcu
+               sysvec_apic_timer_interrupt
+               asm_sysvec_apic_timer_interrupt
+               |          
+               |--0.58%--_raw_spin_unlock_irqrestore
+               |          |          
+               |           --0.56%--try_to_wake_up
+               |                     |          
+               |                      --0.51%--wake_up_q
+               |                                |          
+               |                                 --0.46%--rwsem_wake.isra.0
+               |                                           |          
+               |                                            --0.31%--up_read
+               |          
+                --0.42%--x2apic_send_IPI
+                          smp_call_function_many_cond
+                          on_each_cpu_cond_mask
+                          flush_tlb_mm_range
+                          tlb_finish_mmu
+                          vms_clear_ptes.part.0
+                          vms_complete_munmap_vmas
+                          do_vmi_align_munmap
+                          do_vmi_munmap
+                          __vm_munmap
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     1.65%  mmbench_dyn  [kernel.kallsyms]     [k] do_user_addr_fault
+            |
+            ---do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     1.59%  mmbench_dyn  [kernel.kallsyms]     [k] __send_ipi_mask
+            |
+            ---__send_ipi_mask
+               kvm_smp_send_call_func_ipi
+               smp_call_function_many_cond
+               on_each_cpu_cond_mask
+               flush_tlb_mm_range
+               tlb_finish_mmu
+               |          
+                --1.58%--vms_clear_ptes.part.0
+                          vms_complete_munmap_vmas
+                          do_vmi_align_munmap
+                          do_vmi_munmap
+                          __vm_munmap
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     1.26%  mmbench_dyn  [kernel.kallsyms]     [k] rwsem_down_write_slowpath
+            |
+            ---rwsem_down_write_slowpath
+               down_write_killable
+               |          
+               |--0.75%--__vm_munmap
+               |          __do_sys_munmap
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __munmap
+               |          
+                --0.51%--vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     1.10%  mmbench_dyn  [kernel.kallsyms]     [k] rwsem_spin_on_owner
+            |
+            ---rwsem_spin_on_owner
+               rwsem_down_write_slowpath
+               down_write_killable
+               |          
+               |--0.68%--__vm_munmap
+               |          __do_sys_munmap
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __munmap
+               |          
+                --0.42%--vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     0.69%  mmbench_dyn  mmbench_dyn           [.] worker
+            |
+            ---worker
+
+     0.64%  mmbench_dyn  [kernel.kallsyms]     [k] clear_page_erms
+            |
+            ---clear_page_erms
+               prep_new_page
+               get_page_from_freelist
+               __alloc_frozen_pages_noprof
+               alloc_pages_mpol
+               vma_alloc_folio_noprof
+               do_anonymous_page
+               __handle_mm_fault
+               handle_mm_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     0.42%  mmbench_dyn  [kernel.kallsyms]     [k] get_mem_cgroup_from_mm
+            |
+            ---get_mem_cgroup_from_mm
+               __mem_cgroup_charge
+               do_anonymous_page
+               __handle_mm_fault
+               handle_mm_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     0.37%  mmbench_dyn  [kernel.kallsyms]     [k] __handle_mm_fault
+            |
+            ---__handle_mm_fault
+               handle_mm_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+
+
+#
+# (Tip: To separate samples by time use perf report --sort time,overhead,sym)
+#
