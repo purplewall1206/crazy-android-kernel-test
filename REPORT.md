@@ -1,14 +1,17 @@
 # CortenMM → Linux 6.18 移植 · 最终报告（M8）
 
-- 版本: **v1.1 终稿**（2026-09-21 定稿；数据截止 = r07 收官班: M4.T5 run5 终验 + A5 惰性
-  registry 落树 + G5 门 MET。v1.0（同日晨）记录的 G5 NOT MET 已由 A5（b9541335a554）
+- 版本: **v1.2 终稿**（2026-09-21。v1.1 = 同日 run5 收官班定稿；v1.2 增量 = ① JThreadBench
+  CFE 缺口正式闭环（results/r07/jtbcfe-close.md）② M5.T3 复审 PASS 入库入账补全
+  （5c545359e856: T2' 残余②裁决落地 + io_uring 长期 pin 并发 churn 零损坏）③ M7 第二轮
+  挂机启动 + 首轮 fuzz 面重要更正（首轮 corten=off、corten 修改面未被覆盖——
+  results/r08/m7-round2.md §0）。v1.0（同日晨）记录的 G5 NOT MET 已由 A5（b9541335a554）
   修复并在 run5 终验复现，判定史在 §4.4-4 如实保留）
 - 内核树状态: android17-6.18，HEAD `b9541335a554`（tag `corten-r07-a5`），**项目提交 26 个、
   tag 25 个**（run5 终验件 = 主树干净树直编 #93，`6.18.32-gb9541335a554`，
   bzimg/r07-t5run5，sha256 `24a33880…55ab33`）
 - 唯一权威状态源: `STATE.md`（现场）/ `docs/ROADMAP.md`（任务级）；本报告为 M8.T3 交付物
   终稿，全部数字均有 `results/` 证据路径可复核；无未决 PENDING——未及执行项一律转入
-  §7/§8 的「计划中」显式登记（G2 定量/G7 定量/M7 第二夜/KCSAN/M9 P2-P3），不以"待补"含糊带过
+  §7/§8 的「计划中」显式登记（G2 定量/G7 定量/M7 第二轮=挂机中/KCSAN/M9 P2-P3），不以"待补"含糊带过
 - 口径符号: **BASE** = 同一 bzImage 上 `corten` 未激活（或无 LD_PRELOAD hook）的对照臂；
   **T0/MODE** = `corten=on` + MODE 进程（LD_PRELOAD hook）臂；"同 boot" = 同一内核一次开机内
   ABAB 交错对照（EVAL §2，docs/EVAL.md）
@@ -36,8 +39,8 @@ fork/进程生命周期代价经 A5 修复后与 BASE 同级；真实应用零�
 | M4 | **✓ 完成，判定 PASS（run5 四门终态）** | T0 透明接管 + T1/T2 杂志批处理 + T1c 常驻池 + perf1 TLB 风暴修复 + A5 惰性 registry 全在树；**G1 = MET（2/4）三轮固化（run4 → t5final 五轮 → run5 终验）+ G4 MET（jvm -4.57 入线）+ G5 MET（A5 后 worst +3.77%）**；G3 数字面 NOT MET（apps 全正无回退，机制面成立，§4.4-2）；正确性面 330/330 同参 + strace 零新错误类 + 台账零泄漏（results/r07/t5-run5/t5-run5-report.md §7） |
 | M5 | **✓ 完成** | T1a 忠实 fork + T1b/T2'（INV7/F2/F3/FOLL_FORCE/UNSHARE）+ T3 GUP 互操作全提交；T4 G5 门实测 NOT MET → 根因定案 → **A5 修复（b9541335a554）后 MET（fork -10.65%/exec +3.77%/shell +0.52%）**；JThreadBench MODE 回归 rc=0 零 CFE（results/r07/g5-gate/、a5-fix.md、t5-run5 §4） |
 | M6 | **✓ 完成（T1-T4）** | rmap 守卫 + swap out/in 全事务 + shrinker 压力通道 + 观测面全提交；guest 判据: **swap roundtrip 69164=69164 账目闭合、shrinker 自然换出 RSS 281→3.8MB、三方口径一致**；T5 前置达成（results/r07/m6t2-verify.md、m6t34-verify.md） |
-| M7 | 首轮完成，二轮计划中 | lockdep 首检零 splat + DEBUG_ATOMIC_SLEEP 首开 47 splat→0（zap 协议修正）；syzkaller 17.8h / 1.42M exec **零内存安全 crash**（results/r07/syz-report.md）；第二夜（vm.count=2 快内核口径）+ KCSAN = 计划中（§7/§8） |
-| M8 | **本报告 = v1.1 终稿** | G1 五轮固化 + run5 终验 / G3-G5 复核定案 / G6-G8 对账（§4、§7）；G2 perfetto 定量与 syz 第二夜转计划中 |
+| M7 | 首轮完成；**第二轮挂机中（corten 面首次实际覆盖）** | lockdep 首检零 splat + DEBUG_ATOMIC_SLEEP 首开 47 splat→0（zap 协议修正）；syz 首轮 17.8h / 1.42M exec 零内存安全 crash——**重要更正（v1.2）: 首轮 cmdline 无 corten=on 且 syzkaller 无 corten prctl 描述，corten 修改面未被覆盖**（results/r08/m7-round2.md §0）；第二轮 @b9541335 KCOV 重建 + corten=on + PR_CORTEN 两 prctl 描述 + vm.count=2 + corpus 769 种子 09-21 08:02 挂机中（首 30 分钟 coverage 17,496 已超首轮 17.8h 终值，crash 0）；KCSAN = 计划中（§7/§8） |
+| M8 | **本报告 = v1.2 终稿** | G1 五轮固化 + run5 终验 / G3-G5 复核定案 / G6-G8 对账（§4、§7）；G2 perfetto 定量与 KCSAN 转计划中，syz 第二轮挂机中（09-22 晨收数） |
 | M9 | P1 ✓ | **CortenMM KUnit 25/25 首次在 arm64 全绿** + 全量 Image（+196 KiB）（results/r06/m9-p1/m9-p1-verify.md）；P2/P3 计划中（§7-C4） |
 
 ### 1.3 核心数字亮点（除注明外，全部同 boot BASE vs T0 口径；G1 行 = 五轮固化 + run5 终验双口径）
@@ -55,11 +58,11 @@ fork/进程生命周期代价经 A5 修复后与 BASE 同级；真实应用零�
 | perf 头条主张 | churn 4t 运行中 367K 样本，`find_vma\|mmap_lock` 六符号宽口径 **0 命中** | results/r03/final-smoke/m3-verdict-final.md DoD#4 |
 | M6 swap/回收闭环 | **swapped_out 69164 = swapins 69164（账目精确闭合）**；shrinker 自然触发换出 RSS **281MB→3.8MB**（5s 内 945 次 scan/59,356 页）；冻结点三方口径一致（memory.swap.current == smaps Swap == ledger，Δ<0.05%） | results/r07/m6t2-verify.md §3；m6t34-verify.md §3 |
 | arm64 移植证据 | **KUnit 25/25 全绿**（-smp 4 复跑）+ CORTEN_MM=y 全量 Image 42,232,320 B（+196 KiB） | results/r06/m9-p1/m9-p1-verify.md §2/§3 |
-| syzkaller 首轮 | **1,416,524 execs / 17.8h，4 crash 全部为环境类，0 内存安全类** | results/r07/syz-report.md §1/§3 |
+| syzkaller 首轮 | **1,416,524 execs / 17.8h，4 crash 全部为环境类，0 内存安全类**（口径注 v1.2: 首轮 corten=off、无 corten prctl 描述 = 未覆盖 corten 修改面，本行结论对覆盖面如实缩限，§3-M7/§5.4） | results/r07/syz-report.md §1/§3 |
 | lockdep 首检 + zap 协议修正 | PROVE_LOCKING 全家族构建 + KUnit/guest 压测零 splat；**DEBUG_ATOMIC_SLEEP 首开: zap 路径 47 splat → 修复后 0**（tlb_finish_mmu 协议修正） | results/r07/m7-preheat.md；m6t34-verify.md §7.3/§8 |
 | KUnit 全套终态（HEAD `b9541335a554`） | **24/0/1 + 48/0/0 + 30/0/2 = 102 pass + 3 设计 skip, 0 fail**（on ×2；A5 惰性契约锚更新后同数；off 臂 49 ok 设计性 skip） | results/r07/a5fix/kunit-on{1,2}-full.log；kunit-off1-full-r2.log |
 
-### 1.4 诚实边界（与亮点并存的负向/未决项，M8 v1.1 终稿口径）
+### 1.4 诚实边界（与亮点并存的负向/未决项，M8 v1.2 终稿口径）
 
 1. **mmap-pf（映射区 page-fault）机制成本地板**：五轮固化终读数 t4/t8 = **-17.33% / -22.29%**
    （10/10 负号，五轮一致，非方差）；run5 终验 -21.47/-12.05 同族（perf1 网格 -14.3/-15.5 →
@@ -91,14 +94,18 @@ fork/进程生命周期代价经 A5 修复后与 BASE 同级；真实应用零�
    run3（动态口径）1/4 → perf1 TLB 风暴修复后 run4 = 2/4 → **五轮 ABAB 固化（t5final）= MET 2/4
    成立且更稳** → **run5 终验（A5 后终件）= 2/4 维持，无 A5 交互回归**（§4.2，results/r07/
    g1-final.md、t5-run5-report.md §2）。三口径并列呈现在 §4.1。
-6. **JThreadBench ClassFormatError**: 已由 gupfix（0719bc6ae74e）修复，run3/run4/g1 班/G5 班/
-   run5（独立回归腿）五次独立再证未复现（0 命中），降级为观测项维持
-   （results/r06/gupfix.md §3；results/r07/t5-run5-report.md §5）。
+6. **JThreadBench ClassFormatError —— 已闭环（v1.2）**: gupfix（0719bc6ae74e）修复后
+   run3/run4/g1 班/G5 班/run5（独立回归腿）五次独立再证 0 命中；v1.2 终验收口在 HEAD
+   b9541335a554 上金标准复证: 3/3 `java HelloFmt` rc=0 零 CFE + gdbpy17 审计 pread
+   ret=32963 / diff_vs_disk=0 / 零零页（修复前 3120/28891/8 零页）+ FormatData_en
+   class+load 干净加载——由观测项移入 §7-0 已闭环（results/r06/gupfix.md §3；
+   results/r07/jtbcfe-close.md）。
 7. **metis_eq fork 后段（OQ-D 残余）**: 忠实 fork 在树后 run3/run4/g1 班/run5 维持闭合
    （rc=0、checksum 8a8db990… 三方同值、fork_faithful 前进），观测项维持，无恶化
    （g1-final.md §4；t5-run5-report.md §5）。
 8. **未及执行项（全部显式转 §8 计划，非遮蔽）**: G2 perfetto 定量、G7 内存开销 vs 论文上界
-   定量、M7 第二夜（"连续 2 夜无可复现 crash"完整口径）与 KCSAN、M9 P2/P3（arm64 热钩子
+   定量、M7 第二轮（挂机中, 09-22 晨收数；"连续 2 夜无可复现 crash"完整口径）与 KCSAN、
+   M9 P2/P3（arm64 热钩子
    接线 / contpte 决议）、mmap-pf 批 mark 重构。8 vCPU vs 论文 384 核：只做方向性验证；
    64 线程平台期、2270×/1489× 量级差距、384 核线性段不可测（docs/EVAL.md §3 不可测清单；
    G8 声明 = 本报告内嵌口径: §1.1、§4.1 三口径、§2.2 DEVIATION 清单、本条）。
@@ -300,12 +307,19 @@ v1.0 时点 2639d3294b9d 为 19,229 行，A5 +122/-45 净 +76）。
   证据 results/r07/m5t1b-verify.md + results/r07/m5t1b-*/。残余三项登记（窗粒度 DONTCOPY
   过度 SHARED 良性自愈 / FORCE 边界 perm-RO+VM_WRITE EIO 响亮拒绝 / fork_battery ksmoke
   --kdir 参数），见 results/r07/m5t1b-verify.md §3。
-- **M5.T3 GUP 互操作**: 5c545359e856（tag corten-r07-m5t3）；证据 results/r07/m5t3-verify.md
-  + results/r07/m5t3-gupmat-results.txt。fast 路径零改动证实（arena PTE 对 gup_fast 透明，
-  guest 四形态全对）；slow 路径挖出并修复 T2' 遗留两真 bug（FOLL_FORCE 重定向 × 普通 GUP 写
-  pin = 自旋死循环 → force 语义整体移除；UNSHARE→write 映射 × read-pin 误拒 → ACCERR 落回
-  legacy unshare）+ `zap_pinned` 计数 + 5 个 KUnit 矩阵锚；KUnit 终态 24/0/1 + 43/0/0 +
-  26/0/0 全绿（普通 + lockdep 双口径）。
+- **M5.T3 GUP 互操作**: 5c545359e856（tag corten-r07-m5t3；**复审 PASS → 入库**, STATE
+  r07-m5t3 条: 主树应用 patches/r07-m5t3.diff 与 worktree cmp 字节全等, checkpatch
+  --strict 0E/0W/0C）；证据 results/r07/m5t3-verify.md + results/r07/m5t3-gupmat-results.txt。
+  fast 路径零改动证实（arena PTE 对 gup_fast 透明，guest 四形态全对）；slow 路径挖出并修复
+  T2' 遗留两真 bug: ①FOLL_FORCE 重定向 × 普通 GUP 写 pin（pread/io_uring zc）re-follow
+  不了 RO 存活页 = **GUP 自旋死循环** → force 语义整体移除（perm 缺 WRITE 的外部写统一
+  响亮 EFAULT——**T2' 残余②"外部写不得无声废止进程契约"裁决贯彻到 routed-whole, 该残余
+  由此关闭**）；②UNSHARE→write 映射 × read-pin 误拒 ACCERR → `ctx.unshare` 记来源后
+  FALLBACK 落回 legacy `do_wp_page(unshare)` 接管（写 pin 永不产生 UNSHARE, 不会吞真写拒绝）。
+  另落 `zap_pinned` debugfs 计数（M6 skip-gate 频度证据, guest delta=5289）+ 5 个 KUnit
+  四态矩阵锚；**io_uring REGISTER_BUFFERS 长期 pin ×2 与 arena_stress 4T 并发 churn 零损坏**
+  （1430/864 次远程 pin 读, GUPMAT-RUN ALL PASS + DMESG AUDIT CLEAN）；KUnit 终态 24/0/1 +
+  43/0/0（+5 新锚）+ 26/0/0（foll_force 重写为外部写契约锚）全绿（普通 + lockdep 双口径）。
 - **M5.T4（G5 门）判定史**: lat_proc MODE 臂首次实测 = **NOT MET（fork +516%/exec +172%/
   shell +354%）**，根因 = MODE 生命周期退出 RCU GP（急切 registry + 每-mm synchronize_rcu），
   与忠实 fork 镜像无关（隔离实验 +50ms/进程）；JThreadBench MODE 回归 rc=0 零 CFE。
@@ -315,7 +329,9 @@ v1.0 时点 2639d3294b9d 为 19,229 行，A5 +122/-45 净 +76）。
   契约）；验证: KUnit on×2/off×1 全绿、=n 八对象零瑕疵、隔离实验 +741%→+6%、lat_proc
   fork -0.3/exec +14.5/shell +12.8 全线 ≤30%、dedup/JTB/metis/smoke（T1c 契约件 26/26）
   无回归、evict 20000 页 + drop_caches shrink 走查照常枚举（results/r07/a5-fix.md）。
-- 遗留: ptrace FOLL_FORCE 分叉（upstream 级接口设计问题，§7-C）、m5t1b §3 三项残余维持登记。
+- 遗留: ptrace FOLL_FORCE 分叉（upstream 级接口设计问题，§7-C6）；m5t1b §3 三项残余中
+  ②（FORCE 边界）已由 T3 force 移除裁决落地关闭，①（窗粒度 DONTCOPY 过度 SHARED 良性
+  自愈）③（fork_battery ksmoke --kdir）维持登记（STATE r07-m5t3 条）。
 
 ### M6 rmap/回收/swap — **✓ 完成（T1/T2/T3+T4 全提交，guest 判据闭合，T5 前置达成）**
 - **M6.T1 回收守卫**: 0e469cd9d055（tag corten-r07-m6t1）。V1（oom_reaper 裸写 arena PTE）=
@@ -354,7 +370,7 @@ v1.0 时点 2639d3294b9d 为 19,229 行，A5 +122/-45 净 +76）。
   登记 §7/§8；批量换出天花板 = zram 同步写逐页（上游 page_io 形态，非 corten 缺陷）；
   M6 Stage2（2M chunk rmap）/Stage3（SHARED 换出 COW 合流）= §7-C 后续。
 
-### M7 稳定性 — **首轮完成；第二夜/KCSAN = 计划中**
+### M7 稳定性 — **首轮完成；第二轮挂机中（corten 面首次实际覆盖）；KCSAN = 计划中**
 - lockdep 首检（M7 预热）: PROVE_LOCKING 构建 + KUnit + guest 压测零 splat；interlock
   用例在 lockdep 开销下 1 次时序 flake 复跑绿（M7 清单）；证据 results/r07/m7-preheat.md、
   results/r07/{lockdep-build.log, lockdep-kunit.log, lockdep-kunit-run2.log}。
@@ -368,24 +384,40 @@ v1.0 时点 2639d3294b9d 为 19,229 行，A5 +122/-45 净 +76）。
   全部环境类（2×RCU 饥饿 + 2×VM 无输出，repro reliability=0.00）、**零内存安全类**；
   证据 results/r07/syz-report.md、results/r07/{m7-preheat-syz.md, syz-manager.log,
   kcov-build.log}。corpus 748 programs 已保留作下轮种子（同上 §5）。
+- **首轮 fuzz 面重要更正（v1.2, results/r08/m7-round2.md §0）**: 首轮 cfg cmdline 无
+  `corten=on`（corten 静态分支默认关）且 vanilla syzkaller 无法生成 PR_CORTEN prctl
+  （79/80 常量无描述）——**首轮 1.42M exec 实际未覆盖 corten 修改面**；r07 报告曾引的
+  "正面旁证"（madvise padding 安静拒绝 = `madvise_vma_pad_pages`）实为上游
+  mm/pgsize_migration.c 代码，与 corten 无关，本版撤回该归因。"零内存安全 crash"结论在
+  覆盖面如实缩限后仍成立（4 crash 环境类结论不变）。
+- **第二轮挂机中（r08, 2026-09-21 08:02 起，目标 09-22 08:00）**: KCOV 内核重建至全量
+  @b9541335a554（基座 025756094542 + 11 提交 fast-forward 无冲突，增量构建 PASS ~33 分钟，
+  bzImage sha256 d6c0dd5b…24f，boot 冒烟零 BUG/WARNING）；cmdline **+corten=on** + 共享
+  syzkaller 增补 `prctl$PR_CORTEN_ARENA/MODE` 两描述（手写 const 逐条对照 uapi 核实，
+  make descriptions/build PASS）= **corten 面首次实际可达**；vm.count=2 + corpus 769 种子
+  （748 旧 + 21 新）沿用。首 30 分钟: exec 96,851 @52/s、coverage **17,496 已超首轮 17.8h
+  终值 16,875**、corpus 658（fuzzer 已自主发现 12 个含 corten prctl 的程序、5 个 MODE
+  ENTER 链）、crash 0；本报告成稿时点（08:50）实测 coverage 17,515 / corpus 663 / crash 0
+  （crashes/ 仅 r07 遗留 4 目录）。证据 results/r08/m7-round2.md + results/r08/。
 - interlock flake 登记: `corten_test_txn_uninstall_interlock` / `txn_mutex_disjoint`
   历史时序 flake 各 1-3 例，基线内核可复现（同签名同频），复跑全绿——M7 口径 =
   "首跑容忍/复跑判定"（results/r07/m6t2-verify.md §2: 同轮基线内核 4 跑亦 1 次同签名，
   机理 = host vCPU 饥饿，协议代码无交集；A5 班再证两种签名同址，静音宿主复跑绿）。
-- 遗留（计划中）: KCSAN 未跑；syz "连续 2 夜无可复现 crash" 的 G6 完整口径需第二夜
-  （corpus 种子已备，下轮建议 vm.count=2 + 非 KASAN 快内核单独验证 hang 类，syz-report §4）；
-  B4（zap 路径 add_mm_counter-under-ptl preempt_nested WARN）裁定随 lockdep corten=on
-  复跑全套件执行。
+- 遗留（计划中）: KCSAN 未跑；syz "连续 2 夜无可复现 crash" 的 G6 完整口径 = 第二轮收数
+  （挂机中, 09-22 晨收）后判定（corpus 769 种子在用）；非 KASAN 快内核单独验证 hang 类
+  （syz-report §4）视第二轮结果定；B4（zap 路径 add_mm_counter-under-ptl preempt_nested
+  WARN）裁定随 lockdep corten=on 复跑全套件执行。
 
-### M8 终测报告 — **本报告 = v1.1 终稿（2026-09-21）**
+### M8 终测报告 — **本报告 = v1.2 终稿（2026-09-21）**
 - M8.T1（G1 五轮加测固化）✓ = results/r07/g1-final.md（§4.2）；M4.T5 run5 终验 ✓ =
   results/r07/t5-run5/t5-run5-report.md（§4.2-4.3）；M5.T4（G5 门）✓ NOT MET→A5→MET =
   results/r07/g5-gate/ + a5-fix.md（§4.4-4）；M8.T2（perfetto G2 定量）= **计划中**（§8）；
   M8.T3 = 本报告。
 - G1-G8 终态对账: **G1 MET 2/4（五轮固化 + run5 终验维持）/ G2 计划中（机制地板定性已引用
   perf1 §4）/ G3 数字面 NOT MET·机制面成立（六 boot 方向恒正）/ G4 MET（jvm 收窄入线,
-  噪声族观测维持）/ G5 MET（A5 修复后; 判定史 NOT MET→修复如实保留）/ G6 部分（syz 1 夜 +
-  lockdep ✓ + DEBUG_ATOMIC_SLEEP 47→0 + KUnit ✓；二夜口径与 KCSAN 计划中）/ G7 定性
+  噪声族观测维持）/ G5 MET（A5 修复后; 判定史 NOT MET→修复如实保留）/ G6 部分（syz 1 夜
+  [corten=off 面, v1.2 已如实缩限] + lockdep ✓ + DEBUG_ATOMIC_SLEEP 47→0 + KUnit ✓；
+  第二轮挂机中[corten 面首次覆盖]，完整口径与 KCSAN 计划中）/ G7 定性
   （机制成本地板 + M6 三方口径核对；定量计划中）/ G8 诚实性声明内嵌（§1.1/§1.4/§2.2/
   §2.4/§4.1）**。
 
@@ -575,10 +607,13 @@ m6t34-verify.md §3）+ arena_stats 快照（meta_bytes 1,372,160 B / 335 阵列
 ptdescs 335）+ DEV-12 每-16KB-mmap 一 descriptor 的结构性上界（T1c 池后 descriptor 随
 mmap+munmap 往返复用, 稳态驻留 = 窗口数）。vs 论文理论上界（PT 页同量级 metadata array）
 的正式对照测量未执行, 登记 §8。
-**G6（稳定性）— 部分（首轮完成, 二夜计划中）**: syzkaller 首夜 17.8h/1.42M execs 零内存安全
-crash + lockdep 全家族首检零 splat + DEBUG_ATOMIC_SLEEP 47→0 + KUnit 102 用例 0 fail +
-interlock flake 登记（§5.3/§5.4/§3-M7）。
-"连续 2 夜无可复现 crash"完整口径与 KCSAN 短跑 = §8 计划中（corpus 748 种子已备）。
+**G6（稳定性）— 部分（首轮完成 + 第二轮挂机中）**: syzkaller 首夜 17.8h/1.42M execs 零内存安全
+crash（首轮 corten=off 面, v1.2 已如实缩限并撤回误归因旁证, §3-M7/§5.4）+ lockdep 全家族首检
+零 splat + DEBUG_ATOMIC_SLEEP 47→0 + KUnit 102 用例 0 fail +
+interlock flake 登记（§5.3/§5.4/§3-M7）。第二轮已挂机（corten=on + PR_CORTEN prctl 描述 =
+corten 面首次实际覆盖, vm.count=2, corpus 769 种子; 首 30 分钟 coverage 17,496 已超首轮
+17.8h 终值, crash 0, results/r08/m7-round2.md）。
+"连续 2 夜无可复现 crash"完整口径（待第二轮 09-22 晨收数）与 KCSAN 短跑 = §8 计划中。
 G8（诚实性）: 本报告内嵌口径已齐（§1.1 8vCPU 方向性 D4、§1.4 负向清单、§2.2 DEVIATION、
 §2.4 LoC 终态账、§4.1 三口径）。
 
@@ -663,7 +698,7 @@ G8（诚实性）: 本报告内嵌口径已齐（§1.1 8vCPU 方向性 D4、§1.
 **诚实结论**: -14~-22% 残差 = 每-fault 事务语义 + 池簿记的**裸成本地板**，非风暴性回退、
 非泄漏、非锁竞争退化（profile 同形为证）；T1c 池每 op 两次 mmap_write 段（take+park）与
 legacy 同量级但临界区含路由工作。**M8 杠杆 = mark 批处理重构**（4 页一事务，fault 域
-重构，非小 diff，§7-C1）——本报告如实呈现该地板与杠杆，不宣称 v1.1 内可消除。
+重构，非小 diff，§7-C1）——本报告如实呈现该地板与杠杆，不宣称 v1.2 内可消除。
 pf 格（预映射 fault）无路由开销，终态围绕 0（-7.18/-3.82 固化班），是"纯通道成本"的
 上界估计来源。
 
@@ -723,15 +758,27 @@ pf 格（预映射 fault）无路由开销，终态围绕 0（-7.18/-3.82 固化
   corten=on lockdep boot 暴露（上游 zap_pte_range 同模式，随 M7 第二轮 lockdep 复跑
   裁定，results/r07/t1c-verify.md §8-3）。
 
-### 5.4 syzkaller 首轮（M7.T1/T2 数据点）
+### 5.4 syzkaller 首轮（M7.T1/T2 数据点）+ 第二轮（挂机中）
 
 - 1,416,524 execs / 17.8h 连续（KCOV+KASAN 构建 @025756094542，运行面 mmap/munmap/
   mprotect/madvise/mbind/userfaultfd/openat+clone/ptrace）；corpus 748、coverage 16,875。
 - **4 crash 全部环境/健壮性类（2×RCU GP kthread 饥饿 + 2×VM 无输出），零 KASAN
-  slab/UAF/溢出、零 BUG/WARNING/oops，repro reliability=0.00**；正面旁证: M4.T0 padding
-  输入校验被大量触发且安静拒绝（results/r07/syz-report.md §1/§3）。
-- corpus 748 programs 已保留作下轮种子（同上 §5）；下轮改进建议 = vm.count=2 +
-  rcu_stall_timeout 放宽 + 非 KASAN 快内核单独验证 hang 类（同上 §4）。
+  slab/UAF/溢出、零 BUG/WARNING/oops，repro reliability=0.00**（results/r07/syz-report.md
+  §1/§3）。
+- **覆盖面更正（v1.2, results/r08/m7-round2.md §0）**: 首轮 cmdline 无 corten=on
+  （corten 静态分支默认关）且无 corten prctl 描述——首轮未覆盖 corten 修改面；syz-report
+  §1 的"正面旁证"（M4.T0 padding 输入校验）实为上游 mm/pgsize_migration.c
+  `madvise_vma_pad_pages`，与 corten 无关，本版撤回该归因。首轮"零内存安全 crash"结论
+  在缩限后的覆盖面上维持。
+- **第二轮（r08, 09-21 08:02 挂机中, 目标 09-22 08:00）**: KCOV 重建 @b9541335a554
+  （025756094542 + 11 提交, sha256 d6c0dd5b…24f）；cmdline +corten=on + 新增
+  `prctl$PR_CORTEN_ARENA/MODE` 描述（syz-prog2c 实测可达）；vm.count=2 + reproduce=true
+  + corpus 769 种子（748 旧 + 21 新, prctl 签名未变全部有效载入）。首 30 分钟 coverage
+  17,496 已超首轮 17.8h 终值 16,875，fuzzer 自主发现 12 个 corten prctl 程序
+  （5 个 MODE ENTER 链），crash 0。证据 results/r08/m7-round2.md、results/r08/
+  {syz-cfg-r2.json, syz-manager-r2.log, kcov-build-r2.log, corten.txt(+.const)}。
+- corpus 748 programs 已保留作下轮种子（同上 §5）；后续 = vm.count=2（已实施）+
+  rcu_stall_timeout 放宽 + 非 KASAN 快内核单独验证 hang 类（同上 §4, 视第二轮结果定）。
 
 ### 5.5 fork/COW 隔离与对账
 
@@ -763,7 +810,7 @@ ETIMEDOUT×2、jvm ESRCH×1**）。
 | workload | 状态 | 关键证据 | 残余 |
 |---|---|---|---|
 | java（JVM 启动） | ✓ | `java -version` rc=0（D-G'' CDS 打洞后，results/r06/rogue-fix.md §4）；run_t0_dod java mprotect_routes 0→110 路由接管实证（results/r04/t0b-verify.md）；run5 jvm 3/3 rc=0 | find_vma_intersection RCU 语境 WARN 噪音级（功能无害，rogue-fix.md §6-2） |
-| JThreadBench（2000 线程×3） | ✓ | gupfix 后 rc=0 零 CFE（results/r06/gupfix.md §3"零改动 DoD 最后缺口闭合"）；run5 全矩阵 3/3 rc=0 + 独立回归腿 rc=0/CFE 0/fork-probe OK | ClassFormatError 降级观测项（五次未复现，§1.4-6） |
+| JThreadBench（2000 线程×3） | ✓ | gupfix 后 rc=0 零 CFE（results/r06/gupfix.md §3"零改动 DoD 最后缺口闭合"）；run5 全矩阵 3/3 rc=0 + 独立回归腿 rc=0/CFE 0/fork-probe OK；**v1.2 终验收口（results/r07/jtbcfe-close.md）: HEAD b9541335a554 件 3/3 rc=0 零 CFE + gdbpy17 金标准审计 pread ret=32963/diff_vs_disk=0/零零页（修复前 3120/28891/8 零页）+ FormatData_en class+load 干净加载** | 无——原 ClassFormatError 观测项移入 §7-0 已闭环（A5 叠加后 5 次 MODE java 全 rc=0） |
 | metis_eq | ✓ | rogue 修复后 3/3 rc=0 checksum 一致（rogue-fix.md §4）；**run5 回归双腿 checksum 8a8db990 双臂同值 + fork-probe OK + fork_faithful 前进** | fork 后段 OQ-D 残余=闭合维持观测项 |
 | dedup_eq（glibc + tcmalloc 双档） | ✓ | run5 3 rep rc=0 双档（results/r07/t5-run5-report.md §3）；D15 崩溃级回退 -91.84% 已修复（t5-overhead-diagnosis.md §3.2） | 无 |
 | psearchy_eq | ✓ | run5 rc=0 checksum 双臂同值 d5b067be（=run2 登记）；-40% 方差定案暖机假象（results/r06/g1-consolidation.md §4） | 无 |
@@ -786,8 +833,8 @@ MAPERR；mprotect/mlock 作用于预约范围由 ENOMEM 变为 legacy 成功/拒
 | D-G'' shadow-VMA CDS 打洞（原 A 级） | 452ad7b9d91e; MODE `java -version` rc=0、三 app 全 rc=0（results/r06/dg2-verify.md、rogue-fix.md §4） |
 | present-RO 缺陷族（原 T5 遮蔽项） | e219920b0923（CORTEN_UNMAP_KEEP_PERM + FRESH 门 perm 优先 + demote 前 perm 物化）; 修复后 dedup 5/5、metis 3/3、psearchy 3/3 rc=0（rogue-fix.md §4） |
 | OQ-D metis fork 后段主体 | 忠实 fork 落树后 run3/run4/g1 班/run5 维持闭合（checksum 三方同值, g1-final.md §4; t5-run5-report.md §5）; 残余降级 B2 观测 |
-| JThreadBench ClassFormatError（原 B1） | gupfix 0719bc6ae74e 修复; run3/run4/g1 班/G5 班/run5 五次独立 0 命中（results/r06/gupfix.md §3; results/r07/t5-run5-report.md §5） |
-| GUP 短读/互操作（M5.T3 审计目标） | 5c545359e856; fast 零改动证实 + slow 两真 bug 修复 + guest 四态矩阵全绿（results/r07/m5t3-verify.md） |
+| JThreadBench ClassFormatError（原 B1） | gupfix 0719bc6ae74e 修复; run3/run4/g1 班/G5 班/run5 五次独立 0 命中（results/r06/gupfix.md §3; results/r07/t5-run5-report.md §5）; **v1.2 终验收口正式关闭**: HEAD 金标准复证 3/3 rc=0 零 CFE + pread ret=32963/diff_vs_disk=0/零零页（修复前 3120/28891/8）+ FormatData_en 干净加载（results/r07/jtbcfe-close.md） |
+| GUP 短读/互操作（M5.T3 审计目标） | 5c545359e856 复审 PASS 入库; fast 零改动证实 + slow 两真 bug 修复（force 移除=T2' 残余②落地 + UNSHARE 落回 do_wp_page）+ io_uring 长期 pin churn 零损坏 + guest 四态矩阵全绿（results/r07/m5t3-verify.md） |
 | A1 G1 加测固化缺失 | **已执行**: 五轮 ABAB 固化 G1 = MET 2/4（results/r07/g1-final.md, §4.2）+ run5 终验维持 |
 | A4 M5.T1b/T2' 未 commit | **已提交** 1f8dfc78ae9f tag corten-r07-m5t1b（git log 核对, §9.1） |
 | **A5 G5 NOT MET: MODE 生命周期退出 RCU GP（v1.0 唯一开放 A 级项）** | **已修复**: b9541335a554 tag corten-r07-a5（惰性 ENTER + 惰性 fork + 空 state call_rcu）; G5 = MET（fork -10.65/exec +3.77/shell +0.52）; 隔离实验 +741%→+6%（results/r07/a5-fix.md; t5-run5-report.md §4） |
@@ -843,10 +890,10 @@ MAPERR；mprotect/mlock 作用于预约范围由 ENOMEM 变为 legacy 成功/拒
 | 2 | M5 收口 | **✓ 完成** | T1b/T2' = 1f8dfc78ae9f tag corten-r07-m5t1b；T3 = 5c545359e856 tag corten-r07-m5t3（§3-M5） |
 | 3 | M5.T3/T4（G5） | **✓ 完成（含 A5 修复）** | GUP 互操作全绿; G5 门 NOT MET → 根因定案 → **A5 b9541335a554 修复 → MET（fork -10.65/exec +3.77/shell +0.52）**（§4.4-4）; JVM MODE 臂 = JTB 回归 rc=0 零 CFE |
 | 4 | M6.T1-T4 | **✓ 完成** | T1/T2/T3+T4 全提交; guest 判据闭合（69164/69356 roundtrip、RSS 281→3.8MB、三方口径一致、DEBUG_ATOMIC_SLEEP 47→0）（§3-M6）; G7 定量除外 → A7（下表） |
-| 5 | M7 周期 | **首轮 ✓** | syz 1 夜 + lockdep 首检 + DEBUG_ATOMIC_SLEEP 扩容修复 + 每切片 lockdep 变体全绿; 第二夜（**vm.count=2 + 非 KASAN 快内核口径**, syz-report §4）/KCSAN/B4 裁定 → A8 |
+| 5 | M7 周期 | **首轮 ✓ + 第二轮挂机中** | syz 首轮 1 夜 + lockdep 首检 + DEBUG_ATOMIC_SLEEP 扩容修复 + 每切片 lockdep 变体全绿（首轮 corten=off 面更正见 §3-M7/§5.4）；**第二轮 09-21 08:02 挂机中**（corten=on + PR_CORTEN prctl 描述 = corten 面首次覆盖 + vm.count=2 + corpus 769, m7-round2.md）→ 09-22 晨收数; KCSAN/B4 裁定 → A8 |
 | 6 | M8.T1（G1 固化）+ run5 终验 | **✓ 完成** | 与工作项 1 同夜窗合并执行 |
 | 7 | M8.T2 perfetto G2 | **计划中 → A6** | 定性替代已在 §4.4-G2 引用 |
-| 8 | M8.T3 报告终稿 | **✓ 本报告 v1.1** | G1-G8 全 gate 对账（§3-M8）、LoC 终态账（§2.4, HEAD b9541335a554 实测 19,305 行）、G8 声明内嵌（§1.4-8）; ARM64_PORTING.md 已定稿（publish/） |
+| 8 | M8.T3 报告终稿 | **✓ 本报告 v1.2** | G1-G8 全 gate 对账（§3-M8）、LoC 终态账（§2.4, HEAD b9541335a554 实测 19,305 行）、G8 声明内嵌（§1.4-8）; ARM64_PORTING.md 已定稿（publish/）; v1.2 增量 = JTB 闭环 + M5.T3 入库入账补全 + M7 二轮挂机/首轮面更正 |
 | 9 | **M8 终版数字冻结** | **✓ 本报告即冻结口径** | G1 = 五轮固化 + run5 双口径（§4.2-4.3）；G4/G5 = run5 正式数；M6 = 69164/69356 对账；MODE 兼容 = 六件套全 rc=0；此后上游投稿/对外引用一律以本版数字为准 |
 | 10 | M9 P2/P3 | **计划中 → C4** | arm64 热钩子接线 + contpte/BBM 决议 + access_error 等价门 |
 | 11 | 上游投稿准备评估 | **计划中** | 前置: 本冻结口径 + 26 补丁序列（patches/0001-*.patch 12 件 + 各切片 diff 快照）自足可评；评估项 = 邮件列表格式（cover letter/commit message 英文化核对）/维护者对 glue 白名单与 DEV 表的裁决入口（STATE D13/D17 先例）/ kvm-unitests 与更广 .config 矩阵是否补测。与 A6-A8 无相互阻塞 |
@@ -860,7 +907,7 @@ MAPERR；mprotect/mlock 作用于预约范围由 ENOMEM 变为 legacy 成功/拒
 |---|---|---|---|
 | A6 | G2 perfetto 定量（M8.T2）未执行 | §4.4-G2（定性替代已引用: M3 头条 + M1 PER_VMA_LOCK + perf1 §4 profile） | SQL 固化三件套（mmap_lock_contention/fault_latency/sched_breakdown），1 日窗 |
 | A7 | G7 内存开销定量 vs 论文上界未执行 | §4.4-G7（定性 + 三方口径核对在档） | 常驻/换出两态 × 窗口数扫描（meta_bytes/ptdescs/desc 行数 vs 理论 array 上界），半天 |
-| A8 | M7 第二夜 + KCSAN（G6 完整口径） | §3-M7（corpus 748 种子已备; 下轮 vm.count=2 + rcu_stall_timeout 放宽 + 非 KASAN 快内核验证 hang 类） | syz-manager 续跑一夜 + KCSAN 构建短跑（伴随）+ B4 lockdep corten=on 复跑裁定 |
+| A8 | M7 第二轮收数+判定 + KCSAN（G6 完整口径） | §3-M7（第二轮 09-21 08:02 已挂机、corten=on 面首次覆盖, 09-22 08:00 收; corpus 769 种子在用; rcu_stall_timeout 放宽与非 KASAN 快内核验证 hang 类视第二轮结果定） | 第二轮收数判定（"连续 2 夜无可复现 crash"完整口径）+ KCSAN 构建短跑（伴随）+ B4 lockdep corten=on 复跑裁定 |
 
 ---
 
@@ -919,7 +966,8 @@ green 门台账: run/green.txt（r07-a5 与 r07-t5run5 条目含 G5/G1-G4 终数
 - T5 诊断与修复: results/r06/t5-overhead-diagnosis.md（= publish/t5-overhead-diagnosis.md）、
   results/r06/t5-overhead-build2*.log
 - present-RO 族: results/r06/rogue-fix.md（探针内核取证 rogue/）
-- JTB CFE 根因: results/r06/jtbcfe-investigation.md、results/r06/jtbcfe-final.md
+- JTB CFE 根因: results/r06/jtbcfe-investigation.md、results/r06/jtbcfe-final.md；
+  **终验收口（v1.2 闭环件）: results/r07/jtbcfe-close.md（= publish/jtbcfe-close.md 镜像）**
 - GUP 门修复: results/r06/gupfix.md + results/r06/gupfix/
 - M5.T1a: results/r06/m5t1a-final-verify.md + results/r06/m5t1a/（guest-final/、
   roundtrip-1000-r2.log、fork_isolation/）
@@ -950,16 +998,20 @@ green 门台账: run/green.txt（r07-a5 与 r07-t5run5 条目含 G5/G1-G4 终数
 - M6.T2: results/r07/m6t2-verify.md + results/r07/m6t2-guest/ + results/r07/m6t2-*.log
 - M6.T3+T4（含 §7 复审处置 + §8 zapfix）: results/r07/m6t34-verify.md + results/r07/
   m6t34-guest/ + m6t34-rev/ + m6t34-zapfix/ + m6t34-*.log
-- M7: results/r07/m7-preheat.md、results/r07/m7-preheat-syz.md、results/r07/syz-report.md、
+- M7 首轮: results/r07/m7-preheat.md、results/r07/m7-preheat-syz.md、results/r07/syz-report.md、
   results/r07/{lockdep-build.log, lockdep-kunit.log, lockdep-kunit-run2.log,
   kcov-build.log, syz-manager.log}
+- **M7 第二轮（挂机中, v1.2）**: results/r08/m7-round2.md + results/r08/{syz-cfg-r2.json,
+  syz-manager-r2.log, syz-manager-r2-head.log, kcov-build-r2.log, syzkaller-rebuild-r2.log,
+  kcov-Image-r2(+.sha256), corten.txt + corten.txt.const}
 - M9: results/r06/m9-p1/m9-p1-verify.md + results/r06/m9-p1/（kunit-arm64*.log、
   image-build.log）、results/r02/m9-baseline-build.log（Round A/B）
 - 设计/规范: docs/{PAPER_SPEC,DESIGN,EVAL,ROADMAP}.md；publish/{M3B_DESIGN,M4T0_SPEC,
   M5_FORK_SPEC,M6_RMAP_SPEC,ARM64_PORTING}.md
 - 夜叙事: log/20260912-r00-smoke.md、log/20260913-r01.md、log/20260914-r02.md、
-  log/20260916-r04.md、log/20260917-r05.md、log/20260918-r06.md（r07 起 = STATE.md
-  + publish/STATE-snapshot-*.md 序列）
+  log/20260916-r04.md、log/20260917-r05.md、log/20260918-r06.md、**log/20260919-r07.md**
+  （= publish/log/20260919-r07.md 镜像; r07 连续工作段收官报告, 后续滚动条目 =
+  STATE.md + publish/STATE-snapshot-*.md 序列）
 
 ### 9.3 复现指南（同参重跑）
 
@@ -985,9 +1037,11 @@ run5 登记环境项）。
   `--kdir /root/ktree`，results/r07/m5t1b-verify.md §2e）。
 - **fork 压测**: bench/arena-stress/{fork_arena_test.c, cow_collision.c, fork_battery.sh}
   （`/root/fork_battery.sh --prebuilt /root/ks-ship --outdir …`）。
-- **syzkaller**: `syz-manager -cfg results/r07/syz-cfg-final.json`（KCOV+KASAN 内核
-  /home/ppw/linux-6.18-kcov @025756094542，corpus 种子 /home/ppw/syzwork/corpus/；
-  第二轮建议 vm.count=2 + 非 KASAN 快内核）。
+- **syzkaller**: 首轮 `syz-manager -cfg results/r07/syz-cfg-final.json`（KCOV+KASAN 内核
+  /home/ppw/linux-6.18-kcov @025756094542，corpus 种子 /home/ppw/syzwork/corpus/）；
+  **第二轮（进行中）`-cfg results/r08/syz-cfg-r2.json`**（同内核树重建 @b9541335a554,
+  kcov-Image-r2；cmdline +corten=on + corten prctl 两描述 + vm.count=2；
+  非 KASAN 快内核验证 hang 类视第二轮结果定）。
 - **perfetto**: 采集/SQL 模板 results/r00/smoke_guest.cfg + docs/EVAL.md §5
   （G2 定量对照 = A6 计划中, 采集链路已在 r00 冒烟验证）。
 - **G5 复测**（A5 后口径）: guest 侧 lat_proc 三件套 ×3 rep 臂级交错；hook 必须用
@@ -999,35 +1053,49 @@ run5 登记环境项）。
 
 ---
 
-## 附: 本报告自检状态（v1.1 终稿, 2026-09-21）
+## 附: 本报告自检状态（v1.2 终稿, 2026-09-21）
 
-- 全部 §引用的 results/publish/docs/log 路径已核对存在（终稿时点 2026-09-21；本附录更新时
-  对新增路径 t5-run5/、a5fix/、bzimg/r07-a5、bzimg/r07-t5run5、run/green.txt r07-a5/
-  r07-t5run5 条目逐项复核）。
+- 全部 §引用的 results/publish/docs/log 路径已核对存在（终稿时点 2026-09-21；v1.1 附录对
+  t5-run5/、a5fix/、bzimg/r07-a5、bzimg/r07-t5run5、run/green.txt r07-a5/r07-t5run5 条目
+  逐项复核；**v1.2 附录对新增路径 results/r07/jtbcfe-close.md、publish/jtbcfe-close.md、
+  log/20260919-r07.md、results/r08/ 全目录（m7-round2.md、syz-cfg-r2.json、
+  syz-manager-r2.log、kcov-Image-r2 等）逐项复核**）。
 - PENDING 占位清零维持: v1.0 处置的 12 处 PENDING 无回潮；v1.0 的 4 项「计划中」中
-  **G5-fix（原 A5）已在本班完成闭环**（§7-0），余 G2→A6 / G7 定量→A7 / G6 二夜+KCSAN→A8
-  维持显式登记；M9 P2/P3 与上游投稿评估新增登记（§8）。
+  **G5-fix（原 A5）已在本班完成闭环**（§7-0），余 G2→A6 / G7 定量→A7 /
+  G6 二轮收数+KCSAN→A8 维持显式登记；M9 P2/P3 与上游投稿评估新增登记（§8）。
 - G1-G8 gate 终态对账: **G1 MET 2/4（五轮 ABAB 固化 + run5 终验维持: 固化 unmap
   +45.4/+142.0、unmap-virt +1142/+2583；run5 unmap +61.2/+138.7、unmap-virt +1156/+2327）**
   / **G2 计划中（A6; 定性替代 = M3 头条 + M1 PER_VMA_LOCK + perf1 §4 profile）/
   G3 数字面 NOT MET·机制面成立（六 boot 方向恒正 + 幅度不定, 定案声明 §4.4-2）/
   G4 MET（jvm -6.59→-4.57% 收窄入线; 噪声族观测维持 §4.4-3）/ G5 MET（A5 修复后
   fork -10.65/exec +3.77/shell +0.52; 修复前 +516/+172/+354 判定史如实保留 §4.4-4）/
-  G6 部分（syz 1 夜 + lockdep ✓ + DEBUG_ATOMIC_SLEEP 47→0 + KUnit 102 用例 ✓;
-  二夜口径与 KCSAN → A8）/ G7 定性在档 + 三方口径核对, 定量 → A7 / G8 诚实性声明内嵌
+  G6 部分（syz 1 夜[corten=off 面, v1.2 缩限更正] + lockdep ✓ + DEBUG_ATOMIC_SLEEP 47→0 +
+  KUnit 102 用例 ✓; 第二轮挂机中[corten=on 面首次覆盖, 首 30 分钟 coverage 17,496 已超
+  首轮终值, crash 0]，完整口径与 KCSAN → A8）/ G7 定性在档 + 三方口径核对, 定量 → A7 /
+  G8 诚实性声明内嵌
   （8vCPU 方向性 D4、三口径 §4.1、DEVIATION 清单 §2.2、LoC 净增声明 §2.4、负向清单 §1.4）**。
-- 与 STATE.md 一致性: STATE.md 快照截至 v1.0（G5 NOT MET + REPORT v1.0 条目）；本 v1.1
-  的增量事实（A5 提交 b9541335a554/tag corten-r07-a5、G5 MET、run5 四门终数、M4=PASS）
-  均有 run/green.txt r07-a5 与 r07-t5run5 registry 条目 + results/r07/{a5-fix.md,
-  t5-run5/t5-run5-report.md} 同源背书，**STATE.md 主文件待主 agent 下一循环按本版附录
-  追加 r07 收官条目**（本报告不改 STATE.md）。
+- 与 STATE.md 一致性: STATE.md 主文件条目截至 REPORT v1.0 时点（G5 NOT MET + REPORT
+  v1.0 条目；其中 M5.T3 复审 PASS 入库 5c545359e856 已有 r07 日班条目在档）。本 v1.1 的
+  增量事实（A5 提交 b9541335a554/tag corten-r07-a5、G5 MET、run5 四门终数、M4=PASS）与
+  本 v1.2 的增量事实（jtbcfe-close 闭环、M7 第二轮挂机/首轮 fuzz 面更正）均有 run/green.txt
+  registry 条目 + results/r07/{a5-fix.md, t5-run5/t5-run5-report.md, jtbcfe-close.md} +
+  results/r08/m7-round2.md 同源背书，**STATE.md 主文件的 r07 收官 + r08 条目待主 agent
+  下一循环按本版附录追加**（本报告不改 STATE.md）。
 - 数字溯源: 本报告全部数字可经 §9.2 索引追溯至 results/ 原始件: G1 固化 =
   results/r07/g1-final.md（10 格 × 5 轮全表）；run5 = results/r07/t5-run5/
   t5-run5-report.md（§1 判定表/§2 G1 详表/§3 apps/§4 G5）；G5 修复 =
   results/r07/a5-fix.md（§3.1 隔离/§3.2 lat_proc/§3.3 回归）；M6 数字 =
   m6t2-verify/m6t34-verify §3；KUnit 计数 = 各切片 kunit-on*log 的 TAP 行计数
-  （A5 = a5fix/kunit-on{1,2}-full.log）；LoC = HEAD b9541335a554 `wc -l` 实测。
+  （A5 = a5fix/kunit-on{1,2}-full.log；m5t3 = m5t3-kunit-final-on1/on3.log）；LoC =
+  HEAD b9541335a554 `wc -l` 实测；**v1.2 增量溯源 = JTB 闭环数（3/3 rc=0、
+  ret=32963/diff=0/零零页、FormatData_en）= results/r07/jtbcfe-close.md §0-§2 实测记录；
+  M5.T3 复审入库 = STATE.md r07-m5t3 条 + git log/tag 核对；M7 二轮数（17,496/17,515、
+  corpus 658→663、769 种子、crash 0）= results/r08/m7-round2.md §1-§3 +
+  results/r08/syz-manager-r2.log（本报告引用时点 08:50 实测行）**。
 - 不夸大自查: G1 MET 2/4 与 mmap-pf -14~-22% 机制成本地板并存陈述（§4.6）；G3 跨轮
   幅度收窄/不定如实（+3.11~+19.17 谱系全列）；arm64 P2/P3 未做如实（§3-M9/§8）；
   G5 三班幅度差如实并陈（§4.4-4/B10）；metis 固化班 +35.92% 伪影剔除不引用；
-  pf 高方差中位不判读（§4.4-B6）。
+  pf 高方差中位不判读（§4.4-B6）；**v1.2: JTB CFE 闭环仅声明到实测面（HelloFmt 腿
+  3/3 + 金标准审计 + JThreadBench 各班 rc=0），不外推"所有 JVM 应用零缺陷"；
+  syz 首轮结论对覆盖面缩限（corten=off）+ 误归因旁证撤回（§3-M7/§5.4）；M7 二轮
+  coverage/corpus 数字标注采集时点，挂机未收数前不作 G6 判定**。
