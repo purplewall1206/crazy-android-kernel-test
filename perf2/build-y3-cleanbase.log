@@ -1,0 +1,104 @@
+  DESCEND objtool
+  UPD     include/config/kernel.release
+  UPD     include/generated/utsrelease.h
+  INSTALL libsubcmd_headers
+  CALL    scripts/checksyscalls.sh
+  CC      init/version.o
+  CC      kernel/fork.o
+  CC      mm/filemap.o
+  CC      mm/oom_kill.o
+  CC      arch/x86/mm/init_64.o
+  CC      arch/x86/kernel/espfix_64.o
+  AR      init/built-in.a
+  CC      arch/x86/mm/fault.o
+  CC      arch/x86/mm/ioremap.o
+  CC      drivers/base/firmware_loader/main.o
+  CC      kernel/sys.o
+  CC      arch/x86/kernel/paravirt.o
+  CC      arch/x86/mm/pgtable.o
+  CC      arch/x86/platform/efi/efi_64.o
+  CC      arch/x86/mm/pat/set_memory.o
+  AR      drivers/base/firmware_loader/built-in.a
+  AR      drivers/base/built-in.a
+  CC      mm/percpu.o
+  AR      arch/x86/kernel/built-in.a
+  CC      mm/memory.o
+  CC      mm/mlock.o
+  CC      mm/mmap.o
+  CC      mm/mmu_gather.o
+  CC      mm/mprotect.o
+  CC      kernel/module/main.o
+  CC      mm/mremap.o
+  AR      arch/x86/platform/efi/built-in.a
+  AR      arch/x86/platform/built-in.a
+  CC      mm/pgtable-generic.o
+  AR      drivers/built-in.a
+  CC      mm/rmap.o
+  CC      mm/vma.o
+  AR      arch/x86/mm/pat/built-in.a
+  AR      arch/x86/mm/built-in.a
+  AR      arch/x86/built-in.a
+  CC      mm/mseal.o
+  CC      mm/madvise.o
+  CC      mm/swapfile.o
+  CC      mm/hugetlb.o
+  CC      mm/hugetlb_vmemmap.o
+  CC      mm/mempolicy.o
+  CC      mm/sparse-vmemmap.o
+  CC      mm/migrate.o
+  AR      kernel/module/built-in.a
+  CC      mm/pt_reclaim.o
+  AR      kernel/built-in.a
+  CC      mm/corten.o
+  CC      mm/corten_test.o
+  CC      mm/corten_arena.o
+  CC      mm/corten_arena_test.o
+  CC      mm/corten_fault_test.o
+  AR      mm/built-in.a
+  AR      built-in.a
+  AR      vmlinux.a
+  LD      vmlinux.o
+vmlinux.o: warning: objtool: cpuidle_enter_state+0x142: return with instrumentation enabled
+  MODPOST Module.symvers
+WARNING: modpost: vmlinux: memblock_end_of_DRAM: EXPORT_SYMBOL used for init symbol. Remove __init or EXPORT_SYMBOL.
+  CC [M]  .module-common.o
+  UPD     include/generated/utsversion.h
+  CC      init/version-timestamp.o
+  LD [M]  fs/efivarfs/efivarfs.ko
+  LD [M]  drivers/thermal/intel/x86_pkg_temp_thermal.ko
+  LD [M]  net/netfilter/xt_addrtype.ko
+  KSYMS   .tmp_vmlinux0.kallsyms.S
+  AS      .tmp_vmlinux0.kallsyms.o
+  LD      .tmp_vmlinux1
+  NM      .tmp_vmlinux1.syms
+  KSYMS   .tmp_vmlinux1.kallsyms.S
+  AS      .tmp_vmlinux1.kallsyms.o
+  LD      .tmp_vmlinux2
+  NM      .tmp_vmlinux2.syms
+  KSYMS   .tmp_vmlinux2.kallsyms.S
+  AS      .tmp_vmlinux2.kallsyms.o
+  LD      vmlinux.unstripped
+  NM      System.map
+  SORTTAB vmlinux.unstripped
+  OBJCOPY vmlinux
+  GEN     modules.builtin.modinfo
+  GEN     modules.builtin
+  CC      arch/x86/boot/version.o
+  VOFFSET arch/x86/boot/compressed/../voffset.h
+  OBJCOPY arch/x86/boot/compressed/vmlinux.bin
+  RELOCS  arch/x86/boot/compressed/vmlinux.relocs
+  CC      arch/x86/boot/compressed/kaslr.o
+  GZIP    arch/x86/boot/compressed/vmlinux.bin.gz
+  CC      arch/x86/boot/compressed/misc.o
+  MKPIGGY arch/x86/boot/compressed/piggy.S
+  AS      arch/x86/boot/compressed/piggy.o
+  LD      arch/x86/boot/compressed/vmlinux
+  ZOFFSET arch/x86/boot/zoffset.h
+  OBJCOPY arch/x86/boot/vmlinux.bin
+  AS      arch/x86/boot/header.o
+  LD      arch/x86/boot/setup.elf
+  OBJCOPY arch/x86/boot/setup.bin
+  BUILD   arch/x86/boot/bzImage
+Kernel: arch/x86/boot/bzImage is ready  (#3)
+BUILD_EXIT=0
+7a6258c5e9f81a28d678a7ef76b91540824141b4e42afa69910ce9f510f51eee  arch/x86/boot/bzImage
