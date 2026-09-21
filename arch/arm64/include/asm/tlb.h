@@ -9,6 +9,7 @@
 #define __ASM_TLB_H
 
 #include <linux/pagemap.h>
+#include <linux/corten.h>
 
 
 #define tlb_flush tlb_flush
@@ -77,6 +78,19 @@ static inline void __pte_free_tlb(struct mmu_gather *tlb, pgtable_t pte,
 {
 	struct ptdesc *ptdesc = page_ptdesc(pte);
 
+	/*
+	 * CortenMM hook: this is the arm64 funnel for every TLB-batched
+	 * PTE-page free (free_pgtables(), zap direct reclaim); the
+	 * synchronous paths (fault error handling, THP collapse/split,
+	 * khugepaged's deferred free) already go through the hooked
+	 * pte_free() in asm-generic/pgalloc.h, but the batched path frees
+	 * via __tlb_remove_table() and never sees pte_free(), so it needs
+	 * this explicit call -- the mirror of x86's ___pte_free_tlb().  No
+	 * mm context is needed: the hook only looks up the PFN-keyed
+	 * descriptor, never sleeps and never waits on a lock held by
+	 * reclaim (see mm/corten.c).  No-op unless booted with corten=on.
+	 */
+	corten_on_pte_free(pte);
 	tlb_remove_ptdesc(tlb, ptdesc);
 }
 

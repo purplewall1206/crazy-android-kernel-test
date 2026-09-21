@@ -16,18 +16,14 @@ SYM_PIC_ALIAS(physical_mask);
 
 pgtable_t pte_alloc_one(struct mm_struct *mm)
 {
-	pgtable_t page = __pte_alloc_one(mm, GFP_PGTABLE_USER);
-
 	/*
-	 * CortenMM hook: attach the page descriptor when the PT page is
-	 * born.  This is the outermost user PTE-page allocator on x86;
-	 * kernel page tables (pte_alloc_one_kernel()) are deliberately not
-	 * tracked.  No-op unless booted with corten=on.
+	 * The CortenMM alloc hook lives in asm-generic
+	 * __pte_alloc_one_noprof(), the one spot both x86 (via this
+	 * __pte_alloc_one() wrapper) and arm64 (which inherits the generic
+	 * allocator wholesale) reach; calling it here as well would try to
+	 * install the page descriptor twice.
 	 */
-	if (page)
-		corten_on_pte_alloc(mm, page);
-
-	return page;
+	return __pte_alloc_one(mm, GFP_PGTABLE_USER);
 }
 
 void ___pte_free_tlb(struct mmu_gather *tlb, struct page *pte)

@@ -84,6 +84,15 @@ static inline pgtable_t __pte_alloc_one_noprof(struct mm_struct *mm, gfp_t gfp)
 		return NULL;
 	}
 
+	/*
+	 * CortenMM hook: attach the page descriptor when the PT page is
+	 * born.  Single landing spot for every architecture that inherits
+	 * or wraps the asm-generic user PTE allocator (x86 and arm64 both
+	 * funnel through here); kernel page tables (pte_alloc_one_kernel())
+	 * are deliberately not tracked.  No-op unless booted with corten=on.
+	 */
+	corten_on_pte_alloc(mm, ptdesc_page(ptdesc));
+
 	return ptdesc_page(ptdesc);
 }
 #define __pte_alloc_one(...)	alloc_hooks(__pte_alloc_one_noprof(__VA_ARGS__))
