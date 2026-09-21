@@ -3,7 +3,10 @@
 Revisions: r1 (2026-09-14, initial design). **r2 (2026-09-16, 实证回填)** —
 2026-09-15 aarch64 cross-compile results folded in: §8 P1 status note, §10
 OQ4/OQ5 conclusions, new §11 (Round A/B evidence; logs under
-`/home/ppw/cortenmm/results/r02/`).
+`/home/ppw/cortenmm/results/r02/`). **r3 (2026-09-21, M9-P2 钩子落地)** —
+lifecycle hooks landed and verified on arm64: §6 r3 status block, §10 OQ4
+final resolution, §11.4 item 3, new §11.5 (M9-P2 evidence; logs under
+`/home/ppw/cortenmm/publish/results/r07/`).
 
 Status: design document (M9 deliverable). At r1 no code had been
 cross-compiled; r2 supersedes that: the arm64 defconfig baseline `Image` and
@@ -353,7 +356,8 @@ x86 today (M2a, commit b8386e4e2467):
 | free, synchronous | `include/asm-generic/pgalloc.h:117-128` (`pte_free`) | `corten_on_pte_free()` :127 |
 | (x86-only today) PT_RECLAIM reclaim funnel | `mm/Kconfig:1415-1421` depends `ARCH_SUPPORTS_PT_RECLAIM`, selected only by `arch/x86/Kconfig:331` | flows through `pte_free_tlb` → funnel 2 |
 
-arm64 counterparts (verified in this tree):
+arm64 counterparts (verified in this tree; **r3 (2026-09-21): all landed, see
+the r3 status block at the end of this section**):
 
 1. **Alloc**: arm64 does *not* override `pte_alloc_one`; it inherits
    asm-generic (`arch/arm64/include/asm/pgalloc.h:18` includes
@@ -369,8 +373,12 @@ arm64 counterparts (verified in this tree):
    :80) — there is no `___pte_free_tlb` indirection. Hook = one
    `corten_on_pte_free(pte)` line before `tlb_remove_ptdesc`, preserving the
    x86 ordering (staleness published under the descriptor write lock before
-   the batched free completes; mm/corten.c:384-401).
-3. **Free, synchronous**: `pte_free()` in `include/asm-generic/pgalloc.h:117-128`
+   the batched free completes; mm/corten.c:384-401). Why the batched funnel
+   needs its own call: `tlb_remove_ptdesc()` → `tlb_remove_table()` →
+   generic `__tlb_remove_table()` → `pagetable_dtor_free()`
+   (asm-generic/tlb.h:217-222) — the batched path **never passes through**
+   the hooked `pte_free()`, exactly like x86.
+3. **Free, synchronous**: `pte_free()` in `include/asm-generic/pgalloc.h`
    **already contains the hook** (added in M2a) and arm64 inherits it —
    zero arm64-specific work. (`pte_free` users on arm64: fault-error,
    THP collapse/split, khugepaged deferred free — same call sites as x86.)
@@ -388,6 +396,26 @@ arm64 counterparts (verified in this tree):
 Net: the arm64 hook delta is the `__pte_free_tlb` one-liner plus the alloc
 decision — structurally identical double-funnel coverage to x86; a PT page
 cannot die untracked.
+
+**r3 status (2026-09-21, M9-P2 landed — evidence in §11.5)**: OQ4 was
+resolved as option (a), with one non-obvious consequence found and handled.
+The `corten_on_pte_alloc()` call now lives inside asm-generic
+`__pte_alloc_one_noprof()` (pgalloc.h:94, comment :87-92) — one landing
+spot for x86 (whose `pte_alloc_one()` wraps `__pte_alloc_one()`) and arm64
+(inherits wholesale). Because `corten_ptdesc_install()` is *not*
+re-entrant-safe on the same pfn — a second install replaces the descriptor
+and fires `WARN_ON_ONCE` (mm/corten.c:356) — leaving x86's own funnel call
+in place would have double-installed on every user PTE allocation, so the
+M9-P2 patch deletes the x86-side call (`arch/x86/mm/pgtable.c:17-27`) as
+the paired dedup. The arm64 side adds exactly the predicted one-liner:
+`corten_on_pte_free(pte)` before `tlb_remove_ptdesc()` in
+`arch/arm64/include/asm/tlb.h` (:93, plus the `linux/corten.h` include at
+:12), with the free-hook ordering identical to x86's `___pte_free_tlb()`.
+The synchronous `pte_free()` hook (:136) needed no change. Coverage after
+M9-P2: every arm64 PT page birth/death funnels through a hook — alloc via
+`pte_alloc_one*` → `__pte_alloc_one_noprof` (:94); free via either
+`pte_free()` (:136, synchronous paths) or `__pte_free_tlb` (asm/tlb.h:93,
+TLB-batched paths: `free_pgtables()`, zap).
 
 ## 7. 16K/64K base-page specifics
 
@@ -435,7 +463,7 @@ Aggregating §3.1/§4; what actually changes:
 | Phase | Scope | Est. LoC | Risk | Exit criterion |
 |---|---|---|---|---|
 | P1 compile-level **(r2: core proven green, scope shrunk — status note below)** | Relax `CORTEN_MM` `depends on MMU && X86_64` → `(X86_64 \|\| ARM64)` (mm/Kconfig:1429-1432); kill the `512` literal (corten.h:138, corten.c:314); `#if`/table-drive the geometry helpers (corten.c:449-550) for folded levels; fix 64K-page breakage | 60-150 | low — compiler finds everything | `make ARCH=arm64 LLVM=1 defconfig+corten` builds; KUnit passes under qemu -M virt |
-| P2 hook landing | asm-generic `pte_alloc_one` placement decision (OQ4) + `__pte_free_tlb` one-liner (asm/tlb.h:75-81); debugfs counters sanity on arm64 | 20-50 | low | boot with `corten=on`, ptdesc counter tracks PT pages across exec/exit stress |
+| P2 hook landing **(r3: landed 2026-09-21, see §6 r3 status + §11.5)** | asm-generic `pte_alloc_one` placement decision (OQ4) + `__pte_free_tlb` one-liner (asm/tlb.h:75-81); debugfs counters sanity on arm64 | 20-50 | low | boot with `corten=on`, ptdesc counter tracks PT pages across exec/exit stress |
 | P3 semantic adaptation | Real view on arm64: `pud_leaf/pmd_leaf` (incl. `pmd_cont`) → `-EOPNOTSUPP`; runtime l4/l5 folding in geometry; **contpte interop decision (OQ1, Option A: PTL nesting)**; map/mark sync-point uses gathered `ptep_get` + BBM-safe sequence (§5) | 250-500 | **high** — correctness core | KUnit + arena smoke: fault-populate, mprotect, munmap, fork-COW on arm64; lockdep clean incl. desc→PTL order |
 | P4 validation | arm64 KUnit suite run (synthetic-tree tests reused unchanged), bootlin aarch64 cross-build of android17 config + corten, qemu-system-aarch64 boot matrix (4K defconfig mandatory; 16K config as capability), document results | 100-300 (mostly test glue) | medium | M9 DoD: defconfig cross-compile green + boot smoke report |
 
@@ -513,6 +541,13 @@ not as our baseline.
   (pgalloc.h:75), symmetric with the shipped `pte_free` hook. The only
   residual concern is upstream reviewability of touching a shared header,
   not mechanics; on the compile-safety axis the question is closed.
+  **r3 final (2026-09-21): RESOLVED, option (a) implemented** — hook landed
+  at pgalloc.h:94; the placement forced one paired change the r2 text did
+  not anticipate: x86's own `pte_alloc_one()` wraps `__pte_alloc_one()`, so
+  its M2a-era funnel call had to be removed or every x86 user-PTE alloc
+  would double-install (and trip the replace-descriptor `WARN_ON_ONCE`,
+  mm/corten.c:356). Net x86-side diff is a pure deletion; see §6 r3 status
+  and §11.5.
 - **OQ5**: folded-level handling in `enum corten_pt_level` for 2/3-level
   configs (16K+36, 64K+42/48/52, 4K+39): compile-time `#if` remap vs runtime
   table; decide in P1 with the actual defconfig matrix (android17 arm64
@@ -629,11 +664,58 @@ throwaway worktree `/home/ppw/linux-6.18-m9-trial`（分支
    `qemu-system-aarch64 -M virt` 启动 smoke（Round A 已给基线 Image 与
    构建管线，增量成本≈一次增量构建）。
 3. **P2 钩子**: `__pte_free_tlb` 一行 + alloc 落点（OQ4 已定推荐项），
-   debugfs 计数器 sanity。
+   debugfs 计数器 sanity。**r3 (2026-09-21): 已落地并验证** —— alloc 钩子按
+   OQ4 定案放进 asm-generic `__pte_alloc_one_noprof()`（连带删除 x86 侧重复
+   调用，见 §6 r3 状态段），arm64 `__pte_free_tlb` 加 `corton_on_pte_free`
+   一行；arm64 双对象 0E/0W + CORTEN_MM=y Image + qemu KUnit 验证见 §11.5。
+   （遗留: debugfs 计数器 sanity 需 corten=on 用户态冒烟，归 P4；
+   arm64 TCG 下 interlock 测试的时钟脆弱性记录见 §11.5。）
 4. **P3 语义适配（最大风险主体，未被本轮降低）**: contpte PTL 嵌套（OQ1）、
    BBM 映射序（§5）、gathered `ptep_get` 同步点；本轮唯一相关输入是
    "0 个层级假设错误" 免除了几何重写的编译层恐慌。
 5. **16K/64K 编译矩阵**: §7/R5/OQ5 的遗留验证面，按需排期。
+
+### 11.5 M9-P2 钩子落地实证（2026-09-21, r3）
+
+树: `/home/ppw/linux-6.18-m9`（`m9-arm64`，rebase 至 `2639d3294b9d` =
+M3b 全量 + M4.T0 + M5 + M6 + M9-P1 `025756094542`；本班为该 M6 基座上
+arm64 首次构建/运行验证）。补丁: `patches/r07-m9p2.diff`
+（3 文件 +29/-13, checkpatch --strict 0E/0W/0C）: asm-generic
+`__pte_alloc_one_noprof` alloc 钩子（OQ4-(a)）+ x86 `pte_alloc_one`
+重复调用删除（配对改动，§6 r3）+ arm64 `__pte_free_tlb` 一行钩子 +
+`linux/corten.h` include。日志: `results/r07/m9p2-*.log`。
+
+| Gate | 结果 |
+|---|---|
+| arm64 olddefconfig（CORTEN_MM=y 门控入树） | PASS（4K/52-bit/5 级，ARENA 正确缺席） |
+| `mm/corten.o` + `mm/corten_test.o` | 0E/0W，RC=0 |
+| `Image`（CORTEN_MM=y，增量） | PASS 0E/0W; 42,232,320 B，sha256 `1aa6b167…946562`（较 Round A 基线 +200,704 B，与 M9-P1 Image 同字节数） |
+| qemu `-M virt -cpu max -smp 4` KUnit corten* | 7 boot: **4× 25/0/0 全绿** + 3× 24/1（interlock TCG 时钟伪影，见下） |
+| x86 回归（defconfig+MEMCG，KVM, -smp 4） | **corten 25/0/0 全绿**（含 interlock ok 19）；构建 0E，仅 2 条登记在案的基线警告 |
+
+**interlock 的 TCG 时钟伪影（诚实记录）**: `corten_test_txn_uninstall_interlock`
+在 arm64 TCG 下 7 boot 命中 3 次 24/1，两种签名均为 wall-clock 脚手架被
+guest 时钟异常打破而非协议破坏: (a) runtime 20.25s=worker A 的 20s deadline
+先到期正常放锁（a_err=1, a_locked=0），主线程 200ms 检查窗被拉长后读到
+`b_done==1`——uninstall 是在 A 合法放锁**之后**完成的; (b) guest ktime 跳变
+使 A 的 deadline 起跑即过期、毫秒级穿场（`phase=5 begin_ret=0`，锁真实
+拿到并走完全生命周期）。归属: 卸装/持锁路径与该测试在
+e911b31..2639d3294b9d 间字节不变（git diff 核实）; 本班钩子 static-branch
+关闭且不在测试路径; x86 KVM 同基座绿; **且该 flake 是 x86 侧 M7 既有登记项**
+（run/inflight.txt: "宿主过载 interlock flake 2 例=M7 登记"、"interlock
+3/6 vs 基线 1/4"——本班 arm64 3/7 与登记率同量级，属同一已知项跨架构再现）。
+→ 判定为 interlock 测试对宿主负载/时钟的固有脆弱性（M7 登记延续）;
+遗留加固建议（go-信号替代 deadline 轮询，或 TCG 多数决+KVM 复核判定口径）
+移交测试 owner; M9-P1 单次 25/0/0 未采样到此敏感性。
+
+**基座附带发现（非本补丁范围）**: `x86_64 defconfig`（MEMCG/SHRINKER_DEBUG=n）
+下 `mm/corten_arena.c` 两处编译失败（:3323 `shrinker->id`、:8530
+`mem_cgroup_is_descendant` 隐式声明）——M6.T3/T4 的 memcg-shrinker 代码
+缺 Kconfig 依赖守护，历史 gki 系配置（MEMCG=y）从未暴露; 留 maintainer
+评估补 `depends on`/`#ifdef`。
+
+**P2 判定: PASS**（debugfs corten=on 计数器 sanity 一项按计划移交 P4 用户态
+冒烟）。P3（contpte/BBM 语义适配）未被本班触及，仍是最大风险主体。
 
 ---
 

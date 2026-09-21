@@ -1,0 +1,236 @@
+From 825b4d59e9d00c5a2cd42e57300dc337d2809213 Mon Sep 17 00:00:00 2001
+From: purplewall1206 <purplewall1206@github.com>
+Date: Mon, 21 Sep 2026 11:46:13 +0800
+Subject: [PATCH] mm: CortenMM arena: thin-peek metadata drop on the park path
+
+Replace the [perf1b] wholesale metadata-array drop on the full-reset
+park path with a per-slot thin peek: corten_txn_slot() (new, the
+pointer-read inner half of corten_query()) finds the recorded minority
+of the walked window, and only those slots pay the existing
+corten_unmap() transition.  corten_txn_meta_drop() -- the 512-slot
+count loop plus kfree/kmalloc+memset churn of the covering PT page's
+array on every take/park pair -- is retired.
+
+Semantics are unchanged:
+
+- the recorded predicate is byte-equivalent (corten_query() is a
+  copy-out of the same corten_txn_meta() lookup), so the KEEP_PERM
+  chunk-drop path behaves exactly as before;
+- pristine slots (Invalid/perm-0, payload scrubbed) come from
+  corten_unmap(), the pre-perf1b primitive, which also maintains the
+  M6.T3 nr_mapped/nr_swapped bookkeeping per transition -- the same
+  totals the wholesale drop produced;
+- arenas are PMD-aligned exclusive owners of their PT pages, so every
+  recorded slot lies inside the walked window and UNMAP_PAGES totals
+  are identical (per-slot increments replace the drop's count);
+- a walk that bails mid-window hands the unprocessed tail to the
+  caller's real-RELEASE error path exactly as the [perf1b]
+  success-gate did; already-processed slots are Invalid and are not
+  double-counted.
+
+The array now survives the park for the next take to mark
+(meta_arrays == ptdescs at rest), removing the per-op allocator churn
+measured at 24.1%+3.3% self in the t1 profile; T0 absolute throughput
+t1 +8.7% / t8 +11.2% across two paired boots, zero semantic change.
+
+Verified: KUnit suites green with corten=on (x3, incl. one registered
+interlock flake rerun) and corten=off; =n eight-object build clean;
+debugfs ledger munmap_releases == pool_parks == 49,055 and
+meta_arrays == ptdescs == 335; checkpatch --strict clean.
+
+Signed-off-by: purplewall1206 <purplewall1206@github.com>
+---
+ include/linux/corten.h |  4 +--
+ mm/corten.c            | 58 ++++++++++--------------------------------
+ mm/corten.h            | 12 +++++----
+ mm/corten_arena.c      | 49 +++++++++++++++++------------------
+ 4 files changed, 46 insertions(+), 77 deletions(-)
+
+diff --git a/include/linux/corten.h b/include/linux/corten.h
+index 9d57163defa7..98002e5305e8 100644
+--- a/include/linux/corten.h
++++ b/include/linux/corten.h
+@@ -324,8 +324,8 @@ struct corten_ptdesc {
+ 	 * M6.T3 shrinker bookkeeping: number of slots in the
+ 	 * CORTEN_MAPPED (resident content, swap-out candidate) and
+ 	 * CORTEN_SWAPPED (entry recorded) states, maintained by
+-	 * corten_map()/corten_swap_out()/corten_unmap()/
+-	 * corten_txn_meta_drop() under the covering write lock -- every
++	 * corten_map()/corten_swap_out()/corten_unmap() under the
++	 * covering write lock -- every
+ 	 * state transition of those two shapes goes through exactly
+ 	 * those operations, so the counts are exact by construction.
+ 	 * Written under @lock; lockless readers use READ_ONCE() and
+diff --git a/mm/corten.c b/mm/corten.c
+index 8d21c3656fc3..3b0948160f36 100644
+--- a/mm/corten.c
++++ b/mm/corten.c
+@@ -1446,54 +1446,22 @@ int corten_unmap(struct corten_txn *txn, unsigned long start,
+ }
+ 
+ /**
+- * corten_txn_meta_drop - free the covering PT page's metadata array wholesale.
+- * @txn: transaction whose covering page's array is dropped (write-locked).
++ * corten_txn_slot - resolve @addr to its metadata slot pointer, no copy.
++ * @txn: running transaction (covering write lock held).
++ * @addr: page-aligned address inside the locked range.
+  *
+- * Returns the number of recorded (non-Invalid) slots the array carried, for
+- * caller-side accounting; 0 when there was no array (nothing was recorded).
+- *
+- * [perf1b] A full-reset drop (zflags without KEEP_PERM: the T1c park) owes
+- * the range pristine slots (Invalid, perm 0).  Resetting them one
+- * transaction operation at a time costs a corten_query() per 4K page of the
+- * window for the unrecorded majority -- a 16KB op on a 2M frame walked 512
+- * slots to reset the ~4 that ever carried content.  Dropping the array
+- * gives every reader the same pristine answer from corten_query()'s
+- * meta==NULL path at O(1); the next mark re-ensures it (GFP_NOWAIT, with
+- * the usual -ENOMEM recovery on the fault path).
+- *
+- * Caller contract: hold the covering write lock (a running transaction)
+- * and have completed every PTE clear for the window -- a live PTE with no
+- * metadata behind it is exactly the r03 defect C shape.
++ * Returns the slot pointer, NULL when the page's metadata array does not
++ * exist (nothing was ever recorded: pristine by absence), or an ERR_PTR
++ * for a range/alignment violation.  [perf2a] The full-reset zap uses this
++ * to find the recorded minority of its slots with one pointer read each
++ * instead of a payload copy (corten_query()) or a wholesale array drop
++ * ([perf1b], now retired): the reset is bounded by the walked range and
++ * the array survives the park for the next take to mark.
+  */
+-long corten_txn_meta_drop(struct corten_txn *txn)
++struct corten_pte_meta *corten_txn_slot(struct corten_txn *txn,
++					unsigned long addr)
+ {
+-	struct corten_pte_meta *meta;
+-	long nr = 0;
+-	int i;
+-
+-	if (unlikely(!txn->covering)) {
+-		WARN_ON_ONCE(1);
+-		return 0;
+-	}
+-
+-	meta = txn->covering->meta;
+-	if (!meta)
+-		return 0;
+-
+-	for (i = 0; i < CORTEN_PTES_PER_PT_PAGE; i++) {
+-		nr += meta[i].state != CORTEN_INVALID;
+-		/* Shrinker resident bookkeeping (M6.T3): the array (and
+-		 * with it every recorded state) goes away wholesale.
+-		 */
+-		if (meta[i].state == CORTEN_MAPPED)
+-			txn->covering->nr_mapped--;
+-		else if (meta[i].state == CORTEN_SWAPPED)
+-			txn->covering->nr_swapped--;
+-	}
+-
+-	corten_meta_free(txn->covering);
+-
+-	return nr;
++	return corten_txn_meta(txn, addr);
+ }
+ 
+ /**
+diff --git a/mm/corten.h b/mm/corten.h
+index b97df89e9ede..ae82be70f051 100644
+--- a/mm/corten.h
++++ b/mm/corten.h
+@@ -227,12 +227,14 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
+ void corten_txn_finish(struct corten_txn *txn);
+ 
+ /*
+- * [perf1b] Free the covering PT page's whole metadata array (full-reset
+- * drops): the pristine-slot answer comes from corten_query()'s meta==NULL
+- * path instead of a per-slot reset walk.  Returns the number of recorded
+- * slots the array carried.  See mm/corten.c for the caller contract.
++ * [perf2a] Resolve @addr to its metadata slot pointer inside a running
++ * transaction (no payload copy): NULL = no array (nothing recorded),
++ * ERR_PTR = range/alignment violation.  The full-reset zap uses it to
++ * bound the per-slot reset to the recorded minority of its range.
++ * Caller contract: the covering write lock (see mm/corten.c).
+  */
+-long corten_txn_meta_drop(struct corten_txn *txn);
++struct corten_pte_meta *corten_txn_slot(struct corten_txn *txn,
++					unsigned long addr);
+ 
+ /*
+  * Allocation-failure injection for the KUnit tests (review gap: the
+diff --git a/mm/corten_arena.c b/mm/corten_arena.c
+index 9926229fbbda..0eadb0ab78a1 100644
+--- a/mm/corten_arena.c
++++ b/mm/corten_arena.c
+@@ -5202,21 +5202,29 @@ static int corten_arena_zap_window(struct mm_struct *mm,
+ 		}
+ 
+ 		for (; addr < end; addr += PAGE_SIZE, ptep++) {
+-			struct corten_pte_meta m;
++			struct corten_pte_meta *slot;
+ 			struct folio *folio;
+ 			struct page *page;
+ 			pte_t oldpte;
+ 			bool recorded;
+ 
+-			/* [perf1b] A full-reset drop (no KEEP_PERM: the T1c
+-			 * park) owes pristine slots, which the wholesale
+-			 * array drop below provides; walking the metadata
+-			 * per slot would cost a query per 4K page of the
+-			 * window for the unrecorded majority.
++			/* [perf2a] One pointer read per slot finds the
++			 * recorded minority (a NULL array is the pristine
++			 * nothing-ever-recorded answer); only those slots
++			 * pay the corten_unmap() transition.  The reset is
++			 * bounded by the walked range, and the array
++			 * survives the park -- a 16KB pool arena stopped
++			 * paying the [perf1b] wholesale drop's O(PT page)
++			 * count loop plus the kfree/kmalloc+memset churn
++			 * per take/park pair.  The pristine contract is
++			 * unchanged: every recorded slot in the walk leaves
++			 * here Invalid/perm-0, and slots outside an arena's
++			 * own range were never recorded (arenas are
++			 * PMD-aligned: exclusive owners of their PT pages).
+ 			 */
+-			recorded = (zflags & CORTEN_UNMAP_KEEP_PERM) &&
+-				   corten_query(txn, addr, &m) == 0 &&
+-				   m.state != CORTEN_INVALID;
++			slot = corten_txn_slot(txn, addr);
++			recorded = !IS_ERR(slot) && slot &&
++				   slot->state != CORTEN_INVALID;
+ 
+ 			if (!g) {
+ 				/* The scan proved the window carries no
+@@ -5368,23 +5376,14 @@ static int corten_arena_zap_window(struct mm_struct *mm,
+ 	 * write lock -- once this function reports the walk done (or failed).
+ 	 */
+ 
+-	/* [perf1b] Full-reset drop: the wholesale array free provides the
+-	 * pristine-slot contract (Invalid, perm 0) the per-slot
+-	 * corten_unmap() walk would have; the count keeps the
+-	 * UNMAP_PAGES accounting identical.  Only on a fully successful
+-	 * walk (ret == 0 and no pending overflow round: every PTE cleared,
+-	 * metadata resettable wholesale): a walk that bailed mid-window can
+-	 * leave live PTEs, and a live PTE without metadata is the r03
+-	 * defect C shape -- the caller's error path (real RELEASE for the
+-	 * park) tears the window down completely instead.
++	/* [perf2a] The per-slot reset inside the walk provides the pristine
++	 * contract on every fully-successful pass; there is no wholesale
++	 * array drop any more (see the slot loop above).  A walk that bailed
++	 * mid-window can leave live PTEs, and a live PTE without metadata
++	 * behind it is the r03 defect C shape -- the caller's error path
++	 * (real RELEASE for the park) tears the window down completely
++	 * instead, exactly as the [perf1b] drop's success-gate did.
+ 	 */
+-	if (!ret && !zw->force && !(zflags & CORTEN_UNMAP_KEEP_PERM)) {
+-		long nr = corten_txn_meta_drop(txn);
+-
+-		if (nr)
+-			this_cpu_add(state->stats[CORTEN_ARENA_STAT_UNMAP_PAGES],
+-				     nr);
+-	}
+ 
+ 	return ret;
+ }
+-- 
+2.34.1
+
