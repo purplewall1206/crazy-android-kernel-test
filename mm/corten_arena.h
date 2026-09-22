@@ -129,6 +129,29 @@ int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
 			     unsigned long start, unsigned long len);
 
 /*
+ * V-B.2 (H7) file-event route gate: called from unmap_mapping_range_vma()
+ * for a VMA the mapping's i_mmap walk produced, under i_mmap_lock_read().
+ * Demotes the FILE region's virtual allocation through the chunk-zap
+ * transaction (KEEP_PERM: content dropped, VA and recorded perm kept, a
+ * re-fault re-reads the file) instead of letting zap_page_range_single()
+ * bare-write the window's PTEs (INV6).  @even_cows is the walker's
+ * zap_details verdict -- B.3's COWed MAPPED slots will consume it.
+ * Return: true = arena business, do not run the legacy zap; false = not
+ * a carrier, run legacy unchanged.  The =n stub folds to false.
+ */
+bool corten_arena_unmap_file_event(struct vm_area_struct *vma,
+				   unsigned long start, unsigned long end,
+				   bool even_cows);
+
+/*
+ * V-B.2 (H7) defensive backstop for zap_page_range_single(): a VM_CORTEN
+ * VMA arriving there is a routing hole, not a shape to unmap -- WARN,
+ * count (zap_single_refuses, must stay 0) and refuse.  The =n stub
+ * folds to false so the call site compiles away.
+ */
+bool corten_zap_single_guard(struct vm_area_struct *vma);
+
+/*
  * [F-A, D-G''] Fault-side ownership self-check: is @addr still arena
  * property?  Tier 1 is the cached shadow-VMA bounds test (zero walk),
  * tier 2 an RCU find_vma_intersection() + VM_CORTEN probe for addresses
@@ -704,6 +727,19 @@ static inline vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma
 						      struct pt_regs *regs)
 {
 	return VM_FAULT_FALLBACK;
+}
+
+static inline bool
+corten_arena_unmap_file_event(struct vm_area_struct *vma,
+			      unsigned long start, unsigned long end,
+			      bool even_cows)
+{
+	return false;
+}
+
+static inline bool corten_zap_single_guard(struct vm_area_struct *vma)
+{
+	return false;
 }
 
 static inline int corten_arena_munmap_route(struct mm_struct *mm,

@@ -2303,6 +2303,185 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 }
 
 /* ------------------------------------------------------------------ *
+ * V-B.2: the H7 route gate -- a file-side unmap event (truncate,
+ * invalidation, single-folio re-invalidation) arriving on a FILE
+ * carrier is demoted through the chunk-zap transaction (KEEP_PERM:
+ * content dropped, VA and recorded perm kept), never through the bare
+ * legacy PTE writer; the zap_page_range_single backstop refuses a
+ * carrier loudly; the B.1 dark-gate fault verdict (SEGV_MAPERR)
+ * survives the demotion instead of synthesizing anonymous zero pages.
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_truncate_route(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *carrier, *plain;
+	const unsigned long pgoff = 3;
+	struct address_space *mapping;
+	struct corten_pte_meta m;
+	struct file *file;
+	struct folio *folio;
+	unsigned int fflags;
+	long routes, refuses, base;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "H7 gate requires corten=on");
+
+	file = shmem_file_setup("corten_vb2", 4 * PMD_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	mapping = file->f_mapping;
+	base = file_count(file);
+	routes = corten_arena_test_truncate_routes();
+	refuses = corten_arena_test_zap_single_refuses();
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      file, pgoff), 0);
+	carrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, carrier);
+
+	/* Pre-state: the whole region is the B.1 FILE_MAPPED virtual
+	 * allocation with the recorded perm.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_EXEC |
+				       CORTEN_PERM_USER);
+
+	/* The gate's negative arm: a plain (non-carrier) VMA is none of
+	 * its business -- both the direct call and the backstop stay
+	 * quiet, and the legacy zap of an untouched range changes nothing.
+	 */
+	plain = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
+	KUNIT_ASSERT_NOT_NULL(test, plain);
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_unmap_file_event(plain,
+							 CORTEN_ARENA_TEST_BASE,
+							 CORTEN_ARENA_TEST_BASE +
+							 PAGE_SIZE, true));
+	zap_page_range_single(plain, CORTEN_ARENA_TEST_BASE, PAGE_SIZE, NULL);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_zap_single_refuses(), refuses);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes);
+
+	/* Truncate (even_cows): the whole-window file event -- the real
+	 * upstream walker hands the carrier over under i_mmap_lock_read.
+	 * Every slot demotes to Invalid with the perm kept; the region
+	 * record, the carrier's i_mmap membership and the file reference
+	 * all survive (a truncate is not an munmap).
+	 */
+	unmap_mapping_pages(mapping, pgoff, PMD_SIZE >> PAGE_SHIFT, true);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_zap_single_refuses(), refuses);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_EXEC |
+				       CORTEN_PERM_USER);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN +
+						  PMD_SIZE - PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	i_mmap_lock_read(mapping);
+	KUNIT_EXPECT_PTR_EQ(test,
+			    vma_interval_tree_iter_first(&mapping->i_mmap,
+							 pgoff, pgoff), carrier);
+	i_mmap_unlock_read(mapping);
+	KUNIT_EXPECT_PTR_EQ(test, carrier->vm_file, file);
+	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
+
+	/* Re-fault on a demoted slot: the dark gate holds -- MAPERR, not
+	 * the FRESH synthesizer's anonymous zero pages (the metadata must
+	 * stay Invalid; B.3's rclass-aware arm re-reads the file).
+	 */
+	fflags = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN, 0,
+						NULL, &fflags),
+			CORTEN_FAULT_MAPERR);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+
+	/* Partial invalidation (even_cows == false, the reclaim arm): a
+	 * fresh second region at pgoff 0, one page of the file event --
+	 * exactly the intersecting VA slot demotes, the neighbor keeps
+	 * its FILE_MAPPED virtual allocation.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_START2,
+						      file, 0), 0);
+	unmap_mapping_pages(mapping, 0, 1, false);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes + 2);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_EXEC |
+				       CORTEN_PERM_USER);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2 +
+						  PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+
+	/* Single-folio invalidation (the hwpoison/migrate re-check shape):
+	 * a locked pagecache folio inside the second carrier's window
+	 * walks the same i_mmap tree with a one-page VA window.
+	 * filemap_add_folio() hands the folio over locked -- exactly the
+	 * unmap_mapping_folio() contract.
+	 */
+	folio = filemap_alloc_folio(GFP_KERNEL, 0);
+	KUNIT_ASSERT_NOT_NULL(test, folio);
+	KUNIT_ASSERT_EQ(test,
+			filemap_add_folio(mapping, folio, 2, GFP_KERNEL), 0);
+	unmap_mapping_folio(folio);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes + 3);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2 +
+						  2 * PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2 +
+						  3 * PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	filemap_remove_folio(folio);
+	folio_unlock(folio);
+	folio_put(folio);
+
+	/* The backstop's negative sample: a carrier arriving at the bare
+	 * legacy writer is refused, counted, and changes nothing -- the
+	 * still-FILE_MAPPED slot must survive the refused zap verbatim.
+	 */
+	zap_page_range_single(carrier, CORTEN_ARENA_TEST_START2 + PAGE_SIZE,
+			      PAGE_SIZE, NULL);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_zap_single_refuses(),
+			refuses + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes + 3);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2 +
+						  PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+
+	/* The registry is still INV-MV3 clean after the whole event
+	 * family, and the teardown returns the ledger.
+	 */
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
+	mmap_read_unlock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, file_count(file), base);
+
+	fput(file);
+}
+
+/* ------------------------------------------------------------------ *
  * M5.T1a: faithful fork (M5_FORK_SPEC.md sec 1.3, DEV-14/DEV-15) --
  * the OQ-D replacement for the T0 fork_demote.  The hooks run inside a
  * dup_mmap()-shaped window (oldmm mmap_write held, child nested); the
@@ -7621,11 +7800,11 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_mode),
 	KUNIT_CASE(corten_arena_test_auto_classify),
 	KUNIT_CASE(corten_arena_test_auto_classify_file),
-	KUNIT_CASE(corten_arena_test_auto_classify_file),
 	KUNIT_CASE(corten_arena_test_auto_place),
 	KUNIT_CASE(corten_arena_test_auto_route),
 	KUNIT_CASE(corten_arena_test_auto_attach_release),
 	KUNIT_CASE(corten_arena_test_file_lifecycle),
+	KUNIT_CASE(corten_arena_test_truncate_route),
 	KUNIT_CASE(corten_arena_test_mag_recycle),
 	KUNIT_CASE(corten_arena_test_mag_marker),
 	KUNIT_CASE(corten_arena_test_pool_reuse),

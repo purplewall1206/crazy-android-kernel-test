@@ -209,6 +209,13 @@ static atomic_long_t corten_nr_eagain_leaked;	/* -EAGAIN still escaping */
 static atomic_long_t corten_nr_mremap_release_fail; /* grow RELEASE fails */
 static atomic_long_t corten_nr_mmap_punches;	/* file-MAP_FIXED punch routes */
 static atomic_long_t corten_nr_mmap_punch_rejects; /* unroutable MAP_FIXED */
+/* V-B.2 (H7): file-side unmap events (truncate / invalidation) that the
+ * unmap_mapping_range gate routed into the arena chunk-zap transaction,
+ * and backstop refusals of a VM_CORTEN VMA arriving at the bare legacy
+ * writer (zap_page_range_single) -- the second must stay 0 forever.
+ */
+static atomic_long_t corten_nr_truncate_routes;	/* file events routed */
+static atomic_long_t corten_nr_zap_single_refuses; /* backstop firings */
 /* M5.T3 (M5_FORK_SPEC.md sec 4.3): zap_window() released a PTE whose
  * folio is FOLL_PIN/DMA-pinned.  The release itself is refcount-native
  * (the pin reference carries the folio until unpin, exactly like the
@@ -1232,6 +1239,135 @@ static void corten_region_file_disarm(struct corten_arena *ar)
 	ar->rfile = NULL;
 	ar->rpoff = 0;
 	fput(ar->rfile);
+}
+
+/*
+ * H7 route gate (V-B.2, spec sec 3.2 truncate/invalidation): divert the
+ * file-side unmap event that arrived on a FILE carrier away from
+ * zap_page_range_single() -- the bare legacy PTE writer -- into the
+ * arena's chunk-zap transaction.  Every caller reaches here from
+ * unmap_mapping_range_vma(), i.e. under the mapping's i_mmap_lock_read()
+ * (the unmap_mapping_pages() and unmap_mapping_folio() walkers, which
+ * both hand the carrier over through the very same interval-tree walk),
+ * with the intersected VA range already computed.
+ *
+ * A VM_CORTEN VMA that is a member of mapping->i_mmap is exactly a
+ * published FILE carrier: targeted-DECLARE shadow-VMAs are
+ * private-anonymous only (corten_arena_validate_vma()), so they carry
+ * no vm_file and never join a mapping's interval tree, and a carrier's
+ * membership is bracketed by corten_file_i_mmap_insert()/teardown.
+ *
+ * Lock-order declaration (the B.2 review focus, INV2):
+ *
+ *	this gate:	i_mmap_rwsem(read) > desc->lock(W) > ptl
+ *	the attach:	mmap_lock(W) > i_mmap_rwsem(W), and separately
+ *			mmap_lock(W) > desc->lock(W)
+ *
+ * No cycle is possible between the two: nothing ever acquires i_mmap or
+ * mmap_lock while holding a descriptor lock (the "desc locks never
+ * climb" discipline the shrinker path already obeys), so the desc/ptl
+ * arm of this gate can only sit at the bottom of both chains; and the
+ * attach side's i_mmap critical sections contain no descriptor work at
+ * all -- the FILE mark transactions of corten_arena_file_mark() are
+ * unlocked before corten_file_i_mmap_insert() runs, and the teardown
+ * pair takes no descriptor lock inside i_mmap_lock_write() either.
+ * The gate body itself is the munmap_route() lockless shape
+ * (corten_arena_unmap_chunk(): per-window transactions and gathers,
+ * zero mmap_lock, zero i_mmap, nothing that could re-enter either
+ * lock), so nesting it under i_mmap_read adds exactly one new edge --
+ * i_mmap_read > desc -- with no path back.
+ *
+ * Lifetime: the caller's i_mmap read hold already pins the carrier and
+ * its arena against teardown (corten_region_file_teardown() must take
+ * i_mmap_lock_write to leave the tree); the active reference taken
+ * below extends the pin past the RCU window by the established
+ * [FAIL-2] discipline.  A dying (RELEASE in drain) or fork-frozen
+ * arena answers "handled" without zapping: its own park/RELEASE path
+ * owns the content drop, and the one thing this gate must never do is
+ * fall back to the legacy zap -- that would bare-write window PTEs
+ * (INV6, the reason this slice exists).
+ *
+ * KEEP_PERM semantics (spec sec 3.2.3): the drop keeps the VA and the
+ * recorded permission, so a re-fault after the truncation re-reads the
+ * file's new content.  @even_cows mirrors the walker's zap_details
+ * verdict (true = truncate: drop private COWed pages too; false =
+ * invalidation / unmap_mapping_folio: legacy spares them -- see
+ * should_zap_cows()).  B.2's FILE regions carry no MAPPED (COW) slots
+ * yet (the fault arms are B.3), so both shapes demote exactly the
+ * FILE_MAPPED virtual allocation; the !even_cows MAPPED-sparing joins
+ * this gate together with cow_write()'s first file copies.
+ *
+ * Chunk errors are counted away from truncate_routes and swallowed:
+ * the walker has no error channel, the pagecache folios are already
+ * gone from the truncate's side, and the demotion is retried by the
+ * next file event or at RELEASE.
+ *
+ * Return: true = arena business, the caller must NOT run
+ * zap_page_range_single() on this VMA; false = not a carrier, run the
+ * legacy body unchanged.
+ */
+bool corten_arena_unmap_file_event(struct vm_area_struct *vma,
+				   unsigned long start, unsigned long end,
+				   bool even_cows)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	struct corten_arena *ar;
+
+	if (!(vma->vm_flags & VM_CORTEN))
+		return false;
+
+	/* Both walker shapes demote identically in the B.2 metadata world
+	 * (comment above); the parameter arrives B.3-ready.
+	 */
+	(void)even_cows;
+
+	/* Pin the arena under RCU (the lookup's contract), then drop RCU
+	 * before the chunk driver: its per-window gathers may sleep, and
+	 * the active reference carries the pin from here.
+	 */
+	rcu_read_lock();
+	ar = corten_arena_lookup(mm, vma->vm_start);
+	if (ar && READ_ONCE(ar->carrier) == vma && !READ_ONCE(ar->frozen) &&
+	    !percpu_ref_tryget_live(&ar->active))
+		ar = NULL;
+	rcu_read_unlock();
+
+	if (ar) {
+		if (!corten_arena_unmap_chunk(mm, ar, start, end - start))
+			atomic_long_inc(&corten_nr_truncate_routes);
+		percpu_ref_put(&ar->active);
+	}
+
+	return true;
+}
+
+/*
+ * H7 defensive backstop (V-B.2): a VM_CORTEN VMA arriving at
+ * zap_page_range_single() is a design error -- every legitimate unmap
+ * of arena address space is routed (munmap/madvise routes, the file
+ * event gate above) or owned by a teardown that clears VM_CORTEN
+ * before its own legacy munmap leg, so the bare legacy writer must
+ * never see one.  The zap_page_range_single_batched() variant needs no
+ * twin: its only external caller (madvise_dontneed_single_vma()) walks
+ * the maple tree, which cannot produce a detached carrier, and arena
+ * ranges never reach it unrouted.  Loud on the first hit, counted on
+ * every hit, and the zap is refused rather than half-done -- keeping
+ * the INV6 line intact is worth more than pretending to unmap.
+ * (Punch implants are plain legacy VMAs without VM_CORTEN, so they
+ * stay on the legacy path.)
+ *
+ * Return: true = refuse the zap (caller returns without touching the
+ * range); false = not arena property, run the legacy body.
+ */
+bool corten_zap_single_guard(struct vm_area_struct *vma)
+{
+	if (!(vma->vm_flags & VM_CORTEN))
+		return false;
+
+	atomic_long_inc(&corten_nr_zap_single_refuses);
+	WARN_ONCE(1, "corten: VM_CORTEN vma reached zap_page_range_single()\n");
+
+	return true;
 }
 
 /*
@@ -2268,6 +2404,11 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_mmap_punches));
 	seq_printf(m, "mmap_punch_rejects  %ld\n",
 		   atomic_long_read(&corten_nr_mmap_punch_rejects));
+	/* V-B.2 (H7): the file-event route and the backstop. */
+	seq_printf(m, "truncate_routes     %ld\n",
+		   atomic_long_read(&corten_nr_truncate_routes));
+	seq_printf(m, "zap_single_refuses  %ld\n",
+		   atomic_long_read(&corten_nr_zap_single_refuses));
 	/* M4.T1 magazine observability. */
 	seq_printf(m, "seg_claims          %ld\n",
 		   atomic_long_read(&corten_nr_seg_claims));
@@ -2544,6 +2685,17 @@ long corten_arena_test_j1_probes(void)
 long corten_arena_test_j1_hits(void)
 {
 	return atomic_long_read(&corten_nr_j1_hits);
+}
+
+/* V-B.2 (H7): the file-event route counter and the zap backstop. */
+long corten_arena_test_truncate_routes(void)
+{
+	return atomic_long_read(&corten_nr_truncate_routes);
+}
+
+long corten_arena_test_zap_single_refuses(void)
+{
+	return atomic_long_read(&corten_nr_zap_single_refuses);
 }
 
 long corten_arena_test_pool_nr(struct mm_struct *mm)
@@ -6348,6 +6500,22 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 					 READ_ONCE(ctx->ar->prot),
 		};
 		struct corten_pte_meta fresh = gate;
+
+		/* V-B.2 (H7 follow-through): inside a FILE region an
+		 * Invalid slot is a truncate/invalidation-demoted
+		 * FILE_MAPPED page.  Synthesizing the PrivateAnon
+		 * allocation here would present anonymous zero bytes
+		 * where the file's new content belongs -- the silent
+		 * corruption the whole FILE pre-mark exists to prevent.
+		 * B.1's dark gate verdict (SEGV_MAPERR) survives the
+		 * demotion instead; B.3's rclass-aware FRESH arm
+		 * replaces this refusal with the FILE_MAPPED
+		 * re-synthesis that re-reads the file.
+		 */
+		if (READ_ONCE(ctx->ar->rclass) == CORTEN_REGION_FILE) {
+			corten_unlock(&txn);
+			return CORTEN_F_MAPERR;
+		}
 
 		if (!corten_arena_perm_ok(&gate, ctx->write,
 					  ctx->instruction)) {

@@ -2179,6 +2179,18 @@ void zap_page_range_single(struct vm_area_struct *vma, unsigned long address,
 {
 	struct mmu_gather tlb;
 
+	/*
+	 * CortenMM backstop (V-B.2): no VM_CORTEN VMA may ever be zapped
+	 * by the bare legacy writer -- every legitimate arena unmap is
+	 * routed through a transaction before this point (the H7 gate at
+	 * unmap_mapping_range_vma() owns the file-event family).  Arrival
+	 * here means a new caller slipped past the routing: refuse loudly
+	 * (counted) rather than half-unmap.  Folds away with
+	 * CONFIG_CORTEN_MM_ARENA=n.
+	 */
+	if (corten_zap_single_guard(vma))
+		return;
+
 	tlb_gather_mmu(&tlb, vma->vm_mm);
 	zap_page_range_single_batched(&tlb, vma, address, size, details);
 	tlb_finish_mmu(&tlb);
@@ -4154,6 +4166,23 @@ static void unmap_mapping_range_vma(struct vm_area_struct *vma,
 		unsigned long start_addr, unsigned long end_addr,
 		struct zap_details *details)
 {
+	/*
+	 * CortenMM route gate (V-B.2, INV6): a VM_CORTEN member of this
+	 * mapping's i_mmap is a FILE-region carrier -- zap_page_range_single()
+	 * would bare-write its window PTEs outside any transaction.  The
+	 * gate runs the arena's chunk-zap transaction instead (KEEP_PERM:
+	 * the truncate/re-fault contract) and answers whether the legacy
+	 * body must still run.  Covers both callers of this helper: the
+	 * unmap_mapping_pages() truncate/invalidation walk and
+	 * unmap_mapping_folio()'s single-page re-invalidation, which hand
+	 * the carrier over through the same i_mmap walk under
+	 * i_mmap_lock_read().  NULL details zap everything, like the
+	 * legacy should_zap_cows() reading below.
+	 */
+	if (corten_enabled_static() && (vma->vm_flags & VM_CORTEN) &&
+	    corten_arena_unmap_file_event(vma, start_addr, end_addr,
+					  details ? details->even_cows : true))
+		return;
 	zap_page_range_single(vma, start_addr, end_addr - start_addr, details);
 }
 

@@ -754,6 +754,13 @@ long corten_arena_test_p4_ejects(void);
 long corten_arena_test_placement_idle_ejects(void);
 long corten_arena_test_implant_nr(struct mm_struct *mm);
 
+/* V-B.2 (H7) hooks: the file-event route counter (truncate/invalidation
+ * events handed to the chunk-zap transaction) and the zap backstop
+ * (must stay 0 -- every hit is a routing hole).
+ */
+long corten_arena_test_truncate_routes(void);
+long corten_arena_test_zap_single_refuses(void);
+
 /* M6.T3 shrinker hooks: drive the count/scan bodies directly (the
  * shrinker is only registered on a corten=on boot; the bodies are the
  * same functions the shrinker calls, with a synthetic shrink_control),
