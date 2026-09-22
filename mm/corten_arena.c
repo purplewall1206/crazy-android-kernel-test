@@ -52,6 +52,7 @@
 #include <linux/hugetlb.h>
 #include <linux/memcontrol.h>
 #include <linux/mempolicy.h>
+#include <linux/memfd.h>		/* memfd_check_seals_mmap (V-B.1 may) */
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
 #include <linux/mman.h>
@@ -120,7 +121,7 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
 					    struct corten_mm_state *state,
 					    unsigned long addr,
 					    unsigned long len,
-					    u8 perm, bool novma);
+					    u8 perm, bool novma, bool no_reuse);
 static int corten_arena_pool_take(struct mm_struct *mm,
 				  struct corten_mm_state *state,
 				  unsigned long len2, unsigned long prot,
@@ -139,6 +140,18 @@ static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
 
 /* V-A.2b detached carrier, defined in the shadow-VMA section below. */
 static void corten_arena_carrier_free(struct vm_area_struct *vma);
+
+/* V-B.1 file-may MAY bound, defined in the auto-mmap section below. */
+static u8 corten_file_may_bound(struct file *file);
+
+/* Route-level KUnit anchors flip the dark gate above (the machinery is
+ * compiled and drive-tested while the syscall path stays legacy); the
+ * override dies together with the gate when B.3 activates the takeover.
+ */
+bool corten_file_route_test_override;
+
+/* V-B.1 FILE payload teardown, defined in the region-record section. */
+static void corten_region_file_teardown(struct corten_arena *ar);
 
 static void corten_arena_stat_add(struct corten_mm_state *state,
 				  enum corten_arena_stat which, long val)
@@ -568,6 +581,18 @@ static void corten_arena_free(struct corten_arena *arena)
 {
 	struct vm_area_struct *carrier = READ_ONCE(arena->carrier);
 
+	/* V-B.1: the FILE payload dies with the descriptor -- out of
+	 * i_mmap, the carrier back to the anonymous NULL shape, the
+	 * region's file reference dropped (corten_region_file_teardown).
+	 * Before the carrier free below (the teardown reads the carrier
+	 * to find the interval-tree node); every caller runs under the
+	 * owner mm's mmap_write (or at mm_users == 0), the teardown's
+	 * lock contract.  RELEASE / mode_exit / mm_exit all converge
+	 * here; the park path tears the payload down by itself (the
+	 * descriptor survives it).
+	 */
+	corten_region_file_teardown(arena);
+
 	/* V-A.2b: the carrier dies with the descriptor (its lifetime
 	 * contract) -- the anon_vma chain reference and the avc node live
 	 * in the vma, so the unlink precedes the free.  Every caller runs
@@ -810,13 +835,26 @@ static void corten_arena_unshadow(struct corten_arena *arena,
  * nothing will drop at unlink (the CONFIG_DEBUG_VM WARN shape in
  * unlink_anon_vmas(), review C1).
  *
+ * V-B.1: @file non-NULL selects the FILE shape -- the carrier carries
+ * the mapping's page offset (vma_set_range's @pgoff argument, the
+ * INV-MV3(d) pgoff derivation) and vm_file = @file (a *borrowed*
+ * pointer: the region record owns the reference, register_file() takes
+ * it, teardown drops it -- carrier and rfile same source, same drop).
+ * VM_SHARED stays clear (private mapping, write goes COW) and
+ * vma_set_anonymous() (vm_ops = NULL) still applies: the carrier is
+ * detached, no fault/method dispatch may ever reach it.  The page
+ * offset of an anon carrier stays 0 as before.
+ *
  * Called under the owner mm's mmap_write (vma_start_write() needs it).
  * Return: the carrier, or NULL on allocation failure.
  */
 static struct vm_area_struct *corten_arena_carrier_alloc(struct mm_struct *mm,
 							 unsigned long start,
 							 unsigned long end,
-							 u8 perm, bool prepare)
+							 u8 perm,
+							 struct file *file,
+							 unsigned long pgoff,
+							 bool prepare)
 {
 	vm_flags_t flags = VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC |
 			   VM_NORESERVE;
@@ -827,7 +865,17 @@ static struct vm_area_struct *corten_arena_carrier_alloc(struct mm_struct *mm,
 	if (!vma)
 		return NULL;
 
-	vma_set_range(vma, start, end, 0);
+	if (file) {
+		vma_set_range(vma, start, end, pgoff);
+		vma->vm_file = file;
+	} else {
+		vma_set_range(vma, start, end, 0);
+	}
+	/* vm_ops = NULL: the detached contract (no .fault/.open dispatch
+	 * can reach a carrier), the same anonymous spelling as before --
+	 * for a FILE carrier the backing is expressed by vm_file/rpoff,
+	 * never by vm_ops.
+	 */
 	vma_set_anonymous(vma);
 
 	if (perm & CORTEN_PERM_READ)
@@ -868,7 +916,10 @@ static struct vm_area_struct *corten_arena_carrier_alloc(struct mm_struct *mm,
  * reference and the avc node live in the vma) and free the object.
  * Callers hold the owner mm's mmap_write (or run at mm_users==0);
  * the never-attached refcount (0) is exactly what vm_area_free()'s
- * vma_assert_detached() demands.
+ * vma_assert_detached() demands.  vm_file needs no handling here: a
+ * FILE carrier borrows the region record's reference and
+ * corten_region_file_teardown() (always run before this) already
+ * returned it to the anonymous NULL shape.
  */
 static void corten_arena_carrier_free(struct vm_area_struct *vma)
 {
@@ -974,9 +1025,13 @@ static u8 corten_region_may_full(void)
  * hold the rmap anchors in the tree), and since F1 every pool
  * reactivation re-arms a carrier -- the A.1 anchor-less mixed state
  * is gone.
- * Checked by corten_region_invariants_ok() -- the anchor publish order
- * (carrier before the registry stores, [FAIL-2]) means register()
- * itself can still observe the pre-publish state.
+ * V-B.1 adds the FILE payload pairing (sec 2.5, rule (d)): a FILE
+ * region carries a live file reference, its carrier is armed with the
+ * same file, and the pgoff derivation agrees (carrier->vm_pgoff ==
+ * rpoff) -- and no other class carries a stale rfile.  Checked by
+ * corten_region_invariants_ok() -- the anchor publish order (carrier
+ * before the registry stores, [FAIL-2]) means register() itself can
+ * still observe the pre-publish state.
  */
 static bool corten_region_record_ok(const struct corten_arena *ar)
 {
@@ -994,6 +1049,18 @@ static bool corten_region_record_ok(const struct corten_arena *ar)
 	if (READ_ONCE(ar->idle) && READ_ONCE(ar->vma))
 		return false;
 
+	if (READ_ONCE(ar->rclass) == CORTEN_REGION_FILE) {
+		const struct vm_area_struct *carrier =
+			READ_ONCE(ar->carrier);
+
+		if (!READ_ONCE(ar->rfile) || !carrier ||
+		    carrier->vm_file != ar->rfile ||
+		    carrier->vm_pgoff != READ_ONCE(ar->rpoff))
+			return false;
+	} else if (READ_ONCE(ar->rfile)) {
+		return false;
+	}
+
 	return true;
 }
 
@@ -1008,14 +1075,19 @@ void corten_region_register(struct corten_arena *ar,
 	WRITE_ONCE(ar->may_prot, may_prot | ar->prot);
 	WRITE_ONCE(ar->rflags, rflags);
 
-	/* FILE-class payload has no producer yet (V-B): the fields stay
-	 * clear; the pieces table is born single-piece.  The carrier is
-	 * NOT touched: its lifetime is the descriptor's (created at
-	 * DECLARE/fork-dup, freed at RELEASE/mm_exit by
-	 * corten_arena_free()) and the park/reactivate flips must not
-	 * churn it.
+	/* A FILE payload must already be torn down before any non-FILE
+	 * stamp (the park runs corten_region_file_teardown() first);
+	 * silently dropping a live reference here would leak it, so the
+	 * stale payload is loud instead.  The pieces table is born
+	 * single-piece.  The carrier is NOT touched: its lifetime is the
+	 * descriptor's (created at DECLARE/fork-dup, freed at
+	 * RELEASE/mm_exit by corten_arena_free()) and the park/reactivate
+	 * flips must not churn it.
 	 */
-	ar->rfile = NULL;
+	if (ar->rfile) {
+		WARN_ON_ONCE(1);
+		ar->rfile = NULL;
+	}
 	ar->rpoff = 0;
 	ar->npieces = 1;
 	INIT_LIST_HEAD(&ar->rpieces);
@@ -1026,6 +1098,140 @@ void corten_region_register(struct corten_arena *ar,
 	 * where the encoding-completeness tripwire lives.
 	 */
 	WARN_ON_ONCE(!corten_region_record_ok(ar));
+}
+
+/*
+ * The FILE stamp of the region record (V-B.1, sec 2.2's FILE variant):
+ * register(FILE) + the file payload, inlined because the payload must
+ * land before the class flip -- register()'s own tripwire (and every
+ * lockless reader) sees a fully-armed FILE record or none at all.  The
+ * record takes the file's reference here (get_file cannot fail -- the
+ * caller's own reference pins the object); the caller's carrier must
+ * already carry the same file pointer and pgoff (the carrier borrows
+ * this reference; INV-MV3 rule (d) checks the pairing).  i_mmap
+ * membership is deliberately NOT taken here: it is the publication's
+ * last step (after every failure path is behind), so a never-published
+ * region never dangles in the mapping's interval tree.
+ *
+ * Caller contract: the owner mm's mmap_lock for writing, the carrier
+ * published into @ar (the tripwire reads it).
+ */
+void corten_region_register_file(struct corten_arena *ar, u8 may_prot,
+				 u32 rflags, struct file *file,
+				 unsigned long pgoff)
+{
+	/* A stale payload would leak below -- only a fresh (or torn-down)
+	 * record may take the FILE stamp.
+	 */
+	WARN_ON_ONCE(ar->rfile);
+
+	WRITE_ONCE(ar->rfile, get_file(file));
+	WRITE_ONCE(ar->rpoff, pgoff);
+	WRITE_ONCE(ar->rclass, CORTEN_REGION_FILE);
+	WRITE_ONCE(ar->may_prot, may_prot | ar->prot);
+	WRITE_ONCE(ar->rflags, rflags);
+	ar->npieces = 1;
+	INIT_LIST_HEAD(&ar->rpieces);
+
+	WARN_ON_ONCE(!corten_region_record_ok(ar));
+}
+
+/*
+ * Join @ar's carrier to the backing mapping's i_mmap interval tree --
+ * __vma_link_file() verbatim (mm/vma.c), minus mapping_allow_writable()
+ * (VM_SHARED is never set on a private carrier).  This is what makes
+ * the region visible to the file-side walkers (rmap, truncate,
+ * invalidation): B.2's unmap_mapping_range route gate reads exactly
+ * this membership, and the region record (rfile -> f_mapping, rpoff,
+ * arena bounds) already carries everything that gate needs to resolve
+ * a file event back to the window range.
+ *
+ * Lock order: the caller holds the owner mm's mmap_write, i_mmap_rwsem
+ * nests inside it -- the kernel's existing vma_link() order, no new
+ * edge (INV2).  The carrier must be fully published (this is the last
+ * step of the FILE attach/fork arms) and the region record armed.
+ */
+static void corten_file_i_mmap_insert(struct corten_arena *ar)
+{
+	struct address_space *mapping = ar->rfile->f_mapping;
+
+	i_mmap_lock_write(mapping);
+	flush_dcache_mmap_lock(mapping);
+	vma_interval_tree_insert(ar->carrier, &mapping->i_mmap);
+	flush_dcache_mmap_unlock(mapping);
+	i_mmap_unlock_write(mapping);
+}
+
+/*
+ * The i_mmap membership out: unlink the carrier under the same lock
+ * pair that inserted it.  Called only from the teardown paths (the
+ * region is unreachable or quiesced; see
+ * corten_region_file_teardown()).
+ */
+static void corten_file_i_mmap_remove(struct corten_arena *ar)
+{
+	struct address_space *mapping = ar->rfile->f_mapping;
+
+	i_mmap_lock_write(mapping);
+	flush_dcache_mmap_lock(mapping);
+	vma_interval_tree_remove(ar->carrier, &mapping->i_mmap);
+	flush_dcache_mmap_unlock(mapping);
+	i_mmap_unlock_write(mapping);
+}
+
+/*
+ * Tear down a live FILE payload: leave i_mmap, return the carrier to
+ * the anonymous NULL shape (it survives a park to serve the next ANON
+ * incarnation -- vm_file/vm_pgoff must not dangle), drop the region's
+ * file reference.  No-op for every non-FILE record.
+ *
+ * Called at each region death point, all under the owner mm's
+ * mmap_write (or at mm_users == 0, where no walker can race):
+ * corten_arena_free() (RELEASE / mm_exit / mode_exit converge there)
+ * and corten_arena_pool_park_locked() (reactivation is the ANON reuse
+ * contract -- a parked window must not pin a file).  Missing one of
+ * these calls leaks the file reference and dangles the interval-tree
+ * node: the KUnit lifecycle case reconciles file_count() across every
+ * state.
+ */
+static void corten_region_file_teardown(struct corten_arena *ar)
+{
+	struct vm_area_struct *carrier = READ_ONCE(ar->carrier);
+	struct file *file = ar->rfile;
+
+	if (!file)
+		return;
+
+	if (carrier && carrier->vm_file == file) {
+		corten_file_i_mmap_remove(ar);
+		carrier->vm_file = NULL;
+		carrier->vm_pgoff = 0;
+	}
+	ar->rfile = NULL;
+	ar->rpoff = 0;
+	fput(file);
+}
+
+/*
+ * Disarm a FILE payload whose carrier never joined i_mmap -- the
+ * publication error paths of the FILE attach and the fork child
+ * registration (a mark/store failure unwinds between register_file()
+ * and the i_mmap insertion).  The same drops as teardown minus the
+ * interval-tree remove: the node was never inserted.
+ */
+static void corten_region_file_disarm(struct corten_arena *ar)
+{
+	struct vm_area_struct *carrier = READ_ONCE(ar->carrier);
+
+	if (!ar->rfile)
+		return;
+	if (carrier && carrier->vm_file == ar->rfile) {
+		carrier->vm_file = NULL;
+		carrier->vm_pgoff = 0;
+	}
+	ar->rfile = NULL;
+	ar->rpoff = 0;
+	fput(ar->rfile);
 }
 
 /*
@@ -1213,6 +1419,81 @@ static u8 corten_arena_perm_from_prot(unsigned long prot)
 }
 
 /*
+ * V-B.1: virtually allocate [start, start+len) of a fresh arena as
+ * CORTEN_FILE_MAPPED(perm) -- the whole-region mark the FILE attach
+ * does before publication (corten_mark()'s INVALID -> FILE_MAPPED is
+ * the legal virtual-allocation edge; the transaction layer is
+ * unchanged).  The fill+mark loop is the mmap_route MAP_FIXED shape
+ * (mark records into the PT page's metadata array, so every window's
+ * tracked PT page is ensured first), minus the zap rounds: the range
+ * is fresh, no content can be present.
+ *
+ * Every PTE write on the FILE paths goes through transactions (INV6);
+ * this one writes metadata only -- the region has no resident page in
+ * B.1 (a fault dispatches STUB -> SEGV_MAPERR until B.3's read/COW
+ * arms land).
+ *
+ * Error unwinding: mark is all-or-nothing per window (validate-then-
+ * write, mm/corten.c), so on failure exactly the windows before the
+ * failing one carry marks -- scrub that prefix back to INVALID so the
+ * failed declare leaves no orphaned state behind for the next
+ * declaration of the same range.
+ *
+ * Called under the owner mm's mmap_write (the declare body's context).
+ * Return: 0, or -errno (fill/mark failure; the caller unwinds).
+ */
+static int corten_arena_file_mark(struct mm_struct *mm,
+				  struct corten_arena *ar,
+				  unsigned long start, unsigned long len,
+				  u8 perm)
+{
+	struct corten_pte_meta meta = {
+		.state = CORTEN_FILE_MAPPED,
+		.perm = perm,
+	};
+	unsigned long a, end = start + len;
+	int ret;
+
+	for (a = start; a < end; a = min((a | (PMD_SIZE - 1)) + 1, end)) {
+		ret = corten_arena_fill_upper(ar, a);
+		if (ret)
+			return ret;
+	}
+
+	for (a = start; a < end;) {
+		unsigned long win_end = min((a | (PMD_SIZE - 1)) + 1, end);
+		struct corten_txn txn;
+
+		ret = corten_lock_range(mm, a, win_end - a, &txn);
+		if (ret)
+			goto scrub;
+		ret = corten_mark(&txn, a, win_end - a, &meta);
+		corten_unlock(&txn);
+		if (ret)
+			goto scrub;
+		a = win_end;
+	}
+
+	return 0;
+
+scrub:
+	/* Windows [start, a) are marked (mark is per-window atomic); drop
+	 * their slots back to the pristine INVALID the declare found.
+	 */
+	while (start < a) {
+		unsigned long win_end = min((start | (PMD_SIZE - 1)) + 1, a);
+		struct corten_txn txn;
+
+		if (!corten_lock_range(mm, start, win_end - start, &txn)) {
+			corten_unmap(&txn, start, win_end - start, 0);
+			corten_unlock(&txn);
+		}
+		start = win_end;
+	}
+	return ret;
+}
+
+/*
  * The DECLARE body proper (P0, DEV-13).  The caller holds @mm's mmap_lock
  * for writing; this nests state->ctl_lock inside it -- the inversion of
  * the M3b order, so that the do_mmap auto-attach (which runs with the
@@ -1228,11 +1509,22 @@ static u8 corten_arena_perm_from_prot(unsigned long prot)
  * accounting mmap_region() would have done rides here too: the gate
  * ran in corten_auto_validate() before placement, the charge follows
  * the successful stores.
+ *
+ * V-B.1 adds the FILE arm (@file non-NULL, implies @novma): the region
+ * record takes the file reference (corten_region_register_file), the
+ * carrier is born in FILE shape (vm_file/@pgoff), and the whole region
+ * is virtually allocated CORTEN_FILE_MAPPED up front -- a fault into it
+ * dispatches STUB -> SEGV_MAPERR (the honest B.1 "no semantics yet"
+ * verdict) instead of the FRESH synthesizer's anonymous zero pages.
+ * The pool reuse is skipped (reactivation is the ANON contract), the
+ * parked-arena eject half still runs, and the carrier joins the
+ * mapping's i_mmap as the very last publishing step.
  */
 static int corten_arena_declare_locked(struct mm_struct *mm,
 				       struct corten_mm_state *state,
 				       unsigned long addr, unsigned long len,
-				       u8 perm, bool novma)
+				       u8 perm, struct file *file,
+				       unsigned long pgoff, bool novma)
 {
 	unsigned long frame, first_frame, last_frame;
 	struct corten_arena *arena;
@@ -1249,9 +1541,15 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	 * range is deregistered first so the fresh path below sees a
 	 * clean range (its registry slots would otherwise overlap-reject
 	 * or collide with the stores below).
+	 *
+	 * V-B.1: the FILE arm passes no_reuse -- a parked window must not
+	 * be reactivated for a file mapping (the reuse contract is the
+	 * ANON metadata flip), but the eject half still applies: the
+	 * global placer (oversized spans) can land a fresh range over a
+	 * parked arena's frames.
 	 */
 	ret = corten_arena_pool_prepare_locked(mm, state, addr, len, perm,
-					       novma);
+					       novma, !!file);
 	if (ret <= 0) {
 		mutex_unlock(&state->ctl_lock);
 		return ret;		/* 0 = reactivated, else errno */
@@ -1308,16 +1606,20 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 		 * checklist ran in corten_auto_validate() before placement
 		 * (the may_expand_vm gate), [C1] ran above, and the anchor
 		 * is the V-A.2b carrier -- anon_vma_prepare() can fail
-		 * (-ENOMEM), so it happens before any publication.
+		 * (-ENOMEM), so it happens before any publication.  V-B.1:
+		 * a FILE carrier also carries vm_file/@pgoff (the region's
+		 * borrowed pointer -- register_file takes the reference
+		 * after this succeeds).
 		 */
 		vma = corten_arena_carrier_alloc(mm, addr, addr + len, perm,
-						true);
+						 file, pgoff, true);
 		if (!vma) {
 			ret = -ENOMEM;
 			goto out_free_arena;
 		}
 		arena->prot = perm;
-		may_prot = corten_region_may_full();
+		may_prot = file ? corten_file_may_bound(file)
+				: corten_region_may_full();
 	} else {
 		/* Validation and conversion happen together under the
 		 * write lock (held by the caller): the VMA must survive as
@@ -1356,9 +1658,30 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	/* The region record is born with the arena (V-A.0 sec 3.1.0):
 	 * live == CORTEN_REGION_ANON.  register()'s INV-MV3 tripwire
 	 * reads the anchor pairings, so the publish above must precede
-	 * it.
+	 * it.  V-B.1: the FILE arm takes the file payload instead (the
+	 * carrier above already carries the same pointer and pgoff).
 	 */
-	corten_region_register(arena, CORTEN_REGION_ANON, may_prot, rflags);
+	if (file)
+		corten_region_register_file(arena, may_prot, rflags, file,
+					    pgoff);
+	else
+		corten_region_register(arena, CORTEN_REGION_ANON, may_prot,
+				       rflags);
+
+	/* V-B.1: virtually allocate the whole region as FILE_MAPPED before
+	 * publication (INVALID -> FILE_MAPPED is the transaction layer's
+	 * legal virtual-allocation edge, mm/corten.c's mark state machine
+	 * -- zero changes there).  Every window's PT page is filled up
+	 * front (the mmap_route mark-loop shape): mark() records into the
+	 * PT page's metadata array, a hole would fail the transaction.
+	 * A failure unwinds with nothing published -- the marks of already
+	 * finished windows are scrubbed inside.
+	 */
+	if (file) {
+		ret = corten_arena_file_mark(mm, arena, addr, len, perm);
+		if (ret)
+			goto out_unwind;
+	}
 
 	first_frame = addr >> PMD_SHIFT;
 	last_frame = (addr + len - 1) >> PMD_SHIFT;
@@ -1389,9 +1712,14 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 
 	/* Last publishing step: the observability ledger (S8).  All
 	 * failure paths are behind us, so the ledger only ever contains
-	 * fully registered arenas.
+	 * fully registered arenas.  V-B.1's own last step follows: the
+	 * FILE carrier joins the mapping's i_mmap interval tree -- past
+	 * every failure path, so the tree only ever carries published
+	 * regions.
 	 */
 	corten_arena_obs_add(arena);
+	if (file)
+		corten_file_i_mmap_insert(arena);
 
 	mutex_unlock(&state->ctl_lock);
 
@@ -1411,10 +1739,15 @@ out_unwind:
 	/* The arena is dead here (nothing published but the anchor and
 	 * some frame slots) -- undo the stores and the anchor; the record
 	 * is never re-read after this (the descriptor is freed below),
-	 * so no register() stamp is owed.
+	 * so no register() stamp is owed.  V-B.1: the file payload's
+	 * reference (register_file's get_file) is disarmed before the
+	 * carrier free; the carrier was never inserted into i_mmap (the
+	 * insert is past every failure path).
 	 */
 	while (frame > first_frame)
 		xa_erase(&state->arenas, --frame);
+	if (file)
+		corten_region_file_disarm(arena);
 	if (novma) {
 		WRITE_ONCE(arena->carrier, NULL);
 		corten_arena_carrier_free(vma);
@@ -1451,11 +1784,12 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
 	}
 
 	/* P0 (DEV-13): mmap_write is the outermost lock, ctl_lock nests
-	 * inside it.  The targeted-DECLARE shape: perm/novma are unused
+	 * inside it.  The targeted-DECLARE shape: perm/file are unused
 	 * (the declaring VMA carries the contract).
 	 */
 	mmap_write_lock(mm);
-	ret = corten_arena_declare_locked(mm, state, addr, len, 0, false);
+	ret = corten_arena_declare_locked(mm, state, addr, len, 0, NULL, 0,
+					  false);
 	mmap_write_unlock(mm);
 
 	return ret;
@@ -2584,15 +2918,30 @@ int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,
 enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
 						       bool file)
 {
-	if (file)
-		return CORTEN_MMAP_LEGACY;
-
 	/* The type bits must be exactly MAP_PRIVATE: this rejects
-	 * MAP_SHARED/MAP_SHARED_VALIDATE and absorbs the MAP_DROPPABLE
-	 * alias bit (0x08 lives inside the MAP_TYPE nibble).
+	 * MAP_SHARED/MAP_SHARED_VALIDATE for both arms (VM_SHARED never
+	 * enters the window, MV_VMA_FREE_SPEC.md sec 3.2.1) and absorbs
+	 * the MAP_DROPPABLE alias bit (0x08 lives inside the MAP_TYPE
+	 * nibble).
 	 */
 	if ((flags & MAP_TYPE) != MAP_PRIVATE)
 		return CORTEN_MMAP_LEGACY;
+
+	if (file) {
+		/* V-B.1: the file mirror of the anon whitelist -- at most
+		 * MAP_NORESERVE may accompany the type bits.  MAP_ANONYMOUS
+		 * is absent by construction (a file request never carries
+		 * it) and also rejects defensively.  Every other bit keeps
+		 * the mapping legacy; MAP_FIXED file stays with the D-G''
+		 * punch route (the OQ-MV-2 implant exception -- a region
+		 * needs full i_mmap write-side semantics to host a forced
+		 * file mapping, deliberately out of scope).
+		 */
+		if (flags & ~(MAP_TYPE | MAP_NORESERVE))
+			return CORTEN_MMAP_LEGACY;
+		return CORTEN_MMAP_AUTO_FILE;
+	}
+
 	if (!(flags & MAP_ANONYMOUS))
 		return CORTEN_MMAP_LEGACY;
 
@@ -2607,6 +2956,103 @@ enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
 		return CORTEN_MMAP_LEGACY;
 
 	return CORTEN_MMAP_AUTO;
+}
+
+/*
+ * The MAY bound of a private file mapping (V-B.1, the one-bit answer of
+ * sec 1.3's may calculus): legacy do_mmap() grants
+ * VM_MAYREAD|MAYWRITE|MAYEXEC for private mappings regardless of the
+ * requested prot (mm/mmap.c stamps the three MAY bits globally), and
+ * the open mode can only take EXEC away -- a noexec mount (the
+ * path_noexec() arm below drops VM_MAYEXEC in legacy).  Write is kept:
+ * a MAP_PRIVATE file write goes COW, which the MAY bound must allow.
+ */
+static u8 corten_file_may_bound(struct file *file)
+{
+	u8 may = corten_region_may_full();
+
+	if (path_noexec(&file->f_path))
+		may &= ~CORTEN_PERM_EXEC;
+
+	return may;
+}
+
+/*
+ * The do_mmap() file-validation chain replayed for the MODE window
+ * route (V-B.1; mm/mmap.c's file arm, same order, same errnos).  The
+ * classify whitelist already rejected every flag-side shape
+ * (MAP_SHARED, GROWSDOWN/GROWSUP carriers, DENYWRITE/EXECUTABLE
+ * mappings), so what remains is the file itself:
+ *
+ *   - file_mmap_ok()'s size check: the helper is static in mm/mmap.c,
+ *     so its two conditions are re-derived here verbatim (the
+ *     driver-size table it reads: MAX_LFS_FILESIZE for REG/BLK/SOCK,
+ *     unlimited for "unsigned offset" drivers, 0 -- "unbounded" -- for
+ *     the FOP_UNSIGNED_OFFSET shapes);
+ *   - the DAX gate: no DAX inode enters the window (the FOLL_LONGTERM
+ *     family of refusals applies to a carrier no less than to a VMA;
+ *     file_is_dax() covers fsdax and dev-dax alike, both REJECT rows
+ *     of sec 2.6);
+ *   - FMODE_READ / noexec x EXEC / can_mmap_file: literally the
+ *     mm/mmap.c arms;
+ *   - memfd seals: a private mapping always passes check_write_seal()
+ *     itself (writability is irrelevant without VM_SHARED); the call
+ *     is kept for chain fidelity -- an exotic future seal that bites
+ *     private mappings answers here, not silently later.
+ *
+ * Pure; mm/corten_fault_test.c drives it without an mm.
+ * Return: 0 (and *@may_prot = the MAY bound) or -errno; the caller
+ * degrades to legacy, which answers the syscall with this same errno
+ * through its own chain.
+ */
+int corten_file_may(struct file *file, unsigned long prot,
+		    unsigned long pgoff, unsigned long len, u8 *may_prot)
+{
+	struct inode *inode = file_inode(file);
+	vm_flags_t vm_flags = VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
+	u64 maxsize;
+	int err;
+
+	/* file_mmap_size_max() verbatim (mm/mmap.c). */
+	if (S_ISREG(inode->i_mode) || S_ISBLK(inode->i_mode) ||
+	    S_ISSOCK(inode->i_mode))
+		maxsize = MAX_LFS_FILESIZE;
+	else if (file->f_op->fop_flags & FOP_UNSIGNED_OFFSET)
+		maxsize = 0;
+	else
+		maxsize = ULONG_MAX;
+
+	/* file_mmap_ok() verbatim (mm/mmap.c): len must fit and the
+	 * mapping end must not wrap the max size.
+	 */
+	if (maxsize && len > maxsize)
+		return -EOVERFLOW;
+	maxsize -= len;
+	if (pgoff > maxsize >> PAGE_SHIFT)
+		return -EOVERFLOW;
+
+	if (file_is_dax(file))
+		return -EOPNOTSUPP;
+
+	if (!(file->f_mode & FMODE_READ))
+		return -EACCES;
+
+	if (path_noexec(&file->f_path)) {
+		if (prot & PROT_EXEC)
+			return -EPERM;
+	}
+
+	if (!can_mmap_file(file))
+		return -ENODEV;
+
+	err = memfd_check_seals_mmap(file, &vm_flags);
+	if (err)
+		return err;
+
+	if (may_prot)
+		*may_prot = corten_file_may_bound(file);
+
+	return 0;
 }
 
 int corten_arena_auto_place(unsigned long next_va, unsigned long len,
@@ -3163,11 +3609,13 @@ int corten_auto_validate(struct mm_struct *mm, unsigned long len,
 	return 0;
 }
 
-int corten_arena_auto_mmap_route(struct mm_struct *mm, unsigned long len,
+int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
+				 unsigned long pgoff, unsigned long len,
 				 unsigned long prot, unsigned long *addr,
 				 unsigned long *lenp, unsigned long *flagsp)
 {
 	struct corten_mm_state *state;
+	enum corten_mmap_class class;
 	unsigned long addr2, len2;
 	int ret;
 
@@ -3182,27 +3630,49 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, unsigned long len,
 	/* OVERCOMMIT_NEVER does not honour MAP_NORESERVE (mm/mmap.c:563),
 	 * so the created VMA would carry VM_ACCOUNT and fail the DECLARE
 	 * validation chain wholesale -- degrade the auto takeover of this
-	 * configuration to legacy up front (DEV-12).
+	 * configuration to legacy up front (DEV-12).  V-B.1 keeps the
+	 * conservative posture for the file arm too (a private file
+	 * mapping carries no VM_ACCOUNT demand, but the first version
+	 * stays uniform; registered for a later micro-tuning).
 	 */
 	if (sysctl_overcommit_memory == OVERCOMMIT_NEVER) {
 		corten_arena_auto_fallback(NULL);
 		return 0;
 	}
 
-	if (corten_arena_auto_mmap_classify(*flagsp, false) !=
-	    CORTEN_MMAP_AUTO)
+	class = corten_arena_auto_mmap_classify(*flagsp, !!file);
+	if (class == CORTEN_MMAP_LEGACY)
 		return 0;
 
 	/* V-A.2a: the mmap_region() verification checklist (see
 	 * corten_auto_validate()).  A refusal degrades to the legacy
 	 * flow -- which delivers the identical verdict through its own
 	 * full chain, and no window segment is handed out for a shape
-	 * that cannot be honoured.
+	 * that cannot be honoured.  V-B.1: the file arm adds
+	 * corten_file_may() -- the do_mmap() file validation chain the
+	 * legacy flow would run later (the EACCES/EPERM/ENODEV/
+	 * EOVERFLOW semantics must not be lost to the takeover).
 	 */
 	len2 = round_up(*lenp, PMD_SIZE);
 	ret = corten_auto_validate(mm, len2, prot, *flagsp);
 	if (ret) {
 		atomic_long_inc(&corten_nr_auto_vgate);
+		corten_arena_auto_fallback(NULL);
+		return 0;
+	}
+	/* V-B.1 ships the FILE machinery dark: the takeover activates
+	 * together with the B.3 fault arms (read/COW/EOF/BUS).  Until
+	 * then a classified FILE shape degrades to the legacy flow --
+	 * dlopen-shaped addr==0 private file maps must keep working in
+	 * MODE (the per-slice shippable-state iron rule).  Everything
+	 * downstream (attach, i_mmap, accounting, the direct-drive KUnit
+	 * anchors) stays compiled and tested; B.3 flips this gate.
+	 */
+	if (class == CORTEN_MMAP_AUTO_FILE &&
+	    !READ_ONCE(corten_file_route_test_override))
+		return 0;
+	if (class == CORTEN_MMAP_AUTO_FILE &&
+	    corten_file_may(file, prot, pgoff, len2, NULL)) {
 		corten_arena_auto_fallback(NULL);
 		return 0;
 	}
@@ -3243,14 +3713,20 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, unsigned long len,
 	 * rebuild them).  The auto churn re-asks for the size it just
 	 * freed, so the pool covers the whole working set; a request no
 	 * slot matches keeps the pre-pool placement behaviour.
+	 *
+	 * V-B.1: the FILE arm skips the pool -- a parked window's
+	 * reactivation is the ANON reuse contract, a file mapping always
+	 * takes a fresh window.
 	 */
-	ret = corten_arena_pool_take(mm, state, len2, prot, &addr2);
-	if (!ret) {
-		*addr = addr2;
-		*lenp = len2;
-		return 2;
+	if (class == CORTEN_MMAP_AUTO) {
+		ret = corten_arena_pool_take(mm, state, len2, prot, &addr2);
+		if (!ret) {
+			*addr = addr2;
+			*lenp = len2;
+			return 2;
+		}
+		atomic_long_inc(&corten_nr_pool_misses);
 	}
-	atomic_long_inc(&corten_nr_pool_misses);
 
 	ret = corten_arena_window_place(mm, state, len2, &addr2);
 	if (ret) {
@@ -3266,8 +3742,9 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, unsigned long len,
 	/* Commit: hand the range out and rewrite the request onto the
 	 * window.  V-A.2a: the caller completes the mmap WITHOUT
 	 * mmap_region() -- corten_arena_auto_attach() declares the arena
-	 * (V-A.2b carrier + frames + metadata) and returns; only a
-	 * declare failure degrades to the legacy MAP_FIXED flow
+	 * (V-A.2b carrier + frames + metadata) and returns; V-B.1's file
+	 * arm completes through corten_arena_file_attach() instead; only
+	 * a declare failure degrades to the legacy MAP_FIXED flow
 	 * (the counted attach-failure degradation).
 	 */
 	*addr = addr2;
@@ -3309,11 +3786,53 @@ int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
 
 	ret = corten_arena_declare_locked(mm, state, addr, len,
 					  corten_arena_perm_from_prot(prot),
-					  true);
+					  NULL, 0, true);
 	if (ret) {
 		/* T0a counted attach failures in the per-mm fallback
 		 * bucket; T0b adds the named aggregates on top.
 		 */
+		corten_arena_auto_fallback(state);
+		atomic_long_inc(&corten_nr_auto_attach_fails);
+	} else {
+		atomic_long_inc(&corten_nr_auto_mmaps);
+	}
+
+	return ret;
+}
+
+/*
+ * V-B.1: the FILE counterpart of corten_arena_auto_attach() -- the
+ * do_mmap() completion body of a CORTEN_MMAP_AUTO_FILE takeover (the
+ * dlopen/JVM-libs shape).  DECLARE's locked body runs with the FILE
+ * arm: the region record takes the file reference, the carrier is born
+ * in FILE shape (vm_file/@pgoff, anon_vma kept for the private COW
+ * pages), the region is virtually allocated FILE_MAPPED (faults answer
+ * STUB -> SEGV_MAPERR until B.3), and the carrier joins the mapping's
+ * i_mmap.  The total_vm charge rides the declare's success path, the
+ * may_expand_vm/RLIMIT gate ran in the route's validate -- exactly the
+ * A.2a accounting posture.
+ *
+ * Same failure contract as the anon attach (memory pressure degrades
+ * to the caller's legacy flow, counted); the route's
+ * corten_file_may() already validated the file shape.
+ */
+int corten_arena_file_attach(struct mm_struct *mm, unsigned long addr,
+			     unsigned long len, unsigned long prot,
+			     struct file *file, unsigned long pgoff)
+{
+	struct corten_mm_state *state;
+	int ret;
+
+	mmap_assert_write_locked(mm);
+
+	state = corten_arena_get_state(mm);
+	if (!state)
+		return -ENOMEM;
+
+	ret = corten_arena_declare_locked(mm, state, addr, len,
+					  corten_arena_perm_from_prot(prot),
+					  file, pgoff, true);
+	if (ret) {
 		corten_arena_auto_fallback(state);
 		atomic_long_inc(&corten_nr_auto_attach_fails);
 	} else {
@@ -3739,6 +4258,7 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	unsigned long frame, first, last;
 	struct vm_area_struct *pcarrier, *ccarrier = NULL;
 	struct corten_arena *child;
+	struct file *rfile = NULL;
 	int ret;
 
 	child = kzalloc(sizeof(*child), GFP_KERNEL_ACCOUNT);
@@ -3750,6 +4270,16 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	child->mm = mm;
 	child->prot = READ_ONCE(ar->prot);
 
+	/* V-B.1: a FILE parent mirrors its payload into the child -- the
+	 * child's carrier is born in FILE shape (the parent's file
+	 * pointer, borrowed: register_file below takes the child's own
+	 * reference, same object) with the parent's pgoff.
+	 */
+	if (READ_ONCE(ar->rclass) == CORTEN_REGION_FILE) {
+		rfile = READ_ONCE(ar->rfile);
+		WARN_ON_ONCE(!rfile || !READ_ONCE(ar->carrier));
+	}
+
 	/* V-A.2b/C1: the child carrier of an auto arena, allocated BARE
 	 * (no anon_vma_prepare) so anon_vma_fork() starts from a NULL
 	 * chain -- the exact dup_mmap() shape.  Both failures
@@ -3760,6 +4290,8 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	if (pcarrier) {
 		ccarrier = corten_arena_carrier_alloc(mm, ar->start, ar->end,
 						      READ_ONCE(child->prot),
+						      rfile,
+						      READ_ONCE(ar->rpoff),
 						      false);
 		if (!ccarrier) {
 			ret = -ENOMEM;
@@ -3775,16 +4307,24 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	/* Region record deep-copy (sec 2.2 lifecycle): the child's region
 	 * mirrors the parent's class/MAY bound/flag record (the parent is
 	 * always live here: the fork-begin pool flush released every
-	 * parked arena).  The FILE and pieces payloads are always
-	 * clear/empty in V-A.0, so the single-piece register stamp below
-	 * IS the copy.  register()'s INV-MV3 tripwire reads the anchor
-	 * pairings, so the publishes below must precede it.
+	 * parked arena).  V-B.1: a FILE parent takes the file-registered
+	 * stamp instead -- the child's own reference (get_file) and the
+	 * pgoff copy, so INV-MV3 rule (d) holds on both sides of the
+	 * fork.  The pieces payload is always empty (no file punch
+	 * producer), so single-piece IS the copy.  register()'s INV-MV3
+	 * tripwire reads the anchor pairings, so the publishes below must
+	 * precede it.
 	 */
 	WRITE_ONCE(child->carrier, ccarrier);
 	WRITE_ONCE(child->vma, cvma);
-	corten_region_register(child, READ_ONCE(ar->rclass),
-			       READ_ONCE(ar->may_prot),
-			       READ_ONCE(ar->rflags));
+	if (rfile)
+		corten_region_register_file(child, READ_ONCE(ar->may_prot),
+					    READ_ONCE(ar->rflags), rfile,
+					    READ_ONCE(ar->rpoff));
+	else
+		corten_region_register(child, READ_ONCE(ar->rclass),
+				       READ_ONCE(ar->may_prot),
+				       READ_ONCE(ar->rflags));
 	mutex_init(&child->fill_lock);
 	init_completion(&child->drained);
 	WRITE_ONCE(child->frozen, false);
@@ -3805,11 +4345,16 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	}
 	refcount_set(&state->nr, refcount_read(&state->nr) + 1);
 
-	/* Last publishing step: the observability ledger (S8).  On the
-	 * unwind below the arena was never published, so it must not be
-	 * linked (the ledger only ever contains registered arenas).
+	/* Last publishing steps: the observability ledger (S8), then --
+	 * V-B.1 -- the FILE carrier joins the mapping's i_mmap (past
+	 * every failure path, mirroring the attach's publication order;
+	 * on the unwind below the arena was never published, so it must
+	 * not be linked anywhere -- the ledger only ever contains
+	 * registered arenas, the interval tree armed ones).
 	 */
 	corten_arena_obs_add(child);
+	if (rfile)
+		corten_file_i_mmap_insert(child);
 
 	mutex_unlock(&state->ctl_lock);
 
@@ -3822,6 +4367,12 @@ out_unwind:
 	percpu_ref_exit(&child->active);
 out_put_carrier:
 	mutex_destroy(&child->fill_lock);
+	/* V-B.1: the half-published FILE payload's reference (and the
+	 * carrier's borrowed pointer) -- the i_mmap node was never
+	 * inserted (insertion is past every failure path), so the disarm
+	 * spelling, not the teardown one.
+	 */
+	corten_region_file_disarm(child);
 	if (ccarrier) {
 		/* The child mm is being discarded wholesale on this path
 		 * (fork_abort / MMF_UNSTABLE); dropping the half-forked
@@ -7085,7 +7636,7 @@ static int corten_arena_pool_reactivate(struct mm_struct *mm,
 		struct vm_area_struct *carrier;
 
 		carrier = corten_arena_carrier_alloc(mm, ar->start, ar->end,
-						     perm, true);
+						     perm, NULL, 0, true);
 		if (!carrier) {
 			WRITE_ONCE(ar->idle, true);
 			return -ENOMEM;
@@ -7124,6 +7675,9 @@ static int corten_arena_pool_reactivate(struct mm_struct *mm,
  *     clean range.
  *
  * Called with the owner mm's mmap_write and state->ctl_lock held.
+ * @no_reuse (V-B.1) disables the reactivation half for a FILE declare
+ * (a parked window's reuse contract is the ANON metadata flip; a file
+ * mapping always takes the fresh path) while keeping the eject half.
  * Return: 0 = reactivated (DECLARE is done), 1 = proceed with the fresh
  * path, -errno = the declare failed.
  */
@@ -7131,7 +7685,7 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
 					    struct corten_mm_state *state,
 					    unsigned long addr,
 					    unsigned long len,
-					    u8 perm, bool novma)
+					    u8 perm, bool novma, bool no_reuse)
 {
 	unsigned long frame, first, last;
 	struct corten_arena *ar;
@@ -7152,7 +7706,7 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
 			}
 		}
 
-		if (intact) {
+		if (intact && !no_reuse) {
 			/* [C1] parity with the fresh declare. */
 			ret = corten_arena_check_empty_locked(mm, addr,
 							      addr + len);
@@ -7358,6 +7912,14 @@ static bool corten_arena_pool_park_locked(struct mm_struct *mm,
 	vma = ar->vma;
 	if (vma)
 		corten_arena_unshadow(ar, vma);
+
+	/* V-B.1 (INV-MV3 rule (c)): park(FILE) drops the file payload
+	 * before the RESERVED stamp -- the reactivation is the ANON reuse
+	 * contract, a parked window must not pin a live file reference
+	 * nor keep a carrier node in the mapping's i_mmap.  No-op for
+	 * ANON regions.
+	 */
+	corten_region_file_teardown(ar);
 
 	/* idle <=> rclass=RESERVED (sec 2.5): the park is the second
 	 * rclass write point.  The record keeps the surviving MAY bound
@@ -9000,7 +9562,8 @@ static long corten_arena_mremap_move(struct mm_struct *mm,
 	 * is gone, along with the VMA itself.  The copy below faults
 	 * through the new arena's FRESH path exactly as before.
 	 */
-	ret = corten_arena_declare_locked(mm, state, addr2, len2, perm, true);
+	ret = corten_arena_declare_locked(mm, state, addr2, len2, perm, NULL,
+					  0, true);
 	if (ret) {
 		mmap_write_unlock(mm);
 		return -ENOMEM;

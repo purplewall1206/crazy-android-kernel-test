@@ -412,16 +412,19 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 #ifdef CONFIG_CORTEN_MM_ARENA
 	/*
 	 * MODE-process transparent takeover (M4T0_SPEC.md sec 3.1): an
-	 * addr==0 anonymous private mapping of a MODE process is served
-	 * from the auto-arena window instead of the legacy mmap_base
-	 * area.  Placed after round_hint_to_min()/len alignment (the
-	 * decision sees the final length) and before __get_unmapped_area()
-	 * (the takeover rewrites addr/len/flags onto a fixed window
-	 * segment).  corten=off / non-MODE processes pay one static-branch
-	 * read plus one byte load and are otherwise untouched.
+	 * addr==0 private mapping of a MODE process is served from the
+	 * auto-arena window instead of the legacy mmap_base area -- the
+	 * anonymous arm since T0, the private FILE arm (dlopen/JVM libs
+	 * shapes, MV_VMA_FREE_SPEC.md sec 3.2) since V-B.1.  Placed after
+	 * round_hint_to_min()/len alignment (the decision sees the final
+	 * length) and before __get_unmapped_area() (the takeover rewrites
+	 * addr/len/flags onto a fixed window segment).  corten=off /
+	 * non-MODE processes pay one static-branch read plus one byte
+	 * load and are otherwise untouched.
 	 */
-	if (!file && addr == 0) {
-		int cret = corten_arena_auto_mmap_route(mm, len, prot, &addr,
+	if (addr == 0) {
+		int cret = corten_arena_auto_mmap_route(mm, file, pgoff, len,
+							prot, &addr,
 							&len, &flags);
 
 		if (cret < 0)
@@ -454,14 +457,26 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			 * pool arm (cret == 2) and this arm are now the
 			 * same pure-metadata shape.
 			 *
+			 * V-B.1: a FILE takeover completes through the
+			 * file attach (region file payload + FILE carrier
+			 * + i_mmap + the region-wide FILE_MAPPED virtual
+			 * allocation); the anon shape through the A.2a
+			 * auto attach.
+			 *
 			 * A declare failure (memory pressure) falls
 			 * through to the legacy flow over the reserved
 			 * window segment -- the counted attach-failure
-			 * degradation: a plain anonymous VMA whose
-			 * lookups resolve no arena.
+			 * degradation: a plain mapping whose lookups
+			 * resolve no arena.
 			 */
-			if (!corten_arena_auto_attach(mm, addr, len, prot))
+			if (file) {
+				if (!corten_arena_file_attach(mm, addr, len,
+							      prot, file, pgoff))
+					return addr;
+			} else if (!corten_arena_auto_attach(mm, addr, len,
+							     prot)) {
 				return addr;
+			}
 		}
 	}
 #endif

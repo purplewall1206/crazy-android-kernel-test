@@ -25,6 +25,7 @@
 #include <linux/pgtable.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
+#include <linux/shmem_fs.h>	/* shmem_file_setup (V-B.1 file lifecycle) */
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/swap.h>
@@ -268,8 +269,8 @@ static int corten_arena_test_auto_route_locked(struct mm_struct *mm,
 	int ret;
 
 	mmap_write_lock(mm);
-	ret = corten_arena_auto_mmap_route(mm, len, prot, addr, lenp,
-					   flagsp);
+	ret = corten_arena_auto_mmap_route(mm, NULL, 0, len, prot, addr,
+					   lenp, flagsp);
 	mmap_write_unlock(mm);
 
 	return ret;
@@ -1240,9 +1241,15 @@ static void corten_arena_test_auto_classify(struct kunit *test)
 			corten_arena_auto_mmap_classify(good, false),
 			CORTEN_MMAP_AUTO);
 
-	/* A file backing is never auto-arena material. */
-	KUNIT_EXPECT_EQ(test, corten_arena_auto_mmap_classify(good, true),
-			CORTEN_MMAP_LEGACY);
+	/* V-B.1 flipped the file anchor: the whitelist's file mirror (no
+	 * MAP_ANONYMOUS -- a file request never carries it) is the FILE
+	 * arm's hit; the dedicated case below drives the full file truth
+	 * table.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_auto_mmap_classify(MAP_PRIVATE |
+							MAP_NORESERVE, true),
+			CORTEN_MMAP_AUTO_FILE);
 
 	/* Shared types (and the MAP_DROPPABLE alias inside the type
 	 * nibble) stay legacy.
@@ -1275,6 +1282,76 @@ static void corten_arena_test_auto_classify(struct kunit *test)
 				    "flag bit %#lx must stay legacy",
 				    bad_bits[i]);
 	}
+}
+
+/* V-B.1: the file mirror of the auto-mmap whitelist (MV_VMA_FREE_SPEC.md
+ * sec 3.2.1 -- the dlopen shape is the canonical hit; MAP_SHARED in any
+ * spelling and every extra flag bit stay legacy, MAP_FIXED included:
+ * the OQ-MV-2 implant exception keeps the D-G'' punch route).
+ */
+static void corten_arena_test_auto_classify_file(struct kunit *test)
+{
+	static const unsigned long bad_bits[] = {
+		MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_HUGETLB, MAP_GROWSDOWN,
+		MAP_POPULATE, MAP_LOCKED, MAP_SYNC, MAP_STACK,
+		MAP_UNINITIALIZED, MAP_DENYWRITE, MAP_EXECUTABLE,
+		MAP_NONBLOCK, MAP_DROPPABLE, MAP_32BIT,
+	};
+	unsigned long good = MAP_PRIVATE | MAP_NORESERVE;
+	size_t i;
+
+	/* The clean hits: bare MAP_PRIVATE and with MAP_NORESERVE. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_auto_mmap_classify(MAP_PRIVATE, true),
+			CORTEN_MMAP_AUTO_FILE);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_auto_mmap_classify(good, true),
+			CORTEN_MMAP_AUTO_FILE);
+
+	/* MAP_SHARED / _VALIDATE never enter the window (file or not);
+	 * the MAP_DROPPABLE alias inside the type nibble rejects alike.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_auto_mmap_classify(MAP_SHARED, true),
+			CORTEN_MMAP_LEGACY);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_auto_mmap_classify(MAP_SHARED_VALIDATE,
+							true),
+			CORTEN_MMAP_LEGACY);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_auto_mmap_classify(MAP_PRIVATE |
+							MAP_DROPPABLE, true),
+			CORTEN_MMAP_LEGACY);
+
+	/* Defensive: a file request carrying MAP_ANONYMOUS (the syscall
+	 * cannot produce it) stays legacy instead of half-classifying.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_auto_mmap_classify(MAP_PRIVATE |
+							MAP_ANONYMOUS, true),
+			CORTEN_MMAP_LEGACY);
+
+	/* Every other flag bit keeps the mapping legacy -- MAP_FIXED is
+	 * the OQ-MV-2 implant exception, POPULATE/DENYWRITE/STACK etc.
+	 * the same single-bit whitelist as the anon arm.
+	 */
+	for (i = 0; i < ARRAY_SIZE(bad_bits); i++) {
+		KUNIT_EXPECT_EQ_MSG(test,
+				    corten_arena_auto_mmap_classify(good |
+								    bad_bits[i],
+								    true),
+				    CORTEN_MMAP_LEGACY,
+				    "file flag bit %#lx must stay legacy",
+				    bad_bits[i]);
+	}
+
+	/* The anon arm itself is unchanged: no MAP_ANONYMOUS without a
+	 * file backing stays legacy (the pre-B.1 anchors above already
+	 * cover the full anon table).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_auto_mmap_classify(MAP_PRIVATE, false),
+			CORTEN_MMAP_LEGACY);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1905,6 +1982,324 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
 			1);
 	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+}
+
+/* ------------------------------------------------------------------ *
+ * V-B.1: FILE region lifecycle -- the route's file arm three-state
+ * truth, the file-reference ledger across every teardown point
+ * (release / park / reactivate / mm_exit / mode_exit / fork), the
+ * i_mmap visibility pairing, and the INV-MV3(d) payload pairing.
+ * ------------------------------------------------------------------
+ */
+
+/* Helpers defined with the fork scaffolding below (used here). */
+static int corten_arena_test_meta(struct mm_struct *mm, unsigned long addr,
+				  struct corten_pte_meta *out);
+static int corten_arena_test_fork_begin(struct mm_struct *child,
+					struct mm_struct *parent);
+static int corten_arena_test_fork_commit(struct mm_struct *child,
+					 struct mm_struct *parent);
+
+/* Route wrapper: do_mmap()'s file front half, NULL pgoff caller shape. */
+static int corten_arena_test_file_route(struct mm_struct *mm,
+					struct file *file,
+					unsigned long len,
+					unsigned long *addr,
+					unsigned long *lenp,
+					unsigned long *flagsp)
+{
+	int ret;
+
+	WRITE_ONCE(corten_file_route_test_override, true);
+	mmap_write_lock(mm);
+	ret = corten_arena_auto_mmap_route(mm, file, 0, len, PROT_READ |
+					   PROT_EXEC, addr, lenp, flagsp);
+	mmap_write_unlock(mm);
+	WRITE_ONCE(corten_file_route_test_override, false);
+
+	return ret;
+}
+
+/* Attach wrapper: do_mmap()'s file completion body. */
+static int corten_arena_test_file_attach(struct mm_struct *mm,
+					 unsigned long addr,
+					 struct file *file,
+					 unsigned long pgoff)
+{
+	int ret;
+
+	mmap_write_lock(mm);
+	ret = corten_arena_file_attach(mm, addr, PMD_SIZE,
+				       PROT_READ | PROT_EXEC, file, pgoff);
+	mmap_write_unlock(mm);
+
+	return ret;
+}
+
+static void corten_arena_test_file_lifecycle(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm, *child;
+	struct vm_area_struct *carrier;
+	struct corten_pte_meta m;
+	struct corten_arena *ar;
+	struct file *file;
+	struct address_space *mapping;
+	const unsigned long pgoff = 3;
+	unsigned long addr = 0, lenp = 2 * PAGE_SIZE, flags;
+	long base, timeouts;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "FILE lifecycle requires corten=on");
+
+	/* A real file: the reference ledger needs a live f_ref, the i_mmap
+	 * anchor a real address space (shmem passes corten_file_may: read
+	 * mode, mmap hook, no DAX, no noexec seal).
+	 */
+	file = shmem_file_setup("corten_vb1", PMD_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	mapping = file->f_mapping;
+	base = file_count(file);
+	timeouts = corten_arena_test_drain_timeouts();
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* Route three-state truth: a non-whitelisted file shape answers 0
+	 * without touching the request; the whitelist hit places a fresh
+	 * window (ret 1) and rewrites the request like the anon arm.
+	 */
+	flags = MAP_PRIVATE | MAP_POPULATE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_file_route(mm, file, lenp, &addr,
+						     &lenp, &flags), 0);
+	KUNIT_EXPECT_EQ(test, addr, 0);
+	KUNIT_EXPECT_EQ(test, lenp, 2 * PAGE_SIZE);
+
+	addr = 0;
+	lenp = 2 * PAGE_SIZE;
+	flags = MAP_PRIVATE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_file_route(mm, file, lenp, &addr,
+						     &lenp, &flags), 1);
+	KUNIT_EXPECT_EQ(test, addr, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_EQ(test, lenp, PMD_SIZE);
+	KUNIT_EXPECT_EQ(test, flags, MAP_PRIVATE | MAP_FIXED |
+				     MAP_NORESERVE);
+
+	/* Attach (the do_mmap completion): +1 file reference (the
+	 * region's own), the FILE record fully paired.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      file, pgoff), 0);
+	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
+			1);
+
+	rcu_read_lock();
+	ar = xa_load(&mm->corten_state->arenas,
+		     CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	KUNIT_EXPECT_EQ(test, ar->rclass, CORTEN_REGION_FILE);
+	KUNIT_EXPECT_PTR_EQ(test, ar->rfile, file);
+	KUNIT_EXPECT_EQ(test, ar->rpoff, pgoff);
+	rcu_read_unlock();
+
+	carrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, carrier);
+	KUNIT_EXPECT_PTR_EQ(test, carrier->vm_file, file);
+	KUNIT_EXPECT_EQ(test, carrier->vm_pgoff, pgoff);
+
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
+	mmap_read_unlock(mm);
+
+	/* The whole-region virtual allocation: FILE_MAPPED with the
+	 * recorded perm; B.1's dispatch boundary is deliberate -- a fault
+	 * on it answers STUB (-> SEGV_MAPERR), never the FRESH anon
+	 * synthesizer (that would hand out zero pages for a file range).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m),
+			0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_EXEC |
+				       CORTEN_PERM_USER);
+	KUNIT_EXPECT_EQ(test, corten_arena_dispatch(&m, false, false),
+			CORTEN_DISP_STUB);
+
+	/* INV-MV3(d) negative anchors: each torn payload shape is
+	 * reported by the registry walk.
+	 */
+	mmap_read_lock(mm);
+	rcu_read_lock();
+	ar = xa_load(&mm->corten_state->arenas,
+		     CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
+	if (ar) {
+		struct file *rfile = ar->rfile;
+
+		WRITE_ONCE(ar->rfile, NULL);
+		KUNIT_EXPECT_FALSE(test, corten_region_invariants_ok(mm));
+		WRITE_ONCE(ar->rfile, rfile);
+
+		WRITE_ONCE(carrier->vm_pgoff, pgoff + 1);
+		KUNIT_EXPECT_FALSE(test, corten_region_invariants_ok(mm));
+		WRITE_ONCE(carrier->vm_pgoff, pgoff);
+
+		WRITE_ONCE(ar->rclass, CORTEN_REGION_ANON);
+		KUNIT_EXPECT_FALSE(test, corten_region_invariants_ok(mm));
+		WRITE_ONCE(ar->rclass, CORTEN_REGION_FILE);
+	}
+	rcu_read_unlock();
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
+	mmap_read_unlock(mm);
+
+	/* i_mmap visibility: an interval-tree query over [pgoff,
+	 * pgoff + pages) finds the carrier (the __vma_link_file pairing;
+	 * B.2's truncate gate walks exactly this).
+	 */
+	i_mmap_lock_read(mapping);
+	KUNIT_EXPECT_PTR_EQ(test,
+			    vma_interval_tree_iter_first(&mapping->i_mmap,
+							 pgoff,
+							 pgoff + (PMD_SIZE >>
+								  PAGE_SHIFT) -
+							 1),
+			    carrier);
+	i_mmap_unlock_read(mapping);
+
+	/* Park (the munmap full-coverage shape): the payload dies with
+	 * the park -- reference back, carrier disarmed, i_mmap empty,
+	 * window reusable as the ANON contract.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pool_idle(mm,
+						      CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_EQ(test, file_count(file), base);
+	KUNIT_EXPECT_NULL(test, carrier->vm_file);
+	i_mmap_lock_read(mapping);
+	KUNIT_EXPECT_NULL(test,
+			  vma_interval_tree_iter_first(&mapping->i_mmap, 0,
+						       ULONG_MAX));
+	i_mmap_unlock_read(mapping);
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
+	mmap_read_unlock(mm);
+
+	/* Reactivation is the ANON contract: the parked window serves an
+	 * anon auto mmap (ret 2) and never resurrects the file.
+	 */
+	addr = 0;
+	lenp = PAGE_SIZE;
+	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, lenp,
+							    PROT_READ |
+							    PROT_WRITE, &addr,
+							    &lenp, &flags),
+			2);
+	KUNIT_EXPECT_EQ(test, addr, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_EQ(test, file_count(file), base);
+
+	/* Real RELEASE (the prctl arm): +1 then teardown -- reference
+	 * back, descriptor gone.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_START2,
+						      file, 0), 0);
+	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_release,
+						 CORTEN_ARENA_TEST_START2,
+						 PMD_SIZE), 0);
+	KUNIT_EXPECT_EQ(test, file_count(file), base);
+
+	/* MODE exit (RELEASE per arena): the FILE arena and the
+	 * reactivated ANON one both tear down -- ledger back at base.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_START2,
+						      file, 0), 0);
+	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, file_count(file), base);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
+
+	/* Fork: the child mirrors the payload -- its own reference (same
+	 * file object), the same pgoff, a FILE carrier of its own; the
+	 * child's exit (the mm_exit arm) drops the mirror.
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      file, pgoff), 0);
+	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
+
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+	KUNIT_EXPECT_EQ(test, file_count(file), base + 2);
+
+	carrier = corten_arena_test_carrier_of(child,
+					       CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, carrier);
+	KUNIT_EXPECT_PTR_EQ(test, carrier->vm_file, file);
+	KUNIT_EXPECT_EQ(test, carrier->vm_pgoff, pgoff);
+	mmap_read_lock(child);
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(child));
+	mmap_read_unlock(child);
+
+	/* mm_exit arm: the child's whole registry tears down with its mm
+	 * -- the mirror reference returns.
+	 */
+	mmput(child);
+	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
+
+	/* Error-path anchor (zero leak): a forced fork_commit failure
+	 * discards the half-mirrored child through the same mm_exit --
+	 * the half-armed payload's disarm is exercised by the child's own
+	 * teardown.
+	 */
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	corten_arena_test_fork_fail_arm(2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_EXPECT_NE(test, corten_arena_test_fork_commit(child, mm), 0);
+	corten_arena_test_fork_fail_arm(0);
+	mmput(child);
+	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
+
+	/* Parent teardown: the last FILE reference returns with the
+	 * arena; the tree ends empty.  The test's own fput below drops
+	 * the final reference (a leak here would keep it above 1).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, file_count(file), base);
+	i_mmap_lock_read(mapping);
+	KUNIT_EXPECT_NULL(test,
+			  vma_interval_tree_iter_first(&mapping->i_mmap, 0,
+						       ULONG_MAX));
+	i_mmap_unlock_read(mapping);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
+
+	fput(file);
 }
 
 /* ------------------------------------------------------------------ *
@@ -4561,7 +4956,7 @@ static void corten_arena_test_pool_reuse(struct kunit *test)
 	lenp = PAGE_SIZE;
 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	mmap_write_lock(mm);
-	ret = corten_arena_auto_mmap_route(mm, PAGE_SIZE,
+	ret = corten_arena_auto_mmap_route(mm, NULL, 0, PAGE_SIZE,
 					   PROT_READ | PROT_WRITE, &addr,
 					   &lenp, &flags);
 	mmap_write_unlock(mm);
@@ -4630,7 +5025,7 @@ static void corten_arena_test_pool_reuse(struct kunit *test)
 	lenp = PAGE_SIZE;
 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	mmap_write_lock(mm);
-	ret = corten_arena_auto_mmap_route(mm, 2 * PMD_SIZE,
+	ret = corten_arena_auto_mmap_route(mm, NULL, 0, 2 * PMD_SIZE,
 					   PROT_READ | PROT_WRITE, &addr,
 					   &lenp, &flags);
 	mmap_write_unlock(mm);
@@ -4709,7 +5104,7 @@ static void corten_arena_test_pool_limit(struct kunit *test)
 	lenp = PAGE_SIZE;
 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	mmap_write_lock(mm);
-	ret = corten_arena_auto_mmap_route(mm, PAGE_SIZE,
+	ret = corten_arena_auto_mmap_route(mm, NULL, 0, PAGE_SIZE,
 					   PROT_READ | PROT_WRITE, &addr,
 					   &lenp, &flags);
 	mmap_write_unlock(mm);
@@ -5077,7 +5472,7 @@ static void corten_arena_test_mapfixed_over_parked(struct kunit *test)
 	 */
 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	mmap_write_lock(mm);
-	ret = corten_arena_auto_mmap_route(mm, PMD_SIZE,
+	ret = corten_arena_auto_mmap_route(mm, NULL, 0, PMD_SIZE,
 					   PROT_READ | PROT_WRITE, &addr,
 					   &lenp, &flags);
 	mmap_write_unlock(mm);
@@ -5199,7 +5594,7 @@ static void corten_arena_test_occupied_incl_idle(struct kunit *test)
 		int ret2;
 
 		mmap_write_lock(mm);
-		ret2 = corten_arena_auto_mmap_route(mm, PMD_SIZE,
+		ret2 = corten_arena_auto_mmap_route(mm, NULL, 0, PMD_SIZE,
 						    PROT_READ | PROT_WRITE,
 						    &a2, &len2, &flags2);
 		mmap_write_unlock(mm);
@@ -5261,7 +5656,7 @@ static void corten_arena_test_p4_eject(struct kunit *test)
 	 */
 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	mmap_write_lock(mm);
-	ret = corten_arena_auto_mmap_route(mm, CORTEN_ARENA_TEST_LEN,
+	ret = corten_arena_auto_mmap_route(mm, NULL, 0, CORTEN_ARENA_TEST_LEN,
 					   PROT_READ | PROT_WRITE, &addr,
 					   &lenp, &flags);
 	mmap_write_unlock(mm);
@@ -5380,7 +5775,7 @@ static void corten_arena_test_vma_free_reuse(struct kunit *test)
 	lenp = PAGE_SIZE;
 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	mmap_write_lock(mm);
-	ret = corten_arena_auto_mmap_route(mm, PAGE_SIZE,
+	ret = corten_arena_auto_mmap_route(mm, NULL, 0, PAGE_SIZE,
 					   PROT_READ | PROT_WRITE, &addr2,
 					   &lenp, &flags);
 	mmap_write_unlock(mm);
@@ -5569,7 +5964,8 @@ static void corten_arena_test_inv_mv3(struct kunit *test)
 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	mmap_write_lock(mm);
 	KUNIT_EXPECT_EQ(test,
-			corten_arena_auto_mmap_route(mm, PAGE_SIZE,
+			corten_arena_auto_mmap_route(mm, NULL, 0,
+						     PAGE_SIZE,
 						     PROT_READ | PROT_WRITE,
 						     &addr2, &lenp, &flags),
 			2);
@@ -5627,7 +6023,8 @@ static void corten_arena_test_fork_vma_free(struct kunit *test)
 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	mmap_write_lock(mm);
 	KUNIT_EXPECT_EQ(test,
-			corten_arena_auto_mmap_route(mm, PAGE_SIZE,
+			corten_arena_auto_mmap_route(mm, NULL, 0,
+						     PAGE_SIZE,
 						     PROT_READ | PROT_WRITE,
 						     &addr2, &lenp, &flags),
 			2);
@@ -7223,9 +7620,12 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_prctl),
 	KUNIT_CASE(corten_arena_test_mode),
 	KUNIT_CASE(corten_arena_test_auto_classify),
+	KUNIT_CASE(corten_arena_test_auto_classify_file),
+	KUNIT_CASE(corten_arena_test_auto_classify_file),
 	KUNIT_CASE(corten_arena_test_auto_place),
 	KUNIT_CASE(corten_arena_test_auto_route),
 	KUNIT_CASE(corten_arena_test_auto_attach_release),
+	KUNIT_CASE(corten_arena_test_file_lifecycle),
 	KUNIT_CASE(corten_arena_test_mag_recycle),
 	KUNIT_CASE(corten_arena_test_mag_marker),
 	KUNIT_CASE(corten_arena_test_pool_reuse),

@@ -228,6 +228,9 @@ enum corten_mmap_class {
 	CORTEN_MMAP_LEGACY = 0,		/* not arena-markable */
 	CORTEN_MMAP_MARK,		/* MAP_FIXED private anon: markable */
 	CORTEN_MMAP_AUTO,		/* MODE auto-arena candidate (T0) */
+	CORTEN_MMAP_AUTO_FILE,		/* MODE auto-arena candidate, file arm
+					 * (V-B.1: private file mapping)
+					 */
 };
 
 enum corten_mmap_class corten_arena_mmap_classify(unsigned long flags,
@@ -264,9 +267,39 @@ enum corten_unmap_class corten_arena_punch_classify(unsigned long start,
  * MAP_UNINITIALIZED, MAP_DENYWRITE, ...) keeps the mapping legacy.
  * MAP_STACK stays excluded per OQ-B until the mprotect routing (T0b)
  * can serve thread-stack guard pages.
+ *
+ * V-B.1: @file flips the whitelist to its file mirror -- MAP_PRIVATE
+ * with at most MAP_NORESERVE (MAP_ANONYMOUS is absent by construction
+ * for a file request and also rejects defensively) classifies
+ * CORTEN_MMAP_AUTO_FILE; every other bit keeps the mapping legacy,
+ * MAP_FIXED included (the OQ-MV-2 implant exception keeps the D-G''
+ * punch route).  MAP_SHARED in any spelling never enters the window
+ * (MV_VMA_FREE_SPEC.md sec 3.2.1).
  */
 enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
 						       bool file);
+
+/*
+ * The do_mmap() file-validation chain replayed for the MODE window route
+ * (V-B.1, pure; mm/corten_fault_test.c drives it without an mm).
+ * Mirrors mm/mmap.c's file arm order and errnos: file_mmap_ok() (size
+ * overflow, -EOVERFLOW), the DAX gate (-EOPNOTSUPP), FMODE_READ
+ * (-EACCES), path_noexec x PROT_EXEC (-EPERM, and EXEC leaves the MAY
+ * bound), can_mmap_file() (-ENODEV) and memfd_check_seals_mmap()
+ * (errno through; a private mapping always passes the seal check
+ * itself).  GROWSDOWN/GROWSUP are unreachable (the whitelist rejects
+ * those flag bits up stream).
+ *
+ * On success *@may_prot receives the region's MAY bound: the full
+ * private-mapping superset with EXEC removed for a noexec mount (the
+ * only bit the open mode can take away -- legacy do_mmap() grants
+ * VM_MAYREAD|MAYWRITE|MAYEXEC for private mappings regardless of prot).
+ *
+ * Return: 0 = file may enter the window, -errno = degrade to legacy
+ * (which answers the caller with this same errno through its own chain).
+ */
+int corten_file_may(struct file *file, unsigned long prot,
+		    unsigned long pgoff, unsigned long len, u8 *may_prot);
 
 /*
  * Pure cursor arithmetic of the auto-arena window (sec 3.1): place a
@@ -285,15 +318,25 @@ int corten_arena_auto_place(unsigned long next_va, unsigned long len,
  * it.  Runs with this mm's mmap_lock held for writing (do_mmap's
  * contract).
  *
+ * V-B.1: a @file (classified CORTEN_MMAP_AUTO_FILE by the whitelist)
+ * additionally passes corten_file_may() before placement and skips the
+ * resident pool (a parked window's reactivation is the ANON reuse
+ * contract -- a FILE mapping always takes a fresh window).
+ *
  * Return: 2 = pool take (the mmap completes; do_mmap returns the window
  * address immediately), 1 = fresh window placed, *@addr / *@lenp /
  * *@flagsp rewritten (the caller completes with
- * corten_arena_auto_attach() -- V-A.2a: WITHOUT mmap_region(); only a
- * declare failure degrades to the legacy MAP_FIXED flow), 0 =
- * legacy (not a whitelist hit, gate refusal, window exhausted, or an
- * obstacle in the window), -errno = internal error only.
+ * corten_arena_auto_attach() or corten_arena_file_attach() -- V-A.2a:
+ * WITHOUT mmap_region(); only a declare failure degrades to the legacy
+ * MAP_FIXED flow), 0 = legacy (not a whitelist hit, gate refusal,
+ * window exhausted, or an obstacle in the window), -errno = internal
+ * error only.
  */
-int corten_arena_auto_mmap_route(struct mm_struct *mm, unsigned long len,
+#ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
+extern bool corten_file_route_test_override;
+#endif
+int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
+				 unsigned long pgoff, unsigned long len,
 				 unsigned long prot, unsigned long *addr,
 				 unsigned long *lenp, unsigned long *flagsp);
 
@@ -321,6 +364,34 @@ int corten_auto_validate(struct mm_struct *mm, unsigned long len,
  */
 int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
 			     unsigned long len, unsigned long prot);
+
+/*
+ * V-B.1: the FILE counterpart of corten_arena_auto_attach() -- the
+ * do_mmap() completion body for a CORTEN_MMAP_AUTO_FILE takeover.
+ * Declares the window region (DECLARE's locked body, carrier arm) with
+ * the FILE payload: the region record takes the file reference
+ * (corten_region_register_file()), the carrier is born in FILE shape
+ * (vm_file = rfile, vma_set_range() carries @pgoff, anon_vma_prepare()
+ * kept -- private COW pages still need the avc anchor), the whole
+ * region is virtually allocated CORTEN_FILE_MAPPED up front (a fault
+ * must never fall into the FRESH synthesizer, which would hand out
+ * anonymous zero pages for a file range; until B.3 the dispatch
+ * answers STUB -> SEGV_MAPERR), and the carrier joins the mapping's
+ * i_mmap interval tree (the __vma_link_file() shape, minus
+ * mapping_allow_writable() -- VM_SHARED is never set).  The
+ * total_vm/RLIMIT accounting mirrors the A.2a auto attach
+ * (corten_auto_validate() ran in the route, the charge rides the
+ * declare's success path).
+ *
+ * Safe because the caller (do_mmap) already holds the mmap_write lock
+ * DECLARE would otherwise take first (DEV-13).  Failure degrades to
+ * the caller's legacy flow (counted, harmless -- the established
+ * attach-failure contract).
+ * Return: 0 on success, -errno otherwise.
+ */
+int corten_arena_file_attach(struct mm_struct *mm, unsigned long addr,
+			     unsigned long len, unsigned long prot,
+			     struct file *file, unsigned long pgoff);
 
 /*
  * Gate-free MODE internals; the syscall-context caller is
@@ -770,6 +841,8 @@ static inline int corten_arena_evict_pid(pid_t pid, int nr)
 }
 
 static inline int corten_arena_auto_mmap_route(struct mm_struct *mm,
+					       struct file *file,
+					       unsigned long pgoff,
 					       unsigned long len,
 					       unsigned long prot,
 					       unsigned long *addr,
@@ -783,6 +856,23 @@ static inline int corten_arena_auto_attach(struct mm_struct *mm,
 					   unsigned long addr,
 					   unsigned long len,
 					   unsigned long prot)
+{
+	return 0;
+}
+
+static inline int corten_arena_file_attach(struct mm_struct *mm,
+					   unsigned long addr,
+					   unsigned long len,
+					   unsigned long prot,
+					   struct file *file,
+					   unsigned long pgoff)
+{
+	return 0;
+}
+
+static inline int corten_file_may(struct file *file, unsigned long prot,
+				  unsigned long pgoff, unsigned long len,
+				  u8 *may_prot)
 {
 	return 0;
 }

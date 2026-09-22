@@ -456,6 +456,111 @@ static void corten_fault_test_mmap_classify(struct kunit *test)
 			CORTEN_MMAP_LEGACY);
 }
 
+/*
+ * V-B.1: the do_mmap() file-validation chain replayed for the MODE
+ * window route (corten_file_may), pure -- driven on a fabricated file
+ * so every refusal arm is reachable without a real filesystem (the
+ * production anchors: FMODE_READ, noexec, can_mmap_file, the
+ * file_mmap_ok size bound, the DAX gate).
+ */
+static int corten_fault_test_fops_mmap(struct file *file,
+				       struct vm_area_struct *vma)
+{
+	return 0;	/* never called: can_mmap_file() only probes != NULL */
+}
+
+static const struct file_operations corten_fault_test_fops = {
+	.mmap = corten_fault_test_fops_mmap,
+};
+
+static const struct file_operations corten_fault_test_fops_nommap = {
+};
+
+static void corten_fault_test_file_may_matrix(struct kunit *test)
+{
+	struct inode *inode = kunit_kzalloc(test, sizeof(*inode), GFP_KERNEL);
+	struct address_space *mapping =
+		kunit_kzalloc(test, sizeof(*mapping), GFP_KERNEL);
+	/* Heap, not stack: a super_block alone blows the 2K frame budget. */
+	struct super_block *sb = kunit_kzalloc(test, sizeof(*sb), GFP_KERNEL);
+	struct dentry *de = kunit_kzalloc(test, sizeof(*de), GFP_KERNEL);
+	struct vfsmount mnt = { .mnt_sb = sb, };
+	struct path path = { .mnt = &mnt, .dentry = de, };
+	struct file f = { .f_path = path, };
+	u8 may;
+
+	KUNIT_ASSERT_NOT_NULL(test, inode);
+	KUNIT_ASSERT_NOT_NULL(test, mapping);
+	KUNIT_ASSERT_NOT_NULL(test, sb);
+	KUNIT_ASSERT_NOT_NULL(test, de);
+
+	/* The plain-regular-file shape every arm starts from.  f_path is
+	 * const, so it is wired at the initializer; path_noexec() walks
+	 * f_path.mnt->mnt_flags, mnt->mnt_sb->s_iflags and the dentry's
+	 * inode, so the fabricated mount carries a live sb/dentry
+	 * pair (both zeroed: no SB_I_NOEXEC) and stays mutable for the
+	 * noexec arm below.
+	 */
+	inode->i_mode = S_IFREG;
+	inode->i_mapping = mapping;
+	mapping->host = inode;
+	de->d_inode = inode;
+	f.f_inode = inode;
+	f.f_mapping = mapping;
+	f.f_mode = FMODE_READ | FMODE_WRITE;
+	f.f_op = &corten_fault_test_fops;
+
+	/* The happy arm: full MAY bound (EXEC included -- the private
+	 * mapping's write goes COW, which the bound must allow).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_file_may(&f, PROT_READ | PROT_WRITE |
+					      PROT_EXEC, 0, PMD_SIZE, &may),
+			0);
+	KUNIT_EXPECT_EQ(test, may, CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+			      CORTEN_PERM_EXEC);
+
+	/* FMODE_READ gate: -EACCES (the mm/mmap.c MAP_PRIVATE arm). */
+	f.f_mode = FMODE_WRITE;
+	KUNIT_EXPECT_EQ(test, corten_file_may(&f, PROT_READ, 0, PMD_SIZE,
+					      NULL), -EACCES);
+	f.f_mode = FMODE_READ | FMODE_WRITE;
+
+	/* noexec x PROT_EXEC: -EPERM, and EXEC leaves the bound for the
+	 * executable-but-noexec-tolerated shape.
+	 */
+	mnt.mnt_flags = MNT_NOEXEC;
+	KUNIT_EXPECT_EQ(test, corten_file_may(&f, PROT_READ | PROT_EXEC, 0,
+					      PMD_SIZE, NULL), -EPERM);
+	KUNIT_EXPECT_EQ(test, corten_file_may(&f, PROT_READ, 0, PMD_SIZE,
+					      &may), 0);
+	KUNIT_EXPECT_EQ(test, may, CORTEN_PERM_READ | CORTEN_PERM_WRITE);
+	mnt.mnt_flags = 0;
+
+	/* can_mmap_file(): no mmap/mmap_prepare hook -> -ENODEV. */
+	f.f_op = &corten_fault_test_fops_nommap;
+	KUNIT_EXPECT_EQ(test, corten_file_may(&f, PROT_READ, 0, PMD_SIZE,
+					      NULL), -ENODEV);
+	f.f_op = &corten_fault_test_fops;
+
+	/* file_mmap_ok(): S_ISREG bounds the mapping by
+	 * MAX_LFS_FILESIZE -- pgoff + len past it -> -EOVERFLOW.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_file_may(&f, PROT_READ,
+					      MAX_LFS_FILESIZE >> PAGE_SHIFT,
+					      PMD_SIZE, NULL), -EOVERFLOW);
+
+	/* The DAX gate: a DAX inode never enters the window.  S_DAX folds
+	 * to 0 without CONFIG_FS_DAX, so the arm is unreachable there.
+	 */
+	if (IS_ENABLED(CONFIG_FS_DAX)) {
+		inode->i_flags = S_DAX;
+		KUNIT_EXPECT_EQ(test, corten_file_may(&f, PROT_READ, 0,
+						      PMD_SIZE, NULL),
+				-EOPNOTSUPP);
+		inode->i_flags = 0;
+	}
+}
+
 /* ------------------------------------------------------------------ *
  * S4/S5: real fault chain on a synthetic address space
  * ------------------------------------------------------------------
@@ -2883,6 +2988,7 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_fig8_cow),
 	KUNIT_CASE(corten_fault_test_unmap_classify),
 	KUNIT_CASE(corten_fault_test_mmap_classify),
+	KUNIT_CASE(corten_fault_test_file_may_matrix),
 	KUNIT_CASE(corten_fault_test_punch_classify),
 	KUNIT_CASE(corten_fault_test_map_anon),
 	KUNIT_CASE(corten_fault_test_zero_page),

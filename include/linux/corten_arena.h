@@ -203,9 +203,10 @@ enum corten_region_class {
  *          exactly the @idle flag).
  * @rclass: region record class (MV_VMA_FREE_SPEC.md sec 2, V-A.0):
  *          %CORTEN_REGION_ANON while live, %CORTEN_REGION_RESERVED while
- *          parked (@idle set).  %CORTEN_REGION_FILE has no producer yet
- *          (V-B).  Written under the owner mm's mmap_lock for writing
- *          (the same writers that flip @idle/@prot); read locklessly.
+ *          parked (@idle set).  %CORTEN_REGION_FILE is the V-B.1
+ *          producer's class (private file mappings of a MODE process).
+ *          Written under the owner mm's mmap_lock for writing (the same
+ *          writers that flip @idle/@prot); read locklessly.
  * @may_prot: CORTEN_PERM_* upper bound of the region's mprotect upgrade
  *          space (MAY semantics: always a superset of @prot).  Closes the
  *          M4T0 gap where the mprotect route guessed the bound from
@@ -213,9 +214,11 @@ enum corten_region_class {
  *          protect_range).
  * @rflags: CORTEN_RF_* recording of the mapping's surviving VMA-flag
  *          semantics at attach time (sec 2.6 encoding table).
- * @rfile: FILE-class backing file, held by reference (get_file).  Always
- *          NULL in V-A.0 (no FILE producer).
- * @rpoff: FILE-class mapping start page offset.  Always 0 in V-A.0.
+ * @rfile: FILE-class backing file, held by reference (get_file, taken
+ *          by corten_region_register_file()); NULL for every other
+ *          class.  Dropped by corten_region_file_teardown().
+ * @rpoff: FILE-class mapping start page offset (0 for other classes);
+ *          page pgoff = rpoff + (addr - start) / PAGE_SIZE.
  * @npieces: punch-shape marker: <= 1 single-piece (the region itself),
  *          > 1 punched multi-piece.  The pieces table has no producer in
  *          V-A.0 (the punch route still owns its VMA surgery).
@@ -602,13 +605,39 @@ struct corten_arena *corten_region_next(struct mm_struct *mm,
  *
  * Callers are the arena lifecycle write points (DECLARE/auto-attach,
  * fork child registration, park, reactivation), all under the owner mm's
- * mmap_lock for writing.  A registration of the FILE class is not
- * producible yet (V-B): @rfile/@rpoff stay clear until that slice gives
- * register a file/pgoff producer.
+ * mmap_lock for writing.  A non-FILE stamp requires the FILE payload to
+ * be gone already (corten_region_file_teardown() dropped it) -- clearing
+ * a live reference here would leak it silently, so the stale payload
+ * trips the WARN instead.
  */
 void corten_region_register(struct corten_arena *ar,
 			    enum corten_region_class rclass, u8 may_prot,
 			    u32 rflags);
+
+/**
+ * corten_region_register_file - stamp @ar's region record in the FILE
+ *                               class (V-B.1, the registry's FILE write
+ *                               side).
+ * @ar: the arena whose embedded region to initialise.
+ * @may_prot: CORTEN_PERM_* MAY bound (corten_file_may()'s answer); the
+ *            recorded prot is ORed in, same superset rule as register().
+ * @rflags: CORTEN_RF_* to record.
+ * @file: the backing file; the region takes its own reference
+ *        (get_file) -- the carrier's vm_file borrows this same
+ *        reference (same source, same drop:
+ *        corten_region_file_teardown()).
+ * @pgoff: mapping start page offset; a page's file index derives as
+ *         @pgoff + (addr - ar->start) / PAGE_SIZE (INV-MV3(d): the
+ *         carrier's vm_pgoff must equal this).
+ *
+ * The caller holds the owner mm's mmap_lock for writing and publishes
+ * the carrier before the stamp (register()'s INV-MV3 tripwire reads the
+ * carrier pairing).  i_mmap membership is NOT taken here; it is the
+ * attach/fork publication's last step.
+ */
+void corten_region_register_file(struct corten_arena *ar, u8 may_prot,
+				 u32 rflags, struct file *file,
+				 unsigned long pgoff);
 
 /**
  * corten_region_invariants_ok - INV-MV3 registry walk (sec 2.6, V-A.1).
@@ -799,6 +828,12 @@ corten_region_next(struct mm_struct *mm, struct corten_region_iter *it)
 static inline void corten_region_register(struct corten_arena *ar,
 					  enum corten_region_class rclass,
 					  u8 may_prot, u32 rflags)
+{
+}
+
+static inline void
+corten_region_register_file(struct corten_arena *ar, u8 may_prot, u32 rflags,
+			    struct file *file, unsigned long pgoff)
 {
 }
 
