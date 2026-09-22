@@ -69,6 +69,7 @@
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
+#include <linux/shmem_fs.h>	/* shmem_get_folio/SGP_CACHE (V-B.3 fetch) */
 #include <linux/shrinker.h>	/* shrinker_alloc/register (M6.T3) */
 #include <linux/slab.h>
 #include <linux/swap.h>
@@ -138,17 +139,19 @@ static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
 					  unsigned long start, unsigned long len,
 					  u8 zflags, struct mmu_gather *tlb);
 
+/* V-B.3 (H7 follow-through): the file-event invalidation family
+ * (!even_cows, the reclaim arm) spares the private copies -- only the
+ * FILE_MAPPED slots are that event's business (should_zap_cows()'s
+ * verdict).  Internal to the zap driver: masked before corten_unmap(),
+ * which only accepts CORTEN_UNMAP_ALL.
+ */
+#define CORTEN_UNMAP_FILE_EVENT		BIT(2)
+
 /* V-A.2b detached carrier, defined in the shadow-VMA section below. */
 static void corten_arena_carrier_free(struct vm_area_struct *vma);
 
 /* V-B.1 file-may MAY bound, defined in the auto-mmap section below. */
 static u8 corten_file_may_bound(struct file *file);
-
-/* Route-level KUnit anchors flip the dark gate above (the machinery is
- * compiled and drive-tested while the syscall path stays legacy); the
- * override dies together with the gate when B.3 activates the takeover.
- */
-bool corten_file_route_test_override;
 
 /* V-B.1 FILE payload teardown, defined in the region-record section. */
 static void corten_region_file_teardown(struct corten_arena *ar);
@@ -1292,10 +1295,10 @@ static void corten_region_file_disarm(struct corten_arena *ar)
  * file's new content.  @even_cows mirrors the walker's zap_details
  * verdict (true = truncate: drop private COWed pages too; false =
  * invalidation / unmap_mapping_folio: legacy spares them -- see
- * should_zap_cows()).  B.2's FILE regions carry no MAPPED (COW) slots
- * yet (the fault arms are B.3), so both shapes demote exactly the
- * FILE_MAPPED virtual allocation; the !even_cows MAPPED-sparing joins
- * this gate together with cow_write()'s first file copies.
+ * should_zap_cows()).  V-B.3 wired the sparing: the !even_cows family
+ * only demotes the FILE_MAPPED slots; the COWed MAPPED (and swapped)
+ * private copies are not the file's business anymore and survive the
+ * event with their content.
  *
  * Chunk errors are counted away from truncate_routes and swallowed:
  * the walker has no error channel, the pagecache folios are already
@@ -1316,11 +1319,6 @@ bool corten_arena_unmap_file_event(struct vm_area_struct *vma,
 	if (!(vma->vm_flags & VM_CORTEN))
 		return false;
 
-	/* Both walker shapes demote identically in the B.2 metadata world
-	 * (comment above); the parameter arrives B.3-ready.
-	 */
-	(void)even_cows;
-
 	/* Pin the arena under RCU (the lookup's contract), then drop RCU
 	 * before the chunk driver: its per-window gathers may sleep, and
 	 * the active reference carries the pin from here.
@@ -1333,7 +1331,13 @@ bool corten_arena_unmap_file_event(struct vm_area_struct *vma,
 	rcu_read_unlock();
 
 	if (ar) {
-		if (!corten_arena_unmap_chunk(mm, ar, start, end - start))
+		u8 zflags = CORTEN_UNMAP_KEEP_PERM;
+
+		if (!even_cows)
+			zflags |= CORTEN_UNMAP_FILE_EVENT;
+		if (!corten_arena_unmap_chunk_flags(mm, ar, start,
+						    end - start, zflags,
+						    NULL))
 			atomic_long_inc(&corten_nr_truncate_routes);
 		percpu_ref_put(&ar->active);
 	}
@@ -3812,17 +3816,13 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 		corten_arena_auto_fallback(NULL);
 		return 0;
 	}
-	/* V-B.1 ships the FILE machinery dark: the takeover activates
-	 * together with the B.3 fault arms (read/COW/EOF/BUS).  Until
-	 * then a classified FILE shape degrades to the legacy flow --
-	 * dlopen-shaped addr==0 private file maps must keep working in
-	 * MODE (the per-slice shippable-state iron rule).  Everything
-	 * downstream (attach, i_mmap, accounting, the direct-drive KUnit
-	 * anchors) stays compiled and tested; B.3 flips this gate.
+	/* V-B.3: the dark gate is gone -- a classified FILE shape runs
+	 * the takeover for real now (the read/COW/EOF arms live in
+	 * corten_arena_fault_once()).  dlopen-shaped addr==0 private
+	 * file maps are served from the window; only a corten_file_may()
+	 * refusal degrades to the legacy flow below (which answers the
+	 * same errno through its own chain).
 	 */
-	if (class == CORTEN_MMAP_AUTO_FILE &&
-	    !READ_ONCE(corten_file_route_test_override))
-		return 0;
 	if (class == CORTEN_MMAP_AUTO_FILE &&
 	    corten_file_may(file, prot, pgoff, len2, NULL)) {
 		corten_arena_auto_fallback(NULL);
@@ -5300,7 +5300,24 @@ enum corten_disp corten_arena_dispatch(const struct corten_pte_meta *m,
 		 * corten_arena_swap_in().
 		 */
 		return CORTEN_DISP_SWAPIN;
-	case CORTEN_FILE_MAPPED:	/* M4+ producers: unreachable */
+	case CORTEN_FILE_MAPPED:
+		/* V-B.3 (H4): the FILE_MAPPED virtual allocation is live
+		 * semantics now.  A read (or instruction) fault takes the
+		 * pagecache read arm; a write fault on a writable contract
+		 * takes the COW transaction (a MAP_PRIVATE file page is
+		 * never written through: the first write copies, exactly
+		 * like do_cow_fault()); anything else is a permission
+		 * fault.  The SHARED flag distinction the MAPPED arm makes
+		 * is moot here: FILE_MAPPED's write answer is COW either
+		 * way (shared pagecache folios never reuse), so a read-only
+		 * contract answers ACCERR directly (legacy access_error()
+		 * on a !VM_WRITE file VMA, both fork-shared and not).
+		 */
+		if (!corten_arena_perm_ok(m, write, instruction))
+			return CORTEN_DISP_ACCERR;
+		if (write)
+			return CORTEN_DISP_COW_MAYBE;
+		return CORTEN_DISP_FILE_READ;
 	case CORTEN_SHARED_ANON:
 		/* Deliberately silent here: this is a pure classifier and
 		 * the dispatch-table KUnit case drives it with every state
@@ -5473,6 +5490,11 @@ enum corten_fault_status {
 	CORTEN_F_RETRY,		/* race lost: caller may retry (Fig.7) */
 	CORTEN_F_ACCERR,	/* SEGV_ACCERR */
 	CORTEN_F_MAPERR,	/* SEGV_MAPERR */
+	CORTEN_F_BUS,		/* V-B.3: beyond EOF -> SIGBUS BUS_ADRERR
+				 * (the filemap_fault() verdict; S-FILE-1
+				 * disclosure: legacy-identical semantics,
+				 * new delivery path)
+				 */
 	CORTEN_F_OOM,
 	CORTEN_F_FALLBACK,	/* legacy must run (PT page untracked, ...) */
 };
@@ -5494,6 +5516,14 @@ struct corten_fault_ctx {
 					 * re-validation of the swap-in
 					 * transaction spends one extra
 					 * round when it loses a race
+					 */
+	bool			fileio;	/* V-B.3: a file read/COW arm ran
+					 * (pagecache fetch): the same
+					 * widened 2+2 budget -- its
+					 * unlocked re-validation spends one
+					 * extra round per lost race (the
+					 * swapin shape; truncate racing the
+					 * fetch)
 					 */
 	struct pt_regs		*regs;
 };
@@ -5847,6 +5877,7 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 	pte_t cur, entry;
 	spinlock_t *ptl;	/* ptl nests below the desc write lock (R2) */
 	bool reuse;
+	bool old_is_file;	/* V-B.3 (H6): pagecache folio behind the PTE */
 	int ret;
 
 	vma = corten_arena_get_vma(ctx);
@@ -5870,6 +5901,17 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 
 	page = pte_page(cur);
 	old = page_folio(page);
+	old_is_file = !folio_test_anon(old);
+
+	/* V-B.3 (H6): a pagecache folio (the FILE_MAPPED read arm's
+	 * install) never takes the reuse answer -- its mapcount is the
+	 * whole machine's business (other processes mapping the same
+	 * file) and PageAnonExclusive on it would be a lie; the write is
+	 * always satisfied by the private copy below (wp_page_copy()'s
+	 * file shape, the counter split of corten_zap_release_page()).
+	 * Reuse resumes on the copy's own second write, which finds a
+	 * CORTEN_MAPPED anon folio again.
+	 */
 
 	/* Reuse (paper Fig.8 L28-29: "no need to COW if parent/child has
 	 * left") needs the folio exclusively ours under this ptl.  OQ-5
@@ -5882,7 +5924,7 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 	 * those upstream, and "copy where a reuse would also have been
 	 * safe" is the bounded race direction (R-B).
 	 */
-	reuse = folio_mapcount(old) == 1;
+	reuse = !old_is_file && folio_mapcount(old) == 1;
 	if (reuse && !PageAnonExclusive(page)) {
 		if (folio_maybe_dma_pinned(old)) {
 			reuse = false;
@@ -5970,10 +6012,14 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 
 	/* V-A.1: the old folio of a VMA-less arena carries no rmap anchor
 	 * (see map_anon); the removal stays symmetric with the add.
+	 * V-B.3 (H6): a pagecache folio's rmap is the file mapping's
+	 * (the read arm's folio_add_file_rmap_pte against the carrier)
+	 * and its counter is MM_FILEPAGES -- the same split
+	 * corten_zap_release_page() makes.
 	 */
 	if (vma)
 		folio_remove_rmap_pte(old, page, vma);
-	add_mm_counter(mm, MM_ANONPAGES, -1);
+	add_mm_counter(mm, old_is_file ? MM_FILEPAGES : MM_ANONPAGES, -1);
 	pte_unmap_unlock(ptep, ptl);
 	folio_put(old);
 
@@ -6398,6 +6444,475 @@ out_put:
 }
 
 /*
+ * V-B.3 (H5): fetch the pagecache folio of @pgoff -- the filemap_fault()
+ * core without the vm_fault wrapper (single page, no readahead, no
+ * fault-around: the B.3 scope).  Runs OUTSIDE every arena lock (the folio
+ * lock, the shmem allocator and ->read_folio sleep, INV3) with the arena
+ * pinned by ctx->ar's active reference and the region's rfile reference.
+ *
+ * EOF gate first (filemap_fault()'s entry check): a pgoff at or past the
+ * i_size page count answers -ENODATA, the caller's CORTEN_F_BUS (legacy
+ * VM_FAULT_SIGBUS; the S-FILE-1 disclosure -- same verdict, new delivery
+ * path).
+ *
+ * Two host families:
+ *
+ *   shmem/tmpfs (shmem_mapping()): shmem_get_folio(SGP_CACHE) -- the
+ *   REAL hole allocator.  A raw FGP_CREAT into a shmem mapping would
+ *   bypass shmem_inode_acct_blocks() (tmpfs quota leak, info->alloced
+ *   drift, negative used_blocks on the later recalc), would not read
+ *   back a swapped-out entry, and would hand out unzeroed memory as
+ *   the hole contents.  SGP_CACHE does all three correctly; its own
+ *   EOF race answer is -EINVAL (mapped to -ENODATA below).
+ *
+ *   regular files: the fetch holds the mapping's invalidate lock (the
+ *   filemap_create_folio() contract: no folio may be instantiated
+ *   into a range a truncate is evicting), takes the folio unlocked
+ *   (FGP_FOR_MMAP: the caller of record for doing its own locking
+ *   dance) -- a miss creates it, the synchronous read-in, the
+ *   PGMAJFAULT shape -- then fills a !uptodate folio through the
+ *   filler exactly like filemap_read_folio() (the read unlocks the
+ *   folio, the killable wait follows, the lock is re-taken for the
+ *   post-read re-checks).
+ *
+ * Truncation re-check under the folio lock (filemap_fault()'s "Did it
+ * get truncated?") and the i_size recheck under the same lock ("We
+ * must recheck i_size under page lock"): a folio whose mapping moved,
+ * or a pgoff past an i_size that shrank since the gate, drops and
+ * answers -EAGAIN / -ENODATA; the bounded retry re-fetches (or the
+ * EOF gate answers BUS on the next round).
+ *
+ * Return: the unlocked, uptodate, referenced folio, or
+ * ERR_PTR(-ENODATA) (past EOF), ERR_PTR(-EAGAIN) (truncated/raced:
+ * retry), ERR_PTR(-ENOMEM)/ERR_PTR(-EIO).
+ */
+static struct folio *corten_arena_file_fetch(struct corten_arena *ar,
+					     unsigned long pgoff)
+{
+	struct address_space *mapping = ar->rfile->f_mapping;
+	struct folio *folio;
+	int ret;
+
+	if (pgoff >= DIV_ROUND_UP(i_size_read(mapping->host), PAGE_SIZE))
+		return ERR_PTR(-ENODATA);
+
+	if (IS_ENABLED(CONFIG_SHMEM) && shmem_mapping(mapping)) {
+		ret = shmem_get_folio(mapping->host, pgoff, 0, &folio,
+				      SGP_CACHE);
+		if (unlikely(ret)) {
+			if (ret == -EINVAL)
+				return ERR_PTR(-ENODATA);
+			return ERR_PTR(ret == -ENOMEM ? -ENOMEM : -EIO);
+		}
+		/* The contract: locked, referenced, zero-filled hole or
+		 * swapped-in content, fully accounted.
+		 */
+		if (unlikely(folio->mapping != mapping)) {
+			folio_unlock(folio);
+			folio_put(folio);
+			return ERR_PTR(-EAGAIN);
+		}
+		if (unlikely(pgoff >= DIV_ROUND_UP(i_size_read(mapping->host),
+						   PAGE_SIZE))) {
+			folio_unlock(folio);
+			folio_put(folio);
+			return ERR_PTR(-ENODATA);
+		}
+		folio_unlock(folio);
+		return folio;
+	}
+
+	if (unlikely(!mapping->a_ops->read_folio))
+		return ERR_PTR(-EIO);	/* no host to fill this folio from */
+
+	filemap_invalidate_lock_shared(mapping);
+	folio = __filemap_get_folio(mapping, pgoff,
+				    FGP_CREAT | FGP_FOR_MMAP,
+				    mapping_gfp_constraint(mapping,
+							   GFP_KERNEL));
+	if (IS_ERR(folio)) {
+		filemap_invalidate_unlock_shared(mapping);
+		return folio;
+	}
+	count_vm_event(PGMAJFAULT);
+	count_memcg_event_mm(ar->mm, PGMAJFAULT);
+
+	folio_lock(folio);
+	if (unlikely(folio->mapping != mapping)) {
+		folio_unlock(folio);
+		folio_put(folio);
+		filemap_invalidate_unlock_shared(mapping);
+		return ERR_PTR(-EAGAIN);
+	}
+	if (!folio_test_uptodate(folio)) {
+		/* filemap_read_folio()'s body (static in mm/filemap.c,
+		 * replayed): the filler read unlocks the folio (I/O
+		 * completion owns the unlock), the killable wait
+		 * follows; the lock is re-taken for the post-read
+		 * re-checks.
+		 */
+		ret = mapping->a_ops->read_folio(ar->rfile, folio);
+		if (!ret)
+			ret = folio_wait_locked_killable(folio);
+		if (ret || !folio_test_uptodate(folio)) {
+			folio_put(folio);
+			filemap_invalidate_unlock_shared(mapping);
+			return ERR_PTR(ret ? : -EIO);
+		}
+		folio_lock(folio);
+		if (unlikely(folio->mapping != mapping)) {
+			folio_unlock(folio);
+			folio_put(folio);
+			filemap_invalidate_unlock_shared(mapping);
+			return ERR_PTR(-EAGAIN);
+		}
+	}
+	/* We must recheck i_size under page lock (filemap_fault()): the
+	 * file may have been truncated since the entry gate, and a page
+	 * past the new EOF is the BUS verdict, not a stale translation.
+	 */
+	if (unlikely(pgoff >= DIV_ROUND_UP(i_size_read(mapping->host),
+					   PAGE_SIZE))) {
+		folio_unlock(folio);
+		folio_put(folio);
+		filemap_invalidate_unlock_shared(mapping);
+		return ERR_PTR(-ENODATA);
+	}
+	folio_unlock(folio);
+	filemap_invalidate_unlock_shared(mapping);
+
+	/* The miss statistics legacy files under VM_FAULT_MAJOR; the
+	 * arena's account_fault() only knows the min shape ([P2-8]), so
+	 * the major event is counted here and the fault completes without
+	 * the marker -- same counters, one less vm_fault_t bit to ferry.
+	 */
+	return folio;
+}
+
+/*
+ * V-B.3 (H5): the FILE_MAPPED read arm -- fault_once() calls it right
+ * after releasing the covering desc write lock (the pagecache fetch
+ * sleeps; the swapin's "owns its lock cycles" shape):
+ *
+ *   fetch the folio at region.rpoff + offset (lock-free phase) ->
+ *   re-lock the range -> re-query -> commit PTE + file rmap +
+ *   MM_FILEPAGES under ONE transaction.
+ *
+ * The metadata is NOT written: FILE_MAPPED is both the virtual
+ * allocation and the resident form (the page identity is derivable
+ * from the region record, so there is no __resv payload and no slot
+ * transition to record).  A "the world changed while unlocked"
+ * outcome (the slot demoted by the B.2 truncate gate, a racing fault
+ * installing the same or a different translation) re-queries to a
+ * different shape and answers -EAGAIN: the fault_once retry budget
+ * re-dispatches from the query (Fig.7), so a stale fetch is never
+ * committed over a moved slot.  The EOF answer (-ENODATA) is the
+ * caller's CORTEN_F_BUS.
+ *
+ * Mirror of do_read_fault() + finish_fault() for the order-0 (or
+ * large-folio subpage) clean install; the reference taken by the fetch
+ * becomes the PTE's reference (folio_put on every bail-out path).
+ */
+static int corten_arena_file_read(struct corten_fault_ctx *ctx,
+				  const struct corten_pte_meta *m)
+{
+	struct mm_struct *mm = ctx->mm;
+	struct corten_arena *ar = ctx->ar;
+	struct vm_area_struct *vma;
+	struct folio *folio;
+	struct corten_txn txn;
+	struct corten_pte_meta m2;
+	struct page *page;
+	pmd_t *pmdp;
+	pte_t *ptep, cur, entry;
+	spinlock_t *ptl;	/* nests below the desc write lock (R2) */
+	unsigned long pgoff;
+	int ret;
+
+	vma = corten_arena_get_vma(ctx);
+	if (!vma || !ar->rfile)
+		return -EFAULT;
+
+	pgoff = ar->rpoff + ((ctx->addr - ar->start) >> PAGE_SHIFT);
+
+	folio = corten_arena_file_fetch(ar, pgoff);
+	if (IS_ERR(folio))
+		return PTR_ERR(folio);
+	page = folio_file_page(folio, pgoff);
+
+	/* Re-lock: everything past here runs inside one transaction. */
+	ret = corten_lock_range(mm, ctx->addr, PAGE_SIZE, &txn);
+	if (ret) {
+		ret = ret == -ENOMEM ? -ENOMEM : -EAGAIN;
+		goto out_put;
+	}
+	if (corten_query(&txn, ctx->addr, &m2)) {
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+	if (m2.state != CORTEN_FILE_MAPPED || m2.perm != m->perm) {
+		/* The slot moved while unlocked (truncate demote, a
+		 * concurrent COW, mprotect): re-dispatch from the query.
+		 */
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+
+	pmdp = corten_arena_pmd(mm, ctx->addr);
+	if (!pmdp) {
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+	ptep = pte_offset_map_lock(mm, pmdp, ctx->addr, &ptl);
+	if (!ptep) {
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+
+	cur = ptep_get(ptep);
+	if (!pte_none(cur)) {
+		if (pte_present(cur) && !pte_special(cur) &&
+		    pte_pfn(cur) == page_to_pfn(page)) {
+			/* A racing fault (this arm re-run by the retry
+			 * loop, or a concurrent GUP slow walk) committed
+			 * the same translation: ours is the redundant
+			 * reference.
+			 */
+			pte_unmap_unlock(ptep, ptl);
+			corten_unlock(&txn);
+			folio_put(folio);
+			return 0;
+		}
+		/* Some other translation owns the slot (a COW copy, the
+		 * zero page): re-dispatch from the query.
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+	if (unlikely(check_stable_address_space(mm))) {
+		pte_unmap_unlock(ptep, ptl);
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+
+	/* Clean file translation at the recorded perm (T0b: the metadata
+	 * is the source of truth).  No TLB invalidate: the PTE was
+	 * pte_none() above, so no CPU can hold a stale translation.
+	 */
+	entry = mk_pte(page, corten_arena_perm_pgprot(vma, m2.perm));
+	entry = pte_sw_mkyoung(entry);
+	add_mm_counter(mm, MM_FILEPAGES, 1);
+	folio_add_file_rmap_pte(folio, page, vma);
+	set_ptes(mm, ctx->addr, ptep, entry, 1);
+	update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
+	pte_unmap_unlock(ptep, ptl);
+	corten_unlock(&txn);
+
+	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
+				CORTEN_ARENA_STAT_MAPPED);
+
+	/* No folio_put: the fetch reference IS the PTE reference now
+	 * (do_read_fault()'s accounting).
+	 */
+	return 0;
+
+out_unlock:
+	corten_unlock(&txn);
+out_put:
+	folio_put(folio);
+	return ret;
+}
+
+/*
+ * V-B.3 (H6): the FILE_MAPPED write arm -- a write fault on a private
+ * file mapping is always a COW (MAP_PRIVATE never writes through).
+ * Two shapes, both ending in the same private copy (the cow_write()
+ * copy branch's file deltas: +MM_ANONPAGES/-MM_FILEPAGES, the file
+ * rmap removal, the FILE_MAPPED->MAPPED metadata migration):
+ *
+ *   PTE present: the read arm's translation is in -- corten_arena_cow_write()
+ *   runs under this transaction and takes its file branch.
+ *
+ *   PTE none: the do_cow_fault() shape -- fetch the file folio outside
+ *   the lock, then copy into the fault path's speculative allocation
+ *   and commit PTE + rmap + metadata in one re-locked transaction.
+ *
+ * EOF on the fetch is -ENODATA (the caller's CORTEN_F_BUS): legacy
+ * answers a write past i_size with do_cow_fault()'s SIGBUS, not a
+ * zeroed private page.
+ */
+static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
+				 const struct corten_pte_meta *m)
+{
+	struct mm_struct *mm = ctx->mm;
+	struct corten_arena *ar = ctx->ar;
+	struct vm_area_struct *vma;
+	struct folio *folio;
+	struct corten_txn txn;
+	struct corten_pte_meta m2;
+	struct page *page;
+	pmd_t *pmdp;
+	pte_t *ptep, cur, entry;
+	spinlock_t *ptl;	/* nests below the desc write lock (R2) */
+	unsigned long pgoff;
+	int ret;
+
+	vma = corten_arena_get_vma(ctx);
+	if (!vma || !ar->rfile)
+		return -EFAULT;
+
+	pgoff = ar->rpoff + ((ctx->addr - ar->start) >> PAGE_SHIFT);
+
+	/* First leg: look at the live slot under one transaction. */
+	ret = corten_lock_range(mm, ctx->addr, PAGE_SIZE, &txn);
+	if (ret)
+		return ret == -ENOMEM ? -ENOMEM : -EAGAIN;
+	if (corten_query(&txn, ctx->addr, &m2)) {
+		corten_unlock(&txn);
+		return -EAGAIN;
+	}
+	if (m2.state != CORTEN_FILE_MAPPED || m2.perm != m->perm) {
+		corten_unlock(&txn);
+		return -EAGAIN;
+	}
+
+	pmdp = corten_arena_pmd(mm, ctx->addr);
+	if (!pmdp) {
+		corten_unlock(&txn);
+		return -EAGAIN;
+	}
+	ptep = pte_offset_map_lock(mm, pmdp, ctx->addr, &ptl);
+	if (!ptep) {
+		corten_unlock(&txn);
+		return -EAGAIN;
+	}
+	cur = ptep_get(ptep);
+	if (pte_present(cur) && !pte_special(cur)) {
+		/* The read arm's translation: the in-place COW runs
+		 * under this same transaction (cow_write() re-takes
+		 * ptl itself; the m2 re-query inside its critical
+		 * section is the same slot we just read).
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		ret = corten_arena_cow_write(ctx, &txn, &m2);
+		corten_unlock(&txn);
+		return ret;
+	}
+	pte_unmap_unlock(ptep, ptl);
+	corten_unlock(&txn);
+	if (!pte_none(cur))
+		return -EAGAIN;		/* swap entry &c.: re-dispatch */
+
+	/* Fetch outside the lock, then commit under a fresh transaction. */
+	folio = corten_arena_file_fetch(ar, pgoff);
+	if (IS_ERR(folio))
+		return PTR_ERR(folio);
+	page = folio_file_page(folio, pgoff);
+
+	if (!ctx->folio) {
+		/* The prealloc was consumed by a lost race: retry
+		 * re-arms it (the fault_once epilogue).
+		 */
+		folio_put(folio);
+		return -EAGAIN;
+	}
+
+	ret = corten_lock_range(mm, ctx->addr, PAGE_SIZE, &txn);
+	if (ret) {
+		ret = ret == -ENOMEM ? -ENOMEM : -EAGAIN;
+		goto out_put;
+	}
+	if (corten_query(&txn, ctx->addr, &m2)) {
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+	if (m2.state != CORTEN_FILE_MAPPED || m2.perm != m->perm) {
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+
+	pmdp = corten_arena_pmd(mm, ctx->addr);
+	if (!pmdp) {
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+	ptep = pte_offset_map_lock(mm, pmdp, ctx->addr, &ptl);
+	if (!ptep) {
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+	cur = ptep_get(ptep);
+	if (!pte_none(cur)) {
+		/* A racing read fault committed the translation: its
+		 * pagecache folio is in, re-dispatch takes the
+		 * in-place COW above.
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+	if (unlikely(check_stable_address_space(mm))) {
+		pte_unmap_unlock(ptep, ptl);
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+
+	/* do_cow_fault()'s body: copy the file contents into the private
+	 * folio under ptl (the folio stays alive on the fetch reference
+	 * until the put below).  No break-before-make flush: the PTE was
+	 * pte_none(), so no CPU can hold a cached translation.
+	 */
+	copy_user_highpage(folio_page(ctx->folio, 0), page, ctx->addr, vma);
+	__folio_mark_uptodate(ctx->folio);
+
+	entry = folio_mk_pte(ctx->folio,
+			     corten_arena_perm_pgprot(vma, m2.perm));
+	entry = pte_mkyoung(entry);
+	entry = corten_pte_mkwrite(pte_mkdirty(entry), vma);
+
+	add_mm_counter(mm, MM_ANONPAGES, 1);
+	folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr, RMAP_EXCLUSIVE);
+	set_ptes(mm, ctx->addr, ptep, entry, 1);
+	update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
+	pte_unmap_unlock(ptep, ptl);
+
+	/* FILE_MAPPED -> MAPPED ("any -> MAPPED" is the protocol's legal
+	 * COW edge); corten_map() scrubs the flags -- SHARED is gone with
+	 * the shared folio, which is exactly the private copy's
+	 * semantics.
+	 */
+	ret = corten_map(&txn, ctx->addr, folio_page(ctx->folio, 0),
+			 m2.perm, CORTEN_MAP_FORCE);
+	if (WARN_ON_ONCE(ret)) {
+		/* The PTE is committed and the counters moved; the
+		 * metadata still says FILE_MAPPED -- impossible (the
+		 * slot carries the FILE pre-mark or the FRESH
+		 * synthesis), the next fault's re-query repairs the
+		 * pair.  The speculative reference already became the
+		 * PTE reference (no put of ctx->folio).
+		 */
+		corten_unlock(&txn);
+		folio_put(folio);
+		return -EFAULT;
+	}
+
+	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
+				CORTEN_ARENA_STAT_COW_COPY);
+	corten_unlock(&txn);
+
+	folio_put(folio);		/* the fetch reference */
+	ctx->folio = NULL;		/* became the PTE reference */
+	return 0;
+
+out_unlock:
+	corten_unlock(&txn);
+out_put:
+	folio_put(folio);
+	return ret;
+}
+
+/*
  * One transaction attempt (sec 4.3 for(;;) body).  On entry ctx->folio is
  * the speculative allocation or NULL; on any return the epilogue of the
  * caller owns it (success transferred it -- see map_anon).
@@ -6501,21 +7016,19 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		};
 		struct corten_pte_meta fresh = gate;
 
-		/* V-B.2 (H7 follow-through): inside a FILE region an
-		 * Invalid slot is a truncate/invalidation-demoted
-		 * FILE_MAPPED page.  Synthesizing the PrivateAnon
-		 * allocation here would present anonymous zero bytes
-		 * where the file's new content belongs -- the silent
-		 * corruption the whole FILE pre-mark exists to prevent.
-		 * B.1's dark gate verdict (SEGV_MAPERR) survives the
-		 * demotion instead; B.3's rclass-aware FRESH arm
-		 * replaces this refusal with the FILE_MAPPED
-		 * re-synthesis that re-reads the file.
+		/* V-B.3 (H4, the rclass-aware synthesis): inside a FILE
+		 * region an Invalid slot is a truncate/invalidation-
+		 * demoted FILE_MAPPED page (the B.2 gate's KEEP_PERM
+		 * drop).  The synthesis must re-arm FILE_MAPPED, never
+		 * PrivateAnon -- the anon shape would present anonymous
+		 * zero bytes where the file's (new) content belongs,
+		 * the silent corruption the whole FILE pre-mark exists
+		 * to prevent.  The dispatch below then takes the read
+		 * arm (re-read) or the COW arm (fetch + copy); a slot
+		 * past the new EOF answers BUS on the fetch.
 		 */
-		if (READ_ONCE(ctx->ar->rclass) == CORTEN_REGION_FILE) {
-			corten_unlock(&txn);
-			return CORTEN_F_MAPERR;
-		}
+		if (READ_ONCE(ctx->ar->rclass) == CORTEN_REGION_FILE)
+			fresh.state = CORTEN_FILE_MAPPED;
 
 		if (!corten_arena_perm_ok(&gate, ctx->write,
 					  ctx->instruction)) {
@@ -6574,7 +7087,39 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		ret = corten_arena_restore_pte(ctx, &txn, &m);
 		break;
 	case CORTEN_DISP_COW_MAYBE:
+		/* V-B.3 (H6): a FILE_MAPPED write takes the file COW arm,
+		 * which owns its lock cycles (the first write may need the
+		 * pagecache fetch -- the do_cow_fault() shape -- and the
+		 * fetch sleeps, INV3).  The anon shape runs cow_write()
+		 * under this transaction as before.
+		 */
+		if (m.state == CORTEN_FILE_MAPPED) {
+			ctx->fileio = true;
+			corten_unlock(&txn);
+			ret = corten_arena_file_cow(ctx, &m);
+			if (ret == -ENODATA || ret == -EIO)
+				return CORTEN_F_BUS;
+			if (ret == -EFAULT)
+				return CORTEN_F_MAPERR;
+			break;
+		}
 		ret = corten_arena_cow_write(ctx, &txn, &m);
+		break;
+	case CORTEN_DISP_FILE_READ:
+		/* V-B.3 (H5): the read arm owns its lock cycles -- the
+		 * pagecache fetch sleeps (folio lock, ->read_folio,
+		 * INV3), exactly the swapin shape.  -EFAULT is the loud
+		 * broken-pair answer (MAPERR); -ENODATA (past EOF) and
+		 * -EIO (failed read) are the BUS verdicts
+		 * (filemap_fault()'s SIGBUS answers).
+		 */
+		ctx->fileio = true;
+		corten_unlock(&txn);
+		ret = corten_arena_file_read(ctx, &m);
+		if (ret == -ENODATA || ret == -EIO)
+			return CORTEN_F_BUS;
+		if (ret == -EFAULT)
+			return CORTEN_F_MAPERR;
 		break;
 	case CORTEN_DISP_SWAPIN:
 		/* M6.T2 (spec D5): the swap-in owns its lock cycles --
@@ -6725,12 +7270,14 @@ enum corten_fault_action corten_arena_user_fault(struct mm_struct *mm,
 	for (;;) {
 		st = corten_arena_fault_once(&ctx);
 		if (st != CORTEN_F_RETRY ||
-		    ++tries >= (ctx.swapin ? 4 : 2))
+		    ++tries >= (ctx.swapin || ctx.fileio ? 4 : 2))
 			break;	/* Fig.7 retry cap, x86 fault.c:1408 style;
 				 * the swap-in shape gets 2+2 (spec D5):
 				 * its unlocked re-validation spends one
 				 * extra round per lost race (counted:
-				 * swapin_retries)
+				 * swapin_retries); V-B.3's file arms get
+				 * the same 2+2 (the fetch's unlocked
+				 * re-validation vs a racing truncate)
 				 */
 
 		if (need_folio && !ctx.folio) {
@@ -6761,6 +7308,12 @@ out:
 	case CORTEN_F_MAPERR:
 		this_cpu_inc(state->stats[CORTEN_ARENA_STAT_MAPERR]);
 		return CORTEN_FAULT_MAPERR;
+	case CORTEN_F_BUS:
+		/* V-B.3: the beyond-EOF verdict (filemap_fault()'s
+		 * SIGBUS shape, delivered through the fast hook).
+		 */
+		corten_arena_account_fault(mm, regs, ctx.addr, false);
+		return CORTEN_FAULT_BUS;
 	case CORTEN_F_OOM:
 		corten_arena_account_fault(mm, regs, ctx.addr, false);
 		return CORTEN_FAULT_OOM;
@@ -6858,7 +7411,7 @@ vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma,
 		for (;;) {
 			st = corten_arena_fault_once(&ctx);
 			if (st != CORTEN_F_RETRY ||
-			    ++tries >= (ctx.swapin ? 4 : 2))
+			    ++tries >= (ctx.swapin || ctx.fileio ? 4 : 2))
 				break;	/* same swap-in budget as above */
 			if (need_folio && !ctx.folio) {
 				struct folio *folio;
@@ -6907,6 +7460,11 @@ vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma,
 		return VM_FAULT_SIGSEGV;
 	case CORTEN_F_MAPERR:
 		return VM_FAULT_SIGSEGV;
+	case CORTEN_F_BUS:
+		/* V-B.3: beyond EOF -- the legacy VM_FAULT_SIGBUS verdict
+		 * (S-FILE-1: same semantics, new delivery path).
+		 */
+		return VM_FAULT_SIGBUS;
 	case CORTEN_F_OOM:
 		return VM_FAULT_OOM;
 	default:
@@ -7224,6 +7782,23 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 			recorded = !IS_ERR(slot) && slot &&
 				   slot->state != CORTEN_INVALID;
 
+			/* V-B.3 (H7 follow-through): the file-event
+			 * invalidation family (!even_cows) spares the
+			 * private copies -- a MAPPED (COWed) or SWAPPED
+			 * slot's content is not the file's business
+			 * anymore (should_zap_cows()'s verdict, which
+			 * legacy also extends to the swapped COW
+			 * entries).  Everything else in a FILE region --
+			 * the FILE_MAPPED virtual allocation, PTEs
+			 * without a private record -- stays the event's
+			 * business.
+			 */
+			if ((zflags & CORTEN_UNMAP_FILE_EVENT) && slot &&
+			    !IS_ERR(slot) &&
+			    (slot->state == CORTEN_MAPPED ||
+			     slot->state == CORTEN_SWAPPED))
+				continue;
+
 			if (!g) {
 				/* The scan proved the window carries no
 				 * translation: only the recorded-metadata
@@ -7232,7 +7807,8 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 				 */
 				if (recorded) {
 					ret = corten_unmap(txn, addr,
-							   PAGE_SIZE, zflags);
+							   PAGE_SIZE,
+							   zflags & CORTEN_UNMAP_ALL);
 					if (WARN_ON_ONCE(ret))
 						break;
 
@@ -7329,7 +7905,7 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 				 * family).
 				 */
 				ret = corten_unmap(txn, addr, PAGE_SIZE,
-						   zflags);
+						   zflags & CORTEN_UNMAP_ALL);
 				if (WARN_ON_ONCE(ret))
 					break;
 

@@ -1375,6 +1375,15 @@ void do_user_addr_fault(struct pt_regs *regs,
 		case CORTEN_FAULT_OOM:
 			pagefault_out_of_memory();
 			return;
+		case CORTEN_FAULT_BUS:
+			/* CortenMM V-B.3: a FILE region fault past EOF --
+			 * the do_read_fault() SIGBUS verdict, delivered
+			 * through the fast hook (no lock is held here, so
+			 * force_sig_fault() like the ACCERR arm above).
+			 */
+			force_sig_fault(SIGBUS, BUS_ADRERR,
+					(void __user *)address);
+			return;
 		default:
 			break;	/* CORTEN_FAULT_FALLBACK: run legacy */
 		}

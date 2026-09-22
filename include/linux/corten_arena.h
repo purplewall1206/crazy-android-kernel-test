@@ -479,6 +479,10 @@ enum corten_fault_action {
 	CORTEN_FAULT_ACCERR,		/* SEGV_ACCERR delivery */
 	CORTEN_FAULT_MAPERR,		/* SEGV_MAPERR delivery */
 	CORTEN_FAULT_OOM,		/* pagefault_out_of_memory() */
+	CORTEN_FAULT_BUS,		/* V-B.3: SIGBUS BUS_ADRERR delivery
+					 * (FILE region, beyond EOF -- the
+					 * filemap_fault() verdict)
+					 */
 };
 
 #ifdef CONFIG_CORTEN_MM_ARENA

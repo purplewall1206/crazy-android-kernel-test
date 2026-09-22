@@ -83,6 +83,14 @@ enum corten_disp {
 				 * alike (M5.T3: no FOLL_FORCE survivor)
 				 */
 	CORTEN_DISP_ACCERR,	/* permission mismatch -> SEGV_ACCERR */
+	CORTEN_DISP_FILE_READ,	/* V-B.3: CORTEN_FILE_MAPPED, read fault --
+				 * the filemap_fault() core: the handler
+				 * drops the covering lock (the pagecache
+				 * fetch sleeps), takes the folio at
+				 * region.rpoff + offset, re-locks and
+				 * installs the clean translation in one
+				 * transaction (H5)
+				 */
 	CORTEN_DISP_SWAPIN,	/* M6.T2: CORTEN_SWAPPED -- the fault is a
 				 * swap-in (M6_RMAP_SPEC.md sec 2.1 D5).  The
 				 * handler drops the covering lock (I/O and
@@ -135,7 +143,9 @@ int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
  * transaction (KEEP_PERM: content dropped, VA and recorded perm kept, a
  * re-fault re-reads the file) instead of letting zap_page_range_single()
  * bare-write the window's PTEs (INV6).  @even_cows is the walker's
- * zap_details verdict -- B.3's COWed MAPPED slots will consume it.
+ * zap_details verdict: the truncate family (true) drops the private COW
+ * copies too, the invalidation family (false) spares them
+ * (V-B.3's CORTEN_UNMAP_FILE_EVENT arm).
  * Return: true = arena business, do not run the legacy zap; false = not
  * a carrier, run legacy unchanged.  The =n stub folds to false.
  */
@@ -355,9 +365,6 @@ int corten_arena_auto_place(unsigned long next_va, unsigned long len,
  * window exhausted, or an obstacle in the window), -errno = internal
  * error only.
  */
-#ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
-extern bool corten_file_route_test_override;
-#endif
 int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 				 unsigned long pgoff, unsigned long len,
 				 unsigned long prot, unsigned long *addr,

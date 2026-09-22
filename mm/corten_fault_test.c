@@ -277,13 +277,30 @@ static void corten_fault_test_dispatch(struct kunit *test)
 					 { 0 } },
 		  true, false, CORTEN_DISP_COW_COPY },
 		/* M6.T2: the Swapped state routes to the swap-in
-		 * transaction; the file/shared-anon producers are still
-		 * M4+ and refuse loudly.
+		 * transaction; the shared-anon producer is still M4+
+		 * and refuses loudly.
 		 */
 		{ "swapped", { CORTEN_SWAPPED, CORTEN_PERM_ALL, 0, { 0 } },
 		  false, false, CORTEN_DISP_SWAPIN },
-		{ "file", { CORTEN_FILE_MAPPED, CORTEN_PERM_ALL, 0, { 0 } },
-		  false, false, CORTEN_DISP_STUB },
+		/* V-B.3 (H4): the FILE_MAPPED arms -- a read (data or
+		 * instruction) takes the pagecache read arm, a write on a
+		 * writable contract the COW transaction (MAP_PRIVATE never
+		 * writes through), anything else is a permission fault.
+		 */
+		{ "file-read", { CORTEN_FILE_MAPPED, CORTEN_PERM_ALL, 0,
+				 { 0 } },
+		  false, false, CORTEN_DISP_FILE_READ },
+		{ "file-exec-instr", { CORTEN_FILE_MAPPED,
+		  CORTEN_PERM_READ | CORTEN_PERM_EXEC | CORTEN_PERM_USER, 0,
+		  { 0 } },
+		  false, true, CORTEN_DISP_FILE_READ },
+		{ "file-write-writable", { CORTEN_FILE_MAPPED,
+		  CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER, 0,
+		  { 0 } },
+		  true, false, CORTEN_DISP_COW_MAYBE },
+		{ "file-write-ro", { CORTEN_FILE_MAPPED,
+		  CORTEN_PERM_READ | CORTEN_PERM_USER, 0, { 0 } },
+		  true, false, CORTEN_DISP_ACCERR },
 		{ "shared-anon", { CORTEN_SHARED_ANON, CORTEN_PERM_ALL, 0, { 0 } },
 		  false, false, CORTEN_DISP_STUB },
 	};

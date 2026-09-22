@@ -1995,12 +1995,21 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 /* Helpers defined with the fork scaffolding below (used here). */
 static int corten_arena_test_meta(struct mm_struct *mm, unsigned long addr,
 				  struct corten_pte_meta *out);
+static int corten_arena_test_page_word(struct mm_struct *mm,
+				       unsigned long addr, u64 *val,
+				       bool write);
+static pmd_t *corten_arena_test_pmd(struct mm_struct *mm,
+				    unsigned long addr);
 static int corten_arena_test_fork_begin(struct mm_struct *child,
 					struct mm_struct *parent);
 static int corten_arena_test_fork_commit(struct mm_struct *child,
 					 struct mm_struct *parent);
 
-/* Route wrapper: do_mmap()'s file front half, NULL pgoff caller shape. */
+/* Route wrapper: do_mmap()'s file front half, NULL pgoff caller shape.
+ * V-B.3: the dark gate is gone -- this runs the real takeover (the
+ * B.1-era override no longer exists; this wrapper is now the
+ * route-takeover regression anchor).
+ */
 static int corten_arena_test_file_route(struct mm_struct *mm,
 					struct file *file,
 					unsigned long len,
@@ -2010,30 +2019,39 @@ static int corten_arena_test_file_route(struct mm_struct *mm,
 {
 	int ret;
 
-	WRITE_ONCE(corten_file_route_test_override, true);
 	mmap_write_lock(mm);
 	ret = corten_arena_auto_mmap_route(mm, file, 0, len, PROT_READ |
 					   PROT_EXEC, addr, lenp, flagsp);
 	mmap_write_unlock(mm);
-	WRITE_ONCE(corten_file_route_test_override, false);
 
 	return ret;
 }
 
-/* Attach wrapper: do_mmap()'s file completion body. */
+/* Attach wrapper: do_mmap()'s file completion body, with the prot the
+ * caller wants (the R|X shape below is the common one).
+ */
+static int corten_arena_test_file_attach_prot(struct mm_struct *mm,
+					      unsigned long addr,
+					      struct file *file,
+					      unsigned long pgoff,
+					      unsigned long prot)
+{
+	int ret;
+
+	mmap_write_lock(mm);
+	ret = corten_arena_file_attach(mm, addr, PMD_SIZE, prot, file, pgoff);
+	mmap_write_unlock(mm);
+
+	return ret;
+}
+
 static int corten_arena_test_file_attach(struct mm_struct *mm,
 					 unsigned long addr,
 					 struct file *file,
 					 unsigned long pgoff)
 {
-	int ret;
-
-	mmap_write_lock(mm);
-	ret = corten_arena_file_attach(mm, addr, PMD_SIZE,
-				       PROT_READ | PROT_EXEC, file, pgoff);
-	mmap_write_unlock(mm);
-
-	return ret;
+	return corten_arena_test_file_attach_prot(mm, addr, file, pgoff,
+						  PROT_READ | PROT_EXEC);
 }
 
 static void corten_arena_test_file_lifecycle(struct kunit *test)
@@ -2116,9 +2134,8 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 	mmap_read_unlock(mm);
 
 	/* The whole-region virtual allocation: FILE_MAPPED with the
-	 * recorded perm; B.1's dispatch boundary is deliberate -- a fault
-	 * on it answers STUB (-> SEGV_MAPERR), never the FRESH anon
-	 * synthesizer (that would hand out zero pages for a file range).
+	 * recorded perm; V-B.3 routes a read fault on it to the pagecache
+	 * read arm (the B.1 STUB boundary is gone with the dark gate).
 	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m),
@@ -2127,7 +2144,7 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_EXEC |
 				       CORTEN_PERM_USER);
 	KUNIT_EXPECT_EQ(test, corten_arena_dispatch(&m, false, false),
-			CORTEN_DISP_STUB);
+			CORTEN_DISP_FILE_READ);
 
 	/* INV-MV3(d) negative anchors: each torn payload shape is
 	 * reported by the registry walk.
@@ -2393,18 +2410,43 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 	KUNIT_EXPECT_PTR_EQ(test, carrier->vm_file, file);
 	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
 
-	/* Re-fault on a demoted slot: the dark gate holds -- MAPERR, not
-	 * the FRESH synthesizer's anonymous zero pages (the metadata must
-	 * stay Invalid; B.3's rclass-aware arm re-reads the file).
+	/* Re-fault on a demoted slot: V-B.3's rclass-aware FRESH arm
+	 * re-synthesizes FILE_MAPPED (never PrivateAnon -- that would
+	 * present anonymous zero bytes where the file's new content
+	 * belongs) and the read arm re-reads the file's new content.
+	 * The B.2-era dark-gate verdict (SEGV_MAPERR) is gone with the
+	 * gate.
 	 */
+	{
+		u64 pat = 0xa5b6c7d8e9f01122ULL;
+		loff_t pos = (loff_t)pgoff << PAGE_SHIFT;
+
+		/* The file's "new content" (written through the pagecache
+		 * after the truncation event).
+		 */
+		KUNIT_ASSERT_EQ(test,
+				kernel_write(file, &pat, sizeof(pat), &pos),
+				(ssize_t)sizeof(pat));
+	}
 	fflags = 0;
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN, 0,
 						NULL, &fflags),
-			CORTEN_FAULT_MAPERR);
+			CORTEN_FAULT_HANDLED);
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m), 0);
-	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_EXEC |
+				       CORTEN_PERM_USER);
+	{
+		u64 back = 0;
+
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_page_word(mm,
+							    CORTEN_ARENA_TEST_WIN,
+							    &back, false), 0);
+		KUNIT_EXPECT_EQ(test, back, 0xa5b6c7d8e9f01122ULL);
+	}
 
 	/* Partial invalidation (even_cows == false, the reclaim arm): a
 	 * fresh second region at pgoff 0, one page of the file event --
@@ -2476,6 +2518,436 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 			corten_arena_test_run_op(test, mm,
 						 corten_arena_test_op_mode_exit,
 						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, file_count(file), base);
+
+	fput(file);
+}
+
+/* V-B.3: the rss counters are percpu_counter-batched; get_mm_counter()
+ * only reads the folded global, so a handful of +/-1 deltas on one CPU
+ * stays invisible.  The exact-sum walk is the assertion-grade read.
+ */
+static long corten_arena_test_mm_counter(struct mm_struct *mm, int member)
+{
+	return percpu_counter_sum_positive(&mm->rss_stat[member]);
+}
+
+/* ------------------------------------------------------------------ *
+ * V-B.3: the FILE_MAPPED fault arms -- the read path (attach ->
+ * fault -> the translation serves the file's content, meta stays
+ * FILE_MAPPED, clean read-only PTE, MM_FILEPAGES accounting, the
+ * pagecache folio's rmap) and the EOF verdict (pgoff past i_size ->
+ * CORTEN_FAULT_BUS, the filemap_fault() SIGBUS shape).
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_file_read(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct address_space *mapping;
+	struct vm_area_struct *carrier;
+	struct corten_pte_meta m;
+	struct file *file;
+	struct folio *folio;
+	struct page *page;
+	pmd_t *pmdp;
+	pte_t *ptep, pte;
+	spinlock_t *ptl;	/* guards the read-arm install read */
+	unsigned int fflags;
+	long base, filepg;
+	u64 pat = 0x1122334455667788ULL, back = 0;
+	loff_t pos = PAGE_SIZE;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "FILE read arm requires corten=on");
+
+	/* Three pages of shmem: page 0 stays a hole (zero-fill read),
+	 * page 1 carries a pattern, page 2 is the last page.
+	 */
+	file = shmem_file_setup("corten_vb3r", 3 * PAGE_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	mapping = file->f_mapping;
+	base = file_count(file);
+	KUNIT_ASSERT_EQ(test,
+			kernel_write(file, &pat, sizeof(pat), &pos),
+			(ssize_t)sizeof(pat));
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      file, 0), 0);
+	carrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, carrier);
+	filepg = corten_arena_test_mm_counter(mm, MM_FILEPAGES);
+
+	/* The read fault: handled, and the metadata is NOT rewritten --
+	 * FILE_MAPPED is both the virtual allocation and the resident
+	 * form (no __resv payload, no slot transition).
+	 */
+	fflags = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm,
+						CORTEN_ARENA_TEST_WIN + PAGE_SIZE,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm,
+					       CORTEN_ARENA_TEST_WIN + PAGE_SIZE,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_EXEC |
+				       CORTEN_PERM_USER);
+
+	/* The translation itself: present, clean, read-only (a private
+	 * file mapping is never written through -- the RW contract is
+	 * satisfied by the COW, and PAGE_COPY keeps the installed PTE
+	 * RO), on the pagecache folio of pgoff 1.
+	 */
+	pmdp = corten_arena_test_pmd(mm, CORTEN_ARENA_TEST_WIN + PAGE_SIZE);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp,
+				   CORTEN_ARENA_TEST_WIN + PAGE_SIZE, &ptl);
+	KUNIT_ASSERT_NOT_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_FALSE(test, pte_write(pte));
+	KUNIT_EXPECT_FALSE(test, pte_dirty(pte));
+	page = pte_page(pte);
+	pte_unmap_unlock(ptep, ptl);
+	folio = filemap_get_folio(mapping, 1);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(folio));
+	KUNIT_EXPECT_TRUE(test, page_folio(page) == folio);
+	/* The read arm's rmap: the PTE's map on the file mapping. */
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+	folio_put(folio);
+
+	/* The content is the file's content. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm,
+						    CORTEN_ARENA_TEST_WIN +
+						    PAGE_SIZE, &back, false),
+			0);
+	KUNIT_EXPECT_EQ(test, back, pat);
+
+	/* Accounting: exactly one file page (the hole page was not
+	 * touched yet).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_FILEPAGES),
+			filepg + 1);
+
+	/* A hole page inside EOF reads zeros (the shmem clear: shape of
+	 * the fetch).
+	 */
+	fflags = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	back = ~0ULL;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm,
+						    CORTEN_ARENA_TEST_WIN,
+						    &back, false), 0);
+	KUNIT_EXPECT_EQ(test, back, 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_FILEPAGES),
+			filepg + 2);
+
+	/* Re-fault of an installed page: the redundant-reference arm of
+	 * the read path answers handled without a second install.
+	 */
+	fflags = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm,
+						CORTEN_ARENA_TEST_WIN + PAGE_SIZE,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+
+	/* Beyond EOF: the last file page is index 2; pgoff 3 answers
+	 * BUS (the do_read_fault() SIGBUS verdict through the arena's
+	 * delivery), and the metadata keeps its FILE_MAPPED shape.
+	 */
+	fflags = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm,
+						CORTEN_ARENA_TEST_WIN +
+						3 * PAGE_SIZE, 0, NULL,
+						&fflags),
+			CORTEN_FAULT_BUS);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm,
+					       CORTEN_ARENA_TEST_WIN +
+					       3 * PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	/* No stray translation and no accounting for the refused page. */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_FILEPAGES),
+			filepg + 2);
+
+	/* The zap side of the ledger: teardown drops both file pages
+	 * and the registry stays INV-MV3 clean.
+	 */
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
+	mmap_read_unlock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_FILEPAGES), filepg);
+	KUNIT_EXPECT_EQ(test, file_count(file), base);
+
+	fput(file);
+}
+
+/* ------------------------------------------------------------------ *
+ * V-B.3: the FILE_MAPPED write arm -- the private-copy COW.  First
+ * write on a read-installed page (the in-place shape) and on a
+ * never-faulted slot (the do_cow_fault() fetch+copy shape) both
+ * migrate the metadata FILE_MAPPED -> MAPPED, hand out an exclusive
+ * private page with the file's content, and leave the pagecache folio
+ * (the "file side" of the isolation) untouched; a second write runs
+ * the reuse arm on the now-anon page.
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_file_cow(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct address_space *mapping;
+	struct corten_pte_meta m;
+	struct file *file;
+	struct folio *folio;
+	pmd_t *pmdp;
+	pte_t *ptep, pte;
+	spinlock_t *ptl;	/* guards the COW install reads */
+	unsigned int fflags;
+	long base, filepg, anonpg, routes;
+	u64 pat0 = 0xdeadbeefcafe1234ULL, pat1 = 0x0123456789abcdefULL;
+	u64 back = 0, wr = 0xf00df00ddeadbeefULL;
+	loff_t pos = 0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "FILE COW arm requires corten=on");
+
+	file = shmem_file_setup("corten_vb3c", 2 * PAGE_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	mapping = file->f_mapping;
+	base = file_count(file);
+	KUNIT_ASSERT_EQ(test,
+			kernel_write(file, &pat0, sizeof(pat0), &pos),
+			(ssize_t)sizeof(pat0));
+	pos = PAGE_SIZE;
+	KUNIT_ASSERT_EQ(test,
+			kernel_write(file, &pat1, sizeof(pat1), &pos),
+			(ssize_t)sizeof(pat1));
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_attach_prot(mm,
+							   CORTEN_ARENA_TEST_WIN,
+							   file, 0,
+							   PROT_READ |
+							   PROT_WRITE), 0);
+	filepg = corten_arena_test_mm_counter(mm, MM_FILEPAGES);
+	anonpg = corten_arena_test_mm_counter(mm, MM_ANONPAGES);
+
+	/* Read-install pgoff 0 first (the in-place COW needs the read
+	 * arm's translation in place).  The install is read-only even
+	 * though the contract carries WRITE (PAGE_COPY: the private COW
+	 * shape -- the write must come through the fault).
+	 */
+	fflags = 0;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	pmdp = corten_arena_test_pmd(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, CORTEN_ARENA_TEST_WIN, &ptl);
+	KUNIT_ASSERT_NOT_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_FALSE(test, pte_write(pte));
+	pte_unmap_unlock(ptep, ptl);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_FILEPAGES),
+			filepg + 1);
+	folio = filemap_get_folio(mapping, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(folio));
+	folio_put(folio);
+
+	/* First write on the read-installed page: the COW copy. */
+	fflags = FAULT_FLAG_WRITE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+				       CORTEN_PERM_USER);
+	/* The counters split: one anon page in, the file page out. */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_ANONPAGES),
+			anonpg + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_FILEPAGES), filepg);
+	/* The private copy carries the file's content... */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm,
+						    CORTEN_ARENA_TEST_WIN,
+						    &back, false), 0);
+	KUNIT_EXPECT_EQ(test, back, pat0);
+	/* ...and the file side never saw the write: a later store
+	 * through the private page leaves the pagecache folio's content
+	 * and mapcount untouched (the isolation).
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm,
+						    CORTEN_ARENA_TEST_WIN,
+						    &wr, true), 0);
+	folio = filemap_get_folio(mapping, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(folio));
+	{
+		u64 *kaddr = kmap_local_folio(folio, 0);
+
+		back = *kaddr;
+		kunmap_local(kaddr);
+	}
+	KUNIT_EXPECT_EQ(test, back, pat0);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 0);
+	folio_put(folio);
+
+	/* Second write on the private page: the reuse arm (anon now,
+	 * exclusive, mapcount 1) -- handled, still MAPPED, content
+	 * readable back through the same translation.
+	 */
+	fflags = FAULT_FLAG_WRITE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	back = 0;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm,
+						    CORTEN_ARENA_TEST_WIN,
+						    &back, false), 0);
+	KUNIT_EXPECT_EQ(test, back, wr);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_ANONPAGES),
+			anonpg + 1);
+
+	/* First write on a NEVER-faulted slot (the do_cow_fault()
+	 * fetch+copy shape): fetch outside the lock, copy, one
+	 * transaction.
+	 */
+	fflags = FAULT_FLAG_WRITE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm,
+						CORTEN_ARENA_TEST_WIN + PAGE_SIZE,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm,
+					       CORTEN_ARENA_TEST_WIN + PAGE_SIZE,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_ANONPAGES),
+			anonpg + 2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_FILEPAGES), filepg);
+	back = 0;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm,
+						    CORTEN_ARENA_TEST_WIN +
+						    PAGE_SIZE, &back, false),
+			0);
+	KUNIT_EXPECT_EQ(test, back, pat1);
+	/* The file side is untouched here too. */
+	folio = filemap_get_folio(mapping, 1);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(folio));
+	{
+		u64 *kaddr = kmap_local_folio(folio, 0);
+
+		back = *kaddr;
+		kunmap_local(kaddr);
+	}
+	KUNIT_EXPECT_EQ(test, back, pat1);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 0);
+	folio_put(folio);
+
+	/* A write fault past EOF on a writable FILE contract: the
+	 * do_cow_fault() SIGBUS verdict (BUS, not a zeroed private
+	 * page -- the silent-corruption red line).
+	 */
+	fflags = FAULT_FLAG_WRITE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm,
+						CORTEN_ARENA_TEST_WIN +
+						2 * PAGE_SIZE, 0, NULL,
+						&fflags),
+			CORTEN_FAULT_BUS);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm,
+					       CORTEN_ARENA_TEST_WIN +
+					       2 * PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_ANONPAGES),
+			anonpg + 2);
+
+	/* Read-only contract: a write on the R-only region answers
+	 * ACCERR (the access_error() verdict).
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_START2,
+						      file, 0), 0);
+	fflags = FAULT_FLAG_WRITE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm,
+						CORTEN_ARENA_TEST_START2,
+						0, NULL, &fflags),
+			CORTEN_FAULT_ACCERR);
+
+	/* V-B.3 (H7 follow-through): the invalidation family (!even_cows,
+	 * the reclaim arm) spares the private copies -- a file-driven
+	 * unmap_mapping_pages over pgoff 0 leaves the COWed MAPPED slot
+	 * and its content alone (should_zap_cows()'s verdict).  Both
+	 * regions' carriers sit on pgoff 0, so the event routes twice;
+	 * START2's FILE_MAPPED virtual allocation demotes (that side is
+	 * the file's business), WIN's private copy survives verbatim.
+	 */
+	routes = corten_arena_test_truncate_routes();
+	unmap_mapping_pages(mapping, 0, 1, false);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(),
+			routes + 2);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	back = 0;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm,
+						    CORTEN_ARENA_TEST_WIN,
+						    &back, false), 0);
+	KUNIT_EXPECT_EQ(test, back, wr);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_EXEC |
+				       CORTEN_PERM_USER);
+
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
+	mmap_read_unlock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_ANONPAGES), anonpg);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, MM_FILEPAGES), filepg);
 	KUNIT_EXPECT_EQ(test, file_count(file), base);
 
 	fput(file);
@@ -7805,6 +8277,8 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_auto_attach_release),
 	KUNIT_CASE(corten_arena_test_file_lifecycle),
 	KUNIT_CASE(corten_arena_test_truncate_route),
+	KUNIT_CASE(corten_arena_test_file_read),
+	KUNIT_CASE(corten_arena_test_file_cow),
 	KUNIT_CASE(corten_arena_test_mag_recycle),
 	KUNIT_CASE(corten_arena_test_mag_marker),
 	KUNIT_CASE(corten_arena_test_pool_reuse),
