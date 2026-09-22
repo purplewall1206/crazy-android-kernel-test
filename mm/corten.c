@@ -1627,6 +1627,94 @@ static const struct file_operations corten_evict_fops = {
 	.llseek		= noop_llseek,
 };
 
+/*
+ * V-A.3c: the A-series exit gate one-stop read (j2-audit hook list).
+ * The J1 prelude pair and the INV-MV2 walker ledger in one file,
+ * kselftest output style, with the gate_pass verdict line -- the guest
+ * acceptance run greps this instead of parsing arena_stats.
+ */
+static int corten_audit_gate_show(struct seq_file *m, void *v)
+{
+	corten_arena_audit_gate_report(m);
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(corten_audit_gate);
+
+/*
+ * V-A.3c: the INV-MV2 walker's manual trigger.  Write "<pid>": one
+ * corten_audit_j2_walk() over that process's maple tree and implant
+ * registry, right now, regardless of the sampling switch.  The return
+ * value is the walk's violation count (0 = the invariant holds); the
+ * ledger (j2_walks/j2_violations/j2_stale) lands in arena_stats and
+ * audit_gate.  Write-only, root-only (debugfs is mode 0700), same
+ * shape as the evict control above.
+ */
+static ssize_t corten_j2_walk_write(struct file *file,
+				    const char __user *ubuf, size_t count,
+				    loff_t *ppos)
+{
+	char kbuf[16];
+	unsigned long long pid;
+	int ret;
+
+	if (*ppos || count >= sizeof(kbuf))
+		return count >= sizeof(kbuf) ? -EINVAL : 0;
+	if (copy_from_user(kbuf, ubuf, count))
+		return -EFAULT;
+	kbuf[count] = '\0';
+	strreplace(kbuf, '\n', '\0');
+	if (kstrtoull(kbuf, 10, &pid) || pid > INT_MAX)
+		return -EINVAL;
+
+	ret = corten_arena_j2_walk_pid((pid_t)pid);
+	if (ret < 0)
+		return ret;
+
+	*ppos += count;
+	return count;
+}
+
+static const struct file_operations corten_j2_walk_fops = {
+	.owner		= THIS_MODULE,
+	.write		= corten_j2_walk_write,
+	.llseek		= noop_llseek,
+};
+
+/*
+ * V-A.3c: the hot-path sampling switch.  Write 0/1 (kstrtobool also
+ * takes y/n): 1 arms the static key so the park/take/reactivate/route
+ * triggers run the walker too; 0 restores the default (lifecycle
+ * points only -- mm_exit and fork_commit always walk).
+ */
+static ssize_t corten_j2_every_write(struct file *file,
+				     const char __user *ubuf, size_t count,
+				     loff_t *ppos)
+{
+	char kbuf[8];
+	bool on;
+
+	if (*ppos || count >= sizeof(kbuf))
+		return count >= sizeof(kbuf) ? -EINVAL : 0;
+	if (copy_from_user(kbuf, ubuf, count))
+		return -EFAULT;
+	kbuf[count] = '\0';
+	strreplace(kbuf, '\n', '\0');
+	if (kstrtobool(kbuf, &on))
+		return -EINVAL;
+
+	corten_arena_j2_sample_set(on);
+
+	*ppos += count;
+	return count;
+}
+
+static const struct file_operations corten_j2_every_fops = {
+	.owner		= THIS_MODULE,
+	.write		= corten_j2_every_write,
+	.llseek		= noop_llseek,
+};
+
 /* Shared KUnit infrastructure (mm/corten.h): any of the three test
  * objects may drive the in-memory debugfs render.
  */
@@ -1663,6 +1751,9 @@ char *corten_test_render_dbg(enum corten_dbg_file which)
 		break;
 	case CORTEN_DBG_ARENA_STATS:
 		show = corten_arena_stats_show;
+		break;
+	case CORTEN_DBG_AUDIT_GATE:
+		show = corten_audit_gate_show;
 		break;
 	default:
 		return ERR_PTR(-EINVAL);
@@ -1712,6 +1803,15 @@ static int __init corten_debugfs_init(void)
 	 * pages (spec slice table; the pressure channel is M6.T3).
 	 */
 	debugfs_create_file("evict", 0200, dir, NULL, &corten_evict_fops);
+	/* V-A.3c: the INV-MV2 audit surface -- the exit-gate one-stop
+	 * read, the manual walker trigger and the hot-path sampling
+	 * switch (j2-audit hook list).
+	 */
+	debugfs_create_file("audit_gate", 0444, dir, NULL,
+			    &corten_audit_gate_fops);
+	debugfs_create_file("j2_walk", 0200, dir, NULL, &corten_j2_walk_fops);
+	debugfs_create_file("j2_walk_every", 0200, dir, NULL,
+			    &corten_j2_every_fops);
 
 	return 0;
 }

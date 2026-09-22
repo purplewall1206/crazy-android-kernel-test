@@ -520,6 +520,38 @@ bool corten_implant_covers(struct mm_struct *mm, unsigned long start,
 			   unsigned long len);
 
 /*
+ * V-A.3c INV-MV2 audit walker (j2-audit hook list, MV_VMA_FREE_SPEC.md
+ * sec 1.3 J2): one read-only pass over the mm's maple tree asserting
+ * that every VMA intersecting the window domain is either the arena's
+ * own (VM_CORTEN) or inside the implant registry above.  A violation
+ * WARNs once, counts, and archives the first address; registry entries
+ * carrying no tree VMA (mark-then-fail installs, munmapped implants)
+ * count as stale -- a benign classification, never a WARN.
+ *
+ * corten_audit_j2_walk(): self-sufficient form for callers holding no
+ * lock of @mm (the syscall-route tails, debugfs, KUnit) -- takes the
+ * registry ctl_lock internally, which is also DEV-13-legal under a
+ * held mmap_read/write.
+ * corten_audit_j2_walk_locked(): for callers whose context already
+ * fences every registry writer -- this mm's mmap_write held, the
+ * registry ctl_lock held, or mm_users == 0.
+ * Read-only in the INV6 sense: no PTE is walked or written.
+ * Return: violations found in this pass (0 = INV-MV2 holds).
+ */
+int corten_audit_j2_walk(struct mm_struct *mm);
+int corten_audit_j2_walk_locked(struct mm_struct *mm);
+
+/*
+ * V-A.3c debugfs backends (mm/corten.c owns the files): the "j2_walk
+ * <pid>" manual trigger and the "j2_walk_every" hot-path sampling
+ * switch (a static key, default off -- the park/take/reactivate/route
+ * triggers only walk when it is on; mm_exit and fork_commit always
+ * walk).
+ */
+int corten_arena_j2_walk_pid(pid_t pid);
+void corten_arena_j2_sample_set(bool on);
+
+/*
  * V-A.2a J1 prelude (MV_VMA_FREE_SPEC.md sec 1.3): the find_vma-family
  * window probe.  The exported find_vma()/find_vma_intersection() and
  * lock_vma_under_rcu() call corten_j1_probe() after their lookup; the
@@ -830,6 +862,26 @@ static inline bool corten_implant_covers(struct mm_struct *mm,
 					 unsigned long len)
 {
 	return false;
+}
+
+/* V-A.3c INV-MV2 walker + debugfs backends: no window domain exists. */
+static inline int corten_audit_j2_walk(struct mm_struct *mm)
+{
+	return 0;
+}
+
+static inline int corten_audit_j2_walk_locked(struct mm_struct *mm)
+{
+	return 0;
+}
+
+static inline int corten_arena_j2_walk_pid(pid_t pid)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void corten_arena_j2_sample_set(bool on)
+{
 }
 
 static inline int corten_arena_dontneed_route(struct mm_struct *mm,

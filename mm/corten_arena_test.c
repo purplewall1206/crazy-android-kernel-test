@@ -7381,6 +7381,378 @@ static void corten_arena_test_fault_window_shorts(struct kunit *test)
 						 0, 0), 0);
 }
 
+/* ------------------------------------------------------------------
+ * V-A.3c (j2-audit INV-MV2): the J2 walker -- clean shapes, injected
+ * violations, the stale classification, the trigger-point wiring and
+ * the fork implant mirror.
+ * ------------------------------------------------------------------
+ */
+
+/* The sampling static key is global: a test that arms it must disarm it
+ * whatever its assertions found.
+ */
+static void corten_arena_test_j2_sample_off(void *ctx)
+{
+	corten_arena_j2_sample_set(false);
+}
+
+/* The clean anchor (brief C11): a MODE mm through its real lifecycle --
+ * attach, madvise hint, park -- holds INV-MV2; the delegated-domain
+ * harness VMA never counts, and the exit-gate render exposes the
+ * J1+J2 numbers the A-series guest acceptance greps.
+ */
+static void corten_arena_test_inv_mv2_clean(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	long w0, v0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "J2 walker requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+
+	/* The pure-MODE shape: a live VMA-free window beside the harness's
+	 * delegated-domain VMA -- nothing in the tree is outside the
+	 * dominion's own shapes.
+	 */
+	w0 = corten_arena_test_j2_walks();
+	v0 = corten_arena_test_j2_violations();
+	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_violations(), v0);
+
+	/* An in-window madvise hint (the route's handled arm) and back: a
+	 * full park/free cycle later the invariant still holds.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_NORMAL,
+						   CORTEN_ARENA_TEST_WIN,
+						   PAGE_SIZE), 1);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pool_idle(mm,
+						      CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 0);
+
+	/* The exit-gate one-stop read: the guest interface must carry the
+	 * J1 pair, the J2 ledger and the verdict line.
+	 */
+	{
+		char *gate = corten_test_render_dbg(CORTEN_DBG_AUDIT_GATE);
+
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, gate);
+		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "j1_probes"));
+		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "j1_hits"));
+		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "j2_walks"));
+		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "j2_violations"));
+		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "j2_stale"));
+		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "gate_pass"));
+		kfree(gate);
+	}
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* The violation anchor (brief C12): a foreign VMA inside the window that
+ * no placement guard admitted and no producer registered (mkvm links it
+ * raw -- only an upstream guard failure could produce this shape) is
+ * exactly one violation with its address archived; registering the
+ * range after the fact clears it (the whitelist mechanism's
+ * self-proof); dropping the VMA again leaves the entry as stale, not as
+ * a violation.
+ */
+static void corten_arena_test_inv_mv2_inject(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long at = CORTEN_ARENA_TEST_WIN + PMD_SIZE;
+	struct vm_area_struct *vma;
+	long v0, s0, first0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "J2 injection requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	/* Live dominion state beside the injected piece. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+
+	vma = corten_arena_test_mkvm(mm, at, at + PAGE_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+
+	v0 = corten_arena_test_j2_violations();
+	s0 = corten_arena_test_j2_stale();
+	first0 = corten_arena_test_j2_first_violation();
+
+	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_violations(), v0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_stale(), s0);
+	/* First-writer-wins archive: set when this boot had none yet. */
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_j2_first_violation() == at ||
+			  first0 != 0);
+
+	/* The whitelist self-proof. */
+	mmap_write_lock(mm);
+	corten_implant_mark(mm, at, PAGE_SIZE);
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), 1);
+	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_violations(), v0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_stale(), s0);
+
+	/* The entry outliving its VMA is the stale classification, never
+	 * a violation.
+	 */
+	corten_arena_test_drop_vma(vma);
+	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_violations(), v0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_stale(), s0 + 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* The stale classification on its own producer (the A.3b handoff): a
+ * registry entry whose mmap never installed -- mark-then-fail residue
+ * -- is collected as stale without a WARN; installing the VMA after
+ * the fact stops the counting (registry-before-VMA tolerance).
+ */
+static void corten_arena_test_inv_mv2_stale(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *vma;
+	long s0, v0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "J2 stale class requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	s0 = corten_arena_test_j2_stale();
+	v0 = corten_arena_test_j2_violations();
+
+	/* Registered, never installed.  The mark creates the registry
+	 * (V-A.3c: an ENTER-only mm owns the window domain too), so it
+	 * runs under the mmap_write every producer holds.
+	 */
+	mmap_write_lock(mm);
+	corten_implant_mark(mm, CORTEN_ARENA_TEST_WIN, PAGE_SIZE);
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), 1);
+	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_stale(), s0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_violations(), v0);
+
+	/* The VMA arrives late: the entry stops being stale and the VMA
+	 * is legal against it.
+	 */
+	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
+				     CORTEN_ARENA_TEST_WIN + PAGE_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_stale(), s0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_violations(), v0);
+
+	corten_arena_test_drop_vma(vma);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* The legal implant end-to-end (D24) plus the fork mirror (V-A.3c): a
+ * plain MAP_FIXED over a parked window audits clean, and the child
+ * inherits the registry entry -- dup_mmap copies the implant VMA as an
+ * ordinary legacy VMA, and without the mirror both the child's fault
+ * terminus and this walker would misread it (the harness fork does not
+ * dup tree VMAs, so the copied piece is simulated with mkvm).
+ */
+static void corten_arena_test_inv_mv2_implant_fork(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm, *child;
+	struct vm_area_struct *cvma;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "J2 implant fork requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_vm_mmap(test, mm,
+						  CORTEN_ARENA_TEST_WIN,
+						  PMD_SIZE, MAP_FIXED),
+			CORTEN_ARENA_TEST_WIN);
+
+	/* The walker's core legal shape: zero violations, entry not
+	 * stale.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), 1);
+
+	/* Fork: the registry mirrors.  The parent holds no live arena at
+	 * this point (the window was ejected) -- the implant alone builds
+	 * the child registry (V-A.3c).
+	 */
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(child), 1);
+
+	/* The dup'd piece: a plain window VMA in the child, audited
+	 * against the mirrored entry.
+	 */
+	cvma = corten_arena_test_mkvm(child, CORTEN_ARENA_TEST_WIN,
+				      CORTEN_ARENA_TEST_WIN + PMD_SIZE,
+				      CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(child), 0);
+
+	corten_arena_test_drop_vma(cvma);
+	mmput(child);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* The trigger wiring: fork_commit/mm_exit always walk, the hot-path
+ * points (park, take/reactivate, route tails) only under the sampling
+ * key, and each fires exactly its own count.
+ */
+static void corten_arena_test_j2_triggers(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm, *child;
+	unsigned long win2 = CORTEN_ARENA_TEST_WIN + PMD_SIZE;
+	unsigned long addr = 0, lenp = PMD_SIZE;
+	unsigned long flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	long w;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "J2 triggers require corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+
+	/* Lifecycle: the fork_commit tail walks the child (its registry
+	 * was just built by the mirror).
+	 */
+	w = corten_arena_test_j2_walks();
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 1);
+	/* mm_exit walks the dying registry (the mirrored arena's child).
+	 */
+	mmput(child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 2);
+
+	/* Default: the hot path is dark.  A full park (park_locked tail +
+	 * the route's EXACT exit) and a pool take (reactivate tail + the
+	 * take tail) both stay silent.
+	 */
+	w = corten_arena_test_j2_walks();
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 1);
+	addr = 0;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, PMD_SIZE,
+							    PROT_READ |
+							    PROT_WRITE,
+							    &addr, &lenp,
+							    &flags),
+			2);
+	KUNIT_EXPECT_EQ(test, addr, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w);
+
+	/* Sampling on: every hot point fires its own count. */
+	corten_arena_j2_sample_set(true);
+	KUNIT_ASSERT_EQ(test,
+			kunit_add_action(test, corten_arena_test_j2_sample_off,
+					 NULL), 0);
+
+	w = corten_arena_test_j2_walks();
+	/* Park: park_locked tail + the munmap route's EXACT exit. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 2);
+
+	/* Take: reactivate tail + the take tail. */
+	addr = 0;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, PMD_SIZE,
+							    PROT_READ |
+							    PROT_WRITE,
+							    &addr, &lenp,
+							    &flags),
+			2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 4);
+
+	/* A chunk munmap inside a live window: the route's chunk exit. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, win2, PMD_SIZE), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 win2 + PAGE_SIZE, PAGE_SIZE),
+			1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 5);
+
+	/* The madvise hint arm. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_NORMAL, win2,
+						   PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 6);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
 /* The VMA-free consumption surface: chunk munmap without a VMA split,
  * the FRESH re-dispatch after it, the re-park, and the mprotect route's
  * miss on a parked window (legacy -ENOMEM, S-4's "already munmapped"
@@ -9306,6 +9678,12 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_j1_self_exempt),
 	KUNIT_CASE(corten_arena_test_uffd_window_reject),
 	KUNIT_CASE(corten_arena_test_fault_window_shorts),
+	/* V-A.3c (C-group): the INV-MV2 walker. */
+	KUNIT_CASE(corten_arena_test_inv_mv2_clean),
+	KUNIT_CASE(corten_arena_test_inv_mv2_inject),
+	KUNIT_CASE(corten_arena_test_inv_mv2_stale),
+	KUNIT_CASE(corten_arena_test_inv_mv2_implant_fork),
+	KUNIT_CASE(corten_arena_test_j2_triggers),
 	KUNIT_CASE(corten_arena_test_vma_free_reuse),
 	KUNIT_CASE(corten_arena_test_inv_mv3),
 	KUNIT_CASE(corten_arena_test_fork_vma_free),

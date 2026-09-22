@@ -709,6 +709,10 @@ int corten_prctl_mode(unsigned int op, unsigned long arg3,
  */
 void corten_arena_arenas_report(struct seq_file *m);
 void corten_arena_stats_report(struct seq_file *m);
+/* V-A.3c: the A-series exit gate one-stop read (J1 pair + J2 walker
+ * ledger + verdict, kselftest output style).
+ */
+void corten_arena_audit_gate_report(struct seq_file *m);
 
 #ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
 /* Test hooks for the drain-timeout aggregate wiring: force one timeout
@@ -769,6 +773,12 @@ long corten_arena_test_placement_backstop(void);
 long corten_arena_test_p4_ejects(void);
 long corten_arena_test_placement_idle_ejects(void);
 long corten_arena_test_implant_nr(struct mm_struct *mm);
+
+/* V-A.3c INV-MV2 walker ledger (C-group anchors). */
+long corten_arena_test_j2_walks(void);
+long corten_arena_test_j2_violations(void);
+long corten_arena_test_j2_stale(void);
+long corten_arena_test_j2_first_violation(void);
 
 /* V-A.3b J1-hygiene funnels (audit #1/#2/#29): the fault arm-pair
  * counter and the uffd entry rejects.
@@ -903,6 +913,10 @@ static inline void corten_arena_arenas_report(struct seq_file *m)
 }
 
 static inline void corten_arena_stats_report(struct seq_file *m)
+{
+}
+
+static inline void corten_arena_audit_gate_report(struct seq_file *m)
 {
 }
 
