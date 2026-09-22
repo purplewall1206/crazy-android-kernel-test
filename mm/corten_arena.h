@@ -278,30 +278,49 @@ int corten_arena_auto_place(unsigned long next_va, unsigned long len,
 			    unsigned long *addr);
 
 /*
- * do_mmap() hook (mm/mmap.c, before __get_unmapped_area()): decide the
+ * do_mmap() hook (mm/mmap.c, first hook in the function): decide the
  * auto-arena takeover for one addr==0 anonymous private mapping of a MODE
- * process and rewrite the request onto the window.  Runs with this mm's
- * mmap_lock held for writing (do_mmap's contract).
+ * process, run the mmap_region() verification checklist
+ * (corten_auto_validate()), place a window and rewrite the request onto
+ * it.  Runs with this mm's mmap_lock held for writing (do_mmap's
+ * contract).
  *
- * Return: 1 = takeover, *@addr / *@lenp / *@flagsp rewritten (MAP_FIXED
- * onto the window; the caller must attach with corten_arena_auto_attach()
- * once mmap_region() succeeded), 0 = legacy (not a whitelist hit, window
- * exhausted, or an obstacle in the window), -errno = internal error only.
+ * Return: 2 = pool take (the mmap completes; do_mmap returns the window
+ * address immediately), 1 = fresh window placed, *@addr / *@lenp /
+ * *@flagsp rewritten (the caller completes with
+ * corten_arena_auto_attach() -- V-A.2a: WITHOUT mmap_region(); only a
+ * declare failure degrades to the legacy MAP_FIXED flow), 0 =
+ * legacy (not a whitelist hit, gate refusal, window exhausted, or an
+ * obstacle in the window), -errno = internal error only.
  */
 int corten_arena_auto_mmap_route(struct mm_struct *mm, unsigned long len,
 				 unsigned long prot, unsigned long *addr,
 				 unsigned long *lenp, unsigned long *flagsp);
 
 /*
- * do_mmap() tail hook: register the freshly created VMA at @addr as an
- * auto arena -- DECLARE's locked body (validate/shadowize/publish), safe
- * because the caller already holds the mmap_write lock that DECLARE would
- * otherwise take first (DEV-13).  Failure degrades to a plain legacy
- * anonymous VMA at a window address (counted, harmless).
+ * V-A.2a: the mmap_region() verification checklist the auto takeover
+ * must cover now that it does not run mmap_region() at all -- def_flags
+ * VM_LOCKED (mlock_future_ok parity), the execute-only pkey shape, and
+ * may_expand_vm() (RLIMIT_AS/RLIMIT_DATA; the total_vm charge itself
+ * rides the declare's success path).  Pure over (mm, len, prot, flags).
+ * Return: 0 = proceed, -errno = the legacy flow must answer this one.
+ */
+int corten_auto_validate(struct mm_struct *mm, unsigned long len,
+			 unsigned long prot, unsigned long flags);
+
+/*
+ * do_mmap() completion hook (V-A.2a: runs where mmap_region() used to
+ * be for the auto takeover): register the window at @addr as an auto
+ * arena without creating any VMA -- DECLARE's locked body with the
+ * detached carrier (V-A.2b), the frames and the metadata, plus the
+ * total_vm charge mmap_region() used to make.  Safe because the caller
+ * already holds the mmap_write lock that DECLARE would otherwise take
+ * first (DEV-13).  Failure degrades to the caller's legacy flow: a
+ * plain anonymous VMA at a window address (counted, harmless).
  * Return: 0 on success, -errno otherwise.
  */
 int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
-			     unsigned long len);
+			     unsigned long len, unsigned long prot);
 
 /*
  * Gate-free MODE internals; the syscall-context caller is
@@ -357,6 +376,80 @@ void corten_arena_fork_abort(struct mm_struct *oldmm);
  */
 bool corten_arena_range_overlaps(struct mm_struct *mm, unsigned long start,
 				 unsigned long len);
+
+/*
+ * V-A.2a J1 prelude (MV_VMA_FREE_SPEC.md sec 1.3): the find_vma-family
+ * window probe.  The exported find_vma()/find_vma_intersection() and
+ * lock_vma_under_rcu() call corten_j1_probe() after their lookup; the
+ * slow-path function counts the call (probes) and, when it *found* a
+ * tree VMA overlapping the window domain, the hit (the J2 negative
+ * probe: post-A.2 the only legal window find is a punch implant, which
+ * the slice report discloses).  The inline gate pays one static-branch
+ * read + one byte load for every mm -- the house double-gate shape.
+ */
+void corten_j1_slow(struct mm_struct *mm, unsigned long start,
+		    unsigned long end, struct vm_area_struct *vma);
+
+static inline void corten_j1_probe(struct mm_struct *mm, unsigned long start,
+				   unsigned long end,
+				   struct vm_area_struct *vma)
+{
+	if (corten_enabled_static() && READ_ONCE(mm->corten_mode) &&
+	    end > CORTEN_MODE_WINDOW_START && start < CORTEN_MODE_WINDOW_END)
+		corten_j1_slow(mm, start, end, vma);
+}
+
+/*
+ * The untracked maple lookup for corten's own walkers (the placement
+ * obstacle scan, the punch split scan, the fault tier-2 check): the
+ * probe above counts external consumers, so the registered internal
+ * ones must not go through it.  Defined in mm/mmap.c next to
+ * find_vma_intersection(); mmap_write/read lock contract identical.
+ */
+struct vm_area_struct *corten_vma_find(struct mm_struct *mm,
+				       unsigned long start,
+				       unsigned long end);
+
+/*
+ * V-A.2a: the window-domain fence for the generic gap walkers
+ * (mm/mmap.c generic_get_unmapped_area{,_topdown}() and the x86 twins
+ * in arch/x86/kernel/sys_x86_64.c).  With the live and parked windows
+ * both tree-free, the allocator's gap scan can no longer be trusted to
+ * stay out of the window domain on its own -- the fence pins every
+ * hint-less allocation to the delegator side of the dominion line
+ * (topdown searches below the window, bottom-up above it), which is
+ * exactly sec 1.2's "window outside, delegated domain" contract.
+ * MAP_FIXED bypasses the walkers by design (the punch/implant routes
+ * own those shapes); an explicit hint into the window fails -ENOMEM
+ * via the walker's limit check.
+ */
+static inline void corten_fence_unmapped_area(struct vm_unmapped_area_info *info)
+{
+	if (!corten_enabled_static() ||
+	    !READ_ONCE(current->mm->corten_mode))
+		return;
+
+	if (info->low_limit >= CORTEN_MODE_WINDOW_END ||
+	    info->high_limit <= CORTEN_MODE_WINDOW_START)
+		return;		/* no window intersection */
+
+	if (info->flags & VM_UNMAPPED_AREA_TOPDOWN)
+		info->high_limit = CORTEN_MODE_WINDOW_START;
+	else
+		info->low_limit = CORTEN_MODE_WINDOW_END;
+}
+
+/* The matching hint check: a hinted range overlapping the window must
+ * not take the fast accept path (the range is tree-free there).
+ */
+static inline bool corten_addr_in_window(unsigned long addr,
+					 unsigned long len)
+{
+	return corten_enabled_static() &&
+	       READ_ONCE(current->mm->corten_mode) &&
+	       addr < CORTEN_MODE_WINDOW_END &&
+	       addr + len > CORTEN_MODE_WINDOW_START;
+}
 
 /*
  * MADV_DONTNEED-equivalent routing (sec 5.8): a range strictly inside one
@@ -621,9 +714,35 @@ static inline int corten_arena_auto_mmap_route(struct mm_struct *mm,
 
 static inline int corten_arena_auto_attach(struct mm_struct *mm,
 					   unsigned long addr,
-					   unsigned long len)
+					   unsigned long len,
+					   unsigned long prot)
 {
 	return 0;
+}
+
+static inline void corten_j1_probe(struct mm_struct *mm, unsigned long start,
+				   unsigned long end,
+				   struct vm_area_struct *vma)
+{
+}
+
+static inline struct vm_area_struct *corten_vma_find(struct mm_struct *mm,
+						     unsigned long start,
+						     unsigned long end)
+{
+	return NULL;
+}
+
+struct vm_unmapped_area_info;
+
+static inline void corten_fence_unmapped_area(struct vm_unmapped_area_info *info)
+{
+}
+
+static inline bool corten_addr_in_window(unsigned long addr,
+					 unsigned long len)
+{
+	return false;
 }
 
 static inline int corten_arena_mode_enter(struct mm_struct *mm)

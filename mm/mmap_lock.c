@@ -3,6 +3,7 @@
 #include <trace/events/mmap_lock.h>
 
 #include <linux/mm.h>
+#include "corten_arena.h"
 #include <linux/cgroup.h>
 #include <linux/memcontrol.h>
 #include <linux/mmap_lock.h>
@@ -230,6 +231,13 @@ struct vm_area_struct *lock_vma_under_rcu(struct mm_struct *mm,
 retry:
 	rcu_read_lock();
 	vma = mas_walk(&mas);
+	/* V-A.2a J1 prelude: the fault funnel's window probe.  A miss on
+	 * a window address is the expected post-A.2 shape (S-1: parked
+	 * windows and fresh faults -- MAPERR); a find would be a tree VMA
+	 * living in the window domain (implant whitelist) and is counted
+	 * as a hit.  Atomic counter, RCU-safe.
+	 */
+	corten_j1_probe(mm, address, address + 1, vma);
 	if (!vma) {
 		rcu_read_unlock();
 		goto inval;

@@ -21,6 +21,7 @@
 #include <linux/hugetlb.h>
 
 #include <asm/elf.h>
+#include "../../mm/corten_arena.h"
 #include <asm/ia32.h>
 
 /*
@@ -144,6 +145,7 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr, unsigned long len,
 		addr = PAGE_ALIGN(addr);
 		vma = find_vma(mm, addr);
 		if (end - len >= addr &&
+		    !corten_addr_in_window(addr, len) &&
 		    (!vma || addr + len <= vm_start_gap(vma)))
 			return addr;
 	}
@@ -159,6 +161,7 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr, unsigned long len,
 		info.align_mask = get_align_mask(filp);
 		info.align_offset += get_align_bits();
 	}
+	corten_fence_unmapped_area(&info);
 
 	return vm_unmapped_area(&info);
 }
@@ -189,6 +192,13 @@ arch_get_unmapped_area_topdown(struct file *filp, unsigned long addr0,
 	if (addr) {
 		addr &= PAGE_MASK;
 		if (!mmap_address_hint_valid(addr, len))
+			goto get_unmapped_area;
+
+		/* V-A.2a: a window hint is tree-free terrain now -- the
+		 * accept fast path would hand a foreign mapping arena
+		 * frames; drop to the fenced walker.
+		 */
+		if (corten_addr_in_window(addr, len))
 			goto get_unmapped_area;
 
 		vma = find_vma(mm, addr);
@@ -224,6 +234,7 @@ get_unmapped_area:
 		info.align_mask = get_align_mask(filp);
 		info.align_offset += get_align_bits();
 	}
+	corten_fence_unmapped_area(&info);
 	addr = vm_unmapped_area(&info);
 	if (!(addr & ~PAGE_MASK))
 		return addr;

@@ -667,6 +667,13 @@ long corten_arena_test_va_recycles(void);
 /* T1c pool hooks: the named counters, the pool occupancy of @mm's
  * registry, and the parked-state probe for one frame.
  */
+struct vm_area_struct *corten_arena_test_carrier_of(struct mm_struct *mm,
+						    unsigned long addr);
+long corten_arena_test_carriers(void);
+long corten_arena_test_auto_vgate(void);
+long corten_arena_test_j1_probes(void);
+long corten_arena_test_j1_hits(void);
+
 long corten_arena_test_pool_parks(void);
 long corten_arena_test_pool_hits(void);
 long corten_arena_test_pool_misses(void);

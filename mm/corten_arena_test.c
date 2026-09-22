@@ -15,6 +15,7 @@
 #include <linux/completion.h>
 #include <linux/corten_arena.h>
 #include <linux/cpumask.h>
+#include <linux/highmem.h>
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
@@ -43,6 +44,9 @@
 #define CORTEN_ARENA_TEST_LEN2		(2UL * PMD_SIZE)
 #define CORTEN_ARENA_TEST_START2	(CORTEN_ARENA_TEST_BASE + 8UL * PMD_SIZE)
 #define CORTEN_ARENA_TEST_NOWHERE	(CORTEN_ARENA_TEST_BASE + 64UL * PMD_SIZE)
+
+/* F1 content anchor: pages checked per-page in the first 2M window. */
+#define CORTEN_ARENA_TEST_PAGES		4
 
 /* The T0a auto-arena window (M4T0_SPEC.md sec 1.3): one PMD slot at the
  * window base drives the attach/release/cursor cases.
@@ -940,12 +944,18 @@ static int corten_arena_test_conc_worker(void *data)
 		struct vm_area_struct *vma;
 		int r;
 
-		vma = corten_arena_test_mkvm(c->mm, c->start,
-					     c->start + c->len,
-					     CORTEN_ARENA_TEST_FLAGS_OK);
-		if (!vma) {
-			atomic_inc(&c->errors);
-			break;
+		/* V-A.2a: the window shape is the VMA-less auto takeover
+		 * -- no declaring VMA exists (and none is unwound on
+		 * failure).  The declare shape keeps its tree VMA.
+		 */
+		if (!c->use_window) {
+			vma = corten_arena_test_mkvm(c->mm, c->start,
+						     c->start + c->len,
+						     CORTEN_ARENA_TEST_FLAGS_OK);
+			if (!vma) {
+				atomic_inc(&c->errors);
+				break;
+			}
 		}
 
 		/* The window shape runs the attach under the write lock,
@@ -954,14 +964,17 @@ static int corten_arena_test_conc_worker(void *data)
 		 */
 		if (c->use_window) {
 			mmap_write_lock(c->mm);
-			r = corten_arena_auto_attach(c->mm, c->start, c->len);
+			r = corten_arena_auto_attach(c->mm, c->start,
+						     c->len,
+						     PROT_READ | PROT_WRITE);
 			mmap_write_unlock(c->mm);
 		} else {
 			r = corten_arena_declare(c->mm, c->start, c->len);
 		}
 		if (r) {
 			atomic_inc(&c->errors);
-			corten_arena_test_unmap(c->mm, c->start, c->len);
+			if (!c->use_window)
+				corten_arena_test_unmap(c->mm, c->start, c->len);
 			break;
 		}
 
@@ -1640,7 +1653,6 @@ static void corten_arena_test_mag_recycle(struct kunit *test)
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
 	unsigned long addr = 0, len = 2 * PAGE_SIZE, flags;
-	struct vm_area_struct *vma;
 	long recycles;
 	int ret;
 
@@ -1661,19 +1673,15 @@ static void corten_arena_test_mag_recycle(struct kunit *test)
 						     &flags), 1);
 	KUNIT_EXPECT_EQ(test, addr, CORTEN_MODE_WINDOW_START);
 
-	/* Attach it (the do_mmap tail hook body) so the release can see a
-	 * real arena, then release it directly (the prctl RELEASE body:
-	 * drain + teardown + magazine recycle).
-	 * The route front half does not create the VMA -- mmap_region()
-	 * does, between the two halves -- so stand one in first, exactly
-	 * what the kernel flow would have installed.
+	/* Attach it (the do_mmap completion body) so the release can see
+	 * a real arena, then release it directly (the prctl RELEASE body:
+	 * drain + teardown + magazine recycle).  V-A.2a: the takeover is
+	 * complete after the route -- no VMA is (or needs to be)
+	 * installed between the two halves.
 	 */
-	vma = corten_arena_test_mkvm(mm, CORTEN_MODE_WINDOW_START,
-				     CORTEN_MODE_WINDOW_START + PMD_SIZE,
-				     CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
 	mmap_write_lock(mm);
-	ret = corten_arena_auto_attach(mm, CORTEN_MODE_WINDOW_START, PMD_SIZE);
+	ret = corten_arena_auto_attach(mm, CORTEN_MODE_WINDOW_START,
+				       PMD_SIZE, PROT_READ | PROT_WRITE);
 	mmap_write_unlock(mm);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 
@@ -1775,7 +1783,6 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
-	struct vm_area_struct *vma;
 	char expect[64];
 	char *dbg;
 	int ret;
@@ -1790,21 +1797,14 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 	 */
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 
-	/* A glibc-shaped mmap: a plain 2M NORESERVE anonymous VMA at the
-	 * window base (as mmap_region would create after a takeover
-	 * rewrite), attached by hand -- the do_mmap tail hook's body.
-	 * The arena must be exactly one 2M chunk here: the release rule
-	 * only applies while the leftover tail stays under 2M.
-	 */
-	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
-				     CORTEN_ARENA_TEST_WIN + PMD_SIZE,
-				     CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
-	/* auto_attach() is the do_mmap() tail hook: DECLARE's locked body
-	 * runs under the caller's mmap_write (mmap_region()'s contract).
+	/* A glibc-shaped mmap: V-A.2a -- the takeover completes WITHOUT
+	 * any VMA; the attach is the do_mmap completion body on a bare
+	 * window.  The arena must be exactly one 2M chunk here: the
+	 * release rule only applies while the leftover tail stays under
+	 * 2M.
 	 */
 	mmap_write_lock(mm);
-	ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_WIN, PMD_SIZE);
+	ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_WIN, PMD_SIZE, PROT_READ | PROT_WRITE);
 	mmap_write_unlock(mm);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	KUNIT_EXPECT_EQ(test,
@@ -1852,14 +1852,10 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 	{
 		long drains = corten_arena_test_drain_timeouts();
 
-		vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_START2,
-					     CORTEN_ARENA_TEST_START2 +
-					     2 * PMD_SIZE,
-					     CORTEN_ARENA_TEST_FLAGS_OK);
-		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
 		mmap_write_lock(mm);
 		ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_START2,
-					       2 * PMD_SIZE);
+					       2 * PMD_SIZE,
+					       PROT_READ | PROT_WRITE);
 		mmap_write_unlock(mm);
 		KUNIT_ASSERT_EQ(test, ret, 0);
 
@@ -1889,18 +1885,14 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_START2));
 	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
 
-	/* A genuine mid-arena chunk keeps the VA: chunk zap, not release. */
-	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
-				     CORTEN_ARENA_TEST_WIN +
-				     CORTEN_ARENA_TEST_WIN_LEN,
-				     CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
-	/* auto_attach() is the do_mmap() tail hook: DECLARE's locked body
-	 * runs under the caller's mmap_write (mmap_region()'s contract).
+	/* A genuine mid-arena chunk keeps the VA: chunk zap, not release.
+	 * V-A.2a: the auto takeover is VMA-less -- the VA is kept by the
+	 * frame table alone.
 	 */
 	mmap_write_lock(mm);
 	ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_WIN,
-				       CORTEN_ARENA_TEST_WIN_LEN);
+				       CORTEN_ARENA_TEST_WIN_LEN,
+				       PROT_READ | PROT_WRITE);
 	mmap_write_unlock(mm);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	KUNIT_EXPECT_EQ(test,
@@ -1912,7 +1904,7 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
 			1);
 	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
 			1);
-	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
 }
 
 /* ------------------------------------------------------------------ *
@@ -1978,6 +1970,11 @@ static int corten_arena_test_fork_seed_mapped(struct mm_struct *mm,
 	int ret;
 
 	vma = vma_lookup(mm, addr);
+	if (!vma)
+		/* V-A.2b: an auto arena's rmap anchor is its detached
+		 * carrier -- seed onto it, exactly like map_anon().
+		 */
+		vma = corten_arena_test_carrier_of(mm, addr);
 	if (!vma)
 		return -ENOENT;
 
@@ -4251,16 +4248,12 @@ static void corten_arena_test_op_mremap(struct corten_arena_test_op *o)
 					    o->flags, o->new_addr);
 }
 
-/* Seed/verify the payload through the arena's own fault paths. */
-static void corten_arena_test_op_copy_out(struct corten_arena_test_op *o)
-{
-	o->ret = copy_to_user((void __user *)o->addr, o->buf, 8) ? -EIO : 0;
-}
-
-static void corten_arena_test_op_copy_in(struct corten_arena_test_op *o)
-{
-	o->ret = copy_from_user(o->buf, (void __user *)o->addr, 8) ? -EIO : 0;
-}
+/* kmap-based page word access: the definition lives with the fork
+ * battery below; the mremap route test needs it first.
+ */
+static int corten_arena_test_page_word(struct mm_struct *mm,
+					unsigned long addr, u64 *val,
+					bool write);
 
 /* run_op variant carrying the full T0b argument block. */
 static int corten_arena_test_run_op_full(struct kunit *test,
@@ -4281,9 +4274,8 @@ static void corten_arena_test_mremap_route(struct kunit *test)
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
 	struct corten_pte_meta m;
-	struct vm_area_struct *vma;
-	char pattern[9] = "T0BMOVE1";
-	char back[9] = { 0 };
+	u64 pattern = 0x3154424D4F564554ULL;	/* "T0BMOVE1"-shaped */
+	u64 back = 0;
 	struct corten_arena_test_op o;
 	long new_addr, r0;
 	int ret;
@@ -4357,27 +4349,35 @@ static void corten_arena_test_mremap_route(struct kunit *test)
 	/* Grow: kernel-copy into a fresh window arena, the old arena is
 	 * retired.  The content must survive the move.
 	 */
-	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
-				     CORTEN_ARENA_TEST_WIN +
-				     CORTEN_ARENA_TEST_WIN_LEN,
-				     CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
-	/* auto_attach() is the do_mmap() tail hook: DECLARE's locked body
-	 * runs under the caller's mmap_write (mmap_region()'s contract).
+	/* V-A.2a: the auto takeover is VMA-less and the mremap move
+	 * target is a direct VMA-less declare -- no takeover VMA either.
 	 */
 	mmap_write_lock(mm);
 	ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_WIN,
-				       CORTEN_ARENA_TEST_WIN_LEN);
+				       CORTEN_ARENA_TEST_WIN_LEN,
+				       PROT_READ | PROT_WRITE);
 	mmap_write_unlock(mm);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 
-	o = (struct corten_arena_test_op) {
-		.mm = mm,
-		.fn = corten_arena_test_op_copy_out,
-		.addr = CORTEN_ARENA_TEST_WIN,
-		.buf = pattern,
-	};
-	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
+	/* V-A.2a: the window is VMA-less -- a copy_to_user() in the op
+	 * thread cannot fault it in (the x86 arena hook gates on
+	 * user_mode(regs)); the content runs through the arena fault
+	 * entry + the kernel-side word helper, and the move's own
+	 * prefault leg carries the copy.
+	 */
+	{
+		unsigned int fault_flags = FAULT_FLAG_WRITE;
+
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_user_fault(mm,
+							CORTEN_ARENA_TEST_WIN,
+							0, NULL,
+							&fault_flags),
+				CORTEN_FAULT_HANDLED);
+	}
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm, CORTEN_ARENA_TEST_WIN,
+						    &pattern, true), 0);
 
 	o = (struct corten_arena_test_op) {
 		.mm = mm,
@@ -4396,21 +4396,20 @@ static void corten_arena_test_mremap_route(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, new_addr & (PMD_SIZE - 1), 0);
 
 	/* The content survived the kernel copy. */
-	o = (struct corten_arena_test_op) {
-		.mm = mm,
-		.fn = corten_arena_test_op_copy_in,
-		.addr = new_addr,
-		.buf = back,
-	};
-	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
-	KUNIT_EXPECT_EQ(test, memcmp(back, pattern, 8), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm, new_addr, &back,
+						    false), 0);
+	KUNIT_EXPECT_EQ(test, back, pattern);
 
 	/* The old arena is retired, the new one is a live arena. */
 	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
 			0);
 	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, new_addr), 1);
 	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
-	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, new_addr));
+	/* V-A.2a: the move target carries no VMA either (the VA is kept
+	 * by the frame table; the S-4 reading covers it).
+	 */
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, new_addr));
 }
 
 /* ------------------------------------------------------------------
@@ -4430,7 +4429,8 @@ static int corten_arena_test_pool_attach(struct mm_struct *mm,
 	int ret;
 
 	mmap_write_lock(mm);
-	ret = corten_arena_auto_attach(mm, addr, len);
+	ret = corten_arena_auto_attach(mm, addr, len,
+				       PROT_READ | PROT_WRITE);
 	mmap_write_unlock(mm);
 
 	return ret;
@@ -4466,7 +4466,6 @@ static void corten_arena_test_pool_reuse(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
-	struct vm_area_struct *vma;
 	struct corten_pte_meta m;
 	unsigned long addr, lenp, flags;
 	long parks = corten_arena_test_pool_parks();
@@ -4483,10 +4482,7 @@ static void corten_arena_test_pool_reuse(struct kunit *test)
 	/* One glibc-shaped 2M NORESERVE anonymous arena at the window
 	 * base, with one committed page (real folio + CORTEN_MAPPED).
 	 */
-	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
-				     CORTEN_ARENA_TEST_WIN + PMD_SIZE,
-				     CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	/* V-A.2a: VMA-less auto takeover -- no declaring VMA. */
 	KUNIT_ASSERT_EQ(test, corten_arena_test_pool_attach(mm,
 							    CORTEN_ARENA_TEST_WIN,
 							    PMD_SIZE), 0);
@@ -4672,11 +4668,8 @@ static void corten_arena_test_pool_limit(struct kunit *test)
 	 */
 	for (i = 0; i <= CORTEN_ARENA_POOL_MAX; i++) {
 		unsigned long va = base + i * PMD_SIZE;
-		struct vm_area_struct *vma;
 
-		vma = corten_arena_test_mkvm(mm, va, va + PMD_SIZE,
-					     CORTEN_ARENA_TEST_FLAGS_OK);
-		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+		/* V-A.2a: VMA-less auto takeover (no declaring VMA). */
 		KUNIT_ASSERT_EQ(test,
 				corten_arena_test_pool_attach(mm, va,
 							      PMD_SIZE), 0);
@@ -4739,7 +4732,6 @@ static void corten_arena_test_pool_mode_exit(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
-	struct vm_area_struct *vma;
 	unsigned long parked = CORTEN_ARENA_TEST_WIN;
 	unsigned long live = CORTEN_ARENA_TEST_WIN + 4 * PMD_SIZE;
 	long timeouts = corten_arena_test_drain_timeouts();
@@ -4749,16 +4741,10 @@ static void corten_arena_test_pool_mode_exit(struct kunit *test)
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 
-	/* One parked and one live arena. */
-	vma = corten_arena_test_mkvm(mm, parked, parked + PMD_SIZE,
-				     CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	/* One parked and one live arena (V-A.2a: VMA-less attaches). */
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_test_pool_attach(mm, parked, PMD_SIZE),
 			0);
-	vma = corten_arena_test_mkvm(mm, live, live + PMD_SIZE,
-				     CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_test_pool_attach(mm, live, PMD_SIZE), 0);
 	KUNIT_EXPECT_EQ(test,
@@ -4790,7 +4776,6 @@ static void corten_arena_test_pool_fork(struct kunit *test)
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
 	struct corten_arena_test_pool_fork fk;
-	struct vm_area_struct *vma;
 	struct task_struct *tsk;
 	struct mm_struct *child;
 	long timeouts = corten_arena_test_drain_timeouts();
@@ -4800,10 +4785,7 @@ static void corten_arena_test_pool_fork(struct kunit *test)
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 
-	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
-				     CORTEN_ARENA_TEST_WIN + PMD_SIZE,
-				     CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	/* V-A.2a: VMA-less auto takeover -- no declaring VMA. */
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_test_pool_attach(mm, CORTEN_ARENA_TEST_WIN,
 						      PMD_SIZE), 0);
@@ -4894,11 +4876,10 @@ static void corten_arena_test_vma_free_reuse(struct kunit *test)
 	/* vma'd arena with one committed page, then parked (the cycle's
 	 * entry shape; the park anchors themselves live in pool_reuse).
 	 */
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test,
-			corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
-					       CORTEN_ARENA_TEST_WIN +
-					       PMD_SIZE,
-					       CORTEN_ARENA_TEST_FLAGS_OK));
+	/* V-A.2a: the attach is the VMA-less auto takeover -- no
+	 * declaring VMA exists (the mkvm the pre-A.2 shape needed is
+	 * gone).
+	 */
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_test_pool_attach(mm, CORTEN_ARENA_TEST_WIN,
 						      PMD_SIZE), 0);
@@ -5032,11 +5013,10 @@ static void corten_arena_test_inv_mv3(struct kunit *test)
 		kunit_skip(test, "INV-MV3 requires corten=on");
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test,
-			corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
-					       CORTEN_ARENA_TEST_WIN +
-					       PMD_SIZE,
-					       CORTEN_ARENA_TEST_FLAGS_OK));
+	/* V-A.2a: the attach is the VMA-less auto takeover -- no
+	 * declaring VMA exists (the mkvm the pre-A.2 shape needed is
+	 * gone).
+	 */
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_test_pool_attach(mm, CORTEN_ARENA_TEST_WIN,
 						      PMD_SIZE), 0);
@@ -5146,11 +5126,10 @@ static void corten_arena_test_fork_vma_free(struct kunit *test)
 		kunit_skip(test, "VMA-free fork requires corten=on");
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test,
-			corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
-					       CORTEN_ARENA_TEST_WIN +
-					       PMD_SIZE,
-					       CORTEN_ARENA_TEST_FLAGS_OK));
+	/* V-A.2a: the attach is the VMA-less auto takeover -- no
+	 * declaring VMA exists (the mkvm the pre-A.2 shape needed is
+	 * gone).
+	 */
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_test_pool_attach(mm, CORTEN_ARENA_TEST_WIN,
 						      PMD_SIZE), 0);
@@ -5260,72 +5239,13 @@ static void corten_arena_test_fork_vma_free(struct kunit *test)
  * 前置: pool 复活窗（无 VMA）+ 一页 rmap-less 驻留内容（map_anon 的
  * 无 VMA 形态: 计数 +1、无 folio_add_new_anon_rmap）。
  */
-static int corten_arena_test_seed_mapped_rmapless(struct mm_struct *mm,
-						  unsigned long addr)
-{
-	struct corten_txn txn;
-	struct folio *folio;
-	struct page *page;
-	pte_t *ptep, entry;
-	spinlock_t *ptl;
-	pmd_t *pmdp;
-	struct corten_arena *ar;
-	struct corten_pte_meta m = { };
-	int ret;
-
-	ar = corten_arena_lookup_get(mm, addr);
-	if (!ar)
-		return -ENOENT;
-	ret = corten_arena_fill_upper(ar, addr);
-	percpu_ref_put(&ar->active);
-	if (ret)
-		return ret;
-
-	folio = folio_alloc(GFP_KERNEL | __GFP_ZERO, 0);
-	if (!folio)
-		return -ENOMEM;
-	page = folio_page(folio, 0);
-	__folio_mark_uptodate(folio);
-
-	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
-	if (ret) {
-		folio_put(folio);
-		return ret;
-	}
-	ret = corten_map(&txn, addr, page,
-			 CORTEN_PERM_READ | CORTEN_PERM_WRITE |
-			 CORTEN_PERM_USER, 0);
-	if (ret) {
-		corten_unlock(&txn);
-		folio_put(folio);
-		return ret;
-	}
-	m.state = CORTEN_MAPPED;
-	m.perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER;
-	ret = corten_mark(&txn, addr, PAGE_SIZE, &m);
-	corten_unlock(&txn);
-	if (ret) {
-		folio_put(folio);
-		return ret;
-	}
-
-	pmdp = corten_arena_test_pmd(mm, addr);
-	if (!pmdp)
-		return -ENOENT;
-	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
-	if (!ptep) {
-		folio_put(folio);
-		return -EAGAIN;
-	}
-	entry = pte_mkwrite_novma(pte_mkdirty(mk_pte(page,
-					vm_get_page_prot(VM_READ | VM_WRITE))));
-	add_mm_counter(mm, MM_ANONPAGES, 1);
-	set_pte_at(mm, addr, ptep, entry);
-	pte_unmap_unlock(ptep, ptl);
-
-	return 0;
-}
-
+/* F1 重写: 同一 declare→park→re-declare 构造, 但修复后的前提是
+ * reactivate 无条件重武装 carrier -- 活窗不再 anchor-less。  该形状
+ * 因此与 carrier_shrink_pick 同为 pick 放行形态; B1 的 ptl 纪律回归锚
+ * （两遍 scan 走 pick 路径, 不再出现解锁后二次解锁）保留, 内容改用
+ * 真实 fault（rmap 锚在重武装的 carrier 上, 不能再用 rmap-less 植入
+ * -- 那是在有锚窗口上制造 B1 修复所要杜绝的 freed-under-live-PTE）。
+ */
 static void corten_arena_test_vma_free_shrink_pick(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
@@ -5336,52 +5256,59 @@ static void corten_arena_test_vma_free_shrink_pick(struct kunit *test)
 	pmd_t *pmdp;
 	spinlock_t *ptl;
 	unsigned long addr = CORTEN_ARENA_TEST_WIN + PAGE_SIZE;
-	unsigned long addr2 = 0, lenp, flags;
 	long skipped0 = corten_arena_test_shrink_skipped();
+	unsigned int fault_flags = FAULT_FLAG_WRITE;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "shrinker bodies require corten=on");
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test,
-			corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
-					       CORTEN_ARENA_TEST_WIN +
-					       PMD_SIZE,
-					       CORTEN_ARENA_TEST_FLAGS_OK));
+	/* V-A.2a: the attach is the VMA-less auto takeover -- no
+	 * declaring VMA exists (the mkvm the pre-A.2 shape needed is
+	 * gone).
+	 */
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_test_pool_attach(mm, CORTEN_ARENA_TEST_WIN,
 						      PMD_SIZE), 0);
 
-	/* Park + pool take: the window is live and VMA-less. */
+	/* Park + DECLARE-side reactivation: the arena is live and
+	 * VMA-less (no tree shadow -- the park removed it), and since
+	 * F1 re-arms unconditionally it CARRIES a carrier: the
+	 * anchor-less mixed state this test used to assert is gone
+	 * (its fork shape lost content -- see
+	 * corten_arena_test_fork_redeclare_content).
+	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
 						 corten_arena_test_op_munmap_route,
 						 CORTEN_ARENA_TEST_WIN,
 						 PAGE_SIZE), 1);
-	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
-	lenp = PAGE_SIZE;
-	mmap_write_lock(mm);
-	KUNIT_EXPECT_EQ(test,
-			corten_arena_auto_mmap_route(mm, PAGE_SIZE,
-						     PROT_READ | PROT_WRITE,
-						     &addr2, &lenp, &flags),
-			2);
-	mmap_write_unlock(mm);
-	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
-
-	/* One rmap-less resident page (the map_anon no-VMA shape). */
 	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_seed_mapped_rmapless(mm, addr), 0);
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_WIN,
+					     PMD_SIZE), 0);
+	KUNIT_EXPECT_NOT_NULL(test,
+			      corten_arena_test_carrier_of(mm,
+							   CORTEN_ARENA_TEST_WIN));
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	mmap_read_unlock(mm);
+
+	/* One resident page, rmap-anchored on the re-armed carrier. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_user_fault(mm, addr, 0, NULL,
+						&fault_flags),
+			CORTEN_FAULT_HANDLED);
 
 	/* Pass 1 ages the window; pass 2 evaluates it and reaches the
-	 * pick gate.  The pre-B1 code double-unlocked the ptl here.
+	 * pick: the gate is open (anchor present), so the pre-B1
+	 * double-unlock shape ran exactly here.
 	 */
 	KUNIT_EXPECT_EQ(test, (int)corten_arena_test_shrink_scan(1), 0);
 	KUNIT_EXPECT_EQ(test, (int)corten_arena_test_shrink_scan(1), 0);
-	KUNIT_EXPECT_GT(test, corten_arena_test_shrink_skipped(), skipped0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_shrink_skipped(), skipped0);
 
-	/* The page survived unpicked: translation, metadata and folio
-	 * all intact (the B1 pre-fix shape freed it under the live PTE).
+	/* No swap in the KUnit boot: the pick is kept -- the folio
+	 * reference returns and every shape survives.
 	 */
 	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr, &m), 0);
 	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
@@ -5394,6 +5321,501 @@ static void corten_arena_test_vma_free_shrink_pick(struct kunit *test)
 	folio = page_folio(pte_page(pte));
 	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1);
 	pte_unmap_unlock(ptep, ptl);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* V-A.2b: the carrier reopens the pick gate -- a carrier arena's
+ * faulted page is rmap-anchored, so the pick runs (no skip), the ttu
+ * leg of reclaim finds its mapping, and without swap the page comes
+ * back kept: translation, metadata and folio intact, refcount
+ * restored.
+ */
+static void corten_arena_test_carrier_shrink_pick(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct folio *folio;
+	struct corten_pte_meta m;
+	pte_t *ptep, pte;
+	pmd_t *pmdp;
+	spinlock_t *ptl;
+	unsigned long addr = CORTEN_ARENA_TEST_WIN + PAGE_SIZE;
+	long skipped0 = corten_arena_test_shrink_skipped();
+	unsigned int fault_flags = FAULT_FLAG_WRITE;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "shrinker bodies require corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+
+	/* Real fault content: map_anon() anchored it on the carrier. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm, addr, 0, NULL,
+						&fault_flags),
+			CORTEN_FAULT_HANDLED);
+
+	/* Pass 1 ages the window; pass 2 evaluates and picks. */
+	KUNIT_EXPECT_EQ(test, (int)corten_arena_test_shrink_scan(1), 0);
+	KUNIT_EXPECT_EQ(test, (int)corten_arena_test_shrink_scan(1), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_shrink_skipped(), skipped0);
+
+	/* No swap in the KUnit boot: the pick is kept -- the folio
+	 * reference returns and every shape survives.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	pmdp = corten_arena_test_pmd(mm, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	folio = page_folio(pte_page(pte));
+	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1);
+	pte_unmap_unlock(ptep, ptl);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* Kernel-side word access to one arena page: the fault itself runs
+ * through the arena entry (the only legal producer), the payload rides
+ * kmap -- a copy_to_user()/copy_from_user() in a kernel thread cannot
+ * fault a VMA-less window in (the x86 arena hook gates on
+ * user_mode(regs)), so the uaccess route only works for pages already
+ * present.  @write stamps *@val into the page, else reads it back.
+ */
+static int corten_arena_test_page_word(struct mm_struct *mm,
+					unsigned long addr, u64 *val,
+					bool write)
+{
+	pmd_t *pmdp;
+	pte_t *ptep, pte;
+	spinlock_t *ptl;
+	struct folio *folio;
+	u64 *kaddr;
+	int ret = 0;
+
+	pmdp = corten_arena_test_pmd(mm, addr);
+	if (!pmdp)
+		return -ENOENT;
+	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	if (!ptep)
+		return -EAGAIN;
+	pte = ptep_get(ptep);
+	if (!pte_present(pte) || pte_special(pte)) {
+		pte_unmap_unlock(ptep, ptl);
+		return -ENOENT;
+	}
+	folio = page_folio(pte_page(pte));
+	folio_get(folio);
+	pte_unmap_unlock(ptep, ptl);
+
+	kaddr = kmap_local_folio(folio, addr & (PAGE_SIZE - 1));
+	if (write)
+		*kaddr = *val;
+	else
+		*val = *kaddr;
+	kunmap_local(kaddr);
+	folio_put(folio);
+
+	return ret;
+}
+
+/* C1 回归锚: fork 子 carrier 的 anon_vma 链必须是 dup_mmap 同形 --
+ * 恰好两条（克隆到父 carrier 的 anon_vma + 子自己的 fork 根）, 绝无
+ * 第三条来自 alloc 侧 prepare 的孤儿链。  孤儿根的 num_active_vmas
+ * 无人回减, unlink_anon_vmas() pass-2 在 CONFIG_DEBUG_VM 下 WARN
+ * （本轮基线实测还先触发 rmap.c lock_anon_vma_root 的 WARN_ON_ONCE
+ * (root) -- 同一根因）; 裸化（fork 侧 alloc 跳过 prepare）后链形
+ * 唯一, 两个锚的 active 计数各自恰好为 1。
+ */
+static void corten_arena_test_child_carrier_chain(struct kunit *test,
+						  struct vm_area_struct *ccarrier,
+						  struct vm_area_struct *pcarrier)
+{
+	struct anon_vma_chain *avc;
+	int nr = 0;
+	bool parent_link = false, own_link = false;
+
+	KUNIT_ASSERT_NOT_NULL(test, ccarrier->anon_vma);
+	KUNIT_ASSERT_NOT_NULL(test, pcarrier->anon_vma);
+	KUNIT_EXPECT_TRUE(test, ccarrier->anon_vma != pcarrier->anon_vma);
+
+	list_for_each_entry(avc, &ccarrier->anon_vma_chain, same_vma) {
+		nr++;
+		if (avc->anon_vma == pcarrier->anon_vma)
+			parent_link = true;
+		if (avc->anon_vma == ccarrier->anon_vma)
+			own_link = true;
+	}
+	KUNIT_EXPECT_EQ(test, nr, 2);
+	KUNIT_EXPECT_TRUE(test, parent_link);
+	KUNIT_EXPECT_TRUE(test, own_link);
+	KUNIT_EXPECT_TRUE(test,
+			  ccarrier->anon_vma->parent == pcarrier->anon_vma);
+	KUNIT_EXPECT_TRUE(test,
+			  ccarrier->anon_vma->root == pcarrier->anon_vma->root);
+	/* Each anchor's active count is exactly its one carrier -- the
+	 * WARN shape is an orphan with a count nothing will drop.
+	 */
+	KUNIT_EXPECT_EQ(test, ccarrier->anon_vma->num_active_vmas, 1);
+	KUNIT_EXPECT_EQ(test, pcarrier->anon_vma->num_active_vmas, 1);
+}
+
+/* F1 回归锚（阻断项）: declare→park→re-declare 混合构造的 fork 内容
+ * 继承。  修复前 reactivate 对 declare 侧（novma=false）不重武装
+ * carrier -- 活窗无锚, fork_mirror 既不跳过也不复制（copy_page_range
+ * 无源）, 子窗真空, 首次 fault 拿全新页: fork 对私有匿名内存的继承
+ * 语义被静默破坏（A.1 的 novma 复制臂删除后该形状失去一切覆盖）。
+ * 修复后 reactivate 无条件重武装: 子窗逐页内容非空且与父窗 checksum
+ * 一致（M5 判据 1 口径）, 父窗内容 fork 后原样。
+ */
+static void corten_arena_test_fork_redeclare_content(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm, *child;
+	struct vm_area_struct *pcarrier, *ccarrier;
+	struct corten_pte_meta m;
+	unsigned long addr;
+	long timeouts = corten_arena_test_drain_timeouts();
+	unsigned int fault_flags = FAULT_FLAG_WRITE;
+	u64 seed[CORTEN_ARENA_TEST_PAGES * 2];
+	u64 parent[CORTEN_ARENA_TEST_PAGES * 2];
+	u64 got;
+	int i;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "fork mirror requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	/* The first incarnation is a targeted DECLARE: the harness VMA
+	 * declares the whole range (tree shadow, no carrier).
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN), 0);
+
+	/* Park: the EXACT munmap route, tree shadow removed with it. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_BASE,
+						 PAGE_SIZE), 1);
+
+	/* Re-declare the same window: declare_locked's pool probe
+	 * short-circuits the reactivation before any vma_lookup -- F1
+	 * makes it re-arm the carrier unconditionally, so the live
+	 * window is VMA-less but anchored.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN), 0);
+	pcarrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_BASE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pcarrier);
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_BASE));
+	mmap_read_unlock(mm);
+
+	/* Content: FRESH write faults through the carrier anchor, then
+	 * a distinct pattern at both ends of every page of the first
+	 * window (page-granular, per-page checksum).
+	 */
+	for (i = 0; i < CORTEN_ARENA_TEST_PAGES; i++) {
+		addr = CORTEN_ARENA_TEST_BASE + i * PAGE_SIZE;
+		fault_flags = FAULT_FLAG_WRITE;
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_user_fault(mm, addr, 0, NULL,
+							&fault_flags),
+				CORTEN_FAULT_HANDLED);
+		seed[i * 2] = 0xD00DFEED00000000ULL | (unsigned int)i;
+		seed[i * 2 + 1] = ~seed[i * 2];
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_page_word(mm, addr,
+							    &seed[i * 2],
+							    true), 0);
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_page_word(mm,
+							    addr + PAGE_SIZE -
+							    sizeof(u64),
+							    &seed[i * 2 + 1],
+							    true), 0);
+	}
+
+	/* The parent snapshot (the checksum the child must reproduce). */
+	for (i = 0; i < CORTEN_ARENA_TEST_PAGES * 2; i++) {
+		unsigned long a = CORTEN_ARENA_TEST_BASE +
+				  (i / 2) * PAGE_SIZE +
+				  (i % 2 ? PAGE_SIZE - sizeof(u64) : 0);
+
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_page_word(mm, a,
+							    &parent[i],
+							    false), 0);
+		KUNIT_EXPECT_NE(test, parent[i], 0ULL);
+		KUNIT_EXPECT_EQ(test, parent[i], seed[i]);
+	}
+
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+
+	/* No parked arenas left (the slot was reactivated), so the flush
+	 * is a no-op and the mirror runs inline like fork_vma_free; no
+	 * child VMA exists -- the carrier pair carries the copy.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+
+	KUNIT_EXPECT_EQ(test, corten_arena_query(child,
+						 CORTEN_ARENA_TEST_BASE), 1);
+	ccarrier = corten_arena_test_carrier_of(child, CORTEN_ARENA_TEST_BASE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ccarrier);
+
+	/* C1: the child carrier's chain is the dup_mmap shape. */
+	corten_arena_test_child_carrier_chain(test, ccarrier, pcarrier);
+
+	/* 逐页校验: 子窗每页两端内容非空且与父窗 checksum 一致 --
+	 * the pre-fix shape answered zero pages (silent data loss).
+	 */
+	for (i = 0; i < CORTEN_ARENA_TEST_PAGES * 2; i++) {
+		unsigned long a = CORTEN_ARENA_TEST_BASE +
+				  (i / 2) * PAGE_SIZE +
+				  (i % 2 ? PAGE_SIZE - sizeof(u64) : 0);
+
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_page_word(child, a, &got,
+							    false), 0);
+		KUNIT_EXPECT_EQ(test, got, parent[i]);
+	}
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(child,
+					       CORTEN_ARENA_TEST_BASE,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_TRUE(test, m.flags & CORTEN_PF_SHARED);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pt_present(child,
+						       CORTEN_ARENA_TEST_BASE));
+
+	/* The parent kept its bytes through the COW wrprotect. */
+	for (i = 0; i < CORTEN_ARENA_TEST_PAGES * 2; i++) {
+		unsigned long a = CORTEN_ARENA_TEST_BASE +
+				  (i / 2) * PAGE_SIZE +
+				  (i % 2 ? PAGE_SIZE - sizeof(u64) : 0);
+
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_page_word(mm, a, &got,
+							    false), 0);
+		KUNIT_EXPECT_EQ(test, got, parent[i]);
+	}
+
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(child));
+
+	mmput(child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* V-A.2a: the mmap_region() verification checklist the takeover now
+ * runs itself -- the truth table over (def_flags, prot, limits).
+ * SPEC sec 3.1.2 wants >= 16 rows: 8 prot encodings x {def_flags
+ * VM_LOCKED, none} x {RLIMIT_AS normal / exactly-enough / zero} = 48,
+ * plus the caller-side len2 rounding equivalence below.
+ */
+static void corten_arena_test_auto_validate(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+	static const unsigned long prots[] = {
+		PROT_NONE,
+		PROT_READ,
+		PROT_WRITE,
+		PROT_READ | PROT_WRITE,
+		PROT_EXEC,
+		PROT_READ | PROT_EXEC,
+		PROT_WRITE | PROT_EXEC,
+		PROT_READ | PROT_WRITE | PROT_EXEC,
+	};
+	struct rlimit saved_as = current->signal->rlim[RLIMIT_AS];
+	unsigned long total = mm->total_vm;
+	unsigned long len = PMD_SIZE;
+	int i, j, k, cases = 0;
+
+	/* The verdict precedence is pinned exactly as the gate encodes
+	 * it: mlockall first (-EAGAIN), execute-only second
+	 * (-EOPNOTSUPP), the may_expand_vm() verdict last.  The
+	 * exactly-enough row pins the > (not >=) semantics of the
+	 * legacy limit check.
+	 */
+	for (i = 0; i < ARRAY_SIZE(prots); i++) {
+		bool exec_only = prots[i] == PROT_EXEC;
+
+		for (j = 0; j < 2; j++) {
+			mm->def_flags = j ? VM_LOCKED : 0;
+
+			for (k = 0; k < 3; k++) {
+				int expect;
+
+				switch (k) {
+				case 0:
+					current->signal->rlim[RLIMIT_AS].rlim_cur =
+						RLIM_INFINITY;
+					expect = 0;
+					break;
+				case 1:
+					current->signal->rlim[RLIMIT_AS].rlim_cur =
+						(total +
+						 (len >> PAGE_SHIFT)) <<
+						PAGE_SHIFT;
+					expect = 0;
+					break;
+				default:
+					current->signal->rlim[RLIMIT_AS].rlim_cur = 0;
+					expect = -ENOMEM;
+					break;
+				}
+				if (j)
+					expect = -EAGAIN;
+				else if (exec_only)
+					expect = -EOPNOTSUPP;
+
+				KUNIT_EXPECT_EQ(test,
+						corten_auto_validate(mm, len,
+								     prots[i],
+								     flags),
+						expect);
+				cases++;
+			}
+		}
+	}
+	mm->def_flags = 0;
+	KUNIT_EXPECT_GE(test, cases, 16);
+
+	/* Caller-side rounding equivalence: the route feeds
+	 * round_up(*lenp, PMD_SIZE), so len 1 and PMD_SIZE-1 must gate
+	 * identically to the rounded window in every regime.
+	 */
+	for (k = 0; k < 2; k++) {
+		unsigned long lens[2] = {
+			round_up(1UL, PMD_SIZE),
+			round_up(PMD_SIZE - 1, PMD_SIZE),
+		};
+
+		current->signal->rlim[RLIMIT_AS].rlim_cur =
+			k ? 0 : RLIM_INFINITY;
+		for (i = 0; i < 2; i++)
+			KUNIT_EXPECT_EQ(test,
+					corten_auto_validate(mm, lens[i],
+							     PROT_READ |
+							     PROT_WRITE,
+							     flags),
+					k ? -ENOMEM : 0);
+	}
+	current->signal->rlim[RLIMIT_AS] = saved_as;
+
+	/* The gate is pure: nothing was charged or placed. */
+	KUNIT_EXPECT_EQ(test, mm->total_vm, total);
+	KUNIT_EXPECT_NULL(test, READ_ONCE(mm->corten_state));
+}
+
+/* V-A.2b: the detached carrier -- creation shape, detachment
+ * assertions, the total_vm charge the declare now owes, and the
+ * lifecycle (RELEASE frees the carrier; park/reactivate keeps it).
+ */
+static void corten_arena_test_carrier_vma(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *carrier;
+	struct corten_arena *ar;
+	/* mm_setup's harness VMA is charged (the park's do_munmap uncharge
+	 * must land on a charged counter) -- the deltas below are on top
+	 * of this baseline.
+	 */
+	unsigned long base_vm = mm->total_vm;
+	long carriers0 = corten_arena_test_carriers();
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "carrier lifecycle requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+
+	carrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, carrier);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_carriers(), carriers0 + 1);
+
+	/* Detached: not in the tree (J1), never attached (upstream's own
+	 * detached refcount shape), bound to the arena extent.
+	 */
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	mmap_read_unlock(mm);
+	KUNIT_EXPECT_EQ(test, refcount_read(&carrier->vm_refcnt), 0);
+	KUNIT_EXPECT_EQ(test, carrier->vm_start, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_EQ(test, carrier->vm_end,
+			CORTEN_ARENA_TEST_WIN + PMD_SIZE);
+
+	/* The anchor shape: private anonymous, CORTEN+NOHUGEPAGE, the
+	 * full private MAY bound; the anon_vma chain is prepared (the
+	 * rmap anchor duties).
+	 */
+	KUNIT_EXPECT_TRUE(test, vma_is_anonymous(carrier));
+	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_CORTEN);
+	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_NOHUGEPAGE);
+	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_MAYREAD);
+	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_MAYWRITE);
+	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_MAYEXEC);
+	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_NORESERVE);
+	KUNIT_EXPECT_NOT_NULL(test, carrier->anon_vma);
+
+	/* The accounting mmap_region() used to do. */
+	KUNIT_EXPECT_EQ(test, mm->total_vm,
+			base_vm + (PMD_SIZE >> PAGE_SHIFT));
+
+	/* The record knows its anchor; the descriptor's tree cache is
+	 * empty (the two anchor kinds are mutually exclusive).
+	 */
+	rcu_read_lock();
+	ar = xa_load(&READ_ONCE(mm->corten_state)->arenas,
+		     CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+	if (ar) {
+		KUNIT_EXPECT_PTR_EQ(test, READ_ONCE(ar->carrier), carrier);
+		KUNIT_EXPECT_NULL(test, READ_ONCE(ar->vma));
+	}
+	rcu_read_unlock();
+
+	/* RELEASE frees the carrier with the descriptor. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_release(mm, CORTEN_ARENA_TEST_WIN,
+					     PMD_SIZE), 0);
+	KUNIT_EXPECT_NULL(test,
+			  corten_arena_test_carrier_of(mm,
+						       CORTEN_ARENA_TEST_WIN));
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_EQ(test, mm->total_vm, base_vm);
+	mmap_read_unlock(mm);
+	/* The counter is cumulative creations, not liveness -- the free
+	 * shows up as the descriptor's carrier probe going NULL above.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_carriers(), carriers0 + 1);
 
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
@@ -5546,8 +5968,8 @@ static void corten_arena_test_region_record(struct kunit *test)
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
 	struct corten_arena synth = { };
-	struct corten_arena *ar, *ar2;
 	struct vm_area_struct *vma;
+	struct corten_arena *ar, *ar2;
 
 	/* Truth table on a detached holder (no registry involvement):
 	 * the class lands, the MAY bound absorbs the recorded prot (the
@@ -5744,7 +6166,7 @@ static void corten_arena_test_region_park(struct kunit *test)
 				     CORTEN_ARENA_TEST_FLAGS_OK);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
 	mmap_write_lock(mm);
-	ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_WIN, PMD_SIZE);
+	ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_WIN, PMD_SIZE, PROT_READ | PROT_WRITE);
 	mmap_write_unlock(mm);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 
@@ -6333,7 +6755,11 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_inv_mv3),
 	KUNIT_CASE(corten_arena_test_fork_vma_free),
 	KUNIT_CASE(corten_arena_test_vma_free_shrink_pick),
+	KUNIT_CASE(corten_arena_test_carrier_shrink_pick),
+	KUNIT_CASE(corten_arena_test_auto_validate),
+	KUNIT_CASE(corten_arena_test_carrier_vma),
 	KUNIT_CASE(corten_arena_test_fork_punch_novma),
+	KUNIT_CASE(corten_arena_test_fork_redeclare_content),
 	KUNIT_CASE(corten_arena_test_region_record),
 	KUNIT_CASE(corten_arena_test_region_iter),
 	KUNIT_CASE(corten_arena_test_region_park),

@@ -347,10 +347,6 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 {
 	struct mm_struct *mm = current->mm;
 	int pkey = 0;
-#ifdef CONFIG_CORTEN_MM_ARENA
-	bool corten_auto_arena = false;
-	unsigned long corten_auto_len = 0;
-#endif
 
 	*populate = 0;
 
@@ -446,11 +442,26 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			return addr;
 		}
 		if (cret == 1) {
-			/* Takeover: addr/len/flags were rewritten onto the
-			 * window; attach the VMA after mmap_region().
+			/* V-A.2a (MV_VMA_FREE_SPEC.md sec 3.1.2): the
+			 * takeover completes WITHOUT mmap_region() --
+			 * placement ran in the route, the verification
+			 * checklist ran in corten_auto_validate() (LSM
+			 * coverage rides vm_mmap_pgoff(), which every
+			 * mmap() syscall passes before this point), and
+			 * the declare installs the V-A.2b carrier +
+			 * frames + metadata.  No VMA, no MAP_FIXED flow,
+			 * no early-take VMA reuse left to rescue: the
+			 * pool arm (cret == 2) and this arm are now the
+			 * same pure-metadata shape.
+			 *
+			 * A declare failure (memory pressure) falls
+			 * through to the legacy flow over the reserved
+			 * window segment -- the counted attach-failure
+			 * degradation: a plain anonymous VMA whose
+			 * lookups resolve no arena.
 			 */
-			corten_auto_arena = true;
-			corten_auto_len = len;
+			if (!corten_arena_auto_attach(mm, addr, len, prot))
+				return addr;
 		}
 	}
 #endif
@@ -463,7 +474,14 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 		return addr;
 
 	if (flags & MAP_FIXED_NOREPLACE) {
-		if (find_vma_intersection(mm, addr, addr + len))
+		/* V-A.2a: the arena's own ranges carry no VMA any more --
+		 * the registry, not the tree, is the occupancy truth for
+		 * the window domain.  Without this the NOREPLACE guarantee
+		 * (return -EEXIST, never silently replace) died with the
+		 * shadow-VMA that used to occupy the range.
+		 */
+		if (find_vma_intersection(mm, addr, addr + len) ||
+		    corten_arena_range_overlaps(mm, addr, len))
 			return -EEXIST;
 	}
 
@@ -646,21 +664,6 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 
 	addr = mmap_region(file, addr, len, vm_flags, pgoff, uf);
 
-#ifdef CONFIG_CORTEN_MM_ARENA
-	/*
-	 * Auto-arena attach (M4T0_SPEC.md sec 3.1): the takeover VMA was
-	 * created by the MAP_FIXED flow above -- DECLARE its arena now,
-	 * under the write lock do_mmap holds for its whole body.  A
-	 * failure here is a graceful degradation, not an mmap error: the
-	 * mapping stays a plain anonymous VMA at a window address and
-	 * every lookup on it resolves no arena (the residual race window
-	 * to khugepaged collapse noted in the spec is closed the same way
-	 * -- legacy fallback, T1 removes the window).
-	 */
-	if (corten_auto_arena && !IS_ERR_VALUE(addr))
-		corten_arena_auto_attach(mm, addr, corten_auto_len);
-#endif
-
 	if (!IS_ERR_VALUE(addr) &&
 	    ((vm_flags & VM_LOCKED) ||
 	     (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE))
@@ -810,6 +813,7 @@ generic_get_unmapped_area(struct file *filp, unsigned long addr,
 		addr = PAGE_ALIGN(addr);
 		vma = find_vma_prev(mm, addr, &prev);
 		if (mmap_end - len >= addr && addr >= mmap_min_addr &&
+		    !corten_addr_in_window(addr, len) &&
 		    (!vma || addr + len <= vm_start_gap(vma)) &&
 		    (!prev || addr >= vm_end_gap(prev)))
 			return addr;
@@ -821,6 +825,7 @@ generic_get_unmapped_area(struct file *filp, unsigned long addr,
 	info.start_gap = stack_guard_placement(vm_flags);
 	if (filp && is_file_hugepages(filp))
 		info.align_mask = huge_page_mask_align(filp);
+	corten_fence_unmapped_area(&info);
 	return vm_unmapped_area(&info);
 }
 
@@ -861,8 +866,9 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 		addr = PAGE_ALIGN(addr);
 		vma = find_vma_prev(mm, addr, &prev);
 		if (mmap_end - len >= addr && addr >= mmap_min_addr &&
-				(!vma || addr + len <= vm_start_gap(vma)) &&
-				(!prev || addr >= vm_end_gap(prev)))
+		    !corten_addr_in_window(addr, len) &&
+		    (!vma || addr + len <= vm_start_gap(vma)) &&
+		    (!prev || addr >= vm_end_gap(prev)))
 			return addr;
 	}
 
@@ -873,6 +879,7 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 	info.start_gap = stack_guard_placement(vm_flags);
 	if (filp && is_file_hugepages(filp))
 		info.align_mask = huge_page_mask_align(filp);
+	corten_fence_unmapped_area(&info);
 	addr = vm_unmapped_area(&info);
 
 	/*
@@ -886,6 +893,7 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 		info.flags = 0;
 		info.low_limit = TASK_UNMAPPED_BASE;
 		info.high_limit = mmap_end;
+		corten_fence_unmapped_area(&info);
 		addr = vm_unmapped_area(&info);
 	}
 
@@ -994,11 +1002,36 @@ struct vm_area_struct *find_vma_intersection(struct mm_struct *mm,
 					     unsigned long end_addr)
 {
 	unsigned long index = start_addr;
+	struct vm_area_struct *vma;
 
 	mmap_assert_locked(mm);
-	return mt_find(&mm->mm_mt, &index, end_addr - 1);
+	vma = mt_find(&mm->mm_mt, &index, end_addr - 1);
+	corten_j1_probe(mm, start_addr, end_addr, vma);
+	return vma;
 }
 EXPORT_SYMBOL(find_vma_intersection);
+
+/*
+ * V-A.2a J1 prelude: the untracked lookup the corten walkers use.  The
+ * probe above counts every *external* find_vma-family call on a MODE mm
+ * against the window domain (MV_VMA_FREE_SPEC.md sec 1.3); the corten
+ * walkers (placement obstacle scan, punch split scan, fault tier-2)
+ * are legitimate, registered consumers and must not self-count -- they
+ * reach the tree through this alias instead.
+ *
+ * Not exported: mm-internal (mm/corten_arena.h), mirrors
+ * find_vma_intersection()'s mt_find exactly.
+ */
+#ifdef CONFIG_CORTEN_MM_ARENA
+struct vm_area_struct *corten_vma_find(struct mm_struct *mm,
+				       unsigned long start,
+				       unsigned long end)
+{
+	unsigned long index = start;
+
+	return mt_find(&mm->mm_mt, &index, end - 1);
+}
+#endif
 
 /**
  * find_vma() - Find the VMA for a given address, or the next VMA.
@@ -1011,9 +1044,12 @@ EXPORT_SYMBOL(find_vma_intersection);
 struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 {
 	unsigned long index = addr;
+	struct vm_area_struct *vma;
 
 	mmap_assert_locked(mm);
-	return mt_find(&mm->mm_mt, &index, ULONG_MAX);
+	vma = mt_find(&mm->mm_mt, &index, ULONG_MAX);
+	corten_j1_probe(mm, addr, addr + 1, vma);
+	return vma;
 }
 EXPORT_SYMBOL(find_vma);
 
