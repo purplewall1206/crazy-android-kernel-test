@@ -219,6 +219,16 @@ static atomic_long_t corten_nr_mmap_punch_rejects; /* unroutable MAP_FIXED */
  */
 static atomic_long_t corten_nr_truncate_routes;	/* file events routed */
 static atomic_long_t corten_nr_zap_single_refuses; /* backstop firings */
+/* V-B.4 (H10): the FILE observability ledger.  Regions attached through
+ * the takeover, read-arm installs, private COW copies off the file side
+ * (both the in-place and the fetch+copy shapes), and fork mirrors of a
+ * FILE region (the child's own rfile reference) -- the counters the
+ * dlopen-shaped guest gate reads next to fork_faithful.
+ */
+static atomic_long_t corten_nr_file_mmaps;	/* FILE regions attached */
+static atomic_long_t corten_nr_file_read_faults;/* read-arm installs */
+static atomic_long_t corten_nr_file_cow_copies;	/* private copies off file */
+static atomic_long_t corten_nr_file_fork_mirrors;/* fork child mirrors */
 /* M5.T3 (M5_FORK_SPEC.md sec 4.3): zap_window() released a PTE whose
  * folio is FOLL_PIN/DMA-pinned.  The release itself is refcount-native
  * (the pin reference carries the folio until unpin, exactly like the
@@ -2293,7 +2303,9 @@ static const char *corten_region_class_name(enum corten_region_class rclass)
  * arenas unlinked concurrently simply do not show up.
  *
  * V-A.0 appends the embedded region record's summary (sec 3.1.0): class,
- * CORTEN_RF_* reflection and the piece count.  The region fields are
+ * CORTEN_RF_* reflection and the piece count.  V-B.4 (H10) appends the
+ * FILE payload (the region's file and its start pgoff, both zero for a
+ * non-FILE region).  The region fields are
  * written under the owner mm's mmap_write next to prot/idle; this walker
  * reads them locklessly, so each column is a racing snapshot by design.
  */
@@ -2319,14 +2331,20 @@ void corten_arena_arenas_report(struct seq_file *m)
 {
 	struct corten_arena *ar;
 
-	seq_puts(m, "            mm               anchor [start,end)                prot cls  rflg pcs status\n");
+	seq_puts(m, "            mm               anchor [start,end)                prot cls  rflg pcs status               rfile     poff\n");
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(ar, &corten_arena_list, obs) {
 		struct vm_area_struct *carrier = READ_ONCE(ar->carrier);
+		struct file *rfile = READ_ONCE(ar->rfile);
 
+		/* V-B.4 (H10): the FILE payload columns -- the region's file
+		 * (NULL for anon/reserved, the carrier's own vm_file for a
+		 * live FILE region) and the mapping's start pgoff.  Each is
+		 * a racing snapshot by design (see above).
+		 */
 		seq_printf(m,
-			   "%016lx %016lx [%lx,%lx)           %02x %-4s %04x %-3u %s\n",
+			   "%016lx %016lx [%lx,%lx)           %02x %-4s %04x %-3u %s %016lx %08lx\n",
 			   (unsigned long)READ_ONCE(ar->mm),
 			   (unsigned long)(carrier ? carrier :
 				READ_ONCE(ar->vma)),
@@ -2334,7 +2352,10 @@ void corten_arena_arenas_report(struct seq_file *m)
 			   corten_region_class_name(READ_ONCE(ar->rclass)),
 			   READ_ONCE(ar->rflags), READ_ONCE(ar->npieces),
 			   percpu_ref_is_dying(&ar->active) ?
-				"dying" : "active");
+				"dying" : "active",
+			   (unsigned long)rfile,
+			   rfile ? (unsigned long)READ_ONCE(ar->rpoff) :
+					0UL);
 	}
 	rcu_read_unlock();
 }
@@ -2413,6 +2434,15 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_truncate_routes));
 	seq_printf(m, "zap_single_refuses  %ld\n",
 		   atomic_long_read(&corten_nr_zap_single_refuses));
+	/* V-B.4 (H10): the FILE ledger. */
+	seq_printf(m, "file_mmaps          %ld\n",
+		   atomic_long_read(&corten_nr_file_mmaps));
+	seq_printf(m, "file_read_faults    %ld\n",
+		   atomic_long_read(&corten_nr_file_read_faults));
+	seq_printf(m, "file_cow_copies     %ld\n",
+		   atomic_long_read(&corten_nr_file_cow_copies));
+	seq_printf(m, "file_fork_mirrors   %ld\n",
+		   atomic_long_read(&corten_nr_file_fork_mirrors));
 	/* M4.T1 magazine observability. */
 	seq_printf(m, "seg_claims          %ld\n",
 		   atomic_long_read(&corten_nr_seg_claims));
@@ -3149,6 +3179,9 @@ static u8 corten_file_may_bound(struct file *file)
  *     family of refusals applies to a carrier no less than to a VMA;
  *     file_is_dax() covers fsdax and dev-dax alike, both REJECT rows
  *     of sec 2.6);
+ *   - V-B.4: the hugetlbfs gate -- an explicitly opened hugetlbfs fd
+ *     (no MAP_HUGETLB bit for the classify whitelist to reject) never
+ *     enters the window either; legacy's hugetlbfs_mmap() serves it;
  *   - FMODE_READ / noexec x EXEC / can_mmap_file: literally the
  *     mm/mmap.c arms;
  *   - memfd seals: a private mapping always passes check_write_seal()
@@ -3188,6 +3221,18 @@ int corten_file_may(struct file *file, unsigned long prot,
 		return -EOVERFLOW;
 
 	if (file_is_dax(file))
+		return -EOPNOTSUPP;
+
+	/* V-B.4: a hugetlbfs fd opened explicitly (mmap(NULL, ..., fd)
+	 * carries no MAP_HUGETLB bit, so the classify whitelist never
+	 * sees it -- the B.3 disclosure item 6).  Legacy serves it
+	 * through hugetlbfs_mmap() on VM_HUGETLB carrier semantics the
+	 * window machinery does not model (no PTE-level faults, hstate
+	 * rounding in ksys_mmap_pgoff); the fetch arm would -EIO->BUS
+	 * instead of serving the huge page.  is_file_hugepages() folds
+	 * to false without CONFIG_HUGETLBFS, so the gate compiles away.
+	 */
+	if (is_file_hugepages(file))
 		return -EOPNOTSUPP;
 
 	if (!(file->f_mode & FMODE_READ))
@@ -3989,6 +4034,7 @@ int corten_arena_file_attach(struct mm_struct *mm, unsigned long addr,
 		atomic_long_inc(&corten_nr_auto_attach_fails);
 	} else {
 		atomic_long_inc(&corten_nr_auto_mmaps);
+		atomic_long_inc(&corten_nr_file_mmaps);
 	}
 
 	return ret;
@@ -4309,8 +4355,11 @@ int corten_arena_fork_begin(struct mm_struct *mm, struct mm_struct *oldmm)
  * Parent-side 2M-window pass (M5_FORK_SPEC.md 1.3 ④-2): snapshot ONE
  * window's metadata and turn every CORTEN_MAPPED page in it into a
  * shared one (SHARED, plus the WRITABLE record corten_mark() requires
- * for logically writable pages).  Private-anon and dropped-content
- * slots are snapshot unchanged.  The snapshot is consumed by the child
+ * for logically writable pages) -- except the pinned-private shape
+ * (V-B.4: a GUP-pinned parent page was copied, not shared, and keeps
+ * its writable PTE; recording SHARED there is INV7 drift).  Private-anon
+ * and dropped-content slots are snapshot unchanged.  The snapshot is
+ * consumed by the child
  * replay of the SAME window right after (corten_arena_fork_mirror's
  * window loop) -- one buffer, one window at a time, and the parent's
  * and child's descriptor locks still never nest.  The pmd presence
@@ -4358,6 +4407,7 @@ corten_arena_fork_mark_window(struct corten_arena *ar, unsigned long addr,
 	 */
 	for (a = addr; a < win_end; a += PAGE_SIZE) {
 		struct corten_pte_meta m, nm;
+		bool shared = true;
 
 		ret = corten_query(&txn, a, &m);
 		if (unlikely(ret))
@@ -4367,11 +4417,44 @@ corten_arena_fork_mark_window(struct corten_arena *ar, unsigned long addr,
 			snap[pte_index(a)] = m;
 			continue;
 		}
+
+		/* V-B.4: the pinned-private shape.  copy_page_range() copies
+		 * (instead of sharing) a parent page GUP holds pinned, and
+		 * skips pieces the child never inherited; both leave this
+		 * PTE writable and the folio's exclusive mark in place --
+		 * the child maps a different page (or nothing at all), so
+		 * the slot is NOT hardware-shared and must not take the
+		 * SHARED record (a SHARED slot behind a writable PTE is the
+		 * INV7-drift shape).  The genuinely shared shape is
+		 * distinguishable here precisely because copy_page_range()
+		 * already wrprotected it (a COW mapping's present-writable
+		 * PTE never survives the copy).  Unknown shapes (no
+		 * translation, a special entry) keep the historical mark.
+		 */
+		{
+			pte_t *ptep, cur;
+			spinlock_t *ptl;	/* nests below desc write */
+
+			ptep = pte_offset_map_lock(ar->mm, pmdp, a, &ptl);
+			if (!ptep) {
+				ret = -EAGAIN;
+				break;
+			}
+			cur = ptep_get(ptep);
+			pte_unmap_unlock(ptep, ptl);
+			if (pte_present(cur) && !pte_special(cur) &&
+			    pte_write(cur) &&
+			    PageAnonExclusive(pte_page(cur)))
+				shared = false;
+		}
+
 		/* The child mirrors the SHARED shape, so the snapshot
 		 * records the post-mark state, not the pre-mark one.
 		 */
 		nm = m;
-		nm.flags = m.flags | CORTEN_PF_SHARED;
+		nm.flags = m.flags;
+		if (shared)
+			nm.flags |= CORTEN_PF_SHARED;
 		if (m.perm & CORTEN_PERM_WRITE)
 			nm.flags |= CORTEN_PF_WRITABLE;
 		snap[pte_index(a)] = nm;
@@ -4505,8 +4588,10 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	 * registered arenas, the interval tree armed ones).
 	 */
 	corten_arena_obs_add(child);
-	if (rfile)
+	if (rfile) {
 		corten_file_i_mmap_insert(child);
+		atomic_long_inc(&corten_nr_file_fork_mirrors);
+	}
 
 	mutex_unlock(&state->ctl_lock);
 
@@ -6014,12 +6099,13 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 	 * (see map_anon); the removal stays symmetric with the add.
 	 * V-B.3 (H6): a pagecache folio's rmap is the file mapping's
 	 * (the read arm's folio_add_file_rmap_pte against the carrier)
-	 * and its counter is MM_FILEPAGES -- the same split
-	 * corten_zap_release_page() makes.
+	 * and its counter is mm_counter_file()'s family (V-B.4) -- the
+	 * same split corten_zap_release_page() makes.
 	 */
 	if (vma)
 		folio_remove_rmap_pte(old, page, vma);
-	add_mm_counter(mm, old_is_file ? MM_FILEPAGES : MM_ANONPAGES, -1);
+	add_mm_counter(mm, old_is_file ? mm_counter_file(old) :
+				    MM_ANONPAGES, -1);
 	pte_unmap_unlock(ptep, ptl);
 	folio_put(old);
 
@@ -6034,6 +6120,8 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 
 	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
 				CORTEN_ARENA_STAT_COW_COPY);
+	if (old_is_file)
+		atomic_long_inc(&corten_nr_file_cow_copies);
 
 	/* The speculative single reference became the new PTE reference
 	 * (see the fault_once success epilogue for the other handlers'
@@ -6596,7 +6684,7 @@ static struct folio *corten_arena_file_fetch(struct corten_arena *ar,
  *
  *   fetch the folio at region.rpoff + offset (lock-free phase) ->
  *   re-lock the range -> re-query -> commit PTE + file rmap +
- *   MM_FILEPAGES under ONE transaction.
+ *   the mm_counter_file() rss family under ONE transaction.
  *
  * The metadata is NOT written: FILE_MAPPED is both the virtual
  * allocation and the resident form (the page identity is derivable
@@ -6702,7 +6790,13 @@ static int corten_arena_file_read(struct corten_fault_ctx *ctx,
 	 */
 	entry = mk_pte(page, corten_arena_perm_pgprot(vma, m2.perm));
 	entry = pte_sw_mkyoung(entry);
-	add_mm_counter(mm, MM_FILEPAGES, 1);
+	/* V-B.4: the rss family follows mm_counter_file() -- a shmem
+	 * folio is MM_SHMEMPAGES, exactly what legacy's do_read_fault()
+	 * and copy_page_range() (the fork PTE copy over the carriers)
+	 * account; the B.3-everything-is-FILEPAGES spelling drifted the
+	 * child's counters against its own zap at fork time.
+	 */
+	add_mm_counter(mm, mm_counter_file(folio), 1);
 	folio_add_file_rmap_pte(folio, page, vma);
 	set_ptes(mm, ctx->addr, ptep, entry, 1);
 	update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
@@ -6711,6 +6805,7 @@ static int corten_arena_file_read(struct corten_fault_ctx *ctx,
 
 	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
 				CORTEN_ARENA_STAT_MAPPED);
+	atomic_long_inc(&corten_nr_file_read_faults);
 
 	/* No folio_put: the fetch reference IS the PTE reference now
 	 * (do_read_fault()'s accounting).
@@ -6728,8 +6823,8 @@ out_put:
  * V-B.3 (H6): the FILE_MAPPED write arm -- a write fault on a private
  * file mapping is always a COW (MAP_PRIVATE never writes through).
  * Two shapes, both ending in the same private copy (the cow_write()
- * copy branch's file deltas: +MM_ANONPAGES/-MM_FILEPAGES, the file
- * rmap removal, the FILE_MAPPED->MAPPED metadata migration):
+ * copy branch's file deltas: +MM_ANONPAGES/-mm_counter_file(), the
+ * file rmap removal, the FILE_MAPPED->MAPPED metadata migration):
  *
  *   PTE present: the read arm's translation is in -- corten_arena_cow_write()
  *   runs under this transaction and takes its file branch.
@@ -6899,6 +6994,7 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 
 	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
 				CORTEN_ARENA_STAT_COW_COPY);
+	atomic_long_inc(&corten_nr_file_cow_copies);
 	corten_unlock(&txn);
 
 	folio_put(folio);		/* the fetch reference */
@@ -7625,10 +7721,14 @@ static void corten_zap_release_page(struct mm_struct *mm,
 	 */
 	if (vma)
 		folio_remove_rmap_pte(folio, page, vma);
+	/* V-B.4: the file family is mm_counter_file()'s (shmem-backed
+	 * folios are MM_SHMEMPAGES), symmetric with the read arm's
+	 * install and upstream's copy_page_range() at fork.
+	 */
 	if (!vma || anon)
 		add_mm_counter(mm, MM_ANONPAGES, -1);
 	else
-		add_mm_counter(mm, MM_FILEPAGES, -1);
+		add_mm_counter(mm, mm_counter_file(folio), -1);
 }
 
 /*

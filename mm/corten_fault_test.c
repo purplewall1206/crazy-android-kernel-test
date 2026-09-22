@@ -493,6 +493,16 @@ static const struct file_operations corten_fault_test_fops = {
 static const struct file_operations corten_fault_test_fops_nommap = {
 };
 
+/* V-B.4: the hugetlbfs discriminator -- FOP_HUGE_PAGES is
+ * is_file_hugepages()'s only marking (hugetlbfs_file_operation), so a
+ * regular-file shape wearing it is the explicitly-opened-hugetlbfs-fd
+ * form (no MAP_HUGETLB bit involved).
+ */
+static const struct file_operations corten_fault_test_fops_hugepages = {
+	.mmap = corten_fault_test_fops_mmap,
+	.fop_flags = FOP_HUGE_PAGES,
+};
+
 static void corten_fault_test_file_may_matrix(struct kunit *test)
 {
 	struct inode *inode = kunit_kzalloc(test, sizeof(*inode), GFP_KERNEL);
@@ -576,6 +586,19 @@ static void corten_fault_test_file_may_matrix(struct kunit *test)
 				-EOPNOTSUPP);
 		inode->i_flags = 0;
 	}
+
+	/* V-B.4: the hugetlbfs gate -- an explicitly opened hugetlbfs fd
+	 * (no MAP_HUGETLB bit for the classify whitelist to reject) never
+	 * enters the window; the errno is the DAX family's degrade-only
+	 * -EOPNOTSUPP (the caller falls back to legacy, which serves the
+	 * fd through hugetlbfs_mmap()).  FOP_HUGE_PAGES is fs-independent
+	 * state on the fabricated f_op, so the arm needs no hugetlbfs
+	 * mount.
+	 */
+	f.f_op = &corten_fault_test_fops_hugepages;
+	KUNIT_EXPECT_EQ(test, corten_file_may(&f, PROT_READ, 0, PMD_SIZE,
+					      NULL), -EOPNOTSUPP);
+	f.f_op = &corten_fault_test_fops;
 }
 
 /* ------------------------------------------------------------------ *
