@@ -580,6 +580,16 @@ void corten_region_register(struct corten_arena *ar,
 			    u32 rflags);
 
 /**
+ * corten_region_invariants_ok - INV-MV3 registry walk (sec 2.6, V-A.1).
+ * @mm: address space whose region records to check.
+ *
+ * Asserts the record pairings the VMA-free park surgery exercises --
+ * may_prot >= prot, and idle <=> CORTEN_REGION_RESERVED -- on every
+ * arena of the registry.  The caller holds mmap_lock for read.
+ */
+bool corten_region_invariants_ok(struct mm_struct *mm);
+
+/**
  * corten_prctl_arena - prctl(PR_CORTEN_ARENA) dispatcher.
  * @op: CORTEN_ARENA_DECLARE/_RELEASE/_QUERY.
  * @addr: arg3, the range start (QUERY: the probed address).
@@ -662,8 +672,11 @@ long corten_arena_test_pool_hits(void);
 long corten_arena_test_pool_misses(void);
 long corten_arena_test_pool_over(void);
 long corten_arena_test_pool_ejects(void);
+long corten_arena_test_park_unmap_fails(void);
 long corten_arena_test_pool_nr(struct mm_struct *mm);
 bool corten_arena_test_pool_idle(struct mm_struct *mm, unsigned long addr);
+bool corten_arena_test_pt_present(struct mm_struct *mm, unsigned long addr);
+bool corten_arena_test_perm_pgprot_pure_eq(u8 perm);
 
 /* M6.T3 shrinker hooks: drive the count/scan bodies directly (the
  * shrinker is only registered on a corten=on boot; the bodies are the
@@ -740,6 +753,11 @@ static inline void corten_region_register(struct corten_arena *ar,
 					  enum corten_region_class rclass,
 					  u8 may_prot, u32 rflags)
 {
+}
+
+static inline bool corten_region_invariants_ok(struct mm_struct *mm)
+{
+	return true;
 }
 
 static inline enum corten_fault_action

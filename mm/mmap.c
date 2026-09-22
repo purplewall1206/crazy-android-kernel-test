@@ -431,16 +431,17 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 		if (cret < 0)
 			return cret;	/* internal error only */
 		if (cret == 2) {
-			/* T1c pool take: the reactivated arena's mapping is
-			 * already in place at @addr with the requested
-			 * protection (the route re-warmed the parked
-			 * reservation in place).  The MAP_FIXED flow below
-			 * would only tear the window's tracked page tables
-			 * down for mmap_region() to rebuild them, so the
-			 * mmap completes right here.  The preconditions
-			 * were checked by the route: a whitelisted
-			 * MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE shape on
-			 * a pristine, previously-munmapped window.
+			/* T1c pool take: V-A.1 reactivates the parked
+			 * window as a pure metadata domain (no VMA, no
+			 * PT pages -- the first touch faults fill them).
+			 * The MAP_FIXED flow below would only tear the
+			 * window's tracked page tables down for
+			 * mmap_region() to rebuild them, so the mmap
+			 * completes right here.  The preconditions were
+			 * checked by the route: a whitelisted
+			 * MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE shape
+			 * on a pristine, previously-munmapped window
+			 * (RLIMIT_AS/total_vm parity included).
 			 */
 			return addr;
 		}
