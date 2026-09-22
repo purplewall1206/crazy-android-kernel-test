@@ -1266,6 +1266,11 @@ extern unsigned long  __must_check vm_mmap_pgoff(struct file *, unsigned long,
         unsigned long, unsigned long,
         unsigned long, unsigned long);
 
+/* mm/msync.c: the syscall body behind SYSCALL_DEFINE3(msync) (the
+ * split keeps the funnel callable from in-kernel mm tests).
+ */
+int ksys_msync(unsigned long start, size_t len, int flags);
+
 extern void set_pageblock_order(void);
 unsigned long reclaim_pages(struct list_head *folio_list);
 unsigned int reclaim_clean_pages_from_list(struct zone *zone,

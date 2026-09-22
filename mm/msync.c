@@ -16,6 +16,9 @@
 #include <linux/sched.h>
 #include <linux/page_size_compat.h>
 
+#include "corten_arena.h"	/* corten_arena_msync_skip (V-A.3d S-5) */
+#include "internal.h"		/* mm-internal (ksys_msync prototype) */
+
 /*
  * MS_SYNC syncs the entire file - including mappings.
  *
@@ -30,7 +33,7 @@
  * So by _not_ starting I/O in MS_ASYNC we provide complete flexibility to
  * applications.
  */
-SYSCALL_DEFINE3(msync, unsigned long, start, size_t, len, int, flags)
+int ksys_msync(unsigned long start, size_t len, int flags)
 {
 	unsigned long end;
 	struct mm_struct *mm = current->mm;
@@ -59,8 +62,20 @@ SYSCALL_DEFINE3(msync, unsigned long, start, size_t, len, int, flags)
 	 * just ignore them, but return -ENOMEM at the end. Besides, if the
 	 * flag is MS_ASYNC (w/o MS_INVALIDATE) the result would be -ENOMEM
 	 * anyway and there is nothing left to do, so return immediately.
+	 *
+	 * V-A.3d S-5 (j2-audit #23): a *registered* window segment (an
+	 * arena's live or parked frames -- the exact population the A.1
+	 * reservation VMA used to describe) is not an unmapped gap here:
+	 * msync() over that anonymous reservation was always a
+	 * 0-returning no-op, so the skip below advances over it without
+	 * touching unmapped_error and without the window find_vma() (a
+	 * guaranteed miss and a J1 probe).  Holes inside the window keep
+	 * the legacy -ENOMEM machinery.
 	 */
 	mmap_read_lock(mm);
+	start = corten_arena_msync_skip(mm, start, end);
+	if (start >= end)
+		goto out_unlock;
 	vma = find_vma(mm, start);
 	for (;;) {
 		struct file *file;
@@ -99,17 +114,28 @@ SYSCALL_DEFINE3(msync, unsigned long, start, size_t, len, int, flags)
 			if (error || start >= end)
 				goto out;
 			mmap_read_lock(mm);
-			vma = find_vma(mm, start);
-		} else {
+			start = corten_arena_msync_skip(mm, start, end);
 			if (start >= end) {
 				error = 0;
 				goto out_unlock;
 			}
-			vma = find_vma(mm, vma->vm_end);
+			vma = find_vma(mm, start);
+		} else {
+			start = corten_arena_msync_skip(mm, start, end);
+			if (start >= end) {
+				error = 0;
+				goto out_unlock;
+			}
+			vma = find_vma(mm, start);
 		}
 	}
 out_unlock:
 	mmap_read_unlock(mm);
 out:
 	return error ? : unmapped_error;
+}
+
+SYSCALL_DEFINE3(msync, unsigned long, start, size_t, len, int, flags)
+{
+	return ksys_msync(start, len, flags);
 }

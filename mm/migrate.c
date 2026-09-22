@@ -2488,6 +2488,17 @@ static void do_pages_stat_array(struct mm_struct *mm, unsigned long nr_pages,
 		struct folio *folio;
 		int err = -EFAULT;
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+		/*
+		 * V-A.3d S-5 (j2-audit #28): a MODE mm's window address
+		 * that no implant covers is a guaranteed vma_lookup()
+		 * miss -- answer the errno (unchanged) without the tree
+		 * walk.  Implant-covered addresses keep the lookup:
+		 * their VMA is real and the nid below is the truth.
+		 */
+		if (corten_arena_move_pages_window(mm, addr))
+			goto set_status;
+#endif
 		vma = vma_lookup(mm, addr);
 		if (!vma)
 			goto set_status;

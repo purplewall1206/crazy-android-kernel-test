@@ -7753,6 +7753,490 @@ static void corten_arena_test_j2_triggers(struct kunit *test)
 						 0, 0), 0);
 }
 
+/* ------------------------------------------------------------------
+ * V-A.3d (D-group): the S-5 query-syscall terminals (j2-audit
+ * #13/#20/#23/#28, D24) and the J1 implant exemption -- the A-series
+ * exit-gate closure.
+ * ------------------------------------------------------------------
+ */
+
+/* One ksys_msync() call on the attached worker: the syscall body reads
+ * current->mm for both the lock and the loop.
+ */
+static void corten_arena_test_op_msync(struct corten_arena_test_op *o)
+{
+	o->ret = ksys_msync(o->addr, o->len, o->flags);
+}
+
+static int corten_arena_test_msync(struct kunit *test, struct mm_struct *mm,
+				   unsigned long addr, unsigned long len,
+				   int flags)
+{
+	struct corten_arena_test_op o = {
+		.mm = mm,
+		.fn = corten_arena_test_op_msync,
+		.addr = addr,
+		.len = len,
+		.flags = flags,
+	};
+
+	/* run_op_full() returns o.ret, which IS the msync verdict -- the
+	 * callers assert that value, not the thread's success (the runner
+	 * itself already fails the case if the worker cannot start).
+	 */
+	return corten_arena_test_run_op_full(test, &o);
+}
+
+/* S-5① (audit #23): the registered window segment is not an msync gap.
+ * A fully-occupied window chunk answers 0 (the anonymous-reservation
+ * no-op), a delegated-VMA + occupied-window mix answers 0 with the
+ * window part skipped, and holes inside the window keep the legacy
+ * -ENOMEM -- all with the J1 pair silent (the pre-A.3d walk cost one
+ * window find_vma() per loop entry).
+ */
+static void corten_arena_test_msync_window_segments(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *vma;
+	unsigned long win = CORTEN_ARENA_TEST_WIN;
+	long p0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "msync terminals require corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	/* Two parked frames at the window base + one delegated VMA ending
+	 * exactly at the window's lower edge.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, win, 2 * PMD_SIZE),
+		0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 win, 2 * PMD_SIZE), 1);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_pool_idle(mm, win));
+	vma = corten_arena_test_mkvm(mm, win - PMD_SIZE, win,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+
+	p0 = corten_arena_test_j1_probes();
+
+	/* Pure parked window: the A.1-pre reservation no-op. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_msync(test, mm, win, 2 * PMD_SIZE,
+						MS_SYNC), 0);
+	/* Delegated VMA + parked window: both legs processed/skipped, 0. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_msync(test, mm, win - PMD_SIZE,
+						3 * PMD_SIZE, MS_SYNC), 0);
+	/* Parked head + hole tail: skip stops at the first unregistered
+	 * frame, find_vma() misses, the legacy -ENOMEM.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_msync(test, mm, win, 4 * PMD_SIZE,
+						MS_SYNC), -ENOMEM);
+
+	/* The J1 payoff for #23: the occupied/VMA legs above never walked
+	 * the window tree -- the only probe so far is the single
+	 * find_vma() of the hole tail (one walk, the unchanged legacy
+	 * hole shape: a hole query paid the same walk before A.1).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p0, 1);
+	KUNIT_EXPECT_GT(test,
+			corten_arena_test_named_counter(test,
+							"msync_window_skips"),
+			0);
+
+	/* Pure window hole (either sync flag): unchanged legacy verdict
+	 * and one walk each.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_msync(test, mm, win + 3 * PMD_SIZE,
+						PMD_SIZE, MS_SYNC), -ENOMEM);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_msync(test, mm, win + 3 * PMD_SIZE,
+						PMD_SIZE, MS_ASYNC), -ENOMEM);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p0, 3);
+
+	corten_arena_test_drop_vma(vma);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* S-5② (audit #13, D24): the mincore window terminal answers the real
+ * residency vector -- present pages 1, never-faulted slots 0, a swapped
+ * slot the swap-cache truth (an uncached entry reads 0) -- while a
+ * parked span answers the all-zero reservation vector and hole/implant
+ * chunks keep the legacy funnel (-EAGAIN here; do_mincore() turns the
+ * hole into its -ENOMEM, the implant chunk walks the tree truth).
+ */
+static void corten_arena_test_mincore_route(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *vma;
+	unsigned long win = CORTEN_ARENA_TEST_WIN;
+	unsigned char vec[4];
+	long r0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "mincore terminal requires corten=on");
+
+	/* Not a MODE mm yet: the route is transparent. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mincore_route(mm, win, 1, vec), -EAGAIN);
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, win, PMD_SIZE), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, win), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_fork_seed_mapped(mm, win), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_fork_seed_mapped(mm, win + PAGE_SIZE),
+		0);
+
+	/* The truth walk: two present, one never-faulted slot. */
+	r0 = corten_arena_test_named_counter(test, "mincore_routes");
+	memset(vec, 0xa5, sizeof(vec));
+	KUNIT_EXPECT_EQ(test, corten_arena_mincore_route(mm, win, 3, vec), 3);
+	KUNIT_EXPECT_EQ(test, vec[0], 1);
+	KUNIT_EXPECT_EQ(test, vec[1], 1);
+	KUNIT_EXPECT_EQ(test, vec[2], 0);
+	KUNIT_EXPECT_GT(test,
+			corten_arena_test_named_counter(test, "mincore_routes"),
+			r0);
+
+	/* The swap leg: hand-roll one swap-out (the fork_swapped
+	 * sequence); the uncached entry answers 0 -- mincore_swap()'s
+	 * anon-arm verdict on the same PTE.
+	 */
+	{
+		struct corten_txn txn;
+		struct corten_pte_meta sm = { };
+		swp_entry_t entry = swp_entry(1, 0x77);
+		struct folio *folio;
+		pte_t *ptep, pte;
+		spinlock_t *ptl;	/* the swap-out hand-roll's PTE lock */
+		pmd_t *pmdp = corten_arena_test_pmd(mm, win + PAGE_SIZE);
+
+		KUNIT_ASSERT_NOT_NULL(test, pmdp);
+		vma = corten_arena_test_carrier_of(mm, win + PAGE_SIZE);
+		KUNIT_ASSERT_NOT_NULL(test, vma);
+		ptep = pte_offset_map_lock(mm, pmdp, win + PAGE_SIZE, &ptl);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+		pte = ptep_get_and_clear(mm, win + PAGE_SIZE, ptep);
+		KUNIT_ASSERT_TRUE(test, pte_present(pte));
+		set_pte_at(mm, win + PAGE_SIZE, ptep, swp_entry_to_pte(entry));
+		pte_unmap_unlock(ptep, ptl);
+		folio = page_folio(pte_page(pte));
+		folio_remove_rmap_pte(folio, folio_page(folio, 0), vma);
+		add_mm_counter(mm, MM_ANONPAGES, -1);
+		add_mm_counter(mm, MM_SWAPENTS, 1);
+		folio_put(folio);
+
+		KUNIT_ASSERT_EQ(test,
+				corten_lock_range(mm, win + PAGE_SIZE,
+						  PAGE_SIZE, &txn), 0);
+		sm.state = CORTEN_SWAPPED;
+		sm.perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE |
+			  CORTEN_PERM_USER;
+		corten_swap_encode(&sm, entry);
+		KUNIT_EXPECT_EQ(test,
+				corten_swap_out(&txn, win + PAGE_SIZE, &sm), 0);
+		corten_unlock(&txn);
+	}
+	KUNIT_EXPECT_EQ(test, corten_arena_mincore_route(mm, win, 3, vec), 3);
+	KUNIT_EXPECT_EQ(test, vec[0], 1);
+	KUNIT_EXPECT_EQ(test, vec[1], 0);
+	KUNIT_EXPECT_EQ(test, vec[2], 0);
+
+	/* The parked span: the all-zero reservation vector. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 win, PMD_SIZE), 1);
+	memset(vec, 0xa5, sizeof(vec));
+	KUNIT_EXPECT_EQ(test, corten_arena_mincore_route(mm, win, 2, vec), 2);
+	KUNIT_EXPECT_EQ(test, vec[0], 0);
+	KUNIT_EXPECT_EQ(test, vec[1], 0);
+
+	/* A hole chunk and an implant chunk keep the legacy funnel. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mincore_route(mm, win + 2 * PMD_SIZE, 1,
+						   vec), -EAGAIN);
+	vma = corten_arena_test_mkvm(mm, win + PMD_SIZE,
+				     win + PMD_SIZE + PAGE_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	mmap_write_lock(mm);
+	corten_implant_mark(mm, win + PMD_SIZE, PAGE_SIZE);
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mincore_route(mm, win + PMD_SIZE, 1,
+						   vec), -EAGAIN);
+	/* The delegated domain never enters the route. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mincore_route(mm, CORTEN_ARENA_TEST_BASE, 1,
+						   vec), -EAGAIN);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* S-5③ (audit #20): the fully-parked window span is a terminal 0 for
+ * the contract behaviours (content already dropped at park / hints
+ * that were no-ops on the live arm); every other behaviour, and every
+ * non-parked shape (active frame, hole, mixed), keeps the route's
+ * legacy arm untouched.
+ */
+static void corten_arena_test_madvise_parked_terminal(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long win = CORTEN_ARENA_TEST_WIN;
+	long c0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "madvise terminal requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, win, PMD_SIZE), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 win, PMD_SIZE), 1);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_pool_idle(mm, win));
+
+	c0 = corten_arena_test_named_counter(test, "madvise_parked");
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_DONTNEED, win,
+						   PMD_SIZE), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_DONTNEED_LOCKED,
+						   win, PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_FREE, win,
+						   PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_NORMAL, win,
+						   PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_SEQUENTIAL, win,
+						   PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_RANDOM, win,
+						   PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_COLD, win,
+						   PAGE_SIZE), 1);
+	KUNIT_EXPECT_GT(test,
+			corten_arena_test_named_counter(test, "madvise_parked"),
+			c0);
+
+	/* The disclosed residual: WILLNEED on a parked span keeps the
+	 * legacy verdict (the walk's -ENOMEM downstream).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_WILLNEED, win,
+						   PAGE_SIZE), 0);
+
+	/* Not a parked span: a window hole (never registered) and an
+	 * active-adjacent span both keep the legacy route verdict -- the
+	 * hole's -ENOMEM is the pre-A.1 behaviour too.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_DONTNEED,
+						   win + 2 * PMD_SIZE,
+						   PMD_SIZE), 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_pool_attach(mm, win + PMD_SIZE,
+						      PMD_SIZE), 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_DONTNEED, win,
+						   2 * PMD_SIZE), 0);
+	/* A DONTNEED strictly inside the live arena is the existing
+	 * transactional arm (regression guard for the new head).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_DONTNEED,
+						   win + PMD_SIZE,
+						   PAGE_SIZE), 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* The J1 implant exemption (D24): an implant access is a legal tree
+ * lookup inside the contract -- the query and the found-VMA shapes
+ * both leave the J1 pair silent, so the audit gate reads gate_pass 1
+ * on the exact smoke shape that kept it red after A.3c.  An
+ * unregistered foreign VMA still counts (the exemption is
+ * registry-driven, not blind).
+ */
+static void corten_arena_test_j1_implant_exempt(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long win = CORTEN_ARENA_TEST_WIN;
+	struct vm_area_struct *vma, *locked, *prev = NULL;
+	long p0, h0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "J1 implant exemption requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	/* A live frame0 beside a registered implant on frame1. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, win, PMD_SIZE), 0);
+	vma = corten_arena_test_mkvm(mm, win + PMD_SIZE,
+				     win + PMD_SIZE + PAGE_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	mmap_write_lock(mm);
+	corten_implant_mark(mm, win + PMD_SIZE, PAGE_SIZE);
+	mmap_write_unlock(mm);
+
+	p0 = corten_arena_test_j1_probes();
+	h0 = corten_arena_test_j1_hits();
+
+	/* The smoke contract shape: lookups on the implant VA find the
+	 * registered VMA -- all exempt, probes and hits both silent.
+	 */
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_PTR_EQ(test, find_vma(mm, win + PMD_SIZE), vma);
+	KUNIT_EXPECT_PTR_EQ(test,
+			    find_vma_intersection(mm, win + PMD_SIZE,
+						  win + PMD_SIZE + PAGE_SIZE),
+			    vma);
+	KUNIT_EXPECT_PTR_EQ(test, find_vma_prev(mm, win + PMD_SIZE, &prev),
+			    vma);
+	mmap_read_unlock(mm);
+	locked = lock_vma_under_rcu(mm, win + PMD_SIZE);
+	KUNIT_EXPECT_PTR_EQ(test, locked, vma);
+	if (locked)
+		vma_end_read(locked);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p0, 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_hits() - h0, 0);
+
+	/* The neighbour shape: a query on the VMA-free active frame that
+	 * merely *returns* the implant is the same legal access.
+	 */
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_PTR_EQ(test, find_vma(mm, win), vma);
+	mmap_read_unlock(mm);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p0, 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_hits() - h0, 0);
+
+	/* The exit gate: with the exemption in place the smoke shape
+	 * leaves both hard invariants green.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 0);
+	{
+		char *gate = corten_test_render_dbg(CORTEN_DBG_AUDIT_GATE);
+
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, gate);
+		KUNIT_ASSERT_NOT_NULL(test,
+				      strstr(gate, "gate_pass          1"));
+		kfree(gate);
+	}
+
+	/* The negative control: an unregistered foreign VMA at another
+	 * window frame still counts its hit -- the whitelist, not the
+	 * window, drives the exemption.
+	 */
+	{
+		struct vm_area_struct *fv;
+		long h1;
+
+		fv = corten_arena_test_mkvm(mm, win + 2 * PMD_SIZE,
+					    win + 2 * PMD_SIZE + PAGE_SIZE,
+					    CORTEN_ARENA_TEST_FLAGS_OK);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, fv);
+		h1 = corten_arena_test_j1_hits();
+		mmap_read_lock(mm);
+		KUNIT_EXPECT_PTR_EQ(test, find_vma(mm, win + 2 * PMD_SIZE), fv);
+		mmap_read_unlock(mm);
+		KUNIT_EXPECT_EQ(test, corten_arena_test_j1_hits() - h1, 1);
+		KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p0, 1);
+		corten_arena_test_drop_vma(fv);
+	}
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* S-5 #28: the move_pages query leg's window short-circuit -- every
+ * non-implant window address answers -EFAULT without the tree walk;
+ * implant VA keeps the lookup (the nid is real); the delegated domain
+ * and non-MODE mms never enter.
+ */
+static void corten_arena_test_move_pages_window(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long win = CORTEN_ARENA_TEST_WIN;
+	struct vm_area_struct *vma;
+	long c0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "move_pages terminal requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, win, PMD_SIZE), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 win, PMD_SIZE), 1);
+	vma = corten_arena_test_mkvm(mm, win + PMD_SIZE,
+				     win + PMD_SIZE + PAGE_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	mmap_write_lock(mm);
+	corten_implant_mark(mm, win + PMD_SIZE, PAGE_SIZE);
+	mmap_write_unlock(mm);
+
+	c0 = corten_arena_test_named_counter(test, "move_pages_window");
+	KUNIT_EXPECT_TRUE(test, corten_arena_move_pages_window(mm, win));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_move_pages_window(mm,
+							 win + 2 * PMD_SIZE));
+	KUNIT_EXPECT_GT(test,
+			corten_arena_test_named_counter(test,
+							"move_pages_window"),
+			c0);
+	/* The implant keeps the lookup; the delegated domain, the window's
+	 * lower edge and a non-MODE mm never enter.
+	 */
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_move_pages_window(mm, win + PMD_SIZE));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_move_pages_window(mm,
+							  CORTEN_ARENA_TEST_BASE));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_move_pages_window(mm,
+							  CORTEN_MODE_WINDOW_START -
+							  PAGE_SIZE));
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_FALSE(test, corten_arena_move_pages_window(mm, win));
+}
+
 /* The VMA-free consumption surface: chunk munmap without a VMA split,
  * the FRESH re-dispatch after it, the re-park, and the mprotect route's
  * miss on a parked window (legacy -ENOMEM, S-4's "already munmapped"
@@ -9677,6 +10161,12 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_j1_hooks),
 	KUNIT_CASE(corten_arena_test_j1_self_exempt),
 	KUNIT_CASE(corten_arena_test_uffd_window_reject),
+	/* V-A.3d: the J1 implant exemption runs before the C-group's
+	 * deliberate violation injection -- the exit-gate verdict is
+	 * global-cumulative, and this anchor asserts the clean-boot
+	 * gate_pass the smoke shape now leaves behind.
+	 */
+	KUNIT_CASE(corten_arena_test_j1_implant_exempt),
 	KUNIT_CASE(corten_arena_test_fault_window_shorts),
 	/* V-A.3c (C-group): the INV-MV2 walker. */
 	KUNIT_CASE(corten_arena_test_inv_mv2_clean),
@@ -9684,6 +10174,13 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_inv_mv2_stale),
 	KUNIT_CASE(corten_arena_test_inv_mv2_implant_fork),
 	KUNIT_CASE(corten_arena_test_j2_triggers),
+	/* V-A.3d (D-group): the S-5 terminals (the J1 implant exemption
+	 * is registered with the B-group, see the note there).
+	 */
+	KUNIT_CASE(corten_arena_test_msync_window_segments),
+	KUNIT_CASE(corten_arena_test_mincore_route),
+	KUNIT_CASE(corten_arena_test_madvise_parked_terminal),
+	KUNIT_CASE(corten_arena_test_move_pages_window),
 	KUNIT_CASE(corten_arena_test_vma_free_reuse),
 	KUNIT_CASE(corten_arena_test_inv_mv3),
 	KUNIT_CASE(corten_arena_test_fork_vma_free),

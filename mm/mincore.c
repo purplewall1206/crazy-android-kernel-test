@@ -23,6 +23,7 @@
 #include <linux/uaccess.h>
 #include "swap.h"
 #include "internal.h"
+#include "corten_arena.h"	/* corten_arena_mincore_route (V-A.3d S-5) */
 
 static int mincore_hugetlb(pte_t *pte, unsigned long hmask, unsigned long addr,
 			unsigned long end, struct mm_walk *walk)
@@ -238,6 +239,24 @@ static long do_mincore(unsigned long addr, unsigned long pages, unsigned char *v
 	unsigned long end;
 	int err;
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * V-A.3d S-5 (j2-audit #13, D24): a MODE mm's window-domain
+	 * chunk whose frames are all registered answers here -- parked
+	 * frames as the zero vector (the reservation-VMA semantics A.1
+	 * retired), active frames as the real residency vector read
+	 * straight off the page tables (OQ-MV-11).  -EAGAIN keeps the
+	 * legacy vma_lookup() funnel below (implant chunks keep their
+	 * tree truth, holes keep their -ENOMEM).
+	 */
+	{
+		long crt = corten_arena_mincore_route(current->mm, addr,
+						      pages, vec);
+
+		if (crt != -EAGAIN)
+			return crt;
+	}
+#endif
 	vma = vma_lookup(current->mm, addr);
 	if (!vma)
 		return -ENOMEM;

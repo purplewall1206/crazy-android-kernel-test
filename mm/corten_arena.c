@@ -373,6 +373,19 @@ static atomic_long_t corten_nr_j2_violations;
 static atomic_long_t corten_nr_j2_stale;
 static atomic_long_t corten_j2_first_violation;
 
+/* V-A.3d S-5 terminal answers (j2-audit #13/#20/#23/#28, the D24
+ * verdicts): the three query syscalls whose window-domain legs A.1's
+ * reservation-VMA retirement turned from "anonymous no-op success" into
+ * -ENOMEM, plus the move_pages stat leg's cheap window short-circuit.
+ * All four are disclosure-only (each syscall's return value carries the
+ * semantics); the guest exit gate reads them next to j1_probes to
+ * attribute any surviving window probes.
+ */
+static atomic_long_t corten_nr_msync_window_skips;	/* msync segs answered 0 */
+static atomic_long_t corten_nr_mincore_routes;	/* mincore chunks answered */
+static atomic_long_t corten_nr_madvise_parked;	/* madvise parked-terminal 0s */
+static atomic_long_t corten_nr_move_pages_window; /* stat legs short-circuited */
+
 /* V-A.2b: detached carrier VMAs created (cumulative; the live count is
  * the arenas ledger minus the parked/pool descriptors).
  */
@@ -2348,13 +2361,45 @@ static const char *corten_region_class_name(enum corten_region_class rclass)
  * The out-of-line J1 prelude counter (see mm/corten_arena.h): @vma is
  * the lookup result.  probes counts every external window query on a
  * MODE mm; hits counts the queries that found a tree VMA overlapping
- * the window -- post-A.2a/A.2b those must be punch implants (a
+ * the window domain -- post-A.2a/A.2b those must be punch implants (a
  * non-corten file/anon VMA a MAP_FIXED punch installed) and nothing
  * else; the guest gate asserts the split.
  */
 void corten_j1_slow(struct mm_struct *mm, unsigned long start,
 		    unsigned long end, struct vm_area_struct *vma)
 {
+	unsigned long clip;
+
+	/* V-A.3d J1 exemption (D24: "implant accesses are the legal tree
+	 * lookups inside the contract").  The A.3c audit-gate first run
+	 * showed the guest smoke's punch/implant contract shape landing
+	 * here as exactly one hit -- a legal find that must not pollute
+	 * the J1 ledger or the gate would stay red on a compliant
+	 * workload.  Two shapes are exempt: the query itself lands in
+	 * registered implant VA, or the lookup found a VMA whose window
+	 * intersection is registered (find_vma() on a neighbouring
+	 * window address returning the next VMA, an implant, is the same
+	 * legal access).  The lockless registry query is safe in every
+	 * probe context: callers hold this mm's mmap lock (excluded from
+	 * every mark writer) or an RCU read-side section (the array is
+	 * retired via kfree_rcu(), see corten_implant_mark()); torn
+	 * entry reads can only mis-sort a counter, never leave bounds.
+	 */
+	clip = max(start, CORTEN_MODE_WINDOW_START);
+	if (corten_implant_covers_lockless(mm, clip,
+					   min(end, CORTEN_MODE_WINDOW_END) -
+					   clip))
+		return;
+	if (vma && vma->vm_end > CORTEN_MODE_WINDOW_START &&
+	    vma->vm_start < CORTEN_MODE_WINDOW_END) {
+		clip = max(vma->vm_start, CORTEN_MODE_WINDOW_START);
+		if (corten_implant_covers_lockless(mm, clip,
+						   min(vma->vm_end,
+						       CORTEN_MODE_WINDOW_END) -
+						   clip))
+			return;
+	}
+
 	atomic_long_inc(&corten_nr_j1_probes);
 
 	if (vma && vma->vm_end > CORTEN_MODE_WINDOW_START &&
@@ -2659,6 +2704,15 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_j2_stale));
 	seq_printf(m, "j2_first_violation  %lx\n",
 		   atomic_long_read(&corten_j2_first_violation));
+	/* V-A.3d S-5 terminals (j2-audit #13/#20/#23/#28). */
+	seq_printf(m, "msync_window_skips  %ld\n",
+		   atomic_long_read(&corten_nr_msync_window_skips));
+	seq_printf(m, "mincore_routes      %ld\n",
+		   atomic_long_read(&corten_nr_mincore_routes));
+	seq_printf(m, "madvise_parked      %ld\n",
+		   atomic_long_read(&corten_nr_madvise_parked));
+	seq_printf(m, "move_pages_window   %ld\n",
+		   atomic_long_read(&corten_nr_move_pages_window));
 	seq_printf(m, "carriers            %ld\n",
 		   atomic_long_read(&corten_nr_carriers));
 	seq_printf(m, "zap_pinned          %ld\n",
@@ -9738,19 +9792,35 @@ void corten_implant_mark(struct mm_struct *mm, unsigned long start,
 		if (state->nr_implants == state->nr_implants_alloc) {
 			unsigned int n = state->nr_implants_alloc ?
 					 state->nr_implants_alloc * 2 : 16;
+			struct corten_implant_range *old = state->implants;
 
-			r = krealloc(state->implants,
-				     n * sizeof(*r), GFP_KERNEL);
+			/* V-A.3d: the array is grown by install-and-retire,
+			 * not krealloc() -- the J1 exemption below reads the
+			 * registry from RCU-only contexts
+			 * (lock_vma_under_rcu), where a synchronously freed
+			 * old image would be a use-after-free.  Copy,
+			 * publish the new image, then let a grace period
+			 * release the old one; the publish order (pointer
+			 * before the nr bump, wmb below) is what the
+			 * lockless reader's read order pairs with.
+			 */
+			r = kmalloc_array(n, sizeof(*r), GFP_KERNEL);
 			if (!r)
 				goto drop;
-			state->implants = r;
+			if (old) {
+				memcpy(r, old,
+				       state->nr_implants * sizeof(*r));
+				kfree_rcu_mightsleep(old);
+			}
+			WRITE_ONCE(state->implants, r);
 			state->nr_implants_alloc = n;
 		}
 		memmove(&state->implants[i + 1], &state->implants[i],
 			(state->nr_implants - i) * sizeof(*r));
 		state->implants[i].start = start;
 		state->implants[i].end = end;
-		state->nr_implants++;
+		smp_wmb();	/* publish the entries before their count */
+		WRITE_ONCE(state->nr_implants, state->nr_implants + 1);
 	} else {
 		/* Overlap or adjacency with implants[i..j): merge into one
 		 * entry covering the union.
@@ -9803,6 +9873,49 @@ bool corten_implant_covers(struct mm_struct *mm, unsigned long start,
 		if (state->implants[i].start > cursor)
 			return false;	/* hole before the next range */
 		cursor = state->implants[i].end;
+	}
+
+	return cursor >= end;
+}
+
+/*
+ * The RCU-safe query form (V-A.3d): same predicate as
+ * corten_implant_covers(), for readers that hold an RCU read-side
+ * section instead of the mmap lock -- the J1 exemption inside
+ * corten_j1_slow(), reachable from lock_vma_under_rcu().  Safety has
+ * two halves: (a) the array image read here is snapshot once (count
+ * first, then pointer; the pair ordering with mark's publish -- pointer
+ * before count, smp_wmb between -- guarantees the snapshot's count
+ * never exceeds the image's allocation, on every architecture), and
+ * (b) retired images are freed by kfree_rcu(), so the snapshot stays
+ * valid through the caller's RCU section (mmap-lock callers are
+ * excluded from every writer anyway).  In-place mutations (insert
+ * memmove, merge) may be observed torn: the predicate then misanswers
+ * one advisory counter, it never walks out of bounds.
+ */
+bool corten_implant_covers_lockless(struct mm_struct *mm,
+				    unsigned long start, unsigned long len)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+	const struct corten_implant_range *implants;
+	unsigned long cursor = start, end = start + len;
+	unsigned int nr, i;
+
+	if (!state || !len || end <= start)
+		return false;
+
+	nr = READ_ONCE(state->nr_implants);
+	smp_rmb();	/* pair with mark's publish order above */
+	implants = READ_ONCE(state->implants);
+	if (!implants)
+		return false;
+
+	for (i = 0; i < nr && cursor < end; i++) {
+		if (implants[i].end <= cursor)
+			continue;	/* spent */
+		if (implants[i].start > cursor)
+			return false;	/* hole before the next range */
+		cursor = implants[i].end;
 	}
 
 	return cursor >= end;
@@ -10027,10 +10140,14 @@ int corten_arena_j2_walk_pid(pid_t pid)
  * output style): the J1 pair and the J2 walker ledger in one place so
  * the guest acceptance run greps a single file.  gate_pass is the two
  * hard invariants -- no J1 window *hit* (a tree VMA the legacy lookup
- * found in the window domain) and no INV-MV2 violation; j1_probes and
- * j2_stale are printed raw because their zero-ness is workload-bound
- * (the A.3d S-5 residuals keep probes alive; stale is the benign
- * classification by design).
+ * found in the window domain; implant accesses are exempted from the
+ * pair by V-A.3d, so a compliant workload has no legal hit source left)
+ * and no INV-MV2 violation; j1_probes and j2_stale are printed raw
+ * because their zero-ness is workload-bound (post-A.3d the S-5
+ * terminals answer the msync/madvise/mincore window legs, so probes on
+ * a pure-MODE workload should read zero too -- any residual belongs to
+ * the V-C families (#3/#7) or a disclosed N-low row; stale is the
+ * benign classification by design).
  */
 void corten_arena_audit_gate_report(struct seq_file *m)
 {
@@ -11395,6 +11512,57 @@ int corten_arena_dontneed_route(struct mm_struct *mm, unsigned long start,
 }
 
 /*
+ * V-A.3d S-5③ predicate (audit #20, D24): is [start, start+len) a
+ * fully-parked window span -- entirely inside the window domain, every
+ * 2M frame registered, and every registered frame idle (or a magazine
+ * reserve sentinel, the claim-window marker that carries no content
+ * either)?  This is the exact VA population the A.1 reservation VMA
+ * used to describe: PROT_NONE, anonymous, content dropped at park.
+ * Anything else -- an active frame (the existing route arms own it), a
+ * hole frame, an implant frame -- returns false and the caller keeps
+ * the legacy verdict.  RCU xarray walk like range_overlaps(); the
+ * per-frame completeness check is a count comparison, so a sentinel
+ * occupying an otherwise idle span still classifies as parked.
+ */
+static bool corten_arena_window_parked_span(struct mm_struct *mm,
+					    unsigned long start,
+					    unsigned long len)
+{
+	struct corten_mm_state *state;
+	struct corten_arena *ar;
+	unsigned long frame, expect, found = 0;
+
+	state = READ_ONCE(mm->corten_state);
+	if (!state)
+		return false;
+	if (len & ~PAGE_MASK)
+		return false;
+	if (start < CORTEN_MODE_WINDOW_START ||
+	    start + len > CORTEN_MODE_WINDOW_END ||
+	    start + len <= start)
+		return false;
+
+	expect = ((start + len - 1) >> PMD_SHIFT) - (start >> PMD_SHIFT) + 1;
+
+	rcu_read_lock();
+	xa_for_each_range(&state->arenas, frame, ar, start >> PMD_SHIFT,
+			  (start + len - 1) >> PMD_SHIFT) {
+		if (ar != &corten_va_reserve_sentinel &&
+		    !READ_ONCE(ar->idle)) {
+			/* An active frame: the route arms below own it,
+			 * this is not S-5 land.
+			 */
+			found = 0;
+			break;
+		}
+		found++;
+	}
+	rcu_read_unlock();
+
+	return found == expect;
+}
+
+/*
  * Behaviour-level madvise routing (sec 5.8 / M4T0_SPEC.md sec 3.4),
  * called from madvise_do_behavior() under madvise_lock().  Decision
  * table (MODE matrix sec 3.5):
@@ -11426,6 +11594,35 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_state))
 		return 0;
+
+	/* V-A.3d S-5③ (audit #20, D24): the parked-window terminal.  A
+	 * fully-parked span is the exact VA the A.1 reservation VMA used
+	 * to describe, and madvise() on that shape answered 0 -- the
+	 * legacy walk after A.1 answers -ENOMEM instead (an unregistered
+	 * regression) and burns a window find_vma_prev() plus a
+	 * lock_vma_under_rcu() per call (the J1 pollution #20).  Answer
+	 * the contract behaviours here: the content-drops are semantic
+	 * no-ops (park dropped the content), the hints were already
+	 * no-op successes on the live arm.  Every other behaviour keeps
+	 * the legacy verdict (-ENOMEM on the walk) -- the disclosed S-5
+	 * residual row.
+	 */
+	if (READ_ONCE(mm->corten_mode) && len &&
+	    corten_arena_window_parked_span(mm, start, len)) {
+		switch (behavior) {
+		case MADV_DONTNEED:
+		case MADV_DONTNEED_LOCKED:
+		case MADV_FREE:
+		case MADV_NORMAL:
+		case MADV_SEQUENTIAL:
+		case MADV_RANDOM:
+		case MADV_COLD:
+			atomic_long_inc(&corten_nr_madvise_parked);
+			return 1;
+		default:
+			break;
+		}
+	}
 
 	switch (behavior) {
 	case MADV_DONTNEED:
@@ -11497,6 +11694,241 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 	}
 
 	return corten_arena_range_overlaps(mm, start, len) ? -EOPNOTSUPP : 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * V-A.3d S-5 (j2-audit #13/#20/#23/#28, the D24 verdicts): the query
+ * syscalls whose window-domain legs A.1 turned from "anonymous no-op"
+ * into -ENOMEM.  Each terminal below restores the pre-A.1 baseline for
+ * the *occupied* window (active or parked frames); holes and implants
+ * keep the legacy verdict -- a hole was -ENOMEM before A.1 too, and an
+ * implant is a real tree VMA the legacy funnel must serve.
+ * ------------------------------------------------------------------
+ */
+
+/*
+ * S-5① (audit #23): advance @start past the leading registered-window
+ * segment, if any.  sys_msync() calls this before each find_vma(): a
+ * registered frame span is the reservation-VMA population of old, and
+ * msync() was a 0-returning no-op on it (anonymous, no file, nothing
+ * to invalidate).  The scan walks the registry frame by frame, so a
+ * punched-out (implant) or never-declared (hole) frame stops it and
+ * the loop's legacy machinery takes over from there -- mixed ranges
+ * keep legacy's "process everything, -ENOMEM for the gaps" shape with
+ * the occupied segments contributing neither work nor error.  Caller
+ * holds mmap_read (serialised against every registry writer); pure
+ * function of (mm, start, end), returns the possibly advanced start.
+ */
+unsigned long corten_arena_msync_skip(struct mm_struct *mm,
+				      unsigned long start,
+				      unsigned long end)
+{
+	struct corten_mm_state *state;
+	unsigned long fend, f;
+
+	state = READ_ONCE(mm->corten_state);
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) || !state)
+		return start;
+	if (start < CORTEN_MODE_WINDOW_START ||
+	    start >= CORTEN_MODE_WINDOW_END || start >= end)
+		return start;
+
+	fend = min(end, CORTEN_MODE_WINDOW_END);
+
+	rcu_read_lock();
+	for (f = start >> PMD_SHIFT; (f << PMD_SHIFT) < fend; f++) {
+		struct corten_arena *ar = xa_load(&state->arenas, f);
+
+		if (!ar)
+			break;
+	}
+	rcu_read_unlock();
+
+	f <<= PMD_SHIFT;
+	if (f <= start)
+		return start;
+
+	atomic_long_inc(&corten_nr_msync_window_skips);
+	return min(f, fend);
+}
+
+/*
+ * S-5② (audit #13, D24: the OQ-MV-11 truth walk, delivered early): the
+ * mincore(2) window terminal.  For a chunk whose every window frame is
+ * registered: parked frames answer 0 (the reservation-VMA vector --
+ * content is gone, no page would fault in), active frames answer the
+ * REAL residency vector read straight off the page tables (the window
+ * has no VMA for walk_page_range() to anchor on post-A.2, so the route
+ * walks the PMD-gated path itself; the arena model guarantees one PMD
+ * entry per 2M frame and no THP leaves inside the window, C20).  Any
+ * unregistered frame (hole or implant) returns -EAGAIN and do_mincore()
+ * walks the legacy tree -- the implant's own pages keep their tree
+ * truth, the hole keeps its legacy -ENOMEM.  Read-only in the INV6
+ * sense: PTEs are read under the ptl, nothing is written.
+ * Return: the number of vector bytes filled, or -EAGAIN for legacy.
+ */
+static unsigned char corten_mincore_swap_truth(swp_entry_t entry)
+{
+	struct swap_info_struct *si;
+	struct folio *folio;
+
+	/* The anon arm of mincore_swap(): non-swap entries (migration,
+	 * hwpoison) are uptodate by definition; a real entry is resident
+	 * iff the swap cache holds an uptodate folio for it.  The extra
+	 * device gate is the shmem arm's toll: production PTEs imply a
+	 * live device, but the walk answers (never crashes) on any entry
+	 * shape the window can carry -- a type with no device reads 0.
+	 */
+	if (non_swap_entry(entry))
+		return 1;
+	if (!IS_ENABLED(CONFIG_SWAP))
+		return 0;
+	si = get_swap_device(entry);
+	if (!si)
+		return 0;
+	put_swap_device(si);
+	folio = swap_cache_get_folio(entry);
+	if (folio && !xa_is_value(folio)) {
+		unsigned char p = folio_test_uptodate(folio);
+
+		folio_put(folio);
+		return p;
+	}
+	return 0;
+}
+
+static void corten_mincore_fill_frame(struct mm_struct *mm,
+				      unsigned char *vec,
+				      unsigned long start,
+				      unsigned long end)
+{
+	unsigned long nr = (end - start) >> PAGE_SHIFT;
+	pmd_t *pmdp;
+	pte_t *ptep;
+	spinlock_t *ptl;	/* the PTE lock pairing the read walk */
+	pmd_t pmd;
+
+	pmdp = corten_arena_pmd(mm, start);
+	if (!pmdp)
+		goto zero;
+	pmd = READ_ONCE(*pmdp);
+	if (!pmd_present(pmd))
+		goto zero;
+	if (unlikely(pmd_leaf(pmd))) {
+		/* C20 structurally excludes THP from the window; a leaf
+		 * here can only be a foreign shape -- mirror
+		 * mincore_pte_range()'s THP answer (all resident).
+		 */
+		memset(vec, 1, nr);
+		return;
+	}
+
+	ptep = pte_offset_map_lock(mm, pmdp, start, &ptl);
+	if (!ptep)
+		goto zero;
+	for (; start != end; start += PAGE_SIZE, vec++, ptep++) {
+		pte_t pte = ptep_get(ptep);
+
+		if (pte_none_mostly(pte))
+			*vec = 0;	/* never faulted: the anon 0 */
+		else if (pte_present(pte))
+			*vec = 1;
+		else
+			*vec = corten_mincore_swap_truth(pte_to_swp_entry(pte));
+	}
+	pte_unmap_unlock(ptep - 1, ptl);
+	cond_resched();
+	return;
+
+zero:
+	memset(vec, 0, nr);
+}
+
+long corten_arena_mincore_route(struct mm_struct *mm, unsigned long addr,
+				unsigned long pages, unsigned char *vec)
+{
+	struct corten_mm_state *state;
+	unsigned long end, f, fend, off = 0;
+	int active = 0;
+
+	state = READ_ONCE(mm->corten_state);
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) || !state)
+		return -EAGAIN;
+	/* Chunks start inside the window only (do_mincore() re-enters per
+	 * PAGE_SIZE chunk, so a range crossing the window edge is served
+	 * as [window part routed][rest legacy]).
+	 */
+	if (!pages || addr < CORTEN_MODE_WINDOW_START ||
+	    addr >= CORTEN_MODE_WINDOW_END)
+		return -EAGAIN;
+	end = addr + (pages << PAGE_SHIFT);
+	fend = min(end, CORTEN_MODE_WINDOW_END);
+
+	/* Every window frame of the chunk must be registered; classify
+	 * each frame on the way (parked -> zero vector, active -> truth
+	 * walk) so one call can carry a mixed active/parked span.
+	 */
+	rcu_read_lock();
+	for (f = addr >> PMD_SHIFT; (f << PMD_SHIFT) < fend; f++) {
+		struct corten_arena *ar = xa_load(&state->arenas, f);
+
+		if (!ar) {
+			rcu_read_unlock();
+			return -EAGAIN;	/* hole or implant: legacy tree */
+		}
+		if (ar != &corten_va_reserve_sentinel && !READ_ONCE(ar->idle))
+			active++;
+	}
+	rcu_read_unlock();
+
+	atomic_long_inc(&corten_nr_mincore_routes);
+	if (!active) {
+		memset(vec, 0, pages);
+		return pages;
+	}
+
+	for (f = addr >> PMD_SHIFT; (f << PMD_SHIFT) < fend; f++) {
+		unsigned long fs = f << PMD_SHIFT;
+		unsigned long fe = min(fs + PMD_SIZE, fend);
+		struct corten_arena *ar;
+		bool idle;
+
+		rcu_read_lock();
+		ar = xa_load(&state->arenas, f);
+		idle = !ar || ar == &corten_va_reserve_sentinel ||
+		       READ_ONCE(ar->idle);
+		rcu_read_unlock();
+
+		fs = max(fs, addr);
+		if (idle)
+			memset(vec + off, 0, (fe - fs) >> PAGE_SHIFT);
+		else
+			corten_mincore_fill_frame(mm, vec + off, fs, fe);
+		off += (fe - fs) >> PAGE_SHIFT;
+	}
+
+	return pages;
+}
+
+/*
+ * S-5 #28 (audit #28): the move_pages(2) query leg's cheap window
+ * short-circuit.  do_pages_stat_array() vma_lookup()s every page; on a
+ * MODE mm every window address except an implant is a guaranteed miss
+ * (-EFAULT, the errno the audit recorded for both sides of A.1), so
+ * answer it without the tree walk.  Implant-covered addresses return
+ * false and take the lookup: their VMA is real and the nid is the
+ * truth.  Caller holds the target mm's mmap_read (covers() contract).
+ */
+bool corten_arena_move_pages_window(struct mm_struct *mm, unsigned long addr)
+{
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
+	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
+		return false;
+	if (corten_implant_covers(mm, addr, 1))
+		return false;
+
+	atomic_long_inc(&corten_nr_move_pages_window);
+	return true;
 }
 
 /*

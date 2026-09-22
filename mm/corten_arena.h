@@ -513,11 +513,17 @@ bool corten_arena_placement_backstop(struct mm_struct *mm,
  * implant (counted) -- a false J2 candidate, never a false clearance.
  * corten_implant_covers(): is [start, start+len) fully inside the union of
  * registered ranges?  Read under mmap_read or better.
+ * corten_implant_covers_lockless(): the same predicate for RCU-section
+ * readers (V-A.3d J1 exemption) -- the registry images are retired via
+ * kfree_rcu and the count/pointer snapshot protocol is barrier-paired
+ * with the mark() publisher; read the .c comment before adding callers.
  */
 void corten_implant_mark(struct mm_struct *mm, unsigned long start,
 			 unsigned long len);
 bool corten_implant_covers(struct mm_struct *mm, unsigned long start,
 			   unsigned long len);
+bool corten_implant_covers_lockless(struct mm_struct *mm,
+				    unsigned long start, unsigned long len);
 
 /*
  * V-A.3c INV-MV2 audit walker (j2-audit hook list, MV_VMA_FREE_SPEC.md
@@ -659,6 +665,37 @@ int corten_arena_dontneed_route(struct mm_struct *mm, unsigned long start,
  */
 int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 			       unsigned long start, unsigned long len);
+
+/*
+ * V-A.3d S-5 (j2-audit #13/#23/#28, D24): the query-syscall window
+ * terminals.  All three run under the caller's mmap_read of @mm and
+ * are pure reads (INV6).
+ *
+ * corten_arena_msync_skip(): advance @start past the leading
+ * registered (active-or-parked) window segment; returns @start
+ * unchanged when the leading frame is a hole/implant or @start is
+ * outside the window.  sys_msync() calls it before each find_vma()
+ * and treats a fully-skipped range as the anonymous no-op (0).
+ *
+ * corten_arena_mincore_route(): answer one do_mincore() chunk whose
+ * window frames are all registered -- parked frames -> zero vector,
+ * active frames -> the real residency vector read off the page tables
+ * (present 1, swap per the swap-cache truth, none 0).  Returns the
+ * byte count, or -EAGAIN for the legacy tree walk (hole/implant
+ * frames, non-MODE mm, chunk outside the window).
+ *
+ * corten_arena_move_pages_window(): true when do_pages_stat_array()
+ * should answer -EFAULT for @addr without the vma_lookup() (a MODE
+ * mm's window address that is not implant-covered); false keeps the
+ * legacy lookup.
+ */
+unsigned long corten_arena_msync_skip(struct mm_struct *mm,
+				      unsigned long start,
+				      unsigned long end);
+long corten_arena_mincore_route(struct mm_struct *mm, unsigned long addr,
+				unsigned long pages, unsigned char *vec);
+bool corten_arena_move_pages_window(struct mm_struct *mm,
+				    unsigned long addr);
 
 /*
  * T0b: do_mprotect_pkey() routing gate (M4T0_SPEC.md sec 3.3).  Runs
@@ -864,6 +901,13 @@ static inline bool corten_implant_covers(struct mm_struct *mm,
 	return false;
 }
 
+static inline bool corten_implant_covers_lockless(struct mm_struct *mm,
+						  unsigned long start,
+						  unsigned long len)
+{
+	return false;
+}
+
 /* V-A.3c INV-MV2 walker + debugfs backends: no window domain exists. */
 static inline int corten_audit_j2_walk(struct mm_struct *mm)
 {
@@ -897,6 +941,27 @@ static inline int corten_arena_madvise_route(struct mm_struct *mm,
 					     unsigned long len)
 {
 	return 0;
+}
+
+/* V-A.3d S-5 terminals: no window domain exists. */
+static inline unsigned long corten_arena_msync_skip(struct mm_struct *mm,
+						    unsigned long start,
+						    unsigned long end)
+{
+	return start;
+}
+
+static inline long
+corten_arena_mincore_route(struct mm_struct *mm, unsigned long addr,
+			   unsigned long pages, unsigned char *vec)
+{
+	return -EAGAIN;
+}
+
+static inline bool corten_arena_move_pages_window(struct mm_struct *mm,
+						  unsigned long addr)
+{
+	return false;
 }
 
 static inline int corten_arena_mprotect_route(struct mm_struct *mm,
