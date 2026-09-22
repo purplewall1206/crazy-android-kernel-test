@@ -4845,6 +4845,483 @@ static void corten_arena_test_pool_fork(struct kunit *test)
 }
 
 /* ------------------------------------------------------------------ *
+ * V-A.3a: the placement surface (j2-audit #14-#17, the corruption-class
+ * holes A.1 opened when the reservation VMA stopped being the window
+ * domain's occupancy truth).  Every case drives the real do_mmap() funnel
+ * -- the NOREPLACE gate, the mmap routing gate and the __mmap_prepare
+ * gather -- on the attached op worker (mmap shapes run the full chain,
+ * and the worker's current->mm is the mm under test).
+ * ------------------------------------------------------------------
+ */
+
+/* One do_mmap() shape on the attached worker: takes the write lock the
+ * syscall wrapper would, records the raw return (address or -errno).
+ */
+static void corten_arena_test_op_do_mmap(struct corten_arena_test_op *o)
+{
+	unsigned long populate;
+	LIST_HEAD(uf);
+
+	mmap_write_lock(o->mm);
+	o->retl = (long)do_mmap(NULL, o->addr, o->len,
+				PROT_READ | PROT_WRITE,
+				o->flags | MAP_ANONYMOUS | MAP_PRIVATE,
+				0, 0, &populate, &uf);
+	mmap_write_unlock(o->mm);
+}
+
+static long corten_arena_test_vm_mmap(struct kunit *test, struct mm_struct *mm,
+				      unsigned long addr, unsigned long len,
+				      unsigned long flags)
+{
+	struct corten_arena_test_op o = {
+		.mm = mm,
+		.fn = corten_arena_test_op_do_mmap,
+		.addr = addr,
+		.len = len,
+		.flags = flags,
+	};
+
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
+	return o.retl;
+}
+
+/* Line-length alias: the full placement-truth name defeats argument
+ * alignment in the matrix below.
+ */
+static bool occupied_incl_idle(struct mm_struct *mm, unsigned long addr,
+			       unsigned long len)
+{
+	return corten_arena_range_occupied_incl_idle(mm, addr, len);
+}
+
+/* Declare + park one targeted arena at the harness base (the low-domain
+ * shape: outside every magazine segment, so an ejection erases the frames
+ * instead of restoring markers -- the clean occupied()=false teardown).
+ */
+static void corten_arena_test_park_targeted(struct kunit *test,
+					    struct mm_struct *mm)
+{
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_BASE,
+						 CORTEN_ARENA_TEST_LEN), 1);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pool_idle(mm,
+						      CORTEN_ARENA_TEST_BASE));
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_BASE));
+}
+
+/* Audit #14: MAP_FIXED_NOREPLACE into a parked window must answer
+ * -EEXIST (the contract's literal errno, unchanged from the
+ * reservation-VMA era) although the range is tree-free -- only the
+ * incl-idle registry probe can see the parked frames.  The rejection
+ * changes nothing: no VMA appears, the window stays parked.
+ */
+static void corten_arena_test_noreplace_parked(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "placement guards require corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_vm_mmap(test, mm,
+						  CORTEN_ARENA_TEST_WIN,
+						  PMD_SIZE,
+						  MAP_FIXED_NOREPLACE),
+			-EEXIST);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_TRUE(test,
+			  occupied_incl_idle(mm, CORTEN_ARENA_TEST_WIN,
+					     PMD_SIZE));
+	/* The parked window is invisible to the live-state probe (the
+	 * reject family's skip-idle meaning is unchanged) and stays in the
+	 * pool for the next handout.
+	 */
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_range_overlaps(mm,
+						       CORTEN_ARENA_TEST_WIN,
+						       PMD_SIZE));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pool_idle(mm,
+						      CORTEN_ARENA_TEST_WIN));
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* A.2's guard regression anchor: a LIVE window is VMA-less post-A.2a --
+ * the NOREPLACE gate must keep answering -EEXIST off the registry alone.
+ */
+static void corten_arena_test_noreplace_active(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "placement guards require corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_vm_mmap(test, mm,
+						  CORTEN_ARENA_TEST_WIN,
+						  PMD_SIZE,
+						  MAP_FIXED_NOREPLACE),
+			-EEXIST);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_ARENA_TEST_WIN),
+			1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* D24 (audit #14's plain-MAP_FIXED sibling): legacy MAP_FIXED is
+ * *replace*, so a parked window under one is ejected-and-admitted, never
+ * rejected -- the incoming VMA becomes a registered implant on freed VA,
+ * and the ejected slot can never be handed out again.
+ */
+static void corten_arena_test_mapfixed_over_parked(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	long ejects = corten_arena_test_placement_idle_ejects();
+	long misses = corten_arena_test_pool_misses();
+	unsigned long addr = 0, lenp = PAGE_SIZE, flags;
+	long r;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "placement guards require corten=on");
+
+	/* The production shape: an in-window auto arena (magazine frames),
+	 * parked by the free() munmap.
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pool_idle(mm,
+						      CORTEN_ARENA_TEST_WIN));
+
+	/* The replace: admitted at the requested address, no new errno. */
+	r = corten_arena_test_vm_mmap(test, mm, CORTEN_ARENA_TEST_WIN,
+				      PMD_SIZE, MAP_FIXED);
+	KUNIT_EXPECT_EQ(test, r, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+
+	/* The window left the registry whole -- the erase-eject leaves no
+	 * restored markers under the incoming VMA (the recycle-eject would
+	 * re-mark frames the placement backstop then counts occupied and
+	 * the magazine would later serve under the implant), so both
+	 * probes read the freed range as unoccupied.
+	 */
+	KUNIT_EXPECT_FALSE(test,
+			   occupied_incl_idle(mm, CORTEN_ARENA_TEST_WIN,
+					      PMD_SIZE));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_range_overlaps(mm,
+						       CORTEN_ARENA_TEST_WIN,
+						       PMD_SIZE));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_test_pool_idle(mm,
+						       CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_placement_idle_ejects(),
+			ejects + 1);
+
+	/* The implant registry whitelists the placement (the J2 walker's
+	 * legal shape, D24).
+	 */
+	KUNIT_EXPECT_TRUE(test,
+			  corten_implant_covers(mm, CORTEN_ARENA_TEST_WIN,
+						PMD_SIZE));
+	KUNIT_EXPECT_GE(test, corten_arena_test_implant_nr(mm), 1);
+
+	/* The next same-size auto request cannot hit the ejected window:
+	 * a counted pool miss, fresh window placement elsewhere.
+	 */
+	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+	mmap_write_lock(mm);
+	ret = corten_arena_auto_mmap_route(mm, PMD_SIZE,
+					   PROT_READ | PROT_WRITE, &addr,
+					   &lenp, &flags);
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test, ret, 1);
+	KUNIT_EXPECT_NE(test, addr, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_misses(), misses + 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* The occupancy matrix: occupied_incl_idle() mirrors range_overlaps()
+ * on the live axis and flips on the idle and sentinel axes -- a parked
+ * window and a claimed-but-unallocated magazine frame are both
+ * spoken-for VA (a later reactivation / magazine serve would hand them
+ * out), invisible to the live-state probe the reject family depends on.
+ * The backstop predicate rings on live/parked frames (counter disclosed)
+ * and ignores sentinels (the T0 obstacle contract's legal shape).
+ */
+static void corten_arena_test_occupied_incl_idle(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long seg_tail = 0;
+	long backstops = corten_arena_test_placement_backstop();
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "placement guards require corten=on");
+
+	/* Hole: nothing registered anywhere. */
+	KUNIT_EXPECT_FALSE(test, occupied_incl_idle(mm, 0, TASK_SIZE));
+
+	/* Live (targeted): both probes agree. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN), 0);
+	KUNIT_EXPECT_TRUE(test,
+			  occupied_incl_idle(mm, CORTEN_ARENA_TEST_BASE,
+					     PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_range_overlaps(mm,
+						      CORTEN_ARENA_TEST_BASE,
+						      PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test,
+			  occupied_incl_idle(mm,
+					     CORTEN_ARENA_TEST_BASE +
+					     CORTEN_ARENA_TEST_LEN - PAGE_SIZE,
+					     PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test,
+			  occupied_incl_idle(mm,
+					     CORTEN_ARENA_TEST_BASE +
+					     3 * PMD_SIZE,
+					     2 * PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test, occupied_incl_idle(mm, 0, TASK_SIZE));
+	KUNIT_EXPECT_FALSE(test,
+			   occupied_incl_idle(mm,
+					      CORTEN_ARENA_TEST_BASE - PAGE_SIZE,
+					      PAGE_SIZE));
+	KUNIT_EXPECT_FALSE(test,
+			   occupied_incl_idle(mm,
+					      CORTEN_ARENA_TEST_BASE +
+					      CORTEN_ARENA_TEST_LEN,
+					      PAGE_SIZE));
+	KUNIT_EXPECT_FALSE(test,
+			   occupied_incl_idle(mm,
+					      CORTEN_ARENA_TEST_NOWHERE,
+					      PMD_SIZE));
+	KUNIT_EXPECT_FALSE(test,
+			   occupied_incl_idle(mm, CORTEN_ARENA_TEST_BASE,
+					      0));
+
+	/* Backstop predicate: true (and counted) on live frames, silent
+	 * on the hole.
+	 */
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_placement_backstop(mm,
+							  CORTEN_ARENA_TEST_BASE,
+							  PAGE_SIZE));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_placement_backstop(),
+			backstops + 1);
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_placement_backstop(mm,
+							   CORTEN_ARENA_TEST_NOWHERE,
+							   PMD_SIZE));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_placement_backstop(),
+			backstops + 1);
+
+	/* Parked: the semantic split -- the reject family's probe stays
+	 * false, the placement truth flips true.
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_BASE,
+						 CORTEN_ARENA_TEST_LEN), 1);
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_range_overlaps(mm,
+						       CORTEN_ARENA_TEST_BASE,
+						       PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test,
+			  occupied_incl_idle(mm, CORTEN_ARENA_TEST_BASE,
+					     PAGE_SIZE));
+	KUNIT_EXPECT_TRUE(test, occupied_incl_idle(mm, 0, TASK_SIZE));
+
+	/* Sentinel: a real auto-route placement claims a whole 1GiB
+	 * magazine segment and carves its first frames -- the claim's
+	 * un-allocated tail is reserve markers: occupied VA to the
+	 * placement truth, invisible to the live probe, and legal legacy
+	 * terrain to the backstop (the magazine re-verifies marker + tree
+	 * at every serve, the T0 obstacle contract).
+	 */
+	{
+		unsigned long a2 = 0, len2 = PAGE_SIZE;
+		unsigned long flags2 = MAP_PRIVATE | MAP_ANONYMOUS |
+				       MAP_NORESERVE;
+		int ret2;
+
+		mmap_write_lock(mm);
+		ret2 = corten_arena_auto_mmap_route(mm, PMD_SIZE,
+						    PROT_READ | PROT_WRITE,
+						    &a2, &len2, &flags2);
+		mmap_write_unlock(mm);
+		KUNIT_ASSERT_EQ(test, ret2, 1);
+		seg_tail = a2 + PMD_SIZE;
+	}
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_range_overlaps(mm, seg_tail,
+						       PMD_SIZE));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_range_occupied_incl_idle(mm, seg_tail,
+								PMD_SIZE));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_placement_backstop(mm, seg_tail,
+							   PMD_SIZE));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_placement_backstop(),
+			backstops + 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* P4: a parked window must be VMA-free at handout.  A foreign VMA inside
+ * one (a placement guard failed upstream) makes the reactivation eject
+ * the slot and answer the caller as a plain pool miss -- the auto route
+ * places fresh window, the counter discloses the defensive ejection.
+ */
+static void corten_arena_test_p4_eject(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *vma;
+	unsigned long addr = 0, lenp = CORTEN_ARENA_TEST_LEN, flags;
+	long p4 = corten_arena_test_p4_ejects();
+	long misses = corten_arena_test_pool_misses();
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "placement guards require corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	corten_arena_test_park_targeted(test, mm);
+
+	/* Inject the illegal shape directly (vma_link bypasses every
+	 * placement guard -- only a guard failure upstream can produce it
+	 * for real).
+	 */
+	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_BASE,
+				     CORTEN_ARENA_TEST_BASE + PMD_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+
+	/* The same-size request the parked slot would serve: P4 ejects
+	 * (WARN_ONCE + counter), pool_take degrades to a miss, the fresh
+	 * placement lands elsewhere.  The WARN fires once per boot; the
+	 * counter is the assertion surface.
+	 */
+	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+	mmap_write_lock(mm);
+	ret = corten_arena_auto_mmap_route(mm, CORTEN_ARENA_TEST_LEN,
+					   PROT_READ | PROT_WRITE, &addr,
+					   &lenp, &flags);
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test, ret, 1);
+	KUNIT_EXPECT_NE(test, addr, CORTEN_ARENA_TEST_BASE);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_p4_ejects(), p4 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_misses(), misses + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_test_pool_idle(mm,
+						       CORTEN_ARENA_TEST_BASE));
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* A.2's hint fence, end-to-end through the placement funnel: a hinted
+ * (non-FIXED) anonymous mmap whose hint lands inside the window domain
+ * is NOT accepted at the hint -- the walker replays it outside the
+ * window.  A non-MODE mm keeps the hint (the double gate's zero-disturb
+ * anchor).
+ */
+static void corten_arena_test_hint_fence(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long hint_plain = CORTEN_ARENA_TEST_WIN + PMD_SIZE;
+	unsigned long hint_mode = CORTEN_ARENA_TEST_WIN + 2 * PMD_SIZE;
+	long r;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "placement guards require corten=on");
+
+	/* Non-MODE: the hint is honoured as-is. */
+	r = corten_arena_test_vm_mmap(test, mm, hint_plain, PAGE_SIZE, 0);
+	KUNIT_EXPECT_EQ(test, r, hint_plain);
+	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, hint_plain));
+
+	/* MODE: a different in-window hint, replayed outside [16T, 64T). */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	r = corten_arena_test_vm_mmap(test, mm, hint_mode, PAGE_SIZE, 0);
+	KUNIT_EXPECT_FALSE(test, IS_ERR_VALUE(r));
+	if (!IS_ERR_VALUE(r)) {
+		bool outside = r < CORTEN_MODE_WINDOW_START ||
+			       r >= CORTEN_MODE_WINDOW_END;
+
+		KUNIT_EXPECT_TRUE(test, outside);
+		KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, r));
+		KUNIT_EXPECT_NULL(test, vma_lookup(mm, hint_mode));
+	}
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* ------------------------------------------------------------------ *
  * V-A.1 (MV_VMA_FREE_SPEC.md sec 3.1.1): the park de-VMA surgery.
  * The parked window is a pure metadata domain; the reuse is a metadata
  * flip; every consumer runs off the frame table + region record.
@@ -5505,12 +5982,16 @@ static void corten_arena_test_fork_redeclare_content(struct kunit *test)
 			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
 					     CORTEN_ARENA_TEST_LEN), 0);
 
-	/* Park: the EXACT munmap route, tree shadow removed with it. */
+	/* Park: the EXACT munmap route, tree shadow removed with it.
+	 * (Full-arena coverage: a PAGE_SIZE munmap is a CHUNK zap and
+	 * leaves the arena live -- the re-declare below would then
+	 * overlap-reject.  The test's documented intent is the park.)
+	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
 						 corten_arena_test_op_munmap_route,
 						 CORTEN_ARENA_TEST_BASE,
-						 PAGE_SIZE), 1);
+						 CORTEN_ARENA_TEST_LEN), 1);
 
 	/* Re-declare the same window: declare_locked's pool probe
 	 * short-circuits the reactivation before any vma_lookup -- F1
@@ -6152,7 +6633,6 @@ static void corten_arena_test_region_park(struct kunit *test)
 	struct mm_struct *mm = t->mm;
 	struct corten_region_iter it;
 	struct corten_arena *ar;
-	struct vm_area_struct *vma;
 	unsigned long addr = 0, len = PMD_SIZE, flags;
 	int ret;
 
@@ -6161,10 +6641,11 @@ static void corten_arena_test_region_park(struct kunit *test)
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 
-	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
-				     CORTEN_ARENA_TEST_WIN + PMD_SIZE,
-				     CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	/* V-A.2a: the takeover is VMA-less (the pre-A.2 harness mkvm is
+	 * gone, as in fork_vma_free) -- a hand-linked tree VMA surviving
+	 * the park is the foreign-VMA-in-a-parked-window shape P4 (V-A.3a)
+	 * ejects on handout, not a legal state this test may build.
+	 */
 	mmap_write_lock(mm);
 	ret = corten_arena_auto_attach(mm, CORTEN_ARENA_TEST_WIN, PMD_SIZE, PROT_READ | PROT_WRITE);
 	mmap_write_unlock(mm);
@@ -6751,6 +7232,12 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_pool_limit),
 	KUNIT_CASE(corten_arena_test_pool_mode_exit),
 	KUNIT_CASE(corten_arena_test_pool_fork),
+	KUNIT_CASE(corten_arena_test_noreplace_parked),
+	KUNIT_CASE(corten_arena_test_noreplace_active),
+	KUNIT_CASE(corten_arena_test_mapfixed_over_parked),
+	KUNIT_CASE(corten_arena_test_occupied_incl_idle),
+	KUNIT_CASE(corten_arena_test_p4_eject),
+	KUNIT_CASE(corten_arena_test_hint_fence),
 	KUNIT_CASE(corten_arena_test_vma_free_reuse),
 	KUNIT_CASE(corten_arena_test_inv_mv3),
 	KUNIT_CASE(corten_arena_test_fork_vma_free),

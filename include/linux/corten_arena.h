@@ -327,6 +327,18 @@ struct corten_va_seg {
 	unsigned long		next;	/* next unallocated VA (bump) */
 };
 
+/*
+ * V-A.3a implant registry record (MV_VMA_FREE_SPEC.md sec 2.4 "登记植入",
+ * D24): one window-domain VA range the legacy funnel legally owns -- the
+ * VMAs a punch route (file MAP_FIXED, sec 5.6 D-G'') or a P1b idle-eject
+ * placed over former arena frames.  Stored page-granular and disjoint,
+ * sorted by @start, in a growable array (see @implants below).
+ */
+struct corten_implant_range {
+	unsigned long		start;
+	unsigned long		end;
+};
+
 /**
  * struct corten_mm_state - per-mm arena registry, lazily allocated.
  * @arenas: 2M frame index (addr >> PMD_SHIFT) -> struct corten_arena *.
@@ -363,6 +375,12 @@ struct corten_va_seg {
  * @nr_pool: arenas currently parked in @arena_pool; bounded by
  *            CORTEN_ARENA_POOL_MAX (overflow degrades to the pre-pool
  *            behaviour, counted).
+ * @implants: V-A.3a implant registry (D24): sorted, disjoint window-domain
+ *            ranges the legacy funnel legally owns (punch implants, P1b
+ *            idle-eject placements).  Written under mmap_write + @ctl_lock,
+ *            read under mmap_read or better, freed with the state.
+ * @nr_implants: entries in use in @implants.
+ * @nr_implants_alloc: allocation size of @implants.
  * @owner_mm: back-link to the owning address space (M6.T3 shrinker
  *            registry walk).  Never taken by reference: the state is
  *            created and destroyed by the mm's own lifecycle paths
@@ -415,6 +433,19 @@ struct corten_mm_state {
 	struct list_head	seg_list;
 	struct list_head	arena_pool;
 	unsigned long		nr_pool;
+	/* V-A.3a implant registry (D24): the sorted, disjoint
+	 * corten_implant_range array -- window-domain ranges the legacy
+	 * funnel legally owns.  Writers (corten_implant_mark: the punch
+	 * route's success arms and the P1b idle-eject) run under this mm's
+	 * mmap_write for writing + ctl_lock; readers
+	 * (corten_implant_covers) run under mmap_read or better.  Grown by
+	 * krealloc under those locks; freed with the state.  The array is
+	 * the V-A.3a budget shape -- TODO(V-A.3c): replace with a per-mm
+	 * interval tree when the INV-MV2 walker needs augmented queries.
+	 */
+	struct corten_implant_range *implants;
+	unsigned int		nr_implants;
+	unsigned int		nr_implants_alloc;
 	struct mm_struct	*owner_mm;
 	struct list_head	shrink_reg;
 	spinlock_t		shrink_lock;
@@ -684,6 +715,15 @@ long corten_arena_test_pool_nr(struct mm_struct *mm);
 bool corten_arena_test_pool_idle(struct mm_struct *mm, unsigned long addr);
 bool corten_arena_test_pt_present(struct mm_struct *mm, unsigned long addr);
 bool corten_arena_test_perm_pgprot_pure_eq(u8 perm);
+
+/* V-A.3a placement-surface hooks: the "normally zero" disclosure
+ * counters (placement backstop firings, P4 defensive ejects, P1b
+ * idle-eject admissions) and the implant registry's occupancy.
+ */
+long corten_arena_test_placement_backstop(void);
+long corten_arena_test_p4_ejects(void);
+long corten_arena_test_placement_idle_ejects(void);
+long corten_arena_test_implant_nr(struct mm_struct *mm);
 
 /* M6.T3 shrinker hooks: drive the count/scan bodies directly (the
  * shrinker is only registered on a corten=on boot; the bodies are the

@@ -479,9 +479,18 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 		 * the window domain.  Without this the NOREPLACE guarantee
 		 * (return -EEXIST, never silently replace) died with the
 		 * shadow-VMA that used to occupy the range.
+		 * V-A.3a (audit #14): the probe counts PARKED windows and
+		 * magazine reserve sentinels as occupied too --
+		 * range_overlaps() skips both (its 16+ reject-family
+		 * callers depend on that live-state-only meaning), so the
+		 * incl-idle variant is the placement truth: a parked range
+		 * is tree-free yet still owned (a later reactivation would
+		 * hand it back out), and a claimed magazine frame is
+		 * spoken-for VA.  -EEXIST is the NOREPLACE contract's
+		 * literal errno, unchanged from the reservation-VMA era.
 		 */
 		if (find_vma_intersection(mm, addr, addr + len) ||
-		    corten_arena_range_overlaps(mm, addr, len))
+		    corten_arena_range_occupied_incl_idle(mm, addr, len))
 			return -EEXIST;
 	}
 

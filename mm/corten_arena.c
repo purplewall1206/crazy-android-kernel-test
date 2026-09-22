@@ -286,6 +286,25 @@ static atomic_long_t corten_nr_auto_vgate;
 static atomic_long_t corten_nr_j1_probes;
 static atomic_long_t corten_nr_j1_hits;
 
+/* V-A.3a placement-surface disclosure counters (audit #14-#17): both are
+ * "normally zero" -- a non-zero value means a defensive layer, not a
+ * semantic route, answered a placement request.  placement_backstop: the
+ * __mmap_prepare zero-VMA arm fired (the NOREPLACE/-EEXIST and punch
+ * idle-eject guards upstream make it unreachable); p4_ejects: a parked
+ * window was handed out with a foreign VMA inside (a placement guard
+ * failed upstream) and the P4 assertion ejected instead.
+ */
+static atomic_long_t corten_nr_placement_backstop;
+static atomic_long_t corten_nr_p4_ejects;
+/* V-A.3a P1b arm firings: plain-MAP_FIXED placements that ejected
+ * parked arenas to admit the mapping (the D24 eject-and-admit shape).
+ */
+static atomic_long_t corten_nr_placement_idle_ejects;
+/* V-A.3a: implant registrations dropped on allocation failure (the
+ * implant stays functional, only the J2 whitelist entry is lost).
+ */
+static atomic_long_t corten_nr_implant_drops;
+
 /* V-A.2b: detached carrier VMAs created (cumulative; the live count is
  * the arenas ledger minus the parked/pool descriptors).
  */
@@ -413,6 +432,7 @@ static void corten_arena_state_free(struct corten_mm_state *state)
 	xa_destroy(&state->shrink_aged);
 	free_percpu(state->va_segs);
 	corten_va_lists_free(state);
+	kfree(state->implants);
 	free_percpu(state->stats);
 	mutex_destroy(&state->ctl_lock);
 	kfree(state);
@@ -2247,6 +2267,37 @@ bool corten_arena_test_perm_pgprot_pure_eq(u8 perm)
 
 	return pgprot_val(corten_arena_perm_pgprot(&vma, perm)) ==
 	       pgprot_val(corten_arena_perm_pgprot_pure(perm));
+}
+
+/* V-A.3a placement-surface hooks: the two "normally zero" disclosure
+ * counters (a non-zero value in a green run means a defensive layer
+ * answered a placement request) and the P1b idle-eject count.
+ */
+long corten_arena_test_placement_backstop(void)
+{
+	return atomic_long_read(&corten_nr_placement_backstop);
+}
+
+long corten_arena_test_p4_ejects(void)
+{
+	return atomic_long_read(&corten_nr_p4_ejects);
+}
+
+long corten_arena_test_placement_idle_ejects(void)
+{
+	return atomic_long_read(&corten_nr_placement_idle_ejects);
+}
+
+/* V-A.3a implant registry occupancy (the walker's whitelist predicate
+ * anchor; read under the caller's mmap_read or better).
+ */
+long corten_arena_test_implant_nr(struct mm_struct *mm)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+
+	if (!state)
+		return 0;
+	return state->nr_implants;
 }
 #endif
 
@@ -6893,13 +6944,20 @@ int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
  * Deregister a parked arena without touching the VMAs in its range: the
  * park left the range a plain anonymous mapping which the reuse flow has
  * usually already replaced, and the fresh declare that follows wants the
- * registry slots back.  Frames return to the magazine (markers restored,
- * recycle blocks pushed) exactly like a real release.
+ * registry slots back.  With @recycle the frames return to the magazine
+ * (markers restored, recycle blocks pushed) exactly like a real release;
+ * with !@recycle (the V-A.3a P1b idle-eject arm) they are plain-erased
+ * instead -- the caller is about to install a legacy VMA over them, and a
+ * restored marker would both read as occupied to the placement backstop
+ * and hand the frames back out of the recycle list under that VMA.  The
+ * erased frames take the punch precedent's leak semantics (the magazine
+ * skips marker-less frames, counted).
  *
  * Called with the owner mm's mmap_write and state->ctl_lock held.
  */
 static void corten_arena_pool_eject_locked(struct corten_mm_state *state,
-					   struct corten_arena *ar)
+					   struct corten_arena *ar,
+					   bool recycle)
 {
 	unsigned long frame, first, last;
 
@@ -6914,10 +6972,23 @@ static void corten_arena_pool_eject_locked(struct corten_mm_state *state,
 
 		if (WARN_ON_ONCE(stale && stale != ar))
 			break;
-		if (stale == ar)
-			corten_va_release_frame(state, frame << PMD_SHIFT);
+		if (stale == ar) {
+			if (recycle)
+				corten_va_release_frame(state,
+							frame << PMD_SHIFT);
+			else
+				xa_erase(&state->arenas, frame);
+		}
 	}
 	atomic_long_inc(&corten_nr_pool_ejects);
+
+	/* The deregistration must unlink the observability ledger BEFORE
+	 * the free (obs_remove's contract): the eject path predating V-A.3a
+	 * skipped this -- a freed descriptor stayed linked and the arenas
+	 * walk dereferenced recycled memory once the slab reused it.  The
+	 * placement-surface ejects (P1b/P4) made the shape hot.
+	 */
+	corten_arena_obs_remove(ar);
 
 	/* No transaction can hold a reference (lookup has gated the park
 	 * since the zap; the zap itself fenced the stragglers per window),
@@ -6942,14 +7013,39 @@ static void corten_arena_pool_eject_locked(struct corten_mm_state *state,
  * the warm registry slots are reused as-is.
  *
  * Called with the owner mm's mmap_write and state->ctl_lock held.
- * Return: 0.
+ * Return: 0, -ENOMEM (the accounting or carrier gate refused; the slot
+ * stays parked), -EAGAIN (P4: the auto-shape handout found a foreign VMA
+ * in the window and ejected the slot).
  */
 static int corten_arena_pool_reactivate(struct mm_struct *mm,
 					struct corten_mm_state *state,
-					struct corten_arena *ar, u8 perm)
+					struct corten_arena *ar, u8 perm,
+					bool novma)
 {
 	unsigned long npages = (ar->end - ar->start) >> PAGE_SHIFT;
 	vm_flags_t flags = corten_take_vm_flags(perm);
+
+	/* P4 (V-A.3a, audit #14-#17): a parked window must be VMA-free at
+	 * handout on the AUTO shape (the pool take and the VMA-less
+	 * declare-side probe -- nothing legitimately places a tree VMA
+	 * there: every mmap route into a parked window ejects it first).
+	 * V-A.1 retired the vma_lookup validation arm; this is its
+	 * defensive replacement -- a tree VMA inside the range means a
+	 * placement guard failed upstream.  Fail safe: eject and answer
+	 * -EAGAIN, never hand frames out under someone else's VMA.  The
+	 * callers translate: pool_take degrades to its counted miss (the
+	 * auto route places fresh window), pool_prepare returns to the
+	 * fresh declare path.  The targeted DECLARE (novma == false) is
+	 * exempt: its declaring VMA -- which declare_locked adopts and
+	 * validates right after -- legitimately covers the range.
+	 */
+	if (novma && corten_vma_find(mm, ar->start, ar->end)) {
+		WARN_ONCE(1, "corten: foreign vma in parked window %lx-%lx\n",
+			  ar->start, ar->end);
+		atomic_long_inc(&corten_nr_p4_ejects);
+		corten_arena_pool_eject_locked(state, ar, true);
+		return -EAGAIN;
+	}
 
 	/* V-A.1 accounting parity: the fresh path's mmap_region() charges
 	 * total_vm (and RLIMIT_AS through may_expand_vm) for the mapping
@@ -7068,13 +7164,17 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
 				 * the mprotect route narrows it explicitly.
 				 * The V-A.2a auto route passes the mmap's
 				 * own perm -- including PROT_NONE's 0.
+				 * P4's -EAGAIN (ejected under a foreign VMA)
+				 * takes the fresh path like any miss.
 				 */
-				return corten_arena_pool_reactivate(mm, state,
-								    ar,
-								    novma ? perm :
-								    (CORTEN_PERM_READ |
-								     CORTEN_PERM_WRITE |
-								     CORTEN_PERM_EXEC));
+				ret = corten_arena_pool_reactivate(mm, state,
+								   ar,
+								   novma ? perm :
+								   (CORTEN_PERM_READ |
+								    CORTEN_PERM_WRITE |
+								    CORTEN_PERM_EXEC),
+								   novma);
+				return ret == -EAGAIN ? 1 : ret;
 			}
 		}
 
@@ -7082,7 +7182,7 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
 		 * empty: the slot cannot serve this reuse.  Return its
 		 * frames to the magazine and let the fresh path rebuild.
 		 */
-		corten_arena_pool_eject_locked(state, ar);
+		corten_arena_pool_eject_locked(state, ar, true);
 		return 1;
 	}
 
@@ -7095,7 +7195,7 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
 
 		if (ar && ar != &corten_va_reserve_sentinel &&
 		    READ_ONCE(ar->idle))
-			corten_arena_pool_eject_locked(state, ar);
+			corten_arena_pool_eject_locked(state, ar, true);
 	}
 
 	return 1;
@@ -7453,7 +7553,7 @@ found:
 	 * carrier if the slot predates one (unconditionally: no route
 	 * may publish an anchor-less live window).
 	 */
-	ret = corten_arena_pool_reactivate(mm, state, ar, perm);
+	ret = corten_arena_pool_reactivate(mm, state, ar, perm, true);
 	if (ret) {
 		mutex_unlock(&state->ctl_lock);
 		return ret;	/* -ENOMEM: stays parked, degrade */
@@ -7468,7 +7568,7 @@ eject:
 	/* Holed (punched while parked), or the window is not empty:
 	 * deregister and let the caller place fresh window.
 	 */
-	corten_arena_pool_eject_locked(state, ar);
+	corten_arena_pool_eject_locked(state, ar, true);
 	mutex_unlock(&state->ctl_lock);
 	return -ENOENT;
 }
@@ -7866,6 +7966,186 @@ static int corten_arena_mmap_punch(struct mm_struct *mm,
 }
 
 /*
+ * V-A.3a implant registry (D24): register [start, start+len) (clipped to
+ * the window domain -- outside it an implant is an ordinary legacy VMA
+ * among its peers and no walker will ask) as VA the legacy funnel legally
+ * owns.  Producers: the punch route's success arms (a file MAP_FIXED over
+ * live arena frames) and the P1b idle-eject (a plain MAP_FIXED over a
+ * parked window).  Both run under this mm's mmap_write; @ctl_lock is
+ * taken here (DEV-13 order, like pool_prepare).  The array is kept sorted
+ * and disjoint (merge on insert), so repeated punches of the same hole
+ * cost no growth.  A krealloc failure drops the registration, counted --
+ * the implant keeps working, only its J2 whitelist entry is missing (the
+ * A.3c walker's fallback predicate catches the shape).
+ */
+void corten_implant_mark(struct mm_struct *mm, unsigned long start,
+			 unsigned long len)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+	struct corten_implant_range *r;
+	unsigned long end;
+	unsigned int i;
+
+	if (!state)
+		return;
+	if (start < CORTEN_MODE_WINDOW_START)
+		start = CORTEN_MODE_WINDOW_START;
+	end = start + len;
+	if (end <= start || end > CORTEN_MODE_WINDOW_END)
+		end = CORTEN_MODE_WINDOW_END;
+	if (end <= start)
+		return;
+
+	mutex_lock(&state->ctl_lock);
+
+	/* Locate the first range not entirely below [start, end). */
+	for (i = 0; i < state->nr_implants; i++) {
+		if (state->implants[i].end >= start)
+			break;
+	}
+
+	if (i == state->nr_implants ||
+	    state->implants[i].start > end) {
+		/* Pure insert at @i. */
+		if (state->nr_implants == state->nr_implants_alloc) {
+			unsigned int n = state->nr_implants_alloc ?
+					 state->nr_implants_alloc * 2 : 16;
+
+			r = krealloc(state->implants,
+				     n * sizeof(*r), GFP_KERNEL);
+			if (!r)
+				goto drop;
+			state->implants = r;
+			state->nr_implants_alloc = n;
+		}
+		memmove(&state->implants[i + 1], &state->implants[i],
+			(state->nr_implants - i) * sizeof(*r));
+		state->implants[i].start = start;
+		state->implants[i].end = end;
+		state->nr_implants++;
+	} else {
+		/* Overlap or adjacency with implants[i..j): merge into one
+		 * entry covering the union.
+		 */
+		unsigned int j = i;
+
+		if (start < state->implants[i].start)
+			state->implants[i].start = start;
+		while (j + 1 < state->nr_implants &&
+		       state->implants[j + 1].start <= end)
+			j++;
+		if (end > state->implants[j].end)
+			state->implants[j].end = end;
+		state->implants[i].end = state->implants[j].end;
+		if (j > i) {
+			memmove(&state->implants[i + 1], &state->implants[j + 1],
+				(state->nr_implants - j - 1) * sizeof(*r));
+			state->nr_implants -= j - i;
+		}
+	}
+
+	mutex_unlock(&state->ctl_lock);
+	return;
+
+drop:
+	atomic_long_inc(&corten_nr_implant_drops);
+	mutex_unlock(&state->ctl_lock);
+}
+
+/*
+ * The registry's query form (A.3a: KUnit anchors; the A.3c INV-MV2 walker
+ * is the production consumer): is [start, start+len) fully inside the
+ * union of registered ranges?  Sorted + disjoint lets a single forward
+ * scan answer.  Read under mmap_read or better (every writer holds
+ * mmap_write, so no reader can race a mutation).
+ */
+bool corten_implant_covers(struct mm_struct *mm, unsigned long start,
+			   unsigned long len)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+	unsigned long cursor = start, end = start + len;
+	unsigned int i;
+
+	if (!state || !len || end <= start)
+		return false;
+
+	for (i = 0; i < state->nr_implants && cursor < end; i++) {
+		if (state->implants[i].end <= cursor)
+			continue;	/* spent */
+		if (state->implants[i].start > cursor)
+			return false;	/* hole before the next range */
+		cursor = state->implants[i].end;
+	}
+
+	return cursor >= end;
+}
+
+/*
+ * V-A.3a P1b (audit #14, D24): clear [addr, addr+len) of parked (idle)
+ * arenas before a plain MAP_FIXED replaces them.  Both lookup_get()
+ * probes below skip idle arenas, so without this arm a parked window is
+ * "no arena involved" to the punch route AND tree-free to the MARK
+ * route's early exit -- the legacy funnel would install a foreign VMA on
+ * frames the registry still owns, and a later pool handout (reactivate,
+ * fresh declare) would collide with it.  Legacy plain MAP_FIXED is
+ * *replace*, so the answer is eject-and-admit, not reject: every idle
+ * arena with a frame inside the range is deregistered whole (the parkable
+ * invariant wants intact pieces; a boundary-cutting range ejects just the
+ * same) and the incoming VMA becomes a registered implant on freed VA.
+ *
+ * Magazine reserve sentinels inside the range are left untouched: a
+ * sentinel under an explicit-address legacy mapping is a legal shape the
+ * magazine already owns (every serve re-verifies marker AND tree, the T0
+ * obstacle contract in corten_va_mag_alloc_cpu()), and rejecting here
+ * would surface an error class A.1 never had -- the D24 ruling.  The
+ * eject uses the erase variant (no marker restore), mirroring the punch
+ * precedent: the frames are about to be foreign-owned.
+ *
+ * MODE-agnostic (the registry is the truth source, not the mode bit) and
+ * called under this mm's mmap_write (do_mmap's contract); ctl_lock is
+ * taken inside (DEV-13 order: mmap_write -> ctl_lock, like
+ * pool_prepare).
+ * Return: 0 = the range is clear of idle state (or held none) -- proceed
+ * with the punch/legacy flow; no failure mode exists (an eject cannot
+ * fail).
+ */
+static int corten_arena_placement_punch_idle(struct mm_struct *mm,
+					     unsigned long addr,
+					     unsigned long len)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+	struct corten_arena *ar;
+	unsigned long frame, first, last;
+	bool ejected = false;
+
+	if (!state || !READ_ONCE(state->nr_pool))
+		return 0;
+
+	first = addr >> PMD_SHIFT;
+	last = (addr + len - 1) >> PMD_SHIFT;
+
+	mutex_lock(&state->ctl_lock);
+	xa_for_each_range(&state->arenas, frame, ar, first, last) {
+		if (ar != &corten_va_reserve_sentinel && READ_ONCE(ar->idle)) {
+			corten_arena_pool_eject_locked(state, ar, false);
+			ejected = true;
+		}
+	}
+	mutex_unlock(&state->ctl_lock);
+
+	if (ejected) {
+		atomic_long_inc(&corten_nr_placement_idle_ejects);
+		/* The freed VA is legal legacy terrain now: register the
+		 * implant the gather below is about to create (D24; the J2
+		 * whitelist's producer).
+		 */
+		corten_implant_mark(mm, addr, len);
+	}
+
+	return 0;
+}
+
+/*
  * Routing for every MAP_FIXED shape corten_arena_mmap_classify() does not
  * mark (file-backed, shared, hugetlb, ...).  A range that overlaps arena
  * state must have its overlap removed through the arena's own teardown
@@ -7888,8 +8168,9 @@ static int corten_arena_mmap_punch_route(struct mm_struct *mm,
 
 	/* Plain mmaps cannot overlap an arena (__get_unmapped_area() only
 	 * hands out gaps), and MAP_FIXED_NOREPLACE already returned -EEXIST
-	 * on the shadow-VMA at the do_mmap gate -- so only a real MAP_FIXED
-	 * overwrite gets here.
+	 * on the incl-idle occupancy probe at the do_mmap gate (V-A.3a) --
+	 * so only a real MAP_FIXED overwrite gets here, with the parked
+	 * windows already cleared by the P1b arm in corten_arena_mmap_route().
 	 */
 	if (!(flags & MAP_FIXED) || (flags & MAP_FIXED_NOREPLACE))
 		return 0;
@@ -7920,14 +8201,24 @@ static int corten_arena_mmap_punch_route(struct mm_struct *mm,
 		 * the DEV-13 outermost acquisition and the semaphore is
 		 * not recursive.
 		 */
+		unsigned long rel_start = ar->start;
+		unsigned long rel_len = ar->end - ar->start;
+
 		if (ar_start)
 			percpu_ref_put(&ar_start->active);
 		if (ar_end)
 			percpu_ref_put(&ar_end->active);
-		ret = corten_arena_release_locked(mm, state, ar->start,
-						  ar->end - ar->start);
-		if (!ret)
+		ret = corten_arena_release_locked(mm, state, rel_start,
+						  rel_len);
+		if (!ret) {
 			atomic_long_inc(&corten_nr_mmap_punches);
+			/* V-A.3a: the legacy funnel is about to install a
+			 * foreign VMA over the freed arena range -- the
+			 * implant registry's second producer.  (@ar may be
+			 * freed by now; the range was captured above.)
+			 */
+			corten_implant_mark(mm, rel_start, rel_len);
+		}
 		return ret < 0 ? ret : 0;
 	}
 
@@ -7937,6 +8228,12 @@ static int corten_arena_mmap_punch_route(struct mm_struct *mm,
 		percpu_ref_put(&ar_start->active);
 	if (ar_end)
 		percpu_ref_put(&ar_end->active);
+	if (!ret) {
+		/* V-A.3a: the punched hole receives the foreign VMA (the
+		 * D-G'' file-MAP_FIXED shape) -- register the implant.
+		 */
+		corten_implant_mark(mm, addr, len);
+	}
 
 	return ret < 0 ? ret : 0;
 }
@@ -7991,6 +8288,20 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
 
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_state))
 		return 0;
+
+	/* V-A.3a P1b (audit #14): parked windows are invisible to both
+	 * dispatch legs below (lookup_get() skips idle; the MARK leg's
+	 * lookup miss exits legacy), so a plain MAP_FIXED over one would
+	 * reach the funnel with the frames still registered.  Clear them
+	 * first; NOREPLACE never gets here (do_mmap's gate answered
+	 * -EEXIST on the incl-idle occupancy probe).
+	 */
+	if ((flags & MAP_FIXED) && !(flags & MAP_FIXED_NOREPLACE)) {
+		ret = corten_arena_placement_punch_idle(mm, addr, len);
+		if (ret)
+			return ret;
+	}
+
 	if (corten_arena_mmap_classify(flags, file) != CORTEN_MMAP_MARK)
 		return corten_arena_mmap_punch_route(mm, addr, len, flags);
 
@@ -8923,6 +9234,110 @@ bool corten_arena_range_overlaps(struct mm_struct *mm, unsigned long start,
 	rcu_read_unlock();
 
 	return ret;
+}
+
+/*
+ * V-A.3a placement truth (MV_VMA_FREE_SPEC.md sec 1.2, audit #14-#17):
+ * same walk as corten_arena_range_overlaps(), but EVERY registered arena
+ * frame counts -- live and parked (idle) ones alike, plus (for the
+ * NOREPLACE gate) the magazine reserve sentinels.  The parked case is why
+ * this exists: A.1 removed the reservation VMA, so after a park the range
+ * is tree-free yet still owned (the registry is the only occupancy truth
+ * for the window domain), and a placement decision that trusts the tree
+ * alone installs a foreign VMA on frames a later reactivation would hand
+ * out again.  The sentinel is slot-keyed (its own bounds are meaningless),
+ * so an index hit IS the overlap.  Fast negation keeps the two-condition
+ * shape: with the whole population parked the registry is still full.
+ *
+ * The callers are the placement funnels (do_mmap's NOREPLACE gate,
+ * __mmap_prepare's backstop), all under mmap_write -- serialized against
+ * seg_claim/park/eject writers, so the lockless RCU walk sees a stable
+ * registry.  No reference is taken: only @start/@end/@idle are read, and
+ * the descriptor is freed by kfree_rcu().
+ */
+bool corten_arena_range_occupied_incl_idle(struct mm_struct *mm,
+					   unsigned long start,
+					   unsigned long len)
+{
+	struct corten_mm_state *state;
+	struct corten_arena *ar;
+	unsigned long frame;
+	bool ret = false;
+
+	state = READ_ONCE(mm->corten_state);
+	if (!corten_enabled_static() || !state)
+		return false;
+	/* Placement semantics: parked frames are spoken-for VA exactly like
+	 * live ones -- the whole-population-parked case must not fast-negate
+	 * (mirrors the T1c fix in range_overlaps() above).
+	 */
+	if (!refcount_read(&state->nr) && !READ_ONCE(state->nr_pool))
+		return false;
+	if (!len)
+		return false;
+
+	rcu_read_lock();
+	xa_for_each_range(&state->arenas, frame, ar, start >> PMD_SHIFT,
+			  (start + len - 1) >> PMD_SHIFT) {
+		if (ar == &corten_va_reserve_sentinel) {
+			/* Slot-keyed marker: the iteration index is the frame
+			 * it claims -- that IS the overlap.
+			 */
+			ret = true;
+			break;
+		}
+		if (start < ar->end && start + len > ar->start) {
+			ret = true;
+			break;
+		}
+	}
+	rcu_read_unlock();
+
+	return ret;
+}
+
+/*
+ * V-A.3a P3: the zero-VMA arm of the __mmap_prepare() backstop
+ * (mm/vma.c).  The placement guards upstream (do_mmap's NOREPLACE
+ * -EEXIST, the punch route's idle-eject) make a hit unreachable; this
+ * "rings, never answers" shape is deliberate -- returning -EOPNOTSUPP
+ * with a disclosed counter is strictly better than letting the gather
+ * install a mapping over registered frames.  Unlike the NOREPLACE gate
+ * this walk does NOT count magazine reserve sentinels: a sentinel under
+ * a legacy VMA is a legal, tolerated shape (the magazine re-verifies
+ * marker + tree at every serve, the T0 obstacle contract), and counting
+ * them here would veto exactly the plain-MAP_FIXED-over-claimed-frames
+ * mappings that contract exists for.  mmap_write context.
+ */
+bool corten_arena_placement_backstop(struct mm_struct *mm,
+				     unsigned long start, unsigned long len)
+{
+	struct corten_mm_state *state;
+	struct corten_arena *ar;
+	unsigned long frame;
+
+	state = READ_ONCE(mm->corten_state);
+	if (!corten_enabled_static() || !state)
+		return false;
+	if (!refcount_read(&state->nr) && !READ_ONCE(state->nr_pool))
+		return false;
+	if (!len)
+		return false;
+
+	rcu_read_lock();
+	xa_for_each_range(&state->arenas, frame, ar, start >> PMD_SHIFT,
+			  (start + len - 1) >> PMD_SHIFT) {
+		if (ar == &corten_va_reserve_sentinel)
+			continue;
+		if (start < ar->end && start + len > ar->start) {
+			rcu_read_unlock();
+			atomic_long_inc(&corten_nr_placement_backstop);
+			return true;
+		}
+	}
+	rcu_read_unlock();
+
+	return false;
 }
 
 /*

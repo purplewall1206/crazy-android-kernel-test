@@ -378,6 +378,47 @@ bool corten_arena_range_overlaps(struct mm_struct *mm, unsigned long start,
 				 unsigned long len);
 
 /*
+ * V-A.3a placement truth (MV_VMA_FREE_SPEC.md sec 1.2, audit #14-#17):
+ * true if [start, start+len) intersects ANY registered frame of @mm --
+ * a live arena, a parked (idle) arena or a magazine reserve sentinel all
+ * count as occupied.  This answers "is this VA mine", while
+ * corten_arena_range_overlaps() above answers "is there live arena state
+ * here" (the 16+ reject-family hooks depend on that skip-idle meaning --
+ * do not merge the two).  Same RCU walk shape and O(1) gates as the
+ * active-only variant; callers hold mmap_write (the placement funnels).
+ */
+bool corten_arena_range_occupied_incl_idle(struct mm_struct *mm,
+					   unsigned long start,
+					   unsigned long len);
+
+/*
+ * V-A.3a P3 helper (the __mmap_prepare zero-VMA backstop branch,
+ * mm/vma.c): the live+parked arena occupancy test (reserve sentinels
+ * excluded -- a sentinel under a legacy VMA is a legal shape the magazine
+ * re-verifies at serve time) plus the audit counter, one call.  True
+ * (with corten_nr_placement_backstop bumped) = arena frames are still in
+ * the registry although the range carries no VMA -- the placement guards
+ * upstream (NOREPLACE -EEXIST, punch idle-eject) make this unreachable,
+ * a hit is an audit event, not a semantic answer.  mmap_write context.
+ */
+bool corten_arena_placement_backstop(struct mm_struct *mm,
+				     unsigned long start, unsigned long len);
+
+/*
+ * V-A.3a implant registry (D24): register [start, start+len) (clipped to
+ * the window domain) as legacy-funnel-owned VA -- the producers are the
+ * punch route's success arms and the P1b idle-eject, both under mmap_write;
+ * @ctl_lock is taken inside.  Allocation failure degrades to an unmarked
+ * implant (counted) -- a false J2 candidate, never a false clearance.
+ * corten_implant_covers(): is [start, start+len) fully inside the union of
+ * registered ranges?  Read under mmap_read or better.
+ */
+void corten_implant_mark(struct mm_struct *mm, unsigned long start,
+			 unsigned long len);
+bool corten_implant_covers(struct mm_struct *mm, unsigned long start,
+			   unsigned long len);
+
+/*
  * V-A.2a J1 prelude (MV_VMA_FREE_SPEC.md sec 1.3): the find_vma-family
  * window probe.  The exported find_vma()/find_vma_intersection() and
  * lock_vma_under_rcu() call corten_j1_probe() after their lookup; the
@@ -627,6 +668,32 @@ static inline int corten_arena_mmap_route(struct mm_struct *mm,
 static inline bool corten_arena_range_overlaps(struct mm_struct *mm,
 					       unsigned long start,
 					       unsigned long len)
+{
+	return false;
+}
+
+static inline bool
+corten_arena_range_occupied_incl_idle(struct mm_struct *mm,
+				      unsigned long start, unsigned long len)
+{
+	return false;
+}
+
+static inline bool
+corten_arena_placement_backstop(struct mm_struct *mm, unsigned long start,
+				unsigned long len)
+{
+	return false;
+}
+
+static inline void corten_implant_mark(struct mm_struct *mm,
+				       unsigned long start, unsigned long len)
+{
+}
+
+static inline bool corten_implant_covers(struct mm_struct *mm,
+					 unsigned long start,
+					 unsigned long len)
 {
 	return false;
 }

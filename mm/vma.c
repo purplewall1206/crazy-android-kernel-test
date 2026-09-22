@@ -2468,6 +2468,26 @@ static int __mmap_prepare(struct mmap_state *map, struct list_head *uf)
 	init_vma_munmap(vms, vmi, vms->vma, map->addr, map->end, uf,
 			/* unlock = */ false);
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * V-A.3a (audit #14/#15/#16): the zero-VMA placement shapes.  The
+	 * routes above (NOREPLACE -EEXIST at the do_mmap gate, the punch
+	 * route's idle-eject) make this arm unreachable -- a hit means a
+	 * placement guard failed and arena frames are still registered
+	 * although the range carries no VMA (the tree alone cannot veto
+	 * that: post-A.1 the registry is the window domain's occupancy
+	 * truth).  Answer -EOPNOTSUPP like the overlapping-VMA backstop
+	 * below and disclose through corten_nr_placement_backstop; the
+	 * probe skips reserve sentinels (a sentinel under an explicit
+	 * legacy mapping is a legal shape the magazine re-verifies at
+	 * serve time).  corten=off / no arenas: two loads.
+	 */
+	if (!vms->vma &&
+	    corten_arena_placement_backstop(map->mm, map->addr,
+					    map->end - map->addr))
+		return -EOPNOTSUPP;
+#endif
+
 	/* OK, we have overlapping VMAs - prepare to unmap them. */
 	if (vms->vma) {
 #ifdef CONFIG_CORTEN_MM_ARENA
