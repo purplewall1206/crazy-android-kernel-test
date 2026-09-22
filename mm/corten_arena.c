@@ -338,6 +338,21 @@ static atomic_long_t corten_nr_placement_idle_ejects;
  */
 static atomic_long_t corten_nr_implant_drops;
 
+/* V-A.3b J1-hygiene observation counters (audit #1/#2/#3/#7/#29): the
+ * window-domain funnels around the J1 probe pair.  fault_fallback_window
+ * counts the two fault short-circuit arms -- the fast hook's diversion
+ * (#1) and the slow path's terminus (#2): one parked/hole window fault
+ * traverses both, so the number counts arm firings, not faults.
+ * uffd_window_reject counts mfill/move entries answered -ENOENT (#29).
+ * gup_window_miss and remote_access_window_short quantify the #3/#7
+ * defect families until V-C's corten_gup_probe routes them; they are
+ * disclosure-only, no behavior hangs off any of the four.
+ */
+static atomic_long_t corten_nr_fault_fallback_window;
+static atomic_long_t corten_nr_uffd_window_reject;
+static atomic_long_t corten_nr_gup_window_miss;
+static atomic_long_t corten_nr_remote_access_window_short;
+
 /* V-A.2b: detached carrier VMAs created (cumulative; the live count is
  * the arenas ledger minus the parked/pool descriptors).
  */
@@ -2327,6 +2342,134 @@ void corten_j1_slow(struct mm_struct *mm, unsigned long start,
 		atomic_long_inc(&corten_nr_j1_hits);
 }
 
+/*
+ * V-A.3b audit #1: the fault fast hook's window arm.  A MODE mm's
+ * window-domain address that reached the FALLBACK verdict has no VMA to
+ * find -- post-A.1/A.2 both parked windows and never-declared holes are
+ * tree-free (S-1) -- so lock_vma_under_rcu()'s mas_walk there is a
+ * guaranteed miss whose only effect is polluting the probe above.  The
+ * caller diverts such faults to the slow path, whose mmap_read keeps the
+ * legacy race serialization against a concurrent DECLARE/park; this
+ * helper never terminates a fault by itself (a lockless MAPERR would
+ * SIGSEGV a fault that races a DECLARE which has not published yet --
+ * the legacy ordering point is exactly that lock).  Called from the RCU
+ * exit of the arch hook, no lock held: the counter is atomic_long like
+ * the probe pair.
+ */
+bool corten_fault_window_fallback(struct mm_struct *mm, unsigned long addr)
+{
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
+	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
+		return false;
+
+	atomic_long_inc(&corten_nr_fault_fallback_window);
+	return true;
+}
+
+/*
+ * V-A.3b audit #2: the fault slow path's window terminus.  Called under
+ * the mmap_read just taken by lock_mm_and_find_vma(), before its
+ * find_vma(): a window address with no live (non-idle) arena at it is
+ * the parked/hole shape whose legacy verdict is SIGSEGV MAPERR (S-1) --
+ * answer it without the tree walk.  The registry lookup is the
+ * ownership-fallback carve-out: an active arena whose VA a punch
+ * implant owns must still run find_vma() so the legacy funnel serves
+ * the real VMA (the probe then legally counts the implant hit).  The
+ * mmap_read serializes against DECLARE/park's mmap_write, so the
+ * idle/live answer cannot change under the lookup (the RCU section is
+ * for the xarray walk itself).
+ */
+bool corten_fault_window_maperr(struct mm_struct *mm, unsigned long addr)
+{
+	struct corten_arena *ar;
+
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
+	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
+		return false;
+
+	rcu_read_lock();
+	ar = corten_arena_lookup(mm, addr);
+	rcu_read_unlock();
+	if (ar)
+		return false;
+
+	/* A hole-window implant (the A.3a P1b idle-eject product, or a
+	 * punch into a tree-free window segment) is a registered legacy
+	 * VMA the tree must still serve -- the implant registry is the
+	 * window domain's occupancy truth for exactly these pieces.
+	 * Guest smoke contract caught the missing arm (run_mode_smoke's
+	 * punch/implant cases went MAPERR); reads are safe, every
+	 * registry writer holds mmap_write and the caller holds
+	 * mmap_read.
+	 */
+	if (corten_implant_covers(mm, addr, 1))
+		return false;
+
+	atomic_long_inc(&corten_nr_fault_fallback_window);
+	return true;
+}
+
+/*
+ * V-A.3b audit #29: the uffd mfill/move funnel's window short-circuit.
+ * A MODE mm's window domain cannot host an uffd-registered VMA (only a
+ * MAP_FIXED punch implant can live there), so uffd_lock_vma()'s
+ * lock_vma_under_rcu() and find_vma_and_prepare_anon() would be
+ * guaranteed misses -- user-triggerable ones (UFFDIO_COPY with a window
+ * destination), which would keep the J1 probe permanently non-zero with
+ * a hostile user in the loop.  Answer -ENOENT here, the errno the
+ * legacy lookup misses would return (the C12 terminal verdict).  @src_*
+ * covers move_pages()'s second lookup leg; mfill passes 0/0 (its source
+ * is a userspace buffer read with copy_from_user(), never a tree
+ * lookup).  Ranges are pre-sanitized by the callers (page-aligned, no
+ * wrap).  Disclosure corner: an implant that somehow got
+ * uffd-registered now answers -ENOENT too -- registering a punch
+ * implant for uffd is outside every registered shape.
+ */
+bool corten_uffd_window_reject(struct mm_struct *mm,
+			       unsigned long dst_start, unsigned long dst_len,
+			       unsigned long src_start, unsigned long src_len)
+{
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+		return false;
+
+	if ((dst_start < CORTEN_MODE_WINDOW_END &&
+	     dst_start + dst_len > CORTEN_MODE_WINDOW_START) ||
+	    (src_start < CORTEN_MODE_WINDOW_END &&
+	     src_start + src_len > CORTEN_MODE_WINDOW_START)) {
+		atomic_long_inc(&corten_nr_uffd_window_reject);
+		return true;
+	}
+
+	return false;
+}
+
+/*
+ * V-A.3b audit #3, observation only (the fix is V-C's corten_gup_probe):
+ * gup_vma_lookup()'s miss on a MODE mm's window domain.  GUP-slow
+ * (io_uring, 9p, vhost, pin) is structurally blind to arenas; this
+ * counts the blind spot until the region-aware branch lands.  The J1
+ * probe inside find_vma() has already counted the walk itself.
+ */
+void corten_gup_note_window_miss(struct mm_struct *mm, unsigned long addr)
+{
+	if (corten_enabled_static() && READ_ONCE(mm->corten_mode) &&
+	    addr >= CORTEN_MODE_WINDOW_START && addr < CORTEN_MODE_WINDOW_END)
+		atomic_long_inc(&corten_nr_gup_window_miss);
+}
+
+/*
+ * V-A.3b audit #7, observation only: __access_remote_vm()'s short
+ * answer (zero bytes) on a MODE mm's window domain.  ptrace PEEK/POKE,
+ * /proc/pid/mem and process_vm_readv/writev read nothing there until
+ * V-C routes remote access through regions.
+ */
+void corten_remote_note_window_short(struct mm_struct *mm, unsigned long addr)
+{
+	if (corten_enabled_static() && READ_ONCE(mm->corten_mode) &&
+	    addr >= CORTEN_MODE_WINDOW_START && addr < CORTEN_MODE_WINDOW_END)
+		atomic_long_inc(&corten_nr_remote_access_window_short);
+}
+
 void corten_arena_arenas_report(struct seq_file *m)
 {
 	struct corten_arena *ar;
@@ -2473,6 +2616,17 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_j1_probes));
 	seq_printf(m, "j1_hits             %ld\n",
 		   atomic_long_read(&corten_nr_j1_hits));
+	/* V-A.3b J1-hygiene funnels (audit #1/#2/#3/#7/#29); the two
+	 * observation counters stay non-zero until V-C's gup probe.
+	 */
+	seq_printf(m, "fault_fallback_win  %ld\n",
+		   atomic_long_read(&corten_nr_fault_fallback_window));
+	seq_printf(m, "uffd_window_reject  %ld\n",
+		   atomic_long_read(&corten_nr_uffd_window_reject));
+	seq_printf(m, "gup_window_miss     %ld\n",
+		   atomic_long_read(&corten_nr_gup_window_miss));
+	seq_printf(m, "remote_win_short    %ld\n",
+		   atomic_long_read(&corten_nr_remote_access_window_short));
 	seq_printf(m, "carriers            %ld\n",
 		   atomic_long_read(&corten_nr_carriers));
 	seq_printf(m, "zap_pinned          %ld\n",
@@ -2719,6 +2873,17 @@ long corten_arena_test_j1_probes(void)
 long corten_arena_test_j1_hits(void)
 {
 	return atomic_long_read(&corten_nr_j1_hits);
+}
+
+/* V-A.3b: the J1-hygiene funnel counters (B-group anchors). */
+long corten_arena_test_fault_fallback_window(void)
+{
+	return atomic_long_read(&corten_nr_fault_fallback_window);
+}
+
+long corten_arena_test_uffd_rejects(void)
+{
+	return atomic_long_read(&corten_nr_uffd_window_reject);
 }
 
 /* V-B.2 (H7): the file-event route counter and the zap backstop. */
@@ -10742,7 +10907,24 @@ bool corten_arena_placement_backstop(struct mm_struct *mm,
 			return true;
 		}
 	}
-	rcu_read_unlock();
+		rcu_read_unlock();
+
+	/* The empty-window legal arm: no arena frames anywhere in range,
+	 * so the legacy funnel below will place an ordinary VMA inside
+	 * the window domain (the smoke contract's mmap-fixed-at-window
+	 * shape).  Register it as an implant right here -- under this
+	 * mm's mmap_write like every producer -- so the fault terminus
+	 * (corten_fault_window_maperr) and the A.3c INV-MV2 walker both
+	 * see the registry as the window domain's complete occupancy
+	 * truth.  A range that later fails to install leaves a stale
+	 * entry whose only effect is a tree lookup that answers the
+	 * same legacy MAPERR (harmless; the walker's fallback predicate
+	 * collects it).  implant_mark clips to the window itself.
+	 */
+	if (READ_ONCE(mm->corten_mode) &&
+	    start < CORTEN_MODE_WINDOW_END &&
+	    start + len > CORTEN_MODE_WINDOW_START)
+		corten_implant_mark(mm, start, len);
 
 	return false;
 }

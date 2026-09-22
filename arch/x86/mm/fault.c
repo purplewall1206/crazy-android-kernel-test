@@ -1385,6 +1385,19 @@ void do_user_addr_fault(struct pt_regs *regs,
 					(void __user *)address);
 			return;
 		default:
+			/* V-A.3b audit #1 (J1 hygiene): a window-domain
+			 * address that fell back has no VMA to find (S-1:
+			 * parked windows and holes are tree-free) -- skip
+			 * the per-VMA-lock mas_walk below, a guaranteed
+			 * miss that would only pollute the J1 probe, and
+			 * take the slow path directly.  The mmap_read there
+			 * keeps the legacy race serialization against a
+			 * concurrent DECLARE/park; no lockless MAPERR
+			 * terminus (a fault racing an unpublished DECLARE
+			 * must wait, not SIGSEGV).
+			 */
+			if (corten_fault_window_fallback(mm, address))
+				goto lock_mmap;
 			break;	/* CORTEN_FAULT_FALLBACK: run legacy */
 		}
 	}

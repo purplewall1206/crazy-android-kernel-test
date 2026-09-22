@@ -499,6 +499,18 @@ enum corten_fault_action corten_arena_user_fault(struct mm_struct *mm,
 						 unsigned int *flags);
 
 /*
+ * V-A.3b audit #1 (j2-audit J1 hygiene): the fast hook's window arm.
+ * True for a MODE mm's window-domain address that just got the FALLBACK
+ * verdict -- the caller skips lock_vma_under_rcu()'s mas_walk (a
+ * guaranteed miss post-A.1, S-1) and takes the slow path directly,
+ * where the mmap_read keeps the DECLARE/park race serialization.  The
+ * helper itself never terminates a fault (no lockless MAPERR); it
+ * bumps the fault_fallback_window observation counter.  Declared here
+ * because the caller is arch code (arch/x86/mm/fault.c).
+ */
+bool corten_fault_window_fallback(struct mm_struct *mm, unsigned long addr);
+
+/*
  * Gate-free internal entry points.  They apply no capability check and no
  * corten=on gate so that KUnit can drive them on an un-enabled kernel
  * (same convention as corten_ptdesc_install()); the only syscall-context
@@ -758,6 +770,12 @@ long corten_arena_test_p4_ejects(void);
 long corten_arena_test_placement_idle_ejects(void);
 long corten_arena_test_implant_nr(struct mm_struct *mm);
 
+/* V-A.3b J1-hygiene funnels (audit #1/#2/#29): the fault arm-pair
+ * counter and the uffd entry rejects.
+ */
+long corten_arena_test_fault_fallback_window(void);
+long corten_arena_test_uffd_rejects(void);
+
 /* V-B.2 (H7) hooks: the file-event route counter (truncate/invalidation
  * events handed to the chunk-zap transaction) and the zap backstop
  * (must stay 0 -- every hit is a routing hole).
@@ -859,6 +877,12 @@ corten_arena_user_fault(struct mm_struct *mm, unsigned long address,
 			unsigned int *flags)
 {
 	return CORTEN_FAULT_FALLBACK;
+}
+
+static inline bool
+corten_fault_window_fallback(struct mm_struct *mm, unsigned long addr)
+{
+	return false;
 }
 
 static inline int corten_prctl_arena(unsigned int op, unsigned long addr,

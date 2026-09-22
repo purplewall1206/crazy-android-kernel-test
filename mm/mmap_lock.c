@@ -438,6 +438,21 @@ struct vm_area_struct *lock_mm_and_find_vma(struct mm_struct *mm,
 	if (!get_mmap_lock_carefully(mm, regs))
 		return NULL;
 
+	/* V-A.3b audit #2 (J1 hygiene): the slow path's window terminus.
+	 * A MODE mm's window address with no live arena at it is the
+	 * parked/hole shape (S-1) -- its legacy verdict is SIGSEGV
+	 * MAPERR, answer it without the find_vma() walk.  The helper's
+	 * registry lookup keeps the ownership-fallback shape walking
+	 * (an active arena under a punch implant must serve the real
+	 * VMA).  The second find_vma() below is only reached when the
+	 * first found a VM_GROWSDOWN VMA, which a window address never
+	 * has -- one check in front of the first covers both.
+	 */
+	if (corten_fault_window_maperr(mm, addr)) {
+		mmap_read_unlock(mm);
+		return NULL;
+	}
+
 	vma = find_vma(mm, addr);
 	if (likely(vma && (vma->vm_start <= addr)))
 		return vma;

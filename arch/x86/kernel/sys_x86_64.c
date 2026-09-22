@@ -143,11 +143,17 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr, unsigned long len,
 
 	if (addr) {
 		addr = PAGE_ALIGN(addr);
-		vma = find_vma(mm, addr);
-		if (end - len >= addr &&
-		    !corten_addr_in_window(addr, len) &&
-		    (!vma || addr + len <= vm_start_gap(vma)))
-			return addr;
+		/* V-A.3b J1 hygiene: fence before lookup, as the top-down
+		 * twin below already does -- a window hint never takes
+		 * the accept arm, so the find_vma() on a tree-free
+		 * window address would only pollute the J1 probe.
+		 */
+		if (!corten_addr_in_window(addr, len)) {
+			vma = find_vma(mm, addr);
+			if (end - len >= addr &&
+			    (!vma || addr + len <= vm_start_gap(vma)))
+				return addr;
+		}
 	}
 
 	info.length = len;

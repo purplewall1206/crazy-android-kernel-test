@@ -553,6 +553,26 @@ struct vm_area_struct *corten_vma_find(struct mm_struct *mm,
 				       unsigned long end);
 
 /*
+ * V-A.3b J1 hygiene (j2-audit #1/#2/#3/#7/#29): the window-domain
+ * funnels that keep the probe pair above clean.  fault_window_maperr()
+ * runs under the mmap_read just taken by lock_mm_and_find_vma() and
+ * answers the parked/hole shape without the find_vma(); it returns
+ * false for a live arena (the ownership-fallback shape must still walk
+ * and serve the punch implant).  uffd_window_reject() is the mfill/move
+ * entry short-circuit (-ENOENT, the C12 terminal verdict); the two note
+ * helpers are observation-only counters for the V-C defect families.
+ * The fast-hook arm (#1, corten_fault_window_fallback) lives in
+ * include/linux/corten_arena.h next to its caller.
+ */
+bool corten_fault_window_maperr(struct mm_struct *mm, unsigned long addr);
+bool corten_uffd_window_reject(struct mm_struct *mm,
+			       unsigned long dst_start, unsigned long dst_len,
+			       unsigned long src_start, unsigned long src_len);
+void corten_gup_note_window_miss(struct mm_struct *mm, unsigned long addr);
+void corten_remote_note_window_short(struct mm_struct *mm,
+				     unsigned long addr);
+
+/*
  * V-A.2a: the window-domain fence for the generic gap walkers
  * (mm/mmap.c generic_get_unmapped_area{,_topdown}() and the x86 twins
  * in arch/x86/kernel/sys_x86_64.c).  With the live and parked windows
@@ -931,6 +951,31 @@ static inline struct vm_area_struct *corten_vma_find(struct mm_struct *mm,
 						     unsigned long end)
 {
 	return NULL;
+}
+
+/* V-A.3b J1-hygiene funnels: no MODE mm can exist, never taken. */
+static inline bool corten_fault_window_maperr(struct mm_struct *mm,
+					      unsigned long addr)
+{
+	return false;
+}
+
+static inline bool
+corten_uffd_window_reject(struct mm_struct *mm, unsigned long dst_start,
+			  unsigned long dst_len, unsigned long src_start,
+			  unsigned long src_len)
+{
+	return false;
+}
+
+static inline void corten_gup_note_window_miss(struct mm_struct *mm,
+					       unsigned long addr)
+{
+}
+
+static inline void corten_remote_note_window_short(struct mm_struct *mm,
+						   unsigned long addr)
+{
 }
 
 struct vm_unmapped_area_info;

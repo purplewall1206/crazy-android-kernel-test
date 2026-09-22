@@ -25,6 +25,7 @@
 #include <asm/mmu_context.h>
 #include <asm/tlbflush.h>
 
+#include "corten_arena.h"	/* corten_gup_note_window_miss (V-A.3b #3) */
 #include "internal.h"
 #include "swap.h"
 
@@ -1303,8 +1304,15 @@ static struct vm_area_struct *gup_vma_lookup(struct mm_struct *mm,
 	unsigned long now, next;
 
 	vma = find_vma(mm, addr);
-	if (!vma || (addr >= vma->vm_start))
+	if (!vma || addr >= vma->vm_start) {
+		/* V-A.3b audit #3, observation only: the GUP-slow window
+		 * miss (fix lands with V-C's corten_gup_probe); the J1
+		 * probe inside find_vma() already counted the walk.
+		 */
+		if (!vma)
+			corten_gup_note_window_miss(mm, addr);
 		return vma;
+	}
 
 	/* Only warn for half-way relevant accesses */
 	if (!(vma->vm_flags & VM_GROWSDOWN))

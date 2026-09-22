@@ -6982,8 +6982,16 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 	addr = untagged_addr_remote(mm, addr);
 
 	/* Avoid triggering the temporary warning in __get_user_pages */
-	if (!vma_lookup(mm, addr) && !expand_stack(mm, addr))
+	if (!vma_lookup(mm, addr) && !expand_stack(mm, addr)) {
+		/* V-A.3b audit #7, observation only: the remote-access
+		 * short answer (zero bytes) on a MODE mm's window
+		 * domain -- ptrace, /proc/pid/mem and process_vm_* read
+		 * nothing there until V-C routes remote access through
+		 * regions.
+		 */
+		corten_remote_note_window_short(mm, addr);
 		return 0;
+	}
 
 	/* ignore errors, just check how much was successfully transferred */
 	while (len) {

@@ -17,6 +17,7 @@
 #include <linux/shmem_fs.h>
 #include <asm/tlbflush.h>
 #include <asm/tlb.h>
+#include "corten_arena.h"	/* corten_uffd_window_reject (V-A.3b #29) */
 #include "internal.h"
 #include "swap.h"
 
@@ -46,6 +47,13 @@ struct vm_area_struct *find_vma_and_prepare_anon(struct mm_struct *mm,
 
 	mmap_assert_locked(mm);
 	vma = vma_lookup(mm, addr);
+	/* V-A.3b J1 prelude, hook 5/5 (audit #29): vma_lookup() is a raw
+	 * mtree_load(), so this funnel bypasses every probed primitive --
+	 * probe it here.  Window entries reach this line only for a punch
+	 * implant (the mfill/move entry short-circuit answers the
+	 * tree-free shapes with -ENOENT before they get this far).
+	 */
+	corten_j1_probe(mm, addr, addr + 1, vma);
 	if (!vma)
 		vma = ERR_PTR(-ENOENT);
 	else if (!(vma->vm_flags & VM_SHARED) &&
@@ -717,6 +725,16 @@ static __always_inline ssize_t mfill_atomic(struct userfaultfd_ctx *ctx,
 	/* Does the address range wrap, or is the span zero-sized? */
 	VM_WARN_ON_ONCE(src_start + len <= src_start);
 	VM_WARN_ON_ONCE(dst_start + len <= dst_start);
+
+	/* V-A.3b audit #29 (J1 hygiene): a MODE mm's window domain cannot
+	 * host an uffd-registered VMA, so the uffd_lock_vma() /
+	 * find_vma_and_prepare_anon() lookups below are guaranteed misses
+	 * there -- and user-triggerable ones (UFFDIO_COPY et al. with a
+	 * window destination).  Answer -ENOENT, the errno the misses
+	 * would produce, without touching the maple tree.
+	 */
+	if (corten_uffd_window_reject(dst_mm, dst_start, len, 0, 0))
+		return -ENOENT;
 
 	src_addr = src_start;
 	dst_addr = dst_start;
@@ -1780,6 +1798,15 @@ ssize_t move_pages(struct userfaultfd_ctx *ctx, unsigned long dst_start,
 	/* Does the address range wrap, or is the span zero-sized? */
 	VM_WARN_ON_ONCE(src_start + len < src_start);
 	VM_WARN_ON_ONCE(dst_start + len < dst_start);
+
+	/* V-A.3b audit #29 (J1 hygiene): both ends take a tree lookup in
+	 * uffd_move_lock() (lock_vma_under_rcu() or
+	 * find_vma_and_prepare_anon()), so a window-domain source or
+	 * destination would be a user-triggerable guaranteed miss.  The
+	 * legacy errno for a missing src VMA is -ENOENT; answer it here.
+	 */
+	if (corten_uffd_window_reject(mm, dst_start, len, src_start, len))
+		return -ENOENT;
 
 	err = uffd_move_lock(mm, dst_start, src_start, &dst_vma, &src_vma);
 	if (err)

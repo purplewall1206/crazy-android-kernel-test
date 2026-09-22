@@ -503,9 +503,13 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 		 * hand it back out), and a claimed magazine frame is
 		 * spoken-for VA.  -EEXIST is the NOREPLACE contract's
 		 * literal errno, unchanged from the reservation-VMA era.
+		 * V-A.3b: the registry term comes first -- a MODE window
+		 * range is tree-free, so the find_vma_intersection() there
+		 * was a walk whose only product was a J1 probe count (the
+		 * operands are pure, the OR is unchanged).
 		 */
-		if (find_vma_intersection(mm, addr, addr + len) ||
-		    corten_arena_range_occupied_incl_idle(mm, addr, len))
+		if (corten_arena_range_occupied_incl_idle(mm, addr, len) ||
+		    find_vma_intersection(mm, addr, addr + len))
 			return -EEXIST;
 	}
 
@@ -835,12 +839,22 @@ generic_get_unmapped_area(struct file *filp, unsigned long addr,
 
 	if (addr) {
 		addr = PAGE_ALIGN(addr);
-		vma = find_vma_prev(mm, addr, &prev);
-		if (mmap_end - len >= addr && addr >= mmap_min_addr &&
-		    !corten_addr_in_window(addr, len) &&
-		    (!vma || addr + len <= vm_start_gap(vma)) &&
-		    (!prev || addr >= vm_end_gap(prev)))
-			return addr;
+		/* V-A.3b J1 hygiene: the window fence comes before the
+		 * lookup -- a window hint's accept arm is dead (the
+		 * fenced walker below replays outside the window) and
+		 * the find_vma_prev() on a tree-free window address
+		 * would only pollute the J1 probe.  Semantics are
+		 * unchanged: the accept condition below is exactly the
+		 * original one with the (always-true there) fence term
+		 * factored out.
+		 */
+		if (!corten_addr_in_window(addr, len)) {
+			vma = find_vma_prev(mm, addr, &prev);
+			if (mmap_end - len >= addr && addr >= mmap_min_addr &&
+			    (!vma || addr + len <= vm_start_gap(vma)) &&
+			    (!prev || addr >= vm_end_gap(prev)))
+				return addr;
+		}
 	}
 
 	info.length = len;
@@ -888,12 +902,18 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 	/* requesting a specific address */
 	if (addr) {
 		addr = PAGE_ALIGN(addr);
-		vma = find_vma_prev(mm, addr, &prev);
-		if (mmap_end - len >= addr && addr >= mmap_min_addr &&
-		    !corten_addr_in_window(addr, len) &&
-		    (!vma || addr + len <= vm_start_gap(vma)) &&
-		    (!prev || addr >= vm_end_gap(prev)))
-			return addr;
+		/* V-A.3b J1 hygiene: fence before lookup, as in the
+		 * bottom-up twin above -- a window hint never takes the
+		 * accept arm, so the find_vma_prev() there would only
+		 * pollute the J1 probe.
+		 */
+		if (!corten_addr_in_window(addr, len)) {
+			vma = find_vma_prev(mm, addr, &prev);
+			if (mmap_end - len >= addr && addr >= mmap_min_addr &&
+			    (!vma || addr + len <= vm_start_gap(vma)) &&
+			    (!prev || addr >= vm_end_gap(prev)))
+				return addr;
+		}
 	}
 
 	info.flags = VM_UNMAPPED_AREA_TOPDOWN;
@@ -1098,6 +1118,11 @@ find_vma_prev(struct mm_struct *mm, unsigned long addr,
 	VMA_ITERATOR(vmi, mm, addr);
 
 	vma = vma_iter_load(&vmi);
+	/* V-A.2a J1 prelude, hook 4/5 (V-A.3b): same probe shape as
+	 * find_vma() above -- a hit means a tree VMA in the window
+	 * domain (a punch implant, post-A.2).
+	 */
+	corten_j1_probe(mm, addr, addr + 1, vma);
 	*pprev = vma_prev(&vmi);
 	if (!vma)
 		vma = vma_next(&vmi);

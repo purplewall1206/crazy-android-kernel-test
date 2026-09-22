@@ -7075,6 +7075,312 @@ static void corten_arena_test_hint_fence(struct kunit *test)
  * ------------------------------------------------------------------
  */
 
+/* ------------------------------------------------------------------ *
+ * V-A.3b (j2-audit J1 hygiene): the five-hook J1 prelude, the corten
+ * exemption channels, and the fault/uffd window short-circuits.
+ * ------------------------------------------------------------------
+ */
+
+/* mm-internal (mm/userfaultfd.c), no header: hook 5/5's funnel entry,
+ * compiled only under CONFIG_USERFAULTFD.
+ */
+#ifdef CONFIG_USERFAULTFD
+extern int find_vmas_mm_locked(struct mm_struct *mm,
+			       unsigned long dst_start,
+			       unsigned long src_start,
+			       struct vm_area_struct **dst_vmap,
+			       struct vm_area_struct **src_vmap);
+#endif
+
+/* The five probed primitives, one pass each on a MODE mm's window
+ * domain: every call counts exactly one probe and none counts a hit
+ * (the live window is VMA-free post-A.2), the delegated domain and the
+ * non-MODE door stay silent.  Hook 5 (find_vma_and_prepare_anon)
+ * exists only under CONFIG_USERFAULTFD, so the expected count adapts.
+ */
+static void corten_arena_test_j1_hooks(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *prev = NULL;
+	long p0, p1, h0, h1;
+	int expected = 4;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "J1 hooks require corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+	/* The pure-MODE shape: a live, VMA-free window. */
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+
+	p0 = corten_arena_test_j1_probes();
+	h0 = corten_arena_test_j1_hits();
+
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_NULL(test,
+			  find_vma_intersection(mm, CORTEN_ARENA_TEST_WIN,
+						CORTEN_ARENA_TEST_WIN +
+						PAGE_SIZE));
+	KUNIT_EXPECT_NULL(test, find_vma(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_NULL(test,
+			  find_vma_prev(mm, CORTEN_ARENA_TEST_WIN, &prev));
+	mmap_read_unlock(mm);
+	/* lock_vma_under_rcu() manages its own RCU section. */
+	KUNIT_EXPECT_NULL(test,
+			  lock_vma_under_rcu(mm, CORTEN_ARENA_TEST_WIN));
+#ifdef CONFIG_USERFAULTFD
+	{
+		struct vm_area_struct *dv, *sv;
+
+		expected++;
+		mmap_read_lock(mm);
+		KUNIT_EXPECT_EQ(test,
+				find_vmas_mm_locked(mm,
+						    CORTEN_ARENA_TEST_WIN,
+						    CORTEN_ARENA_TEST_NOWHERE,
+						    &dv, &sv), -ENOENT);
+		mmap_read_unlock(mm);
+	}
+#endif
+
+	p1 = corten_arena_test_j1_probes();
+	h1 = corten_arena_test_j1_hits();
+	KUNIT_EXPECT_EQ(test, p1 - p0, (long)expected);
+	KUNIT_EXPECT_EQ(test, h1 - h0, 0);
+
+	/* The delegated domain is beyond the first door's window term. */
+	mmap_read_lock(mm);
+	find_vma(mm, CORTEN_ARENA_TEST_NOWHERE);
+	mmap_read_unlock(mm);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p1, 0);
+
+	/* The second door: with MODE off, the same window call is silent. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	mmap_read_lock(mm);
+	find_vma(mm, CORTEN_ARENA_TEST_WIN);
+	mmap_read_unlock(mm);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p1, 0);
+}
+
+/* The exemption channels (audit #52): a MODE mm drives the two corten
+ * tree-walk consumers -- the auto route's obstacle scan (through the
+ * untracked corten_vma_find alias) and the fenced window-hint walkers
+ * -- with the J1 counters silent throughout; only an explicit external
+ * lookup counts.
+ */
+static void corten_arena_test_j1_self_exempt(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long hint = CORTEN_MODE_WINDOW_START + 4 * PMD_SIZE;
+	long p0, p1;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "J1 exemption requires corten=on");
+	if (sysctl_overcommit_memory == OVERCOMMIT_NEVER)
+		kunit_skip(test, "auto takeover degraded (OVERCOMMIT_NEVER)");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	p0 = corten_arena_test_j1_probes();
+
+	/* Auto takeover (addr == 0): the magazine obstacle scan reaches
+	 * the maple tree through the alias only.  A degraded-to-legacy
+	 * outcome walks the delegated side and is equally silent.
+	 */
+	KUNIT_ASSERT_FALSE(test,
+			   IS_ERR_VALUE(corten_arena_test_vm_mmap(test, mm,
+								  0, PMD_SIZE,
+								  0)));
+	/* A window hint: the walkers fence before any lookup on the
+	 * hinted address (the V-A.3b fence-before-lookup order).
+	 */
+	KUNIT_ASSERT_FALSE(test,
+			   IS_ERR_VALUE(corten_arena_test_vm_mmap(test, mm,
+								  hint,
+								  PAGE_SIZE,
+								  0)));
+
+	p1 = corten_arena_test_j1_probes();
+	KUNIT_EXPECT_EQ(test, p1 - p0, 0);
+
+	/* Positive control: the same window address, probed explicitly. */
+	mmap_read_lock(mm);
+	find_vma(mm, hint);
+	mmap_read_unlock(mm);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p1, 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* The mfill/move entry short-circuit (audit #29): a window-domain
+ * destination (or, for move, either leg) answers -ENOENT off the two
+ * doors alone.  The funnel-level shapes need a live userfaultfd
+ * context; the helper is the funnel's verdict (brief B10's degraded
+ * form) and its counter is the observable.
+ */
+static void corten_arena_test_uffd_window_reject(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	long r0, r1;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "uffd short-circuit requires corten=on");
+
+	/* MODE is the takeover: the short-circuit is live from mode_enter
+	 * on, before any arena exists (a hole window answers -ENOENT no
+	 * less -- it cannot host an uffd registration either).
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_uffd_window_reject(mm,
+						    CORTEN_MODE_WINDOW_START,
+						    PAGE_SIZE, 0, 0));
+
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+
+	r0 = corten_arena_test_uffd_rejects();
+
+	/* mfill shape (the src leg is unused: 0/0). */
+	KUNIT_EXPECT_TRUE(test,
+			  corten_uffd_window_reject(mm, CORTEN_ARENA_TEST_WIN,
+						    PAGE_SIZE, 0, 0));
+	/* move shape: either leg inside the window rejects. */
+	KUNIT_EXPECT_TRUE(test,
+			  corten_uffd_window_reject(mm,
+						    CORTEN_ARENA_TEST_NOWHERE,
+						    PAGE_SIZE,
+						    CORTEN_ARENA_TEST_WIN,
+						    PAGE_SIZE));
+	/* A delegated range straddling the window's lower edge. */
+	KUNIT_EXPECT_TRUE(test,
+			  corten_uffd_window_reject(mm,
+						    CORTEN_MODE_WINDOW_START -
+						    PAGE_SIZE,
+						    2 * PAGE_SIZE, 0, 0));
+
+	r1 = corten_arena_test_uffd_rejects();
+	KUNIT_EXPECT_EQ(test, r1 - r0, 3);
+
+	/* Boundary exactness: touching is not intersecting, and a fully
+	 * delegated range never rejects.
+	 */
+	KUNIT_EXPECT_FALSE(test,
+			   corten_uffd_window_reject(mm,
+						     CORTEN_MODE_WINDOW_START -
+						     PAGE_SIZE,
+						     PAGE_SIZE, 0, 0));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_uffd_window_reject(mm,
+						     CORTEN_MODE_WINDOW_END,
+						     PAGE_SIZE, 0, 0));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_uffd_window_reject(mm,
+						     CORTEN_ARENA_TEST_NOWHERE,
+						     PAGE_SIZE, 0, 0));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_uffd_rejects(), r1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	/* The second door: with MODE off, the same window call is silent. */
+	KUNIT_EXPECT_FALSE(test,
+			   corten_uffd_window_reject(mm, CORTEN_ARENA_TEST_WIN,
+						     PAGE_SIZE, 0, 0));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_uffd_rejects(), r1);
+}
+
+/* The fault short-circuit pair (audit #1/#2) with the S-1 invariance:
+ * a parked window's slow-path lookup answers NULL with ZERO J1 probes
+ * (the terminus replaced the walk), an active window still walks (the
+ * ownership-fallback carve-out -- legacy must serve a punch implant),
+ * and the fast-hook arm diverts without terminating anything by
+ * itself.
+ */
+static void corten_arena_test_fault_window_shorts(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long active = CORTEN_MODE_WINDOW_START + 2 * PMD_SIZE;
+	long p0, p1, f0, f1;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "fault short-circuit requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* The parked window at the base (the noreplace_parked recipe). */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pool_idle(mm,
+						      CORTEN_ARENA_TEST_WIN));
+	/* The active window one slot up. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, active, PMD_SIZE),
+			0);
+
+	f0 = corten_arena_test_fault_fallback_window();
+	p0 = corten_arena_test_j1_probes();
+
+	/* #1: the fast-hook arm is domain-wide (the slow path decides);
+	 * it counts and diverts, never terminates.
+	 */
+	KUNIT_EXPECT_TRUE(test,
+			  corten_fault_window_fallback(mm,
+						       CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_TRUE(test, corten_fault_window_fallback(mm, active));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_fault_window_fallback(mm,
+							CORTEN_ARENA_TEST_NOWHERE));
+
+	/* #2 end-to-end: the parked window's slow-path lookup answers
+	 * NULL without touching the maple tree.
+	 */
+	KUNIT_EXPECT_NULL(test,
+			  lock_mm_and_find_vma(mm, CORTEN_ARENA_TEST_WIN,
+					       NULL));
+	p1 = corten_arena_test_j1_probes();
+	f1 = corten_arena_test_fault_fallback_window();
+	KUNIT_EXPECT_EQ(test, p1 - p0, 0);
+	KUNIT_EXPECT_EQ(test, f1 - f0, 3);
+
+	/* The carve-out: an active arena keeps the walk (the probe below
+	 * is the ownership-fallback shape's legal cost -- it would find a
+	 * punch implant there).
+	 */
+	KUNIT_EXPECT_NULL(test, lock_mm_and_find_vma(mm, active, NULL));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p1, 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fault_fallback_window(), f1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
 /* The VMA-free consumption surface: chunk munmap without a VMA split,
  * the FRESH re-dispatch after it, the re-park, and the mprotect route's
  * miss on a parked window (legacy -ENOMEM, S-4's "already munmapped"
@@ -8996,6 +9302,10 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_occupied_incl_idle),
 	KUNIT_CASE(corten_arena_test_p4_eject),
 	KUNIT_CASE(corten_arena_test_hint_fence),
+	KUNIT_CASE(corten_arena_test_j1_hooks),
+	KUNIT_CASE(corten_arena_test_j1_self_exempt),
+	KUNIT_CASE(corten_arena_test_uffd_window_reject),
+	KUNIT_CASE(corten_arena_test_fault_window_shorts),
 	KUNIT_CASE(corten_arena_test_vma_free_reuse),
 	KUNIT_CASE(corten_arena_test_inv_mv3),
 	KUNIT_CASE(corten_arena_test_fork_vma_free),
