@@ -7611,12 +7611,15 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 
 	/* V-A.1: the old folio of a VMA-less arena carries no rmap anchor
 	 * (see map_anon); the removal stays symmetric with the add.
-	 * V-B.3 (H6): a pagecache folio's rmap is the file mapping's
-	 * (the read arm's folio_add_file_rmap_pte against the carrier)
-	 * and its counter is mm_counter_file()'s family (V-B.4) -- the
-	 * same split corten_zap_release_page() makes.
+	 * W1.c (R3): a pagecache old folio's rmap is the file mapping's
+	 * own mapcount (the read arm's novma install) -- its removal is
+	 * vma-free now, numerically the same -1 mapper the vma-ful call
+	 * ran.  V-B.3 (H6): its counter is mm_counter_file()'s family
+	 * (V-B.4) -- the same split corten_zap_release_page() makes.
 	 */
-	if (vma)
+	if (old_is_file)
+		folio_remove_file_rmap_novma(old);
+	else if (vma)
 		folio_remove_rmap_pte(old, page, vma);
 	add_mm_counter(mm, old_is_file ? mm_counter_file(old) :
 				    MM_ANONPAGES, -1);
@@ -8311,7 +8314,17 @@ static int corten_arena_file_read(struct corten_fault_ctx *ctx,
 	 * child's counters against its own zap at fork time.
 	 */
 	add_mm_counter(mm, mm_counter_file(folio), 1);
-	folio_add_file_rmap_pte(folio, page, vma);
+	/* W1.c (R4): the file mapcount is the pagecache folio's own,
+	 * carried by the novma wrapper (W1.a) inside this transaction --
+	 * numerically the vma-ful call it replaces (order-0: +1 mapper,
+	 * first map bumps NR_FILE_MAPPED), minus the vma terms the
+	 * wrapper's contract leaves to the caller.  Order-0 only, like
+	 * the wrapper: every supported pagecache shape here is order-0
+	 * (tmpfs huge defaults to never; the FGP_CREAT fetch above
+	 * allocates order 0), and the wrapper's VM_WARN trips loudly on
+	 * anything else.
+	 */
+	folio_add_file_rmap_novma(folio);
 	set_ptes(mm, ctx->addr, ptep, entry, 1);
 	update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
 	pte_unmap_unlock(ptep, ptl);
@@ -9215,11 +9228,11 @@ struct corten_zap_win {
  * split.  V-A.1: @vma is NULL for a VMA-less arena, whose pages carry
  * no rmap anchor (see corten_arena_map_anon()) -- the removal must not
  * run for them or the mapcount underflows, and the folio is not flagged
- * anon, so the window's vma-ness owns the counter split.  A *file*
- * page under a NULL @vma walk (a previous punch's legacy mapping) is
- * anchored by its own VMA's i_mmap regardless of the arena, so the
- * covering VMA is resolved for the vma-insensitive removal (the
- * zap_pte_range() convention).
+ * anon, so the window's vma-ness owns the counter split.  W1.c (R7):
+ * the *file* family's rmap is the pagecache folio's own mapcount (the
+ * read arm's novma install), so its removal is vma-free too and the
+ * folio family, not the window's vma-ness, keys the arm; the anon
+ * family keeps the carrier-anchored call (its flip is W-2's).
  */
 static void corten_zap_release_page(struct mm_struct *mm,
 				    struct vm_area_struct *vma,
@@ -9231,10 +9244,17 @@ static void corten_zap_release_page(struct mm_struct *mm,
 	/* V-A.1: a VMA-less arena's pages carry no rmap anchor (see
 	 * corten_arena_map_anon()) -- the removal must not run for them
 	 * or the mapcount underflows, and the folio is not flagged anon,
-	 * so the window's vma-ness owns the counter split.
+	 * so the window's vma-ness owns the counter split.  W1.c (R7):
+	 * the file family removes through the novma wrapper (symmetric
+	 * with the read arm's install); the anon family stays on the
+	 * vma-anchored call.
 	 */
-	if (vma)
-		folio_remove_rmap_pte(folio, page, vma);
+	if (vma) {
+		if (anon)
+			folio_remove_rmap_pte(folio, page, vma);
+		else
+			folio_remove_file_rmap_novma(folio);
+	}
 	/* V-B.4: the file family is mm_counter_file()'s (shmem-backed
 	 * folios are MM_SHMEMPAGES), symmetric with the read arm's
 	 * install and upstream's copy_page_range() at fork.

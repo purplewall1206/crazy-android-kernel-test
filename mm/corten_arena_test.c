@@ -3152,6 +3152,266 @@ static void corten_arena_test_file_cow(struct kunit *test)
 	fput(file);
 }
 
+/* Helpers defined below (the op worker and the W1.a stat reader). */
+static int corten_arena_test_run_op_full(struct kunit *test,
+					 struct corten_arena_test_op *o);
+static long corten_arena_test_node_stat(pg_data_t *pgdat,
+					enum node_stat_item item);
+
+/* ------------------------------------------------------------------ *
+ * W1.c: the file rmap precision anchor (R-W1-4).  A real legacy
+ * mapper -- a plain MAP_SHARED file VMA outside every arena window,
+ * faulted through the unmodified funnel -- and the arena's novma
+ * install share one pagecache folio, and every ledger stays exact:
+ * the folio's mapcount, the per-mm file family, the node's
+ * NR_FILE_MAPPED (the exact fold-lagged read of
+ * corten_arena_test_node_stat()).  Every retirement point takes out
+ * exactly its own mapper: the even_cows demote retires the arena's
+ * through the flipped zap (the B.2 registry enum's arm) and the
+ * legacy's through its own i_mmap walk; the mode-exit teardown
+ * retires the arena's alone (the registry empties with the region --
+ * the W1.b pairing); the legacy munmap the rest.  The stale-guard
+ * zero holds throughout.
+ * ------------------------------------------------------------------
+ */
+
+/* The legacy half of the fixture: a plain MAP_SHARED file VMA at
+ * NOWHERE, prefaulted through handle_mm_fault() (the GUP faultin
+ * shape: no USER bit, mmap read held).  Runs on the attached worker
+ * (the funnel's production shape) and BEFORE mode_enter -- a
+ * MODE-process file mmap would be routed to the takeover.
+ */
+static void corten_arena_test_op_legacy_file_map(struct corten_arena_test_op *o)
+{
+	unsigned long populate = 0, off;
+	LIST_HEAD(uf);
+	struct vm_area_struct *vma;
+
+	mmap_write_lock(o->mm);
+	o->retl = (long)do_mmap(o->file, o->addr, o->len, PROT_READ,
+				o->flags, 0, 0, &populate, &uf);
+	mmap_write_unlock(o->mm);
+	if (IS_ERR_VALUE((unsigned long)o->retl)) {
+		o->ret = (int)o->retl;
+		return;
+	}
+
+	vma = vma_lookup(o->mm, o->addr);
+	if (!vma) {
+		o->ret = -ENOENT;
+		return;
+	}
+	mmap_read_lock(o->mm);
+	for (off = 0; off < o->len && !o->ret; off += PAGE_SIZE) {
+		if (handle_mm_fault(vma, o->addr + off, 0, NULL) &
+		    VM_FAULT_ERROR)
+			o->ret = -EIO;
+	}
+	mmap_read_unlock(o->mm);
+}
+
+/* Its mirror: the plain munmap that retires the legacy mappers. */
+static void corten_arena_test_op_legacy_file_unmap(struct corten_arena_test_op *o)
+{
+	mmap_write_lock(o->mm);
+	o->ret = do_munmap(o->mm, o->addr, o->len, NULL);
+	mmap_write_unlock(o->mm);
+}
+
+static void corten_arena_test_file_rmap_shared(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct address_space *mapping;
+	struct corten_arena_test_op omap, ounmap;
+	struct corten_pte_meta m;
+	struct file *file;
+	struct folio *folio, *folio1;
+	pg_data_t *pgdat;
+	unsigned int fflags;
+	long base, filepg, filemc, filestat, routes, reads, stale;
+	int filepg_family;
+	u64 pat = 0x51de51de51de51deULL, back = 0;
+	loff_t pos = 0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "FILE rmap anchor requires corten=on");
+
+	file = shmem_file_setup("corten_w1c", 2 * PAGE_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	mapping = file->f_mapping;
+	base = file_count(file);
+	KUNIT_ASSERT_EQ(test,
+			kernel_write(file, &pat, sizeof(pat), &pos),
+			(ssize_t)sizeof(pat));
+
+	/* The legacy mapper: two prefaulted pages at NOWHERE, outside
+	 * every arena window and every other fixture range.
+	 */
+	omap = (struct corten_arena_test_op){
+		.mm = mm, .fn = corten_arena_test_op_legacy_file_map,
+		.file = file, .addr = CORTEN_ARENA_TEST_NOWHERE,
+		.len = 2 * PAGE_SIZE, .flags = MAP_SHARED | MAP_FIXED,
+	};
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &omap), 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR_VALUE((unsigned long)omap.retl));
+
+	folio = filemap_get_folio(mapping, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(folio));
+	folio1 = filemap_get_folio(mapping, 1);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(folio1));
+	pgdat = folio_pgdat(folio);
+	filepg_family = corten_arena_test_file_rss(mapping);
+
+	/* The legacy baseline: one mapper per folio, both ledgers the
+	 * funnel's own exact accounting.  filestat is sampled here so
+	 * every later delta is arena-only.
+	 */
+	filemc = folio_mapcount(folio);
+	KUNIT_EXPECT_EQ(test, filemc, 1);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio1), 1);
+	filepg = corten_arena_test_mm_counter(mm, filepg_family);
+	KUNIT_EXPECT_EQ(test, filepg, 2);
+	filestat = corten_arena_test_node_stat(pgdat, NR_FILE_MAPPED);
+	reads = corten_arena_test_named_counter(test, "file_read_faults");
+	stale = corten_arena_test_named_counter(test, "imap_stale_refuses");
+	routes = corten_arena_test_truncate_routes();
+
+	/* The arena joins the folio: the same file, pgoff 0 aligned
+	 * with the legacy mapping.  The registry membership (W1.b) is
+	 * the enumeration source, not a mapper: it adds no mapcount.
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      file, 0), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), filemc);
+
+	/* The read arm's novma install (R4): exactly one mapper on the
+	 * shared folio -- the legacy mapper untouched -- and exactly
+	 * one page in each family's ledger.
+	 */
+	fflags = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), filemc + 1);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio1), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, filepg_family),
+			filepg + 1);
+	/* NR_FILE_MAPPED counts mapped FOLIOS: the first mapper bumps
+	 * it, the last remover drops it -- the arena's second mapping of
+	 * an already-mapped pagecache folio must leave it alone (and
+	 * every later assert here would catch the wrapper stealing the
+	 * shared ledger: the demote's -1 belongs to the legacy last
+	 * mapper, the mode-exit's removal charges nothing).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_node_stat(pgdat, NR_FILE_MAPPED),
+			filestat);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"file_read_faults"),
+			reads + 1);
+	back = 0;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm, CORTEN_ARENA_TEST_WIN,
+						    &back, false),
+			0);
+	KUNIT_EXPECT_EQ(test, back, pat);
+
+	/* The even_cows demote retires each mapper through its own arm:
+	 * the arena's through the flipped zap (R7, inside the B.2
+	 * registry enum), the legacy's through its i_mmap walk -- the
+	 * sum is exact, zero mappers left on the folio.
+	 */
+	unmap_mapping_pages(mapping, 0, 1, true);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes + 1);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, filepg_family),
+			filepg - 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_node_stat(pgdat, NR_FILE_MAPPED),
+			filestat - 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m),
+			0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	/* The region survives its demote: the registry pairing holds. */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
+
+	/* Both mappers refault: each rejoins with exactly +1, and the
+	 * arena re-reads the pagecache folio's content.
+	 */
+	omap = (struct corten_arena_test_op){
+		.mm = mm, .fn = corten_arena_test_op_legacy_file_map,
+		.file = file, .addr = CORTEN_ARENA_TEST_NOWHERE,
+		.len = 2 * PAGE_SIZE, .flags = MAP_SHARED | MAP_FIXED,
+	};
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &omap), 0);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+	fflags = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 2);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"file_read_faults"),
+			reads + 2);
+	back = 0;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm, CORTEN_ARENA_TEST_WIN,
+						    &back, false),
+			0);
+	KUNIT_EXPECT_EQ(test, back, pat);
+
+	/* The mode exit retires exactly the arena's mapper (the same
+	 * flipped zap); the legacy mapper survives it and the registry
+	 * empties with the region (the W1.b pairing's exit shape).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, filepg_family),
+			filepg);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_node_stat(pgdat, NR_FILE_MAPPED),
+			filestat);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 0);
+
+	/* The legacy munmap retires the rest: clean zero on both
+	 * folios, the node ledger back to its pre-fixture value.
+	 */
+	ounmap = (struct corten_arena_test_op){
+		.mm = mm, .fn = corten_arena_test_op_legacy_file_unmap,
+		.addr = CORTEN_ARENA_TEST_NOWHERE, .len = 2 * PAGE_SIZE,
+	};
+	KUNIT_EXPECT_EQ(test, corten_arena_test_run_op_full(test, &ounmap), 0);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 0);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio1), 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_node_stat(pgdat, NR_FILE_MAPPED),
+			filestat - 2);
+
+	/* The stale-guard zero held through every event. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"imap_stale_refuses"),
+			stale);
+	KUNIT_EXPECT_EQ(test, file_count(file), base);
+
+	folio_put(folio1);
+	folio_put(folio);
+	fput(file);
+}
+
 /* ------------------------------------------------------------------ *
  * V-B.4: the FILE fork mirror -- the parent/child reconciliation the
  * faithful-fork contract promises for a FILE region: the child's own
@@ -11570,6 +11830,11 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_registry_inval),
 	KUNIT_CASE(corten_arena_test_file_read),
 	KUNIT_CASE(corten_arena_test_file_cow),
+	/* W1.c: the file mapcount precision anchor (R-W1-4) -- the
+	 * novma install/remove against a real legacy mapper on the
+	 * same pagecache folio, every retirement exact.
+	 */
+	KUNIT_CASE(corten_arena_test_file_rmap_shared),
 	KUNIT_CASE(corten_arena_test_file_fork_mirror),
 	KUNIT_CASE(corten_arena_test_file_fork_cow),
 	KUNIT_CASE(corten_arena_test_file_fork_pinned),
