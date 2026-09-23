@@ -907,6 +907,26 @@ bool corten_rmap_swap_out(struct folio *folio, struct vm_area_struct *vma,
 			  unsigned long address, bool defer, pte_t *old_pte);
 
 /*
+ * W1.d (W1_NATIVE_RMAP_SPEC.md sec 3.2): the try_to_unmap() layer's
+ * vma-free file routing.  A pagecache folio mapped by a window is not
+ * reachable through i_mmap (the carrier left the tree in W1.b), so
+ * try_to_unmap() calls this before its rmap walk: the per-inode
+ * registry (the same enumeration source the truncate/invalidation gate
+ * uses) derives every window slot mapping folio->index and demotes it
+ * through the single-page transaction -- PTE clear inside a notifier
+ * window, the novma mapcount return, metadata stays CORTEN_FILE_MAPPED
+ * (the next fault re-reads the pagecache).  The walk and
+ * folio_not_mapped() then run exactly upstream over the shared
+ * mapcount; there is no corten-specific return channel.
+ *
+ * Declines: anon folios (the M6.T2 anchored arm's family, W1.e's
+ * territory), large folios (and with them the TTU_RMAP_LOCKED callers,
+ * who hold i_mmap_rwsem themselves), and TTU_HWPOISON (counted -- the
+ * M6 refusal posture; the hwpoison caller keeps its -EBUSY verdict).
+ */
+void corten_rmap_ttu(struct folio *folio, enum ttu_flags flags);
+
+/*
  * M6.T2 swapoff parity (spec 1.2 P12): unuse_pte() replaces a swap PTE
  * with a present PTE holding @folio (already locked, I/O settled).  On a
  * shadow-VMA the metadata must follow (CORTEN_SWAPPED -> CORTEN_MAPPED)
@@ -1147,6 +1167,11 @@ static inline bool corten_rmap_swap_out(struct folio *folio,
 					pte_t *old_pte)
 {
 	return false;
+}
+
+/* W1.d: no arena registry, the ttu walk is all legacy. */
+static inline void corten_rmap_ttu(struct folio *folio, enum ttu_flags flags)
+{
 }
 
 /* W1.a novma rmap wrappers: no arena, nothing borrows folio->_mapcount. */

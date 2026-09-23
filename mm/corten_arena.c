@@ -249,6 +249,13 @@ static atomic_long_t corten_nr_mmap_punch_rejects; /* unroutable MAP_FIXED */
 static atomic_long_t corten_nr_truncate_routes;	/* file events routed */
 static atomic_long_t corten_nr_zap_single_refuses; /* backstop firings */
 static atomic_long_t corten_nr_imap_stale_refuses; /* stale-node backstop */
+/* W1.d (W1_NATIVE_RMAP_SPEC.md sec 3.2): window file mappings demoted by
+ * the try_to_unmap() hook -- the reclaim family of the file-event
+ * consumers (the truncate/invalidation family above shares the same
+ * registry enumeration and B.2 semantics).  One per demoted window slot,
+ * so a folio mapped by several regions counts per mapper.
+ */
+static atomic_long_t corten_nr_ttu_routes;	/* ttu file demotions */
 /* V-B.4 (H10): the FILE observability ledger.  Regions attached through
  * the takeover, read-arm installs, private COW copies off the file side
  * (both the in-place and the fetch+copy shapes), and fork mirrors of a
@@ -2897,6 +2904,9 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_zap_single_refuses));
 	seq_printf(m, "imap_stale_refuses  %ld\n",
 		   atomic_long_read(&corten_nr_imap_stale_refuses));
+	/* W1.d: the ttu hook's file demotions (the reclaim family). */
+	seq_printf(m, "ttu_routes          %ld\n",
+		   atomic_long_read(&corten_nr_ttu_routes));
 	/* V-B.4 (H10): the FILE ledger. */
 	seq_printf(m, "file_mmaps          %ld\n",
 		   atomic_long_read(&corten_nr_file_mmaps));
@@ -3278,6 +3288,12 @@ long corten_arena_test_maps_window_rows(void)
 long corten_arena_test_truncate_routes(void)
 {
 	return atomic_long_read(&corten_nr_truncate_routes);
+}
+
+/* W1.d: the ttu hook's file demotions. */
+long corten_arena_test_ttu_routes(void)
+{
+	return atomic_long_read(&corten_nr_ttu_routes);
 }
 
 long corten_arena_test_zap_single_refuses(void)
@@ -13674,6 +13690,255 @@ bool corten_rmap_swap_out(struct folio *folio, struct vm_area_struct *vma,
 	*old_pte = pteval;
 	atomic_long_inc(&corten_nr_swapped_out);
 	return true;
+}
+
+/*
+ * W1.d (W1_NATIVE_RMAP_SPEC.md sec 3.2): the single-page file demotion
+ * -- the ttu hook's worker.  The slot address was derived from
+ * folio->index and the region record by corten_rmap_ttu(); this
+ * transaction verifies the slot really maps @folio and removes exactly
+ * that mapping, the reclaim-family twin of the B.2 truncate gate's
+ * chunk transaction.
+ *
+ * Lock shape (DEV-13 direction, the corten_rmap_swap_out() one): the
+ * caller opened the mmu_notifier invalidate window before the desc lock
+ * (R6-2 -- the removal is invisible to secondary-MMU users otherwise;
+ * the window may sleep, so it never nests the desc write lock), then
+ * desc->lock(W, BH) > ptl inside.  No allocation, no I/O.
+ *
+ * Slot admission mirrors the FILE_EVENT spare of the B.2 zap (V-B.3):
+ * only a CORTEN_FILE_MAPPED slot whose PTE still maps this pagecache
+ * folio (pfn identity) is the reclaim's business.  A MAPPED/SWAPPED
+ * slot is a private COW copy -- its content is not the file's anymore
+ * and reclaim of the pagecache folio must not touch it (its own anon
+ * folio is the anchored ttu anon family's); anything else (INVALID
+ * from a truncate demote, a refilled generation, a hole) simply does
+ * not map this folio.
+ *
+ * The commit is the read arm's (corten_arena_file_read(), R4) exact
+ * inverse inside the transaction: PTE clear + TLB flush (the M6
+ * arm's flush_cache/flush_tlb shape, no deferral -- OQ-W1-1's
+ * non-defer first version), the dirty bit propagated to the folio
+ * (upstream's file branch), mm_counter_file() -1, the novma mapcount
+ * return and the PTE's folio reference.  The metadata is deliberately
+ * NOT written: CORTEN_FILE_MAPPED is both the virtual allocation and
+ * the resident form (the page identity is derivable from the region
+ * record), so the demoted slot IS the FILE_MAPPED record and the next
+ * fault dispatches FILE_READ -- it re-reads the pagecache (old content
+ * or a refilled generation, never anonymous zeros).
+ *
+ * Return: 1 = demoted one window mapping; 0 = this slot is not a
+ * mapping of @folio (declined inside the transaction, nothing written).
+ */
+static int corten_rmap_ttu_file_one(struct corten_arena *ar,
+				    unsigned long addr, struct folio *folio,
+				    enum ttu_flags flags)
+{
+	struct mm_struct *mm = ar->mm;
+	struct vm_area_struct *vma;
+	struct corten_txn txn;
+	struct corten_pte_meta m;
+	struct mmu_notifier_range range;
+	pmd_t *pmdp;
+	pte_t *ptep, pteval;
+	spinlock_t *ptl;
+	int demoted = 0;
+
+	/* The mlock contract, the M6.T1 prefilter's shape: a locked
+	 * window keeps its mappings until the reclaim passes
+	 * TTU_IGNORE_MLOCK (unmap_poisoned_folio's shape).  The carrier
+	 * carries the VM_LOCKED verdict the same way it carries the
+	 * committed perm.
+	 */
+	vma = READ_ONCE(ar->carrier);
+	if (!(flags & TTU_IGNORE_MLOCK) && vma &&
+	    (vma->vm_flags & VM_LOCKED)) {
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return 0;
+	}
+
+	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, mm,
+				addr, addr + PAGE_SIZE);
+	mmu_notifier_invalidate_range_start(&range);
+
+	if (corten_lock_range(mm, addr, PAGE_SIZE, &txn))
+		goto out_range;
+	if (corten_query(&txn, addr, &m))
+		goto out_unlock;
+	if (m.state != CORTEN_FILE_MAPPED)
+		goto out_unlock;
+
+	/* The demotion is a PTE removal: it needs the carrier for the
+	 * cache/tlb flush shapes.  A live FILE region has one (the
+	 * parked/frozen windows were skipped by the enumeration).
+	 */
+	vma = corten_arena_anchor_vma(ar);
+	if (unlikely(!vma)) {
+		WARN_ONCE(1, "corten: live FILE region without a carrier\n");
+		goto out_unlock;
+	}
+
+	pmdp = corten_arena_pmd(mm, addr);
+	if (unlikely(!pmdp))
+		goto out_unlock;
+	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	if (unlikely(!ptep))
+		goto out_unlock;
+
+	pteval = ptep_get(ptep);
+	if (unlikely(!pte_present(pteval) || pte_special(pteval) ||
+		     pte_pfn(pteval) != folio_pfn(folio))) {
+		/* Not this folio's mapper: a COW copy (skipped by the
+		 * state check above only while the metadata is honest),
+		 * a racing fault's new generation, or a demoted slot
+		 * with a legacy-fallback PTE.  Leave the slot alone --
+		 * the folio's own mapcount verdict stays exact.
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		corten_unlock(&txn);
+		mmu_notifier_invalidate_range_end(&range);
+		return 0;
+	}
+
+	/* Committed (mirrors try_to_unmap_one()'s file branch): clear
+	 * + flush, dirty propagation, counter, rmap, PTE reference.
+	 */
+	flush_cache_range(vma, addr, addr + PAGE_SIZE);
+	pteval = ptep_get_and_clear(mm, addr, ptep);
+	flush_tlb_range(vma, addr, addr + PAGE_SIZE);
+	if (pte_dirty(pteval))
+		folio_mark_dirty(folio);
+
+	update_hiwater_rss(mm);
+	add_mm_counter(mm, mm_counter_file(folio), -1);
+	/* W1.d (R4 inverse): the file mapcount is the pagecache folio's
+	 * own, returned through the novma wrapper inside this
+	 * transaction -- exactly what the read arm's install borrowed.
+	 */
+	folio_remove_file_rmap_novma(folio);
+	folio_put(folio);
+	/* The metadata stays CORTEN_FILE_MAPPED: no __resv payload, no
+	 * transition to record (the read arm never wrote one either).
+	 */
+
+	pte_unmap_unlock(ptep, ptl);
+	demoted = 1;
+out_unlock:
+	corten_unlock(&txn);
+out_range:
+	mmu_notifier_invalidate_range_end(&range);
+	if (demoted)
+		this_cpu_inc(READ_ONCE(mm->corten_state)->stats[
+				CORTEN_ARENA_STAT_UNMAP_PAGES]);
+	return demoted;
+}
+
+/*
+ * W1.d (W1_NATIVE_RMAP_SPEC.md sec 3.2): the try_to_unmap() layer's
+ * vma-free hook -- the file side's true routing.  A pagecache folio
+ * mapped by an arena window has no i_mmap member behind the window
+ * (carriers stopped joining the tree in W1.b), so the rmap walk that
+ * follows in try_to_unmap() sees only the legacy mappers and the
+ * window's borrowed mapcount would keep the folio resident forever --
+ * the structural exclusion W1.d replaces.  This hook enumerates the
+ * folio's (mapping, index) through the per-inode registry -- the same
+ * source and the same derivation the B.2 truncate gate uses (three
+ * consumers, one registry) -- and hands every region that covers
+ * folio->index to corten_rmap_ttu_file_one().
+ *
+ * The caller's contract is try_to_unmap()'s: folio locked and
+ * referenced, so mapping/index are stable.  After the hook, the
+ * ordinary rmap walk handles the legacy mappers and folio_not_mapped()
+ * delivers the upstream verdict over the shared mapcount: the
+ * demotions here participate in it through the novma wrapper, there is
+ * no corten-specific return channel.
+ *
+ * Declines (the M6 exclusion postures, each deliberately silent unless
+ * counted):
+ *   - anon folios: the W1.e territory.  The anchored ttu anon leg
+ *     (try_to_unmap_one()'s M6.T2 arm) keeps serving them, file-COW
+ *     copies included -- they are anon folios.
+ *   - large folios: every window install is order-0 (the novma
+ *     wrapper's contract); this also keeps the TTU_RMAP_LOCKED
+ *     callers (split/collapse hold i_mmap_rwsem themselves) out of
+ *     the read lock below.
+ *   - TTU_HWPOISON: the poison path needs its own entry semantics
+ *     (kill markers, M6's loud refusal), not a silent demotion --
+ *     refused and counted, the folio stays mapped and the hwpoison
+ *     caller keeps its -EBUSY terminal state.
+ *
+ * Lock order: i_mmap_rwsem(read) > notifier window > desc->lock(W) >
+ * ptl -- the B.2/W1.b declared edge (F8) with the M6 window shape
+ * nested one step deeper; nothing climbs back (a transaction never
+ * acquires i_mmap or a notifier), so the composition is acyclic and
+ * zero new lock classes.
+ */
+void corten_rmap_ttu(struct folio *folio, enum ttu_flags flags)
+{
+	struct corten_inode_regions *reg;
+	struct address_space *mapping;
+
+	if (!corten_enabled_static() || folio_test_anon(folio) ||
+	    folio_test_large(folio))
+		return;
+
+	mapping = folio->mapping;
+	if (!mapping)
+		return;
+
+	/* The fast gate: a mapping without corten regions -- the whole
+	 * legacy world and every corten=off process -- costs one xarray
+	 * probe and returns.  The probe is a peek: the authoritative
+	 * load happens under the registry's lock (the erase side holds
+	 * it write), so a concurrently dying registry head is never
+	 * dereferenced.
+	 */
+	if (!xa_load(&corten_inode_regions, (unsigned long)mapping))
+		return;
+
+	if (flags & TTU_HWPOISON) {
+		atomic_long_inc(&corten_nr_rmap_rejects);
+		return;
+	}
+
+	i_mmap_lock_read(mapping);
+	reg = xa_load(&corten_inode_regions, (unsigned long)mapping);
+	if (!reg)
+		goto out_unlock;
+
+	{
+		struct corten_arena *ar;
+		unsigned long routes = 0;
+		pgoff_t index = folio->index;
+
+		list_for_each_entry(ar, &reg->regions, rfile_node) {
+			unsigned long npages =
+				(ar->end - ar->start) >> PAGE_SHIFT;
+			unsigned long addr;
+
+			if (index < ar->rpoff ||
+			    index >= ar->rpoff + npages)
+				continue;	/* not this region's page */
+
+			addr = ar->start + ((index - ar->rpoff) <<
+					    PAGE_SHIFT);
+			/* The enumeration's lifetime rules (W1.b): a
+			 * parked window owns no mapping and a frozen one
+			 * belongs to the fork snapshot; the active ref
+			 * extends the read hold's pin past the section.
+			 */
+			if (READ_ONCE(ar->idle) || READ_ONCE(ar->frozen))
+				continue;
+			if (!percpu_ref_tryget_live(&ar->active))
+				continue;
+			routes += corten_rmap_ttu_file_one(ar, addr, folio,
+							   flags);
+			percpu_ref_put(&ar->active);
+		}
+		atomic_long_add(routes, &corten_nr_ttu_routes);
+	}
+out_unlock:
+	i_mmap_unlock_read(mapping);
 }
 
 /*

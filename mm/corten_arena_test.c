@@ -3413,6 +3413,357 @@ static void corten_arena_test_file_rmap_shared(struct kunit *test)
 }
 
 /* ------------------------------------------------------------------ *
+ * W1.d: the ttu file true routing (W1_NATIVE_RMAP_SPEC.md sec 3.2).
+ * The reclaim family entry (try_to_unmap -> corten_rmap_ttu): a
+ * pagecache folio mapped by a window is invisible to the i_mmap walk
+ * (W1.b), so before W1.d the borrowed mapcount pinned it resident
+ * forever; the hook demotes the window slot through the single-page
+ * transaction and folio_not_mapped() delivers the upstream verdict.
+ * The truncate family entry (unmap_mapping_pages) is W1.b's and stays
+ * green next to it -- two consumers, one registry.
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_ttu_file_route(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_arena_test_op omap, ounmap;
+	struct address_space *mapping;
+	struct corten_pte_meta m;
+	struct file *file;
+	struct folio *folio;
+	pg_data_t *pgdat;
+	unsigned int fflags;
+	long base, routes, refuses, filepg, filestat;
+	int filepg_family;
+	pte_t *ptep, pte;
+	pmd_t *pmdp;
+	spinlock_t *ptl;
+	unsigned long refs;
+	u64 pat = 0x0ddba110c0ffee00ULL, back = 0;
+	loff_t pos = 0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "W1.d ttu route requires corten=on");
+
+	file = shmem_file_setup("corten_w1d", 2 * PAGE_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	mapping = file->f_mapping;
+	base = file_count(file);
+	KUNIT_ASSERT_EQ(test,
+			kernel_write(file, &pat, sizeof(pat), &pos),
+			(ssize_t)sizeof(pat));
+	routes = corten_arena_test_ttu_routes();
+	refuses = corten_arena_test_named_counter(test, "rmap_rejects");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      file, 0), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
+
+	/* The window read fault installs the pagecache folio (the read
+	 * arm's novma borrow).
+	 */
+	fflags = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	folio = filemap_get_folio(mapping, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(folio));
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m),
+			0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	filepg_family = corten_arena_test_file_rss(mapping);
+	filepg = corten_arena_test_mm_counter(mm, filepg_family);
+	pgdat = folio_pgdat(folio);
+	filestat = corten_arena_test_node_stat(pgdat, NR_FILE_MAPPED);
+
+	/* A legacy mapper joins the folio: the shared shape W1.c's
+	 * precision anchor established -- folio 0 now carries two
+	 * mappers (window + legacy), folio 1 one (legacy).
+	 */
+	omap = (struct corten_arena_test_op){
+		.mm = mm, .fn = corten_arena_test_op_legacy_file_map,
+		.file = file, .addr = CORTEN_ARENA_TEST_NOWHERE,
+		.len = 2 * PAGE_SIZE, .flags = MAP_SHARED | MAP_FIXED,
+	};
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &omap), 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR_VALUE((unsigned long)omap.retl));
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, filepg_family),
+			filepg + 2);
+
+	/* The reclaim shape (shrink_folio_list's flags) through the real
+	 * entry: the hook demotes the window slot, the ordinary walk
+	 * retires the legacy mapper, and folio_not_mapped() -- over the
+	 * shared mapcount, no corten channel -- says "unmapped".  Before
+	 * W1.d this call left folio_mapped() at 1 (the window's borrowed
+	 * mapper was unreachable) and reclaim kept the page resident.
+	 */
+	folio_lock(folio);
+	refs = folio_ref_count(folio);
+	try_to_unmap(folio, TTU_BATCH_FLUSH);
+	folio_unlock(folio);
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_ttu_routes(), routes + 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"rmap_rejects"),
+			refuses);
+	KUNIT_EXPECT_EQ(test, folio_mapped(folio), 0);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 0);
+	/* Both PTE references returned (the window's folio_put and the
+	 * legacy walk's), the test's own and the pagecache's remain.
+	 */
+	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), refs - 2);
+
+	/* The demotion itself: PTE none, the metadata still the
+	 * FILE_MAPPED record (the resident form needs no transition --
+	 * the page identity derives from the region record), the file
+	 * family ledger exact.
+	 */
+	pmdp = corten_arena_test_pmd(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, CORTEN_ARENA_TEST_WIN, &ptl);
+	KUNIT_ASSERT_NOT_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap_unlock(ptep, ptl);
+	KUNIT_EXPECT_TRUE(test, pte_none(pte));
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m),
+			0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	/* -2: the window's and the legacy pg-0 mapper's; pg 1 remains. */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_counter(mm, filepg_family),
+			filepg);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_node_stat(pgdat, NR_FILE_MAPPED),
+			filestat);
+
+	/* The next fault re-reads the pagecache (content identical), the
+	 * mapcount rejoins with exactly +1.
+	 */
+	fflags = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+	back = 0;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm, CORTEN_ARENA_TEST_WIN,
+						    &back, false),
+			0);
+	KUNIT_EXPECT_EQ(test, back, pat);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m),
+			0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+
+	/* The truncate family entry on the same region (W1.b's
+	 * enumeration, one registry): the even_cows demote drops the
+	 * window's mapper exactly once more.
+	 */
+	unmap_mapping_pages(mapping, 0, 1, true);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_ttu_routes(), routes + 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m),
+			0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+
+	/* Teardown: the legacy munmap, the mode exit (the W1.b pairing:
+	 * registry empties with the region), the ledgers closed.
+	 */
+	ounmap = (struct corten_arena_test_op){
+		.mm = mm, .fn = corten_arena_test_op_legacy_file_unmap,
+		.addr = CORTEN_ARENA_TEST_NOWHERE, .len = 2 * PAGE_SIZE,
+	};
+	KUNIT_EXPECT_EQ(test, corten_arena_test_run_op_full(test, &ounmap), 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 0);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_registry_empty());
+	KUNIT_EXPECT_EQ(test, file_count(file), base);
+
+	folio_put(folio);
+	fput(file);
+}
+
+/* ------------------------------------------------------------------ *
+ * W1.d: the TTU branch coverage and the hwpoison/migrate re-check.  The
+ * hook's declines keep the M6 exclusion postures: TTU_HWPOISON is
+ * refused and counted (the folio stays mapped, unmap_poisoned_folio()
+ * keeps its folio_mapped -> -EBUSY terminal state -- identical to the
+ * pre-upgrade behavior, registered), and migration of a window file
+ * page stays structurally excluded -- post-W1.b the migrate walker's
+ * i_mmap walk cannot even produce the carrier, so the M6.T1 guard is
+ * no longer the defense there; the folio_mapped() verdict at the
+ * migrate callers is (the guard itself stays armed for the anon leg
+ * and keeps answering "refuse" when driven directly).  A mapping with
+ * no corten regions costs one xarray probe: ttu behaves exactly
+ * upstream.
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_ttu_declines(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_arena_test_op omap, ounmap;
+	struct vm_area_struct *carrier, *legacy;
+	struct address_space *mapping, *mapping2;
+	struct corten_pte_meta m;
+	struct file *file, *file2;
+	struct folio *folio, *folio2;
+	unsigned int fflags;
+	long routes, refuses;
+	pte_t *ptep, pte, installed;
+	pmd_t *pmdp;
+	spinlock_t *ptl;
+	u64 pat = 0x0dd0f00d12345678ULL;
+	loff_t pos = 0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "W1.d ttu declines require corten=on");
+
+	file = shmem_file_setup("corten_w1d2", PAGE_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	mapping = file->f_mapping;
+	KUNIT_ASSERT_EQ(test,
+			kernel_write(file, &pat, sizeof(pat), &pos),
+			(ssize_t)sizeof(pat));
+	routes = corten_arena_test_ttu_routes();
+	refuses = corten_arena_test_named_counter(test, "rmap_rejects");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      file, 0), 0);
+	carrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, carrier);
+	fflags = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
+						0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	folio = filemap_get_folio(mapping, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(folio));
+
+	pmdp = corten_arena_test_pmd(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, CORTEN_ARENA_TEST_WIN, &ptl);
+	KUNIT_ASSERT_NOT_NULL(test, ptep);
+	installed = ptep_get(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(installed));
+	pte_unmap_unlock(ptep, ptl);
+
+	/* The hwpoison shape (unmap_poisoned_folio()'s non-hugetlb
+	 * flags): refused and counted, nothing written -- the pre- and
+	 * post-upgrade terminal states are identical (folio stays
+	 * mapped, the caller's folio_mapped() check answers -EBUSY).
+	 */
+	folio_lock(folio);
+	try_to_unmap(folio, TTU_IGNORE_MLOCK | TTU_SYNC | TTU_HWPOISON);
+	folio_unlock(folio);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"rmap_rejects"),
+			refuses + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_ttu_routes(), routes);
+	KUNIT_EXPECT_EQ(test, folio_mapped(folio), 1);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+
+	/* The migrate shape: the walker's i_mmap walk cannot produce the
+	 * carrier (W1.b), so a window-mapped page is simply invisible to
+	 * it -- no demotion, no refusal count, folio still mapped (the
+	 * migrate callers' folio_mapped() verdict keeps it -EBUSY).
+	 */
+	try_to_migrate(folio, 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"rmap_rejects"),
+			refuses + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_ttu_routes(), routes);
+	KUNIT_EXPECT_EQ(test, folio_mapped(folio), 1);
+
+	/* The M6.T1 guard itself stays armed and answers "refuse" when
+	 * driven directly (the anon leg's posture; the file side no
+	 * longer needs it, the count documents the difference).
+	 */
+	KUNIT_EXPECT_FALSE(test, corten_rmap_unmap_one(folio, carrier,
+						       CORTEN_ARENA_TEST_WIN,
+						       0, true));
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"rmap_rejects"),
+			refuses + 2);
+
+	/* The slot survived both declines verbatim. */
+	ptep = pte_offset_map_lock(mm, pmdp, CORTEN_ARENA_TEST_WIN, &ptl);
+	KUNIT_ASSERT_NOT_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap_unlock(ptep, ptl);
+	KUNIT_EXPECT_EQ(test, pte_val(pte), pte_val(installed));
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m),
+			0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+
+	/* The fast gate: a mapping with no corten regions (a plain
+	 * legacy mapper of another file) costs the hook one xarray probe
+	 * and ttu behaves exactly upstream.
+	 */
+	file2 = shmem_file_setup("corten_w1d3", PAGE_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file2));
+	mapping2 = file2->f_mapping;
+	omap = (struct corten_arena_test_op){
+		.mm = mm, .fn = corten_arena_test_op_legacy_file_map,
+		.file = file2, .addr = CORTEN_ARENA_TEST_NOWHERE,
+		.len = PAGE_SIZE, .flags = MAP_SHARED | MAP_FIXED,
+	};
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &omap), 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR_VALUE((unsigned long)omap.retl));
+	legacy = vma_lookup(mm, CORTEN_ARENA_TEST_NOWHERE);
+	KUNIT_ASSERT_NOT_NULL(test, legacy);
+	folio2 = filemap_get_folio(mapping2, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(folio2));
+
+	folio_lock(folio2);
+	try_to_unmap(folio2, TTU_BATCH_FLUSH);
+	folio_unlock(folio2);
+	KUNIT_EXPECT_EQ(test, folio_mapped(folio2), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_ttu_routes(), routes);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"rmap_rejects"),
+			refuses + 2);
+
+	ounmap = (struct corten_arena_test_op){
+		.mm = mm, .fn = corten_arena_test_op_legacy_file_unmap,
+		.addr = CORTEN_ARENA_TEST_NOWHERE, .len = PAGE_SIZE,
+	};
+	KUNIT_EXPECT_EQ(test, corten_arena_test_run_op_full(test, &ounmap), 0);
+	folio_put(folio2);
+	fput(file2);
+
+	folio_put(folio);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_registry_empty());
+	fput(file);
+}
+
+/* ------------------------------------------------------------------ *
  * V-B.4: the FILE fork mirror -- the parent/child reconciliation the
  * faithful-fork contract promises for a FILE region: the child's own
  * file reference and pgoff (INV-MV3(d) on both sides), both regions on
@@ -11835,6 +12186,14 @@ static struct kunit_case corten_arena_test_cases[] = {
 	 * same pagecache folio, every retirement exact.
 	 */
 	KUNIT_CASE(corten_arena_test_file_rmap_shared),
+	/* W1.d: the ttu file true routing -- the reclaim family entry
+	 * (try_to_unmap -> the registry hook -> the single-page demote,
+	 * both a shared window+legacy folio and the refault re-read),
+	 * and the TTU branch coverage (the HWPOISON refusal and the
+	 * migrate exclusion re-checked, the no-registry fast gate).
+	 */
+	KUNIT_CASE(corten_arena_test_ttu_file_route),
+	KUNIT_CASE(corten_arena_test_ttu_declines),
 	KUNIT_CASE(corten_arena_test_file_fork_mirror),
 	KUNIT_CASE(corten_arena_test_file_fork_cow),
 	KUNIT_CASE(corten_arena_test_file_fork_pinned),

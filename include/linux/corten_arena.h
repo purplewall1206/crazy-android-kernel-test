@@ -1035,6 +1035,11 @@ long corten_arena_test_imap_stale_refuses(void);
 long corten_arena_test_registry_size(struct address_space *mapping);
 bool corten_arena_test_registry_empty(void);
 
+/* W1.d hook: the ttu file demotions (the reclaim family of the
+ * file-event consumers).
+ */
+long corten_arena_test_ttu_routes(void);
+
 /* M6.T3 shrinker hooks: drive the count/scan bodies directly (the
  * shrinker is only registered on a corten=on boot; the bodies are the
  * same functions the shrinker calls, with a synthetic shrink_control),

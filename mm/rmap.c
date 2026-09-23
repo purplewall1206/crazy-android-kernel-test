@@ -2414,6 +2414,21 @@ void try_to_unmap(struct folio *folio, enum ttu_flags flags)
 		.anon_lock = folio_lock_anon_vma_read,
 	};
 
+	/*
+	 * CortenMM (W1.d, W1_NATIVE_RMAP_SPEC.md sec 3.2): a pagecache
+	 * folio mapped by an arena window has no i_mmap member behind
+	 * the window (carriers left the tree in W1.b), so the walk below
+	 * sees only the legacy mappers and the window's borrowed
+	 * mapcount would keep the folio resident forever.  Route the
+	 * window side first: the registry hook demotes every window
+	 * mapping through its single-page transaction, then the ordinary
+	 * walk -- and folio_not_mapped()'s verdict over the shared
+	 * mapcount -- proceeds exactly upstream.  Anon folios and the
+	 * hwpoison shape are declined inside the hook (the M6 postures;
+	 * the hook folds to nothing on corten=off).
+	 */
+	corten_rmap_ttu(folio, flags);
+
 	if (flags & TTU_RMAP_LOCKED)
 		rmap_walk_locked(folio, &rwc);
 	else
