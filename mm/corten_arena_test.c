@@ -1990,7 +1990,8 @@ static void corten_arena_test_auto_attach_release(struct kunit *test)
  * V-B.1: FILE region lifecycle -- the route's file arm three-state
  * truth, the file-reference ledger across every teardown point
  * (release / park / reactivate / mm_exit / mode_exit / fork), the
- * i_mmap visibility pairing, and the INV-MV3(d) payload pairing.
+ * per-inode registry visibility pairing (W1.b), and the INV-MV3(d)
+ * payload pairing.
  * ------------------------------------------------------------------
  */
 
@@ -2076,9 +2077,9 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 	if (!corten_enabled_static())
 		kunit_skip(test, "FILE lifecycle requires corten=on");
 
-	/* A real file: the reference ledger needs a live f_ref, the i_mmap
-	 * anchor a real address space (shmem passes corten_file_may: read
-	 * mode, mmap hook, no DAX, no noexec seal).
+	/* A real file: the reference ledger needs a live f_ref, the
+	 * registry anchor a real address space (shmem passes
+	 * corten_file_may: read mode, mmap hook, no DAX, no noexec seal).
 	 */
 	file = shmem_file_setup("corten_vb1", PMD_SIZE, 0);
 	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
@@ -2178,22 +2179,21 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
 	mmap_read_unlock(mm);
 
-	/* i_mmap visibility: an interval-tree query over [pgoff,
-	 * pgoff + pages) finds the carrier (the __vma_link_file pairing;
-	 * B.2's truncate gate walks exactly this).
+	/* Registry visibility (W1.b): the region is a member of the
+	 * mapping's per-inode registry -- the interval-tree membership
+	 * became this list link, and the invalidation enumeration reads
+	 * exactly it.  The carrier is NOT in i_mmap anymore (the flip's
+	 * structural assertion).
 	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
 	i_mmap_lock_read(mapping);
-	KUNIT_EXPECT_PTR_EQ(test,
-			    vma_interval_tree_iter_first(&mapping->i_mmap,
-							 pgoff,
-							 pgoff + (PMD_SIZE >>
-								  PAGE_SHIFT) -
-							 1),
-			    carrier);
+	KUNIT_EXPECT_NULL(test,
+			  vma_interval_tree_iter_first(&mapping->i_mmap, 0,
+						       ULONG_MAX));
 	i_mmap_unlock_read(mapping);
 
 	/* Park (the munmap full-coverage shape): the payload dies with
-	 * the park -- reference back, carrier disarmed, i_mmap empty,
+	 * the park -- reference back, carrier disarmed, registry empty,
 	 * window reusable as the ANON contract.
 	 */
 	KUNIT_EXPECT_EQ(test,
@@ -2206,11 +2206,7 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 						      CORTEN_ARENA_TEST_WIN));
 	KUNIT_EXPECT_EQ(test, file_count(file), base);
 	KUNIT_EXPECT_NULL(test, carrier->vm_file);
-	i_mmap_lock_read(mapping);
-	KUNIT_EXPECT_NULL(test,
-			  vma_interval_tree_iter_first(&mapping->i_mmap, 0,
-						       ULONG_MAX));
-	i_mmap_unlock_read(mapping);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 0);
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
 	mmap_read_unlock(mm);
@@ -2307,30 +2303,30 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
 
 	/* Parent teardown: the last FILE reference returns with the
-	 * arena; the tree ends empty.  The test's own fput below drops
-	 * the final reference (a leak here would keep it above 1).
+	 * arena; the registry ends empty (W1.b).  The test's own fput
+	 * below drops the final reference (a leak here would keep it
+	 * above 1).
 	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
 						 corten_arena_test_op_mode_exit,
 						 0, 0), 0);
 	KUNIT_EXPECT_EQ(test, file_count(file), base);
-	i_mmap_lock_read(mapping);
-	KUNIT_EXPECT_NULL(test,
-			  vma_interval_tree_iter_first(&mapping->i_mmap, 0,
-						       ULONG_MAX));
-	i_mmap_unlock_read(mapping);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 0);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_registry_empty());
 	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
 
 	fput(file);
 }
 
 /* ------------------------------------------------------------------ *
- * V-B.2: the H7 route gate -- a file-side unmap event (truncate,
- * invalidation, single-folio re-invalidation) arriving on a FILE
- * carrier is demoted through the chunk-zap transaction (KEEP_PERM:
- * content dropped, VA and recorded perm kept), never through the bare
- * legacy PTE writer; the zap_page_range_single backstop refuses a
+ * V-B.2 / W1.b: the file-side unmap event family (truncate,
+ * invalidation, single-folio re-invalidation) is enumerated from the
+ * per-inode registry and demoted through the chunk-zap transaction
+ * (KEEP_PERM: content dropped, VA and recorded perm kept), never
+ * through the bare legacy PTE writer; both backstops -- the
+ * zap_page_range_single refusal and the demoted i_mmap-keyed gate
+ * (stale-node shape, must stay zero-hit after the flip) -- refuse a
  * carrier loudly; the B.1 dark-gate fault verdict (SEGV_MAPERR)
  * survives the demotion instead of synthesizing anonymous zero pages.
  * ------------------------------------------------------------------
@@ -2346,7 +2342,7 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 	struct file *file;
 	struct folio *folio;
 	unsigned int fflags;
-	long routes, refuses, base;
+	long routes, refuses, stales, base;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "H7 gate requires corten=on");
@@ -2357,6 +2353,7 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 	base = file_count(file);
 	routes = corten_arena_test_truncate_routes();
 	refuses = corten_arena_test_zap_single_refuses();
+	stales = corten_arena_test_imap_stale_refuses();
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 	KUNIT_ASSERT_EQ(test,
@@ -2365,6 +2362,7 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 						      file, pgoff), 0);
 	carrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_WIN);
 	KUNIT_ASSERT_NOT_NULL(test, carrier);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
 
 	/* Pre-state: the whole region is the B.1 FILE_MAPPED virtual
 	 * allocation with the recorded perm.
@@ -2375,30 +2373,31 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_EXEC |
 				       CORTEN_PERM_USER);
 
-	/* The gate's negative arm: a plain (non-carrier) VMA is none of
-	 * its business -- both the direct call and the backstop stay
-	 * quiet, and the legacy zap of an untouched range changes nothing.
+	/* The backstop's negative arm: a plain (non-carrier) VMA is none
+	 * of its business -- both the direct call and the zap backstop
+	 * stay quiet, and the legacy zap of an untouched range changes
+	 * nothing.
 	 */
 	plain = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
 	KUNIT_ASSERT_NOT_NULL(test, plain);
-	KUNIT_EXPECT_FALSE(test,
-			   corten_arena_unmap_file_event(plain,
-							 CORTEN_ARENA_TEST_BASE,
-							 CORTEN_ARENA_TEST_BASE +
-							 PAGE_SIZE, true));
+	KUNIT_EXPECT_FALSE(test, corten_arena_imap_stale_guard(plain));
 	zap_page_range_single(plain, CORTEN_ARENA_TEST_BASE, PAGE_SIZE, NULL);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_zap_single_refuses(), refuses);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_imap_stale_refuses(), stales);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes);
 
-	/* Truncate (even_cows): the whole-window file event -- the real
-	 * upstream walker hands the carrier over under i_mmap_lock_read.
-	 * Every slot demotes to Invalid with the perm kept; the region
-	 * record, the carrier's i_mmap membership and the file reference
-	 * all survive (a truncate is not an munmap).
+	/* Truncate (even_cows): the whole-window file event -- W1.b's
+	 * registry enumeration hands the region over under
+	 * i_mmap_lock_read (the carrier is no longer an i_mmap member,
+	 * so the legacy walk sees nothing of it).  Every slot demotes to
+	 * Invalid with the perm kept; the region record, the registry
+	 * membership and the file reference all survive (a truncate is
+	 * not an munmap).
 	 */
 	unmap_mapping_pages(mapping, pgoff, PMD_SIZE >> PAGE_SHIFT, true);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes + 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_zap_single_refuses(), refuses);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_imap_stale_refuses(), stales);
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m), 0);
 	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
@@ -2408,10 +2407,11 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN +
 						  PMD_SIZE - PAGE_SIZE, &m), 0);
 	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
 	i_mmap_lock_read(mapping);
-	KUNIT_EXPECT_PTR_EQ(test,
-			    vma_interval_tree_iter_first(&mapping->i_mmap,
-							 pgoff, pgoff), carrier);
+	KUNIT_EXPECT_NULL(test,
+			  vma_interval_tree_iter_first(&mapping->i_mmap, pgoff,
+						       pgoff));
 	i_mmap_unlock_read(mapping);
 	KUNIT_EXPECT_PTR_EQ(test, carrier->vm_file, file);
 	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
@@ -2478,7 +2478,9 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 
 	/* Single-folio invalidation (the hwpoison/migrate re-check shape):
 	 * a locked pagecache folio inside the second carrier's window
-	 * walks the same i_mmap tree with a one-page VA window.
+	 * re-invalidates one page -- the registry arm derives the
+	 * one-page window range from folio->index (the first region's
+	 * rpoff=3 window misses the [2,2] event by derivation alone).
 	 * filemap_add_folio() hands the folio over locked -- exactly the
 	 * unmap_mapping_folio() contract.
 	 */
@@ -2500,14 +2502,29 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 	folio_unlock(folio);
 	folio_put(folio);
 
-	/* The backstop's negative sample: a carrier arriving at the bare
-	 * legacy writer is refused, counted, and changes nothing -- the
-	 * still-FILE_MAPPED slot must survive the refused zap verbatim.
+	/* The zap backstop's negative sample: a carrier arriving at the
+	 * bare legacy writer is refused, counted, and changes nothing --
+	 * the still-FILE_MAPPED slot must survive the refused zap
+	 * verbatim.
 	 */
 	zap_page_range_single(carrier, CORTEN_ARENA_TEST_START2 + PAGE_SIZE,
 			      PAGE_SIZE, NULL);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_zap_single_refuses(),
 			refuses + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes + 3);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2 +
+						  PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+
+	/* The demoted i_mmap-keyed gate (W1.b): after the flip it answers
+	 * zero hits on every real event (asserted above), and a direct
+	 * carrier hand-over -- the B.2 shape that cannot occur anymore --
+	 * is refused, counted and inert, exactly like the zap backstop.
+	 */
+	KUNIT_EXPECT_TRUE(test, corten_arena_imap_stale_guard(carrier));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_imap_stale_refuses(),
+			stales + 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes + 3);
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2 +
@@ -2525,15 +2542,175 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 						 corten_arena_test_op_mode_exit,
 						 0, 0), 0);
 	KUNIT_EXPECT_EQ(test, file_count(file), base);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 0);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_registry_empty());
 
+	fput(file);
+}
+
+/* ------------------------------------------------------------------ *
+ * W1.b: the per-inode region registry and the enumeration flip --
+ * registration/deregistration symmetry (attach, park, exit), the
+ * enumeration hitting exactly the intersecting regions of a file event
+ * (single region, multi-region cross, and the derived miss that must
+ * not count), and the demoted i_mmap-keyed route answering zero hits
+ * after the flip (R-W1-2: an enumeration miss would leave stale PTEs
+ * behind, so the backstop pair must stay silent).
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_registry_inval(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct address_space *mapping, *other;
+	struct corten_pte_meta m;
+	struct file *file, *file2;
+	long routes, stales, base;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "W1.b registry requires corten=on");
+
+	file = shmem_file_setup("corten_w1b", 4 * PMD_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	mapping = file->f_mapping;
+	base = file_count(file);
+	routes = corten_arena_test_truncate_routes();
+	stales = corten_arena_test_imap_stale_refuses();
+
+	/* The fast gate's negative sample: a mapping without corten
+	 * regions (the whole legacy world) takes the event with zero
+	 * routes and zero backstop noise.
+	 */
+	file2 = shmem_file_setup("corten_w1b_other", PAGE_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file2));
+	other = file2->f_mapping;
+	unmap_mapping_pages(other, 0, 1, true);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_imap_stale_refuses(), stales);
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	/* Region A: rpoff 2 over the mode window (file pages 2..513);
+	 * region B follows at rpoff 0 (file pages 0..511) -- the
+	 * dlopen-shaped multi-region-per-inode layout.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      file, 2), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
+	KUNIT_EXPECT_FALSE(test, corten_arena_test_registry_empty());
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_START2,
+						      file, 0), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 2);
+
+	/* Cross-region miss: the invalidation event [0,1] does not
+	 * derive into A (zba 2 > zea 1) -- exactly B's first two slots
+	 * demote (the !even_cows arm spares nothing here: the slots are
+	 * FILE_MAPPED virtual allocations), and A's window is untouched.
+	 */
+	unmap_mapping_pages(mapping, 0, 2, false);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_imap_stale_refuses(), stales);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2,
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2 +
+						  PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2 +
+						  2 * PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+
+	/* The multi-region cross: the truncate event [2,514] derives
+	 * into BOTH regions (A's full window, B's pages 2..511) -- two
+	 * routes, one event.  A demotes at both ends; B's page 2 (spared
+	 * by the previous invalidation) now drops with the even_cows
+	 * verdict, and B's last page 511 with it.
+	 */
+	unmap_mapping_pages(mapping, 2, 513, true);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes + 3);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_imap_stale_refuses(), stales);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_EXEC |
+				       CORTEN_PERM_USER);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN +
+						  PMD_SIZE - PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2 +
+						  2 * PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2 +
+						  511 * PAGE_SIZE, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+
+	/* The flip's zero-hit anchor: no event above ever surfaced a
+	 * carrier through the legacy i_mmap walk, and the demoted gate
+	 * refuses the direct B.2 hand-over (a shape that cannot occur
+	 * anymore) without touching any slot.
+	 */
+	{
+		struct vm_area_struct *carrier;
+
+		carrier = corten_arena_test_carrier_of(mm,
+						       CORTEN_ARENA_TEST_WIN);
+		KUNIT_ASSERT_NOT_NULL(test, carrier);
+		i_mmap_lock_read(mapping);
+		KUNIT_EXPECT_NULL(test,
+				  vma_interval_tree_iter_first(&mapping->i_mmap,
+							       0, ULONG_MAX));
+		i_mmap_unlock_read(mapping);
+		KUNIT_EXPECT_TRUE(test, corten_arena_imap_stale_guard(carrier));
+		KUNIT_EXPECT_EQ(test, corten_arena_test_imap_stale_refuses(),
+				stales + 1);
+		KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(),
+				routes + 3);
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_meta(mm,
+						       CORTEN_ARENA_TEST_WIN,
+						       &m), 0);
+		KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	}
+
+	/* Teardown symmetry: A's park unlinks its node (B stays), the
+	 * mode exit unlinks B's -- the global index ends empty and the
+	 * file ledger at base.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
+	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 0);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_registry_empty());
+	KUNIT_EXPECT_EQ(test, file_count(file), base);
+
+	fput(file2);
 	fput(file);
 }
 
 /* V-B.3: the rss counters are percpu_counter-batched; get_mm_counter()
  * only reads the folded global, so a handful of +/-1 deltas on one CPU
  * stays invisible.  The exact-sum walk is the assertion-grade read.
- */
-static long corten_arena_test_mm_counter(struct mm_struct *mm, int member)
+ */static long corten_arena_test_mm_counter(struct mm_struct *mm, int member)
 {
 	return percpu_counter_sum_positive(&mm->rss_stat[member]);
 }
@@ -2978,19 +3155,19 @@ static void corten_arena_test_file_cow(struct kunit *test)
 /* ------------------------------------------------------------------ *
  * V-B.4: the FILE fork mirror -- the parent/child reconciliation the
  * faithful-fork contract promises for a FILE region: the child's own
- * file reference and pgoff (INV-MV3(d) on both sides), both carriers
- * on the mapping's i_mmap, the shared pagecache folio behind both PTEs
- * (mapcount/refcount differential: +1 mapper, +1 PTE reference), the
- * child's MM_FILEPAGES accounting, and the V-B.4 observability ledger
- * (file_mmaps / file_read_faults / file_fork_mirrors through the
- * rendered debugfs counters).
+ * file reference and pgoff (INV-MV3(d) on both sides), both regions on
+ * the mapping's per-inode registry (W1.b), the shared pagecache folio
+ * behind both PTEs (mapcount/refcount differential: +1 mapper, +1 PTE
+ * reference), the child's MM_FILEPAGES accounting, and the V-B.4
+ * observability ledger (file_mmaps / file_read_faults /
+ * file_fork_mirrors through the rendered debugfs counters).
  * ------------------------------------------------------------------
  */
 static void corten_arena_test_file_fork_mirror(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm, *child;
-	struct vm_area_struct *carrier, *ccarrier, *ivma;
+	struct vm_area_struct *carrier, *ccarrier;
 	struct address_space *mapping;
 	struct corten_pte_meta m;
 	struct corten_arena *ar;
@@ -3002,7 +3179,7 @@ static void corten_arena_test_file_fork_mirror(struct kunit *test)
 	unsigned int fflags;
 	const unsigned long pgoff = 3;
 	unsigned long addr = CORTEN_ARENA_TEST_WIN;
-	unsigned long folio_pfn, ref, maps = 0;
+	unsigned long folio_pfn, ref;
 	int filepg_family;
 	long base, mmaps, reads, mirrors, timeouts;
 	u64 pat = 0xa11cea5e7712c0deULL, back = 0;
@@ -3106,18 +3283,16 @@ static void corten_arena_test_file_fork_mirror(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(child));
 	mmap_read_unlock(child);
 
-	/* Both carriers are i_mmap members of the same pgoff (the fork
-	 * duplication of __vma_link_file's pairing).
+	/* Both regions are registry members (W1.b): the fork duplication
+	 * of the publish pairing, parent and child alike.  No carrier is
+	 * an i_mmap member anymore.
 	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 2);
 	i_mmap_lock_read(mapping);
-	vma_interval_tree_foreach(ivma, &mapping->i_mmap, pgoff, pgoff) {
-		maps++;
-		if (ivma == carrier || ivma == ccarrier)
-			continue;
-		maps += 100;		/* a foreign member: loud */
-	}
+	KUNIT_EXPECT_NULL(test,
+			  vma_interval_tree_iter_first(&mapping->i_mmap, 0,
+						       ULONG_MAX));
 	i_mmap_unlock_read(mapping);
-	KUNIT_EXPECT_EQ(test, maps, 2);
 
 	/* The child's slot and translation: the same virtual allocation
 	 * (FILE_MAPPED at the recorded perm), the same folio read-only.
@@ -3161,12 +3336,14 @@ static void corten_arena_test_file_fork_mirror(struct kunit *test)
 	}
 
 	/* The child's exit returns its mirror reference and its PTE's
-	 * hold on the folio; the parent's shape survives verbatim.
+	 * hold on the folio; the parent's registry membership survives
+	 * verbatim (W1.b: registry_size drops to 1, the parent's own).
 	 */
 	mmput(child);
 	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
 	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
 	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), ref);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
 	folio_put(folio);
 
 	KUNIT_EXPECT_EQ(test,
@@ -11390,6 +11567,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_auto_attach_release),
 	KUNIT_CASE(corten_arena_test_file_lifecycle),
 	KUNIT_CASE(corten_arena_test_truncate_route),
+	KUNIT_CASE(corten_arena_test_registry_inval),
 	KUNIT_CASE(corten_arena_test_file_read),
 	KUNIT_CASE(corten_arena_test_file_cow),
 	KUNIT_CASE(corten_arena_test_file_fork_mirror),

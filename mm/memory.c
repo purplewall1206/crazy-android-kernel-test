@@ -4167,21 +4167,18 @@ static void unmap_mapping_range_vma(struct vm_area_struct *vma,
 		struct zap_details *details)
 {
 	/*
-	 * CortenMM route gate (V-B.2, INV6): a VM_CORTEN member of this
-	 * mapping's i_mmap is a FILE-region carrier -- zap_page_range_single()
-	 * would bare-write its window PTEs outside any transaction.  The
-	 * gate runs the arena's chunk-zap transaction instead (KEEP_PERM:
-	 * the truncate/re-fault contract) and answers whether the legacy
-	 * body must still run.  Covers both callers of this helper: the
-	 * unmap_mapping_pages() truncate/invalidation walk and
-	 * unmap_mapping_folio()'s single-page re-invalidation, which hand
-	 * the carrier over through the same i_mmap walk under
-	 * i_mmap_lock_read().  NULL details zap everything, like the
-	 * legacy should_zap_cows() reading below.
+	 * CortenMM stale-node backstop (W1.b, INV6): a published FILE
+	 * region is no longer an i_mmap member -- its invalidation is
+	 * enumerated from the per-inode registry by
+	 * corten_arena_unmap_file_range() before this walk, so the walk
+	 * only ever sees legacy VMAs.  A VM_CORTEN VMA here is a stale
+	 * interval-tree node that survived its teardown: WARN, count
+	 * (imap_stale_refuses, must stay 0) and refuse the bare legacy
+	 * writer instead of half-unmapping (same posture as the
+	 * zap_page_range_single() backstop).
 	 */
 	if (corten_enabled_static() && (vma->vm_flags & VM_CORTEN) &&
-	    corten_arena_unmap_file_event(vma, start_addr, end_addr,
-					  details ? details->even_cows : true))
+	    corten_arena_imap_stale_guard(vma))
 		return;
 	zap_page_range_single(vma, start_addr, end_addr - start_addr, details);
 }
@@ -4235,6 +4232,17 @@ void unmap_mapping_folio(struct folio *folio)
 	details.zap_flags = ZAP_FLAG_DROP_MARKER;
 
 	i_mmap_lock_read(mapping);
+	/*
+	 * CortenMM (W1.b): the regions of this mapping are enumerated
+	 * from the per-inode registry, under the same read hold the
+	 * interval-tree walk below uses (the registry's lock is
+	 * i_mmap_rwsem; the walk's desc/ptl edge order is the B.2 one).
+	 * unmap_mapping_folio() re-invalidates one page: the registry
+	 * arm derives the one-page window range from folio->index.
+	 */
+	if (corten_enabled_static())
+		corten_arena_unmap_file_range(mapping, first_index,
+					      last_index, false);
 	if (unlikely(!RB_EMPTY_ROOT(&mapping->i_mmap.rb_root)))
 		unmap_mapping_range_tree(&mapping->i_mmap, first_index,
 					 last_index, &details);
@@ -4265,6 +4273,17 @@ void unmap_mapping_pages(struct address_space *mapping, pgoff_t start,
 		last_index = ULONG_MAX;
 
 	i_mmap_lock_read(mapping);
+	/*
+	 * CortenMM (W1.b): the regions of this mapping are enumerated
+	 * from the per-inode registry -- published FILE regions never
+	 * joined i_mmap, so the tree walk below covers only the legacy
+	 * mappers.  The registry arm runs the same i_mmap_lock_read
+	 * section and hands @even_cows to the chunk transaction (the
+	 * truncate/invalidation demotion verdict, V-B.2 semantics).
+	 */
+	if (corten_enabled_static())
+		corten_arena_unmap_file_range(mapping, first_index,
+					      last_index, even_cows);
 	if (unlikely(!RB_EMPTY_ROOT(&mapping->i_mmap.rb_root)))
 		unmap_mapping_range_tree(&mapping->i_mmap, first_index,
 					 last_index, &details);

@@ -137,21 +137,31 @@ int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
 			     unsigned long start, unsigned long len);
 
 /*
- * V-B.2 (H7) file-event route gate: called from unmap_mapping_range_vma()
- * for a VMA the mapping's i_mmap walk produced, under i_mmap_lock_read().
- * Demotes the FILE region's virtual allocation through the chunk-zap
- * transaction (KEEP_PERM: content dropped, VA and recorded perm kept, a
- * re-fault re-reads the file) instead of letting zap_page_range_single()
- * bare-write the window's PTEs (INV6).  @even_cows is the walker's
- * zap_details verdict: the truncate family (true) drops the private COW
- * copies too, the invalidation family (false) spares them
- * (V-B.3's CORTEN_UNMAP_FILE_EVENT arm).
- * Return: true = arena business, do not run the legacy zap; false = not
- * a carrier, run legacy unchanged.  The =n stub folds to false.
+ * W1.b (W1_NATIVE_RMAP_SPEC.md sec 4.2) invalidation enumeration: called
+ * from unmap_mapping_pages()/unmap_mapping_folio() inside their
+ * i_mmap_lock_read() section, this enumerates the mapping's registered
+ * corten regions from the per-inode registry (the i_mmap replacement for
+ * published FILE regions -- a carrier never joins the interval tree
+ * anymore) and runs the B.2 chunk-zap transaction on every intersecting
+ * VA range: KEEP_PERM with the walker's @even_cows verdict selecting the
+ * CORTEN_UNMAP_FILE_EVENT demotion shape (truncate drops private COW
+ * copies, invalidation spares them).  Zero regions (the whole legacy
+ * world) costs one xarray probe.
  */
-bool corten_arena_unmap_file_event(struct vm_area_struct *vma,
-				   unsigned long start, unsigned long end,
+void corten_arena_unmap_file_range(struct address_space *mapping,
+				   pgoff_t first_index, pgoff_t last_index,
 				   bool even_cows);
+
+/*
+ * W1.b stale-node backstop (the demoted V-B.2 route gate): a VM_CORTEN
+ * VMA surfacing through the mapping's i_mmap walk means a stale
+ * interval-tree node survived its teardown (R-W1-2's exact shape -- the
+ * enumeration above never hands carriers over anymore).  WARN, count
+ * (imap_stale_refuses, must stay 0) and refuse the bare legacy writer,
+ * exactly like the zap_page_range_single() backstop below.  The =n stub
+ * folds to false so the call site compiles away.
+ */
+bool corten_arena_imap_stale_guard(struct vm_area_struct *vma);
 
 /*
  * V-B.2 (H7) defensive backstop for zap_page_range_single(): a VM_CORTEN
@@ -953,10 +963,14 @@ static inline vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma
 	return VM_FAULT_FALLBACK;
 }
 
-static inline bool
-corten_arena_unmap_file_event(struct vm_area_struct *vma,
-			      unsigned long start, unsigned long end,
-			      bool even_cows)
+static inline void corten_arena_unmap_file_range(struct address_space *mapping,
+						 pgoff_t first_index,
+						 pgoff_t last_index,
+						 bool even_cows)
+{
+}
+
+static inline bool corten_arena_imap_stale_guard(struct vm_area_struct *vma)
 {
 	return false;
 }

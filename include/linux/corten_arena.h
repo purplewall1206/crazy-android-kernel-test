@@ -251,7 +251,24 @@ enum corten_region_class {
  * @carrier: detached, not-in-tree VMA that will host rmap/PTE-API
  *          semantics for the region (sec 2.3).  Field only in V-A.0 --
  *          no producer, stays NULL; the semantics land in V-A.2b.
+ * @rfile_node: W1.b (W1_NATIVE_RMAP_SPEC.md sec 4.1) per-inode registry
+ *          membership: a published FILE region hangs this node off its
+ *          backing mapping's corten_inode_regions head -- the i_mmap
+ *          equivalent for a region that owns no tree VMA.  Linked by
+ *          the attach's last publishing step and unlinked by the FILE
+ *          teardown, both under the mapping's i_mmap_rwsem for writing.
+ * @rinodes: the registry head @rfile_node is linked on (after the
+ *          link), or the pre-allocated still-unlinked one (during the
+ *          attach's armable window; the link itself allocates nothing).
+ *          NULL for every non-FILE record.  Lifetime: the head dies
+ *          with the last unlink of its mapping (erased from the global
+ *          index at nr == 0, under the same i_mmap_rwsem hold).
  */
+struct corten_inode_regions {
+	struct list_head	regions;  /* corten_arena.rfile_node list */
+	unsigned int		nr;	  /* regions currently linked */
+};
+
 struct corten_arena {
 	unsigned long		start;
 	unsigned long		end;
@@ -297,6 +314,8 @@ struct corten_arena {
 	unsigned int		npieces;  /* >1 = punched multi-piece */
 	struct list_head	rpieces;  /* piece list; empty if <=1 */
 	struct vm_area_struct	*carrier; /* sec 2.3 detached VMA (V-A.2b) */
+	struct list_head	rfile_node; /* W1.b per-inode registry node */
+	struct corten_inode_regions *rinodes; /* W1.b registry head */
 
 	struct rcu_head		rcu;
 };
@@ -1007,6 +1026,14 @@ void corten_arena_test_wl_histogram(struct mm_struct *mm,
  */
 long corten_arena_test_truncate_routes(void);
 long corten_arena_test_zap_single_refuses(void);
+
+/* W1.b registry hooks: the demoted i_mmap-keyed route backstop (must
+ * stay 0 -- a hit is a stale interval-tree node), the per-mapping
+ * registry occupancy, and the emptiness of the global index.
+ */
+long corten_arena_test_imap_stale_refuses(void);
+long corten_arena_test_registry_size(struct address_space *mapping);
+bool corten_arena_test_registry_empty(void);
 
 /* M6.T3 shrinker hooks: drive the count/scan bodies directly (the
  * shrinker is only registered on a corten=on boot; the bodies are the
