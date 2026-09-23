@@ -604,6 +604,12 @@ int corten_arena_release(struct mm_struct *mm, unsigned long addr,
 int corten_arena_query(struct mm_struct *mm, unsigned long addr);
 void corten_arena_mm_exit(struct mm_struct *mm);
 
+/* V-D (S-3 disclosure): swapoff's unuse_mm() notes each visit to an mm
+ * whose window domain it cannot walk (carrier windows are tree-free);
+ * pure observation, counted per visit.
+ */
+void corten_arena_unuse_blind_note(struct mm_struct *mm);
+
 /**
  * corten_arena_lookup - resolve the arena covering @addr, if any.
  * @mm: address space to look in.
@@ -938,6 +944,14 @@ long corten_arena_test_j2_violations(void);
 long corten_arena_test_j2_stale(void);
 long corten_arena_test_j2_first_violation(void);
 
+/* V-D (B-2 closure ledger): the exit walk's per-level upper-table
+ * retirement counts, and the S-3 swapoff-blindness disclosure counter.
+ */
+long corten_arena_test_exit_upper_pmds(void);
+long corten_arena_test_exit_upper_puds(void);
+long corten_arena_test_exit_upper_p4ds(void);
+long corten_arena_test_unuse_blind_mms(void);
+
 /* V-A.3b J1-hygiene funnels (audit #1/#2/#29): the fault arm-pair
  * counter and the uffd entry rejects.
  */
@@ -990,6 +1004,10 @@ long corten_arena_test_swapped_pages(void);
  * no reachable caller but are stubbed to keep the surface total.
  */
 static inline void corten_arena_mm_exit(struct mm_struct *mm)
+{
+}
+
+static inline void corten_arena_unuse_blind_note(struct mm_struct *mm)
 {
 }
 

@@ -2463,6 +2463,14 @@ static int unuse_mm(struct mm_struct *mm, unsigned int type)
 	mmap_read_lock(mm);
 	if (check_stable_address_space(mm))
 		goto unlock;
+	/* CortenMM (M-V V-D, S-3): this walk is VMA-bounded, so a MODE
+	 * process's tree-free carrier windows and their swap entries are
+	 * invisible to the early swap-in -- counted here as the
+	 * disclosure; the entries ride until a window fault or the exit
+	 * walk releases them (bounded spin in try_to_unuse(), never a
+	 * leak).  The behavior is the guest retest's to characterize.
+	 */
+	corten_arena_unuse_blind_note(mm);
 	for_each_vma(vmi, vma) {
 		if (vma->anon_vma && !is_vm_hugetlb_page(vma)) {
 			ret = unuse_vma(vma, type);

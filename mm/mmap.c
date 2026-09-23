@@ -1485,10 +1485,13 @@ void exit_mmap(struct mm_struct *mm)
 	int count = 0;
 
 	/* mm's last user has gone, and its about to be pulled down */
-	/* Arena teardown first (drain + free the arena descriptors while no
-	 * fault can be in flight); the legacy unmap below then retires the
-	 * shadow-VMAs' page tables through the regular free funnels
-	 * (M3B_DESIGN sec 5.2).
+	/* Arena teardown first (M-V V-D): the pure-PT exit walk zaps the
+	 * tree-free windows and retires their page tables -- PTE pages and
+	 * the upper tables the window domain holds exclusively -- then the
+	 * drain frees the descriptors while no fault can be in flight.
+	 * The legacy unmap below then retires the tree VMAs' page tables
+	 * (targeted shadows, punch implants, the delegated domain) through
+	 * the regular free funnels (M3B_DESIGN sec 5.2).
 	 */
 	corten_arena_mm_exit(mm);
 

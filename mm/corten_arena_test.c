@@ -202,6 +202,7 @@ struct corten_arena_test_op {
 	unsigned long new_addr;
 	long retl;
 	char *buf;		/* pattern in/out for copy_to_user checks */
+	struct file *file;	/* the punch shape's mapping backend */
 	struct completion done;
 };
 
@@ -6617,6 +6618,38 @@ static void corten_arena_test_op_do_mmap(struct corten_arena_test_op *o)
 	mmap_write_unlock(o->mm);
 }
 
+/* One file MAP_FIXED punch shape on the attached worker: the real
+ * do_mmap() funnel -- the punch route, the overlap gather and the
+ * implant VMA install exactly as the guest's memfd MAP_FIXED runs it.
+ */
+static void corten_arena_test_op_punch(struct corten_arena_test_op *o)
+{
+	unsigned long populate;
+	LIST_HEAD(uf);
+
+	mmap_write_lock(o->mm);
+	o->retl = (long)do_mmap(o->file, o->addr, o->len,
+				PROT_READ | PROT_WRITE,
+				MAP_FIXED | MAP_SHARED, 0, 0, &populate, &uf);
+	mmap_write_unlock(o->mm);
+}
+
+static long corten_arena_test_punch(struct kunit *test, struct mm_struct *mm,
+				    struct file *file, unsigned long addr,
+				    unsigned long len)
+{
+	struct corten_arena_test_op o = {
+		.mm = mm,
+		.fn = corten_arena_test_op_punch,
+		.file = file,
+		.addr = addr,
+		.len = len,
+	};
+
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
+	return o.retl;
+}
+
 static long corten_arena_test_vm_mmap(struct kunit *test, struct mm_struct *mm,
 				      unsigned long addr, unsigned long len,
 				      unsigned long flags)
@@ -10598,6 +10631,417 @@ static void corten_arena_test_mvc_smaps_pagemap(struct kunit *test)
 						 0, 0), 0);
 }
 
+/*
+ * V-D (MV_VMA_FREE_SPEC.md sec 3.4): the spec's terminal anchor -- one
+ * synthetic mm through the whole MODE lifecycle
+ * (mmap->fault->mprotect->madvise->mremap->fork->swap->park->exit),
+ * then the exit walk itself, then the ledger must close on every axis:
+ *
+ *   - the accounting triple: global ptdescs/meta_arrays deltas are 0
+ *     (every descriptor and meta array the lifecycle created came
+ *     back) and the folio side reads from the mm (MM_ANONPAGES and
+ *     MM_SWAPENTS both 0 -- the walk's zap released the mapped page
+ *     and the swap entry);
+ *   - the B-2 criterion: mm_pgtables_bytes(mm) == 0 after the walk
+ *     (PTE pages dec'd on retirement, the window-exclusive PMD/PUD
+ *     pages self-torn) -- the harness VMA is never faulted, so the
+ *     window domain is the only page-table footprint;
+ *   - the upper-table count: exit_upper_pmds/puds advance by exactly
+ *     the footprint (one 1GiB PMD page and one 512GiB PUD page per mm
+ *     that ever filled the window; parent + forked child = 2 each),
+ *     and p4ds stays 0 (runtime-folded p4d; on la57 the 256TB span
+ *     test keeps the shared p4d page with the harness VMA, matching
+ *     upstream free_pgtables' boundary discipline);
+ *   - the whitelist: the INV-MV2 walker answers 0 violations with the
+ *     lifecycle done, and the J1 pair never recorded a window hit.
+ *
+ * The forked child exits through the real mmput()->exit_mmap() funnel
+ * before the parent is walked, so its ledger closes under the same
+ * walk the guest exercises.
+ */
+static void corten_arena_test_exit_lifecycle(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm, *child;
+	struct corten_arena *ar;
+	struct vm_area_struct *carrier;
+	struct corten_pte_meta sm;
+	struct folio *folio;
+	struct corten_txn txn;
+	pte_t *ptep, pte, swp_pte;
+	spinlock_t *ptl;	/* guards the swap-out PTE rewrite */
+	pmd_t *pmdp;
+	swp_entry_t entry = swp_entry(1, 0x5d);
+	unsigned long win = CORTEN_ARENA_TEST_WIN;
+	unsigned long win2 = CORTEN_ARENA_TEST_WIN + 2 * PMD_SIZE;
+	unsigned long keep = win + PAGE_SIZE;
+	unsigned long die = win + PMD_SIZE + PAGE_SIZE;
+	unsigned long anon = win + 2 * PAGE_SIZE;
+	long ptdescs0, arrays0, j1h0, pmds0, puds0, p4ds0, swaps0, timeouts;
+	long upper_pmds, upper_puds;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "lifecycle ledger requires corten=on");
+
+	ptdescs0 = corten_arena_test_named_counter(test, "ptdescs");
+	arrays0 = corten_arena_test_named_counter(test, "meta_arrays");
+	j1h0 = corten_arena_test_j1_hits();
+	pmds0 = corten_arena_test_exit_upper_pmds();
+	puds0 = corten_arena_test_exit_upper_puds();
+	p4ds0 = corten_arena_test_exit_upper_p4ds();
+	swaps0 = corten_arena_test_named_counter(test, "zap_swap_frees");
+	timeouts = corten_arena_test_drain_timeouts();
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* mmap: two VMA-less carrier windows (the auto takeover). */
+	KUNIT_ASSERT_EQ(test, corten_arena_test_pool_attach(mm, win,
+							    2 * PMD_SIZE),
+			0);
+	/* fault: one mapped page per window plus a virtual allocation. */
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, keep), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, keep),
+			0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, die), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, die),
+			0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_anon(mm, anon),
+			0);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_pt_present(mm, keep));
+
+	/* mprotect: the routed permission downgrade commits (1 = routed). */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_mprotect_route(mm, win, PAGE_SIZE,
+						    PROT_READ, -1), 1);
+
+	/* madvise(DONTNEED shape): the chunk zap drops one slot's content,
+	 * keeping its committed perm.
+	 */
+	ar = corten_arena_lookup_get(mm, anon);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_unmap_chunk(mm, ar, anon, PAGE_SIZE), 0);
+	percpu_ref_put(&ar->active);
+
+	/* mremap: the in-place shrink retires the second window (its
+	 * mapped page drops with the tail).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_mremap_route(mm, win,
+							2 * PMD_SIZE,
+							PMD_SIZE, 0, 0),
+			(long)win);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, win));
+
+	/* fork: the mirror carries the window to a child registry with
+	 * its own page tables; the child then exits through the real
+	 * mmput()->exit_mmap() funnel (the walk under test).
+	 */
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_query(child, win), 1);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_pt_present(child, win));
+	mmput(child);
+
+	/* swap: the M6.T2 hand-rolled swap-out shape on the surviving
+	 * page -- synthetic entry, counted MM_SWAPENTS, Swapped metadata.
+	 */
+	carrier = corten_arena_test_carrier_of(mm, keep);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, carrier);
+	pmdp = corten_arena_test_pmd(mm, keep);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, keep, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get_and_clear(mm, keep, ptep);
+	KUNIT_ASSERT_TRUE(test, pte_present(pte));
+	swp_pte = swp_entry_to_pte(entry);
+	set_pte_at(mm, keep, ptep, swp_pte);
+	pte_unmap_unlock(ptep, ptl);
+	folio = page_folio(pte_page(pte));
+	folio_remove_rmap_pte(folio, folio_page(folio, 0), carrier);
+	add_mm_counter(mm, MM_ANONPAGES, -1);
+	add_mm_counter(mm, MM_SWAPENTS, 1);
+	folio_put(folio);
+	KUNIT_ASSERT_EQ(test, corten_lock_range(mm, keep, PAGE_SIZE, &txn),
+			0);
+	memset(&sm, 0, sizeof(sm));
+	sm.state = CORTEN_SWAPPED;
+	sm.perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER;
+	corten_swap_encode(&sm, entry);
+	KUNIT_EXPECT_EQ(test, corten_swap_out(&txn, keep, &sm), 0);
+	corten_unlock(&txn);
+
+	/* park: a third window parks through the exact munmap route. */
+	KUNIT_ASSERT_EQ(test, corten_arena_test_pool_attach(mm, win2,
+							    PMD_SIZE),
+			0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 win2, PMD_SIZE), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 1);
+
+	/* The whitelist pair: the tree answers the INV-MV2 walker clean
+	 * and the J1 probe never found a window VMA.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_hits(), j1h0);
+
+	/* exit: the pure-PT walk itself (the guest reaches it through
+	 * exit_mmap(); the direct call keeps the assertions on this side
+	 * of the deferred mm free).
+	 */
+	corten_arena_mm_exit(mm);
+
+	KUNIT_EXPECT_EQ(test, get_mm_counter(mm, MM_ANONPAGES), 0);
+	KUNIT_EXPECT_EQ(test, get_mm_counter(mm, MM_SWAPENTS), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_named_counter(test,
+							      "zap_swap_frees"),
+			swaps0 + 1);
+
+	/* The B-2 criterion: the window domain's whole page-table
+	 * footprint came back (PTE pages dec'd, exclusive upper tables
+	 * self-torn); the never-faulted harness VMA holds none.
+	 */
+	KUNIT_EXPECT_EQ(test, mm_pgtables_bytes(mm), 0);
+
+	upper_pmds = corten_arena_test_exit_upper_pmds() - pmds0;
+	upper_puds = corten_arena_test_exit_upper_puds() - puds0;
+	KUNIT_EXPECT_EQ(test, upper_pmds, 2);
+	KUNIT_EXPECT_EQ(test, upper_puds, 2);
+	/* la57: the child (tree-free mm) frees its p4d page, the parent
+	 * shares its 256TB span with the harness VMA and keeps it (the
+	 * upstream free_pgtables boundary discipline).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_exit_upper_p4ds() - p4ds0,
+			mm_p4d_folded(mm) ? 0 : 1);
+
+	/* The accounting triple: descriptors and meta arrays came back
+	 * (the child's exit closed its share), and no drain degraded.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test, "ptdescs"),
+			ptdescs0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test, "meta_arrays"),
+			arrays0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
+	KUNIT_EXPECT_NULL(test, READ_ONCE(mm->corten_state));
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, win));
+	/* The registry is gone: query answers the no-state -ENOENT. */
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, win), -ENOENT);
+}
+
+/*
+ * V-D follow-up (the guest punchfork leak probe): the battery interleave
+ * the mva1_probe runs, driven through the real do_mmap()/munmap-route
+ * funnels -- a parked-window prelude (the S-4 shape), then eight
+ * iterations, each an 8MiB four-window carrier arena placed by the auto
+ * route (pool take or magazine placement), content in every window, two
+ * window-aligned memfd MAP_FIXED punches through the real punch funnel
+ * (frames erased, content zapped, implant VMAs installed by mmap_region),
+ * a fork whose child exits through the real mmput()->exit_mmap() funnel,
+ * and the iteration-end munmap that answers -ENOENT (the punched arena's
+ * start frame is a hole, so the pool release's start-frame lookup
+ * misses -- the guest's silent munmap failure; the arena and its
+ * implants stay live until process exit).  The B-2 criterion is checked
+ * per side: pgtables_bytes == 0 for every child and the parent.
+ */
+static void corten_arena_test_exit_punchfork(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm, *child;
+	struct vm_area_struct *cvma;
+	struct file *memfd;
+	unsigned long w = 0;
+	int i, j;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "punchfork exit ledger requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* The S-4 prelude: one 8MiB window placed by the auto route and
+	 * parked by its munmap -- the pool slot the first punchfork
+	 * iteration reactivates.
+	 */
+	w = corten_arena_test_vm_mmap(test, mm, 0, 4 * PMD_SIZE,
+				      MAP_PRIVATE | MAP_ANONYMOUS |
+				      MAP_NORESERVE);
+	KUNIT_ASSERT_EQ(test, w & ~PAGE_MASK, 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 w, 4 * PMD_SIZE), 1);
+
+	memfd = shmem_file_setup("corten-punchfork", 2 * PMD_SIZE, 0);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, memfd);
+
+	for (j = 0; j < 8; j++) {
+		/* The 8MiB punchfork window: four PMD windows, one mapped
+		 * page (and thus one PTE page) each.  The first iteration
+		 * reactivates the parked prelude window; the rest place
+		 * fresh (the magazine).
+		 */
+		w = corten_arena_test_vm_mmap(test, mm, 0, 4 * PMD_SIZE,
+					      MAP_PRIVATE | MAP_ANONYMOUS |
+					      MAP_NORESERVE);
+		KUNIT_ASSERT_EQ(test, w & ~PAGE_MASK, 0);
+		for (i = 0; i < 4; i++) {
+			unsigned long a = w + i * PMD_SIZE + PAGE_SIZE;
+
+			KUNIT_ASSERT_EQ(test,
+					corten_arena_test_fill_window(mm, a),
+					0);
+			KUNIT_ASSERT_EQ(test,
+					corten_arena_test_fork_seed_mapped(mm, a),
+					0);
+		}
+
+		/* punch①+②: memfd MAP_FIXED over windows 0 and 1 -- the
+		 * real punch route (frames erased, content zapped) and
+		 * the real implant install by mmap_region().
+		 */
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_punch(test, mm, memfd, w,
+							PMD_SIZE), w);
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_punch(test, mm, memfd,
+							w + PMD_SIZE, PMD_SIZE),
+				w + PMD_SIZE);
+
+		/* fork: the child mirrors the punched arena (register_child
+		 * re-fills the hole frames) and inherits the implants as
+		 * plain tree VMAs, exactly like dup_mmap() copies them.
+		 */
+		child = mm_alloc();
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_fork_begin(child, mm), 0);
+		cvma = corten_arena_test_mkvm(child, w, w + PMD_SIZE,
+					      CORTEN_ARENA_TEST_FLAGS_OK);
+		KUNIT_ASSERT_NOT_NULL(test, cvma);
+		cvma = corten_arena_test_mkvm(child, w + PMD_SIZE,
+					      w + 2 * PMD_SIZE,
+					      CORTEN_ARENA_TEST_FLAGS_OK);
+		KUNIT_ASSERT_NOT_NULL(test, cvma);
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_fork_commit(child, mm), 0);
+
+		/* The child exits first (the guest's waitpid order): the
+		 * real funnel, with the mm's lifetime held for the B-2
+		 * assertion.
+		 */
+		mmgrab(child);
+		mmput(child);
+		KUNIT_EXPECT_EQ(test, mm_pgtables_bytes(child), 0);
+		mmdrop(child);
+
+		/* The iteration-end munmap over the punched arena answers
+		 * -ENOENT (the start frame is a hole; the guest's silent
+		 * munmap failure -- the arena stays live until exit).
+		 */
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_run_op(test, mm,
+							 corten_arena_test_op_munmap_route,
+							 w, 4 * PMD_SIZE),
+				-ENOENT);
+	}
+
+	fput(memfd);
+
+	/* Process exit: eight interleaved punched arenas, sixteen real
+	 * implants, the harness VMA -- one real exit_mmap() funnel.
+	 */
+	mmgrab(mm);
+	mmput(mm);
+	KUNIT_EXPECT_EQ(test, mm_pgtables_bytes(mm), 0);
+	mmdrop(mm);
+	t->mm = NULL;
+}
+
+/*
+ * V-D follow-up #2 (the guest 4x4096 residue, root cause anchor): two
+ * live arenas sharing one P4D span from DIFFERENT PUD segments -- the
+ * metis_eq shape (an 8MiB corpus region at the window base and a
+ * chunk-carved 128MiB arena one 1GiB segment up).  The phase-B
+ * self-teardown retires each arena's PMD page in ascending registry
+ * order, but the FIRST arena's PUD-page decision ran while the second
+ * arena's PMD page still sat in the shared PUD page: the all-none scan
+ * failed, the PUD page was skipped for good and its account surfaced
+ * as exactly one "non-zero pgtables_bytes: 4096" BUG line per mm --
+ * legacy could not recover it (the window domain is tree-free, so
+ * free_pgtables never descends there).  The B1/B2/B3 pass separation
+ * retires every PMD page before any PUD page is judged; the anchor
+ * drives the real mmput()->exit_mmap() funnel and requires the whole
+ * account back, upper-table counters included (two PMD pages, one PUD
+ * page for the shared 512GiB span).
+ */
+static void corten_arena_test_exit_multi_segment(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long win = CORTEN_ARENA_TEST_WIN;
+	unsigned long win2 = CORTEN_ARENA_TEST_WIN + PUD_SIZE;
+	long pmds0, puds0;
+	int i;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "multi-segment exit requires corten=on");
+
+	pmds0 = corten_arena_test_exit_upper_pmds();
+	puds0 = corten_arena_test_exit_upper_puds();
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* Arena A at the window base (its own PUD segment), one mapped
+	 * page -- and PTE page -- per window.
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_test_pool_attach(mm, win,
+							    2 * PMD_SIZE),
+			0);
+	for (i = 0; i < 2; i++) {
+		unsigned long a = win + i * PMD_SIZE + PAGE_SIZE;
+
+		KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, a), 0);
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_fork_seed_mapped(mm, a), 0);
+	}
+
+	/* Arena B one PUD segment up: same P4D span, different PMD page.
+	 * The chunk-carve (a window-aligned inner munmap) keeps the frames
+	 * and resets the slots, exactly like the guest's PROT_NONE arena
+	 * tail -- the carve is not load-bearing for the leak, the segment
+	 * distance is.
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_test_pool_attach(mm, win2,
+							    2 * PMD_SIZE),
+			0);
+	for (i = 0; i < 2; i++) {
+		unsigned long a = win2 + i * PMD_SIZE + PAGE_SIZE;
+
+		KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, a), 0);
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_test_fork_seed_mapped(mm, a), 0);
+	}
+
+	/* The real funnel: the walk owns the tree-free window domain
+	 * (free_pgtables cannot reach it), so the shared PUD page's
+	 * retirement is the walk's alone to finish.
+	 */
+	mmgrab(mm);
+	mmput(mm);
+	KUNIT_EXPECT_EQ(test, mm_pgtables_bytes(mm), 0);
+	mmdrop(mm);
+	t->mm = NULL;
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_exit_upper_pmds(),
+			pmds0 + 2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_exit_upper_puds(),
+			puds0 + 1);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
@@ -10666,6 +11110,16 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_mvc_merge_first_row),
 	KUNIT_CASE(corten_arena_test_mvc_gup_probe),
 	KUNIT_CASE(corten_arena_test_mvc_smaps_pagemap),
+	/* V-D: the full-lifecycle ledger anchor (B-2 closure). */
+	KUNIT_CASE(corten_arena_test_exit_lifecycle),
+	/* V-D follow-up: the punchfork interleave both funnels must meet
+	 * (the guest battery's residue probe family).
+	 */
+	KUNIT_CASE(corten_arena_test_exit_punchfork),
+	/* V-D follow-up #2: two arenas, one P4D span, two PUD segments --
+	 * the metis shape that stranded the shared PUD page (4x4096).
+	 */
+	KUNIT_CASE(corten_arena_test_exit_multi_segment),
 	KUNIT_CASE(corten_arena_test_vma_free_reuse),
 	KUNIT_CASE(corten_arena_test_inv_mv3),
 	KUNIT_CASE(corten_arena_test_fork_vma_free),

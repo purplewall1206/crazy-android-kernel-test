@@ -344,6 +344,26 @@ static atomic_long_t corten_nr_placement_idle_ejects;
  */
 static atomic_long_t corten_nr_implant_drops;
 
+/* V-D (MV_VMA_FREE_SPEC.md sec 3.4, the B-2 closure ledger): upper-table
+ * pages the exit walk self-retired, per level.  Every fill_upper() runs
+ * the standard pX_alloc() funnels, so each page is pgtables_bytes
+ * accounted on the way in; these counters prove the way out -- a MODE
+ * lifecycle that ends with pgtables_bytes == 0 must show pmds+puds
+ * (a runtime-unfolded p4d adds p4ds) matching the window footprint,
+ * and the guest gate greps them next to the zero-BUG-line criterion.
+ */
+static atomic_long_t corten_nr_exit_upper_pmds;
+static atomic_long_t corten_nr_exit_upper_puds;
+static atomic_long_t corten_nr_exit_upper_p4ds;
+/* V-D (S-3 disclosure): swapoff unuse passes that visited an mm whose
+ * window domain they cannot walk -- unuse_mm() is VMA-bounded and the
+ * post-A.2 carrier windows are tree-free, so their swap entries ride
+ * until a fault or the exit walk releases them.  Counted per unuse_mm()
+ * visit with arenas registered; the behavior characterization itself is
+ * the guest retest's (spec sec 4, S-3).
+ */
+static atomic_long_t corten_nr_unuse_blind_mms;
+
 /* V-A.3b J1-hygiene observation counters (audit #1/#2/#3/#7/#29): the
  * window-domain funnels around the J1 probe pair.  fault_fallback_window
  * counts the two fault short-circuit arms -- the fast hook's diversion
@@ -1480,6 +1500,8 @@ bool corten_region_invariants_ok(struct mm_struct *mm)
 
 /* Leaf PTE walk; defined in the S4 section below. */
 static pmd_t *corten_arena_pmd(struct mm_struct *mm, unsigned long addr);
+/* Upper-entry walk (V-D exit); defined next to corten_arena_pmd(). */
+static pud_t *corten_arena_pud(struct mm_struct *mm, unsigned long addr);
 
 /*
  * Flag whitelist for the declared VMA: access rights, their mirroring
@@ -2005,19 +2027,50 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
 }
 
 /*
- * V-A.1: retire the PT pages a VMA-less arena leaves behind.  The zap
- * cleared every PTE; free_pgtables() only walks tree VMAs, so a no-VMA
- * window's page tables would otherwise outlive the arena (leaked at mm
- * death).  PT-page frees run through pte_free_tlb(), whose funnel owns
- * the M2a descriptor uninstall; the PUD/P4D pages are left in place --
- * warm for the next arena in their span, and a bounded (4K per 1GiB)
- * mm-death residue that the V-D exit walk owns wholesale.
+ * The PTE-page retirement core: drop every tracked-or-drift PTE page in
+ * [start,end) through the pte_free_tlb() funnel (INV6: the funnel owns
+ * the M2a descriptor uninstall and the TLB batching) against a
+ * caller-owned gather.  V-D: mm_dec_nr_ptes() pairs the mm_inc_nr_ptes()
+ * __pte_alloc() did for every install path (fill_upper() and the fault
+ * fallbacks all go through pte_alloc()), so pgtables_bytes now returns
+ * to zero with the pages -- the accounting half of the B-2 closure (the
+ * upper-table half is the exit walk's self-teardown below).
  *
  * Upper-level note: only pmd entries the arena owned are cleared; a pud
- * shared with other mappings is untouched.
+ * shared with other mappings is untouched (the exit walk decides when a
+ * whole upper page is window-exclusive).
  *
  * Callers hold mmap_write (release path) or the dying mm's read lock
  * (exit path), with the arena's content already zapped.
+ */
+static void corten_arena_free_ptes_span(struct mm_struct *mm,
+					struct mmu_gather *tlb,
+					unsigned long start,
+					unsigned long end)
+{
+	unsigned long addr;
+
+	for (addr = start; addr < end;
+	     addr = min((addr | (PMD_SIZE - 1)) + 1, end)) {
+		pmd_t *pmdp = corten_arena_pmd(mm, addr);
+
+		if (!pmdp || !pmd_present(READ_ONCE(*pmdp)) ||
+		    pmd_leaf(READ_ONCE(*pmdp)))
+			continue;
+
+		pte_free_tlb(tlb, pmd_pgtable(READ_ONCE(*pmdp)), addr);
+		pmd_clear(pmdp);
+		mm_dec_nr_ptes(mm);
+	}
+}
+
+/*
+ * V-A.1: retire the PT pages a VMA-less arena leaves behind.  The zap
+ * cleared every PTE; free_pgtables() only walks tree VMAs, so a no-VMA
+ * window's page tables would otherwise outlive the arena (leaked at mm
+ * death).  The upper pages are left in place on the live paths -- warm
+ * for the next arena in their span; the V-D exit walk retires them
+ * wholesale at mm death.
  */
 static void corten_arena_free_ptes_novma(struct mm_struct *mm,
 					 unsigned long start,
@@ -2030,21 +2083,9 @@ static void corten_arena_free_ptes_novma(struct mm_struct *mm,
 	 */
 	struct mmu_gather _tlb;
 	struct mmu_gather *tlb = &_tlb;
-	unsigned long addr;
 
 	tlb_gather_mmu(tlb, mm);
-	for (addr = start; addr < end;
-	     addr = min((addr | (PMD_SIZE - 1)) + 1, end)) {
-		pmd_t *pmdp = corten_arena_pmd(mm, addr);
-
-		if (!pmdp || !pmd_present(READ_ONCE(*pmdp)) ||
-		    pmd_leaf(READ_ONCE(*pmdp)))
-			continue;
-
-		pte_free_tlb(tlb, pmd_pgtable(READ_ONCE(*pmdp)), addr);
-		pmd_clear(pmdp);
-	}
-
+	corten_arena_free_ptes_span(mm, tlb, start, end);
 	tlb_finish_mmu(tlb);
 }
 
@@ -2751,6 +2792,16 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_swapin_heals));
 	seq_printf(m, "zap_swap_frees      %ld\n",
 		   atomic_long_read(&corten_nr_zap_swap_frees));
+	/* V-D (B-2 closure ledger): upper tables the exit walk retired. */
+	seq_printf(m, "exit_upper_pmds     %ld\n",
+		   atomic_long_read(&corten_nr_exit_upper_pmds));
+	seq_printf(m, "exit_upper_puds     %ld\n",
+		   atomic_long_read(&corten_nr_exit_upper_puds));
+	seq_printf(m, "exit_upper_p4ds     %ld\n",
+		   atomic_long_read(&corten_nr_exit_upper_p4ds));
+	/* V-D (S-3 disclosure): swapoff unuse visits blind to windows. */
+	seq_printf(m, "unuse_blind_mms     %ld\n",
+		   atomic_long_read(&corten_nr_unuse_blind_mms));
 	/* M6.T3 shrinker pressure channel + M6.T4 observability. */
 	seq_printf(m, "shrink_scans        %ld\n",
 		   atomic_long_read(&corten_nr_shrink_scans));
@@ -3113,6 +3164,28 @@ long corten_arena_test_j2_walks(void)
 	return atomic_long_read(&corten_nr_j2_walks);
 }
 
+/* V-D (B-2 ledger): the exit walk's upper-table retirement counts. */
+long corten_arena_test_exit_upper_pmds(void)
+{
+	return atomic_long_read(&corten_nr_exit_upper_pmds);
+}
+
+long corten_arena_test_exit_upper_puds(void)
+{
+	return atomic_long_read(&corten_nr_exit_upper_puds);
+}
+
+long corten_arena_test_exit_upper_p4ds(void)
+{
+	return atomic_long_read(&corten_nr_exit_upper_p4ds);
+}
+
+/* V-D (S-3 disclosure): swapoff unuse visits blind to windows. */
+long corten_arena_test_unuse_blind_mms(void)
+{
+	return atomic_long_read(&corten_nr_unuse_blind_mms);
+}
+
 long corten_arena_test_j2_violations(void)
 {
 	return atomic_long_read(&corten_nr_j2_violations);
@@ -3134,17 +3207,335 @@ long corten_arena_test_j2_first_violation(void)
  * ------------------------------------------------------------------
  */
 
+/* V-D helpers: the window-domain tree test and the all-none table
+ * scans.  A level's page can only be retired when nothing that the
+ * legacy pass will still walk can reach it: every tree VMA in the
+ * level's span defers to free_pgtables() (it will descend exactly
+ * those spans after the walk returns), and every entry left in the
+ * page itself defers the free outright (a non-none entry that is not
+ * a window the walk just cleared is an anomaly -- the page stays and
+ * the residual pgtables_bytes discloses it, rather than freeing a
+ * table something may still be walking).
+ */
+static bool corten_arena_exit_span_clear(struct mm_struct *mm,
+					 unsigned long start,
+					 unsigned long end)
+{
+	VMA_ITERATOR(vmi, mm, start);
+	struct vm_area_struct *vma;
+
+	for_each_vma_range(vmi, vma, end)
+		return false;
+
+	return true;
+}
+
+static bool corten_arena_exit_pmd_page_clear(pmd_t *pmdp)
+{
+	int i;
+
+	for (i = 0; i < PTRS_PER_PMD; i++)
+		if (!pmd_none(READ_ONCE(pmdp[i])))
+			return false;
+
+	return true;
+}
+
+static bool corten_arena_exit_pud_page_clear(pud_t *pudp)
+{
+	int i;
+
+	for (i = 0; i < PTRS_PER_PUD; i++)
+		if (!pud_none(READ_ONCE(pudp[i])))
+			return false;
+
+	return true;
+}
+
+static bool corten_arena_exit_p4d_page_clear(p4d_t *p4dp)
+{
+	int i;
+
+	for (i = 0; i < PTRS_PER_P4D; i++)
+		if (!p4d_none(READ_ONCE(p4dp[i])))
+			return false;
+
+	return true;
+}
+
 /*
- * Called from exit_mmap() before the legacy teardown: drain and free every
- * arena, then drop the registry.  mm_users is already 0 here, so no fault
- * can be in flight and the drain is purely defensive; the unmap_vmas() that
- * follows retires the shadow-VMAs' page tables through the regular free
- * funnels.
+ * One walkable run of phase A: the full-clear chunk zap (swap entries
+ * released and counted) followed by the PTE-page retirement, against
+ * the walk's gather.  A zap failure at mm_users == 0 is a kernel bug
+ * (no transaction can be in flight); the run is still retired as far
+ * as it got and the residue is left to the leak ledger -- WARN once,
+ * never hang the dying process.
+ */
+static void corten_arena_exit_run(struct mm_struct *mm,
+				  struct corten_arena *arena,
+				  struct mmu_gather *tlb,
+				  unsigned long start, unsigned long end)
+{
+	if (corten_arena_unmap_chunk_flags(mm, arena, start, end - start,
+					   0, tlb))
+		WARN_ONCE(1,
+			  "corten: exit walk zap failed at [%lx,%lx): PT residue left to the leak ledger\n",
+			  start, end);
+	corten_arena_free_ptes_span(mm, tlb, start, end);
+}
+
+/*
+ * V-D (MV_VMA_FREE_SPEC.md sec 3.4): the pure-PT exit walk.  mm_users
+ * is 0 and both the tree and the registry are frozen, so the window
+ * domain tears its own page tables down instead of waiting for the
+ * VMA-bounded free_pgtables() that can never see it:
+ *
+ *   A) per PMD window still owned by an arena frame slot: full-clear
+ *      zap (swap entries released and counted, the M6.T2 arm) + PTE
+ *      page retirement through the pte_free_tlb() funnel.  Windows a
+ *      tree VMA covers (targeted-DECLARE shadows, punch implants) and
+ *      punched-hole frames (slot erased, a legacy VMA lives there)
+ *      stay with the legacy unmap_vmas()/free_pgtables() pass that
+ *      exit_mmap() runs after this returns -- the walk works at
+ *      window granularity, so a punched arena's surviving windows no
+ *      longer ride the old arena-level "any VMA in span" skip (their
+ *      content and PT pages used to leak at mm death).
+ *   B) the upper tables fill_upper() built, retired wherever the
+ *      window domain holds a level's page exclusively: PMD pages per
+ *      PUD_SIZE span, PUD pages per P4D span, P4D pages per PGDIR
+ *      span (runtime-folded levels skip themselves).  pgtables_bytes
+ *      returns to zero with them -- the B-2 closure.
+ *
+ * Everything runs on one fullmm mmu_gather (INV6: every PT page free
+ * goes through the pX_free_tlb() batched funnels; the whole mm is
+ * dying, so range tracking is moot).  mmap_write is held across the
+ * walk -- the strongest fence the legacy pass itself uses
+ * (free_pgtables() runs under it in exit_mmap()), and with mm_users 0
+ * nobody can contest it: the zap's covering-VMA lookups want a lock to
+ * run under, and the tree queries above are its readers.  Runs BEFORE
+ * the unpublish (the zap's stats bookkeeping reads mm->corten_state)
+ * and BEFORE the drain (the zap anchors rmap on the carrier, which the
+ * drain's descriptor teardown frees) -- the j2 audit walk at the
+ * mm_exit head already saw the untouched picture.
+ */
+static void corten_arena_exit_walk(struct mm_struct *mm,
+				   struct corten_mm_state *state)
+{
+	/* Pointer variable for the pX_free_tlb() macros: they substitute
+	 * their first argument unparenthesized, so "&tlb" would expand to
+	 * "&tlb->freed_tables" (the free_pte_range() shape convention).
+	 */
+	struct mmu_gather tlb_;
+	struct mmu_gather *tlb = &tlb_;
+	struct corten_arena *arena;
+	unsigned long frame, win, run_start = 0;
+	unsigned long seg, walked_until = 0;
+	unsigned long done_pmd_seg = 0, done_pud_seg = 0;
+	bool have_run = false;
+
+	mmap_write_lock(mm);
+	tlb_gather_mmu_fullmm(tlb, mm);
+
+	/* A) zap + PTE-page retirement, window by window. */
+	frame = 0;
+	xa_for_each(&state->arenas, frame, arena) {
+		if (arena == &corten_va_reserve_sentinel)
+			continue;
+
+		/* Every frame of an arena holds the same descriptor; walk
+		 * each one once, at its first frame.
+		 */
+		if (frame < walked_until)
+			continue;
+		walked_until = arena->end >> PMD_SHIFT;
+
+		for (win = arena->start & PMD_MASK; win < arena->end;
+		     win += PMD_SIZE) {
+			bool walkable;
+
+			/* A punched frame is no longer arena property
+			 * (a legacy VMA lives in the hole); the tree
+			 * test catches its implant anyway.
+			 */
+			if (xa_load(&state->arenas,
+				    win >> PMD_SHIFT) != arena)
+				walkable = false;
+			else
+				walkable = corten_arena_exit_span_clear(mm,
+									win,
+									win + PMD_SIZE);
+
+			if (walkable && !have_run) {
+				have_run = true;
+				run_start = win;
+			} else if (!walkable && have_run) {
+				have_run = false;
+				corten_arena_exit_run(mm, arena, tlb,
+						      run_start, win);
+			}
+		}
+
+		if (have_run) {
+			have_run = false;
+			corten_arena_exit_run(mm, arena, tlb, run_start,
+					      arena->end);
+		}
+	}
+
+	/* B) upper-table self-teardown, one ascending registry pass per
+	 * level.  Segments are visited in ascending arena order; the
+	 * done_* cursors keep one level's page processed exactly once
+	 * when neighbouring arenas share it.
+	 *
+	 * The pass separation is load-bearing: a level's page can only be
+	 * retired once every page the level below holds in its span is
+	 * gone, and that lower-level retirement of a later arena runs
+	 * AFTER the first arena reaches the shared upper page.  A single
+	 * interleaved pass tested the upper page while a later arena's
+	 * lower pages still sat in it, skipped it (the conservative
+	 * leave-it rule) and never came back -- the mm's last retiring PMD
+	 * page stranded the PUD page above it as a 4096 pgtables_bytes
+	 * residue whenever two arenas shared a P4D span from different
+	 * PUD segments (the guest metis shape: an 8MiB region at the
+	 * window base and a chunk-carved 128MiB arena one segment up).
+	 */
+	frame = 0;
+	walked_until = 0;
+	xa_for_each(&state->arenas, frame, arena) {
+		if (arena == &corten_va_reserve_sentinel)
+			continue;
+
+		/* Same first-frame dedupe as phase A. */
+		if (frame < walked_until)
+			continue;
+		walked_until = arena->end >> PMD_SHIFT;
+
+		/* Pass B1 -- PMD pages: one per PUD_SIZE span. */
+		for (seg = arena->start & PUD_MASK; seg < arena->end;
+		     seg += PUD_SIZE) {
+			pud_t *pudp;
+			pmd_t *pmdp;
+
+			if (seg < done_pmd_seg)
+				continue;
+			done_pmd_seg = seg + PUD_SIZE;
+
+			pudp = corten_arena_pud(mm, seg);
+			if (!pudp || !pud_present(READ_ONCE(*pudp)) ||
+			    pud_leaf(READ_ONCE(*pudp)))
+				continue;
+			if (!corten_arena_exit_span_clear(mm, seg,
+							  seg + PUD_SIZE))
+				continue;
+			pmdp = pmd_offset(pudp, seg);
+			if (!corten_arena_exit_pmd_page_clear(pmdp))
+				continue;
+
+			pud_clear(pudp);
+			pmd_free_tlb(tlb, pmdp, seg);
+			mm_dec_nr_pmds(mm);
+			atomic_long_inc(&corten_nr_exit_upper_pmds);
+		}
+	}
+
+	/* Pass B2 -- PUD pages: one per P4D span (the pgd slot itself on
+	 * a runtime-folded p4d -- p4d_clear() handles both).  Runs after
+	 * the B1 pass retired every PMD page, so the all-none scan below
+	 * sees the span's whole lower level gone.
+	 */
+	frame = 0;
+	walked_until = 0;
+	xa_for_each(&state->arenas, frame, arena) {
+		if (arena == &corten_va_reserve_sentinel)
+			continue;
+
+		if (frame < walked_until)
+			continue;
+		walked_until = arena->end >> PMD_SHIFT;
+
+		for (seg = arena->start & P4D_MASK; seg < arena->end;
+		     seg += P4D_SIZE) {
+			p4d_t *p4dp;
+			pud_t *pudp;
+
+			if (seg < done_pud_seg)
+				continue;
+			done_pud_seg = seg + P4D_SIZE;
+
+			p4dp = p4d_offset(pgd_offset(mm, seg), seg);
+			if (!p4d_present(READ_ONCE(*p4dp)) ||
+			    p4d_leaf(READ_ONCE(*p4dp)))
+				continue;
+			if (!corten_arena_exit_span_clear(mm, seg,
+							  seg + P4D_SIZE))
+				continue;
+			pudp = pud_offset(p4dp, seg);
+			if (!corten_arena_exit_pud_page_clear(pudp))
+				continue;
+
+			p4d_clear(p4dp);
+			pud_free_tlb(tlb, pudp, seg);
+			mm_dec_nr_puds(mm);
+			atomic_long_inc(&corten_nr_exit_upper_puds);
+		}
+	}
+
+	/* Pass B3 -- P4D pages: real only on a runtime-unfolded p4d; the
+	 * p4d_free_tlb() funnel no-ops on the folded shape, so the guard
+	 * merely skips dead work.  (p4d pages carry no pgtables_bytes
+	 * account -- upstream frees them the same unaccounted way in
+	 * free_p4d_range().)  Same pass-separation argument as B2: it
+	 * runs after every PUD page of the span is gone.
+	 */
+	if (!mm_p4d_folded(mm)) {
+		frame = 0;
+		walked_until = 0;
+		xa_for_each(&state->arenas, frame, arena) {
+			if (arena == &corten_va_reserve_sentinel)
+				continue;
+
+			if (frame < walked_until)
+				continue;
+			walked_until = arena->end >> PMD_SHIFT;
+
+			for (seg = arena->start & PGDIR_MASK; seg < arena->end;
+			     seg += PGDIR_SIZE) {
+				pgd_t *pgdp;
+				p4d_t *p4dp;
+
+				pgdp = pgd_offset(mm, seg);
+				if (!pgd_present(READ_ONCE(*pgdp)))
+					continue;
+				if (!corten_arena_exit_span_clear(mm, seg,
+								  seg + PGDIR_SIZE))
+					continue;
+				p4dp = p4d_offset(pgdp, seg);
+				if (!corten_arena_exit_p4d_page_clear(p4dp))
+					continue;
+
+				pgd_clear(pgdp);
+				p4d_free_tlb(tlb, p4dp, seg);
+				atomic_long_inc(&corten_nr_exit_upper_p4ds);
+			}
+		}
+	}
+
+	tlb_finish_mmu(tlb);
+	mmap_write_unlock(mm);
+}
+
+/*
+ * Called from exit_mmap() before the legacy teardown: walk the window
+ * domain's page tables down (V-D), then drain and free every arena and
+ * drop the registry.  mm_users is already 0 here, so no fault can be in
+ * flight and the drain is purely defensive; the unmap_vmas() that
+ * follows retires the tree VMAs' page tables (targeted shadows, punch
+ * implants, the delegated domain) through the regular free funnels.
  */
 void corten_arena_mm_exit(struct mm_struct *mm)
 {
 	struct corten_mm_state *state;
-	unsigned long frame = 0, drained_until = 0, zapped_until = 0;
+	unsigned long frame = 0, drained_until = 0;
 	struct corten_arena *arena;
 	bool had_arenas;
 
@@ -3162,60 +3553,17 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 */
 	corten_audit_j2_walk_locked(mm);
 
-	/* V-A.1: zap the VMA-less arenas (reactivated pool windows)
-	 * BEFORE the unpublish below -- the zap's stats bookkeeping
-	 * reads mm->corten_state, which the unpublish clears.  They are
-	 * invisible to the unmap_vmas()/free_pgtables() pass that
-	 * follows, so their content and PT pages would otherwise leak at
-	 * mm death.  This runs with no lock held but ctl-free
-	 * deliberately: the lock order everywhere else is mmap > ctl, and
-	 * acquiring the read semaphore under ctl_lock would register the
-	 * reverse edge (the untracked walk's covering-VMA lookup wants a
-	 * lock to run under).  Safety needs neither lock: mm_users is 0,
-	 * so no fault or transaction can appear, and the descriptor
-	 * trees' own locks fence the walk against everything dead.
+	/* V-D: the pure-PT walk (zap + PTE/upper-table retirement) runs
+	 * before the unpublish below -- the zap's stats bookkeeping reads
+	 * mm->corten_state, which the unpublish clears -- and before the
+	 * drain, whose descriptor teardown frees the zap's rmap anchor
+	 * (the carrier).  It runs ctl-free deliberately: the lock order
+	 * everywhere else is mmap > ctl, and the walk already holds
+	 * mmap_write.  Safety needs neither lock: mm_users is 0, so no
+	 * fault or transaction can appear, and the descriptor trees' own
+	 * locks fence the walk against everything dead.
 	 */
-	frame = 0;
-	xa_for_each(&state->arenas, frame, arena) {
-		struct vm_area_struct *avma;
-		bool any_vma = false;
-
-		VMA_ITERATOR(vmi, mm, arena->start);
-
-		if (arena == &corten_va_reserve_sentinel)
-			continue;
-
-		/* Every frame of an arena holds the same descriptor; zap
-		 * each one once, at its first frame.
-		 */
-		if (frame < zapped_until)
-			continue;
-		zapped_until = arena->end >> PMD_SHIFT;
-
-		if (READ_ONCE(arena->vma))
-			continue;
-
-		for_each_vma_range(vmi, avma, arena->end) {
-			any_vma = true;
-			break;
-		}
-		if (any_vma)
-			continue;
-
-		mmap_read_lock(mm);
-		{
-			struct mmu_gather tlb;
-
-			tlb_gather_mmu(&tlb, mm);
-			corten_arena_unmap_chunk_flags(mm, arena, arena->start,
-						       arena->end - arena->start,
-						       0, &tlb);
-			tlb_finish_mmu(&tlb);
-			corten_arena_free_ptes_novma(mm, arena->start,
-						     arena->end);
-		}
-		mmap_read_unlock(mm);
-	}
+	corten_arena_exit_walk(mm, state);
 
 	/* Unpublish; no reader can be racing (mm_users == 0). */
 	smp_store_release(&mm->corten_state, NULL);
@@ -3297,6 +3645,27 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	synchronize_rcu();
 
 	corten_arena_state_free(state);
+}
+
+/*
+ * V-D (S-3 disclosure, MV_VMA_FREE_SPEC.md sec 4/C18): swapoff's
+ * try_to_unuse() reaches this mm's swap entries only through tree
+ * VMAs (unuse_mm() is VMA-bounded), and the post-A.2 carrier windows
+ * are tree-free -- their swap entries are invisible to the early
+ * swap-in optimization and ride until a fault (do_swap_page through
+ * the window fault gate) or this mm's exit walk releases them.
+ * unuse_mm() calls this under its mmap_read; the counter is pure
+ * observation (a disclosure, not a route -- swapoff is not a hot
+ * path, and the semantics are the registered S-3 verdict to
+ * characterize in the guest retest: bounded spin until the entries
+ * drop, never a leak).
+ */
+void corten_arena_unuse_blind_note(struct mm_struct *mm)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+
+	if (state && refcount_read(&state->nr))
+		atomic_long_inc(&corten_nr_unuse_blind_mms);
 }
 
 /* ------------------------------------------------------------------ *
@@ -6251,6 +6620,26 @@ static pmd_t *corten_arena_pmd(struct mm_struct *mm, unsigned long addr)
 		return NULL;
 
 	return pmd_offset(pudp, addr);
+}
+
+/*
+ * Walk to the PUD ENTRY of @addr with the same top-down gating (the
+ * pud-holding page is one p4d level up; see corten_arena_pmd()).  The
+ * V-D exit walk uses it to reach a window span's pud entry for the
+ * PMD-page retirement decision.
+ */
+static pud_t *corten_arena_pud(struct mm_struct *mm, unsigned long addr)
+{
+	pgd_t *pgdp = pgd_offset(mm, addr);
+	p4d_t *p4dp;
+
+	if (!pgd_present(READ_ONCE(*pgdp)))
+		return NULL;
+	p4dp = p4d_offset(pgdp, addr);
+	if (!p4d_present(READ_ONCE(*p4dp)))
+		return NULL;
+
+	return pud_offset(p4dp, addr);
 }
 
 /*
@@ -10180,7 +10569,6 @@ static int corten_arena_mmap_punch(struct mm_struct *mm,
 		if (WARN_ON_ONCE(stale && stale != ar))
 			return -EIO;
 	}
-
 	ret = corten_arena_unmap_chunk_retry(mm, ar, start, end - start);
 	if (ret)
 		return ret;
