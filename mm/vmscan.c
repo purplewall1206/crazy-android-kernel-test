@@ -739,9 +739,14 @@ static pageout_t pageout(struct folio *folio, struct address_space *mapping,
 /*
  * Same as remove_mapping, but if the folio is removed from the mapping, it
  * gets returned with a refcount of 0.
+ *
+ * Non-static for the CortenMM arena's native swap-out driver (W1.e1) -- the
+ * __reclaim_pages() precedent: a built-in reclaim consumer that owns the
+ * whole folio lifecycle needs the exact freeze/decache race protocol this
+ * function implements for the swapcache arm.
  */
-static int __remove_mapping(struct address_space *mapping, struct folio *folio,
-			    bool reclaimed, struct mem_cgroup *target_memcg)
+int __remove_mapping(struct address_space *mapping, struct folio *folio,
+		     bool reclaimed, struct mem_cgroup *target_memcg)
 {
 	int refcount;
 	void *shadow = NULL;

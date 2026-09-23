@@ -907,6 +907,30 @@ bool corten_rmap_swap_out(struct folio *folio, struct vm_area_struct *vma,
 			  unsigned long address, bool defer, pte_t *old_pte);
 
 /*
+ * W1.e1 (W1_NATIVE_RMAP_SPEC.md sec 3.4): the native anonymous swap-out
+ * driver -- the shrinker/evict pick's end-to-end lifecycle, replacing the
+ * __reclaim_pages()-through-ttu detour that existed to hand the pick's
+ * own address back through the rmap walk.  Caller holds only the pick's
+ * folio reference; the driver takes the folio lock (vmscan.c:1174
+ * mirror), runs the entry/swapcache leg, the UNCHANGED M6.T2 transaction
+ * inside its own notifier window (INV6: no transaction-body changes),
+ * the sync-writeout leg (zram shape) and the __remove_mapping()/free
+ * leg.  Every leg is the bit-for-bit mirror of shrink_folio_list()'s
+ * anonymous arm catalogued at the definition site (R-W1-1).
+ *
+ * The M6 ttu anonymous arm and this driver coexist for W1.e1: the
+ * shrinker pressure leg still reaches the folio through ttu
+ * (__reclaim_pages()), the evict/debugfs leg goes through here; W1.e2
+ * rewires the shrinker leg and retires the guard's anon arm.
+ *
+ * Return: true = the folio was freed behind the swap PTE; false = kept
+ * resident (every keep arm counted in driver_kept), pick reference
+ * dropped by the driver.
+ */
+bool corten_swap_out_driver(struct mm_struct *mm, unsigned long addr,
+			    struct folio *folio);
+
+/*
  * W1.d (W1_NATIVE_RMAP_SPEC.md sec 3.2): the try_to_unmap() layer's
  * vma-free file routing.  A pagecache folio mapped by a window is not
  * reachable through i_mmap (the carrier left the tree in W1.b), so
@@ -1172,6 +1196,16 @@ static inline bool corten_rmap_swap_out(struct folio *folio,
 /* W1.d: no arena registry, the ttu walk is all legacy. */
 static inline void corten_rmap_ttu(struct folio *folio, enum ttu_flags flags)
 {
+}
+
+/* W1.e1: no driver on a corten=off boot (the evict entry is gated on the
+ * static key upstream of this declaration).
+ */
+static inline bool corten_swap_out_driver(struct mm_struct *mm,
+					  unsigned long addr,
+					  struct folio *folio)
+{
+	return false;
 }
 
 /* W1.a novma rmap wrappers: no arena, nothing borrows folio->_mapcount. */

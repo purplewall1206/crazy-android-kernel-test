@@ -2899,6 +2899,173 @@ static void corten_fault_test_swap_zap_free(struct kunit *test)
 	KUNIT_EXPECT_GE(test, ft_named_counter(test, "zap_swap_frees"), 1);
 }
 
+/* W1.e1 (W1_NATIVE_RMAP_SPEC.md sec 3.4), the R-W1-1 keep arm: with no
+ * swap area the driver's entry leg cannot allocate and the pick must
+ * come back resident and byte-identical -- the "kept" verdict ttu's
+ * still-mapped report used to deliver, now owned by the driver (pick
+ * reference dropped, no state written, counted).  The complementary
+ * gate to the round-trip case below: on a swap-up boot (the guest) the
+ * entry leg would succeed, so this shape skips there and the guest
+ * asserts the success path instead; the kept-swapcache sub-arm
+ * (vmscan.c:1661 folio_free_swap mirror) stays self-guarded and
+ * mirror-only in this slice.
+ */
+static void corten_fault_test_driver_keep_noswap(struct kunit *test)
+{
+	struct ft_mm *t;
+	unsigned long addr = FT_BASE + 6 * PAGE_SIZE;
+	unsigned long kept0, anon0;
+	struct corten_pte_meta m;
+	struct folio *folio;
+	pte_t *ptep, pte, installed;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "driver requires corten=on");
+	if (ft_swap_up())
+		kunit_skip(test,
+			   "keep arm needs a swapless boot (guest: shared-slot keep)");
+
+	t = ft_setup(test);
+	folio = ft_populate(test, t, addr, &installed);
+	anon0 = get_mm_counter(t->mm, MM_ANONPAGES);
+	kept0 = ft_named_counter(test, "driver_kept");
+
+	/* The pick: one reference, no lock (the driver's trylock is the
+	 * vmscan.c:1174 leg).
+	 */
+	folio_get(folio);
+	KUNIT_EXPECT_FALSE(test, corten_swap_out_driver(t->mm, addr, folio));
+
+	/* The pick reference came back (only the PTE's remains), the page
+	 * is mapped, unmoved, swap-free, and every counter is inert.
+	 */
+	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1);
+	KUNIT_EXPECT_EQ(test, folio_mapped(folio), 1);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+	KUNIT_EXPECT_FALSE(test, folio_test_swapcache(folio));
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_EQ(test, pte_val(pte), pte_val(installed));
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_ANONPAGES), anon0);
+	KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 0);
+	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "driver_kept"), kept0 + 1);
+	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "driver_swapped"), 0);
+}
+
+/* W1.e1, the R-W1-1 real-device arm: the driver end to end on a
+ * populated arena page -- entry + swapcache, the M6.T2 transaction
+ * (INV6: the unchanged body, in the driver's own notifier window), the
+ * swap writeout and the __remove_mapping() release -- with the
+ * reference ledger asserted at every boundary, then the fault-back
+ * round trip.  Runs wherever a swap area is up (zram on the guest,
+ * like swap_roundtrip above); the swapless KUnit boot skips it.
+ */
+static void corten_fault_test_driver_swap_roundtrip(struct kunit *test)
+{
+	struct ft_mm *t;
+	unsigned long addr = FT_BASE + 6 * PAGE_SIZE;
+	unsigned long anon0;
+	long drv0, swpin0;
+	struct corten_pte_meta m;
+	struct folio *folio;
+	void *kaddr;
+	pte_t *ptep, pte, installed;
+	swp_entry_t entry;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "driver requires corten=on");
+	if (!ft_swap_up())
+		kunit_skip(test, "driver round-trip requires a swap area");
+
+	t = ft_setup(test);
+	folio = ft_populate(test, t, addr, &installed);
+
+	/* The pattern + folio_alloc_swap()'s uptodate precondition (the
+	 * same shape ft_swap_out() establishes for the ttu arm).
+	 */
+	kaddr = kmap_local_page(folio_page(folio, 0));
+	memset(kaddr, 0x5c, PAGE_SIZE);
+	kunmap_local(kaddr);
+	__folio_mark_uptodate(folio);
+
+	anon0 = get_mm_counter(t->mm, MM_ANONPAGES);
+	drv0 = ft_named_counter(test, "driver_swapped");
+	swpin0 = ft_named_counter(test, "swapins");
+
+	/* The ledger before the driver: one PTE reference, one mapper,
+	 * no swap state of any kind.
+	 */
+	KUNIT_ASSERT_EQ(test, folio_ref_count(folio), 1);
+	KUNIT_ASSERT_EQ(test, folio_mapcount(folio), 1);
+	KUNIT_ASSERT_FALSE(test, folio_test_swapcache(folio));
+	KUNIT_ASSERT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 0);
+
+	/* The pick: one reference, no lock.  Every EXPECT from the call
+	 * on is reference-free: the driver FREES the folio on success,
+	 * so @folio is dead weight past this point (all faces below go
+	 * through the address).
+	 */
+	folio_get(folio);
+	KUNIT_EXPECT_TRUE(test, corten_swap_out_driver(t->mm, addr, folio));
+
+	/* The swap PTE and the metadata payload agree (the INV7 pair),
+	 * the perm contract survived.
+	 */
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, !pte_present(pte) && !pte_none(pte));
+	entry = pte_to_swp_entry(pte);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_SWAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+	KUNIT_EXPECT_EQ(test, corten_swap_decode(&m).val, entry.val);
+
+	/* The counters moved exactly one page ANONPAGES -> SWAPENTS and
+	 * the driver owns the attribution.
+	 */
+	KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_ANONPAGES),
+			anon0 - 1);
+	KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 1);
+	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "driver_swapped"),
+			drv0 + 1);
+
+	/* The entry is exactly PTE-referenced now (the swapcache member
+	 * was released by the removal): one duplicate succeeds, freed
+	 * again to restore the count.
+	 */
+	KUNIT_EXPECT_EQ(test, swap_duplicate(entry), 0);
+	swap_free(entry);
+
+	/* The round trip: the fault reads the content back through the
+	 * device (zram on the guest gate).
+	 */
+	KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+	ptep = ft_pte(t, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	kaddr = kmap_local_page(pte_page(pte));
+	KUNIT_EXPECT_EQ(test, ((u8 *)kaddr)[0], 0x5c);
+	KUNIT_EXPECT_EQ(test, ((u8 *)kaddr)[PAGE_SIZE / 2], 0x5c);
+	kunmap_local(kaddr);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+	KUNIT_EXPECT_GE(test, ft_named_counter(test, "swapins"), swpin0 + 1);
+
+	/* The ledger closed: ANONPAGES restored, SWAPENTS drained. */
+	KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_ANONPAGES), anon0);
+	KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 0);
+}
+
 /* The mprotect consumer over a Swapped slot (spec D7): pure-metadata
  * perm rewrite, the swap PTE untouched, the pending perm recorded for
  * the swap-in to honor.  Synthetic entry bits only -- nothing here
@@ -3058,6 +3225,8 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_swap_encode),
 	KUNIT_CASE(corten_fault_test_swap_roundtrip),
 	KUNIT_CASE(corten_fault_test_swap_zap_free),
+	KUNIT_CASE(corten_fault_test_driver_keep_noswap),
+	KUNIT_CASE(corten_fault_test_driver_swap_roundtrip),
 	KUNIT_CASE(corten_fault_test_swap_mprotect_pending),
 	{}
 };

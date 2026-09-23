@@ -405,6 +405,8 @@ extern unsigned long mem_cgroup_shrink_node(struct mem_cgroup *mem,
 extern unsigned long shrink_all_memory(unsigned long nr_pages);
 extern int vm_swappiness;
 long remove_mapping(struct address_space *mapping, struct folio *folio);
+int __remove_mapping(struct address_space *mapping, struct folio *folio,
+		     bool reclaimed, struct mem_cgroup *target_memcg);
 
 extern unsigned long reclaim_pages(struct list_head *folio_list);
 extern unsigned long __reclaim_pages(struct list_head *folio_list,
