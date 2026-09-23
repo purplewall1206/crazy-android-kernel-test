@@ -566,6 +566,21 @@ struct corten_smap_stats {
 	u64		pss;
 };
 
+/*
+ * V-E (MV_VMA_FREE_SPEC.md sec 3.5) sys_brk arm ids: which of the four
+ * sys_brk outcomes answered a MODE-mm request.  Shared (not under
+ * CONFIG_CORTEN_MM_ARENA) because mm/mmap.c names the constants at the
+ * call sites compiled under both Kconfig faces; the =n inline note
+ * folds the call away.
+ */
+enum corten_brk_arm {
+	CORTEN_BRK_GROW = 0,	/* do_brk_flags() installed the growth */
+	CORTEN_BRK_SHRINK,	/* do_vmi_align_munmap() trimmed the heap */
+	CORTEN_BRK_NOOP,	/* page-aligned break unchanged */
+	CORTEN_BRK_REJECT,	/* refused: limits/guard/rlimit/alignment */
+	CORTEN_BRK_NR_ARMS,
+};
+
 #ifdef CONFIG_CORTEN_MM_ARENA
 
 /*
@@ -965,6 +980,26 @@ long corten_arena_test_uffd_rejects(void);
 long corten_arena_test_gup_probes(void);
 long corten_arena_test_gup_probe_rejects(void);
 long corten_arena_test_maps_window_rows(void);
+
+/* V-E brk delegation ledger (spec sec 3.5): the arm counter read
+ * (@arm indexes enum corten_brk_arm) and the heap-domain find_vma
+ * count (OQ-MV-7 numerator).
+ */
+long corten_arena_test_brk_arm(int arm);
+long corten_arena_test_heap_lookups(void);
+
+/* V-E whitelist (J2-complete) ledger: the walk/violation/anomaly
+ * counters, the brk-VMA registration observable, and the one-walk
+ * per-class histogram (fills @counts, an array of CORTEN_WL_NR_CLASSES
+ * unsigned longs; the class ids mirror enum corten_wl_class in
+ * mm/corten_arena.h).
+ */
+long corten_arena_test_wl_walks(void);
+long corten_arena_test_wl_violations(void);
+long corten_arena_test_wl_brk_anomalies(void);
+long corten_arena_test_wl_brk_vmas(void);
+void corten_arena_test_wl_histogram(struct mm_struct *mm,
+				    unsigned long *counts);
 
 /* V-B.2 (H7) hooks: the file-event route counter (truncate/invalidation
  * events handed to the chunk-zap transaction) and the zap backstop

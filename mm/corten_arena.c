@@ -417,6 +417,37 @@ static atomic_long_t corten_nr_gup_probes;	/* carrier answers */
 static atomic_long_t corten_nr_gup_probe_rejects; /* window -EFAULTs */
 static atomic_long_t corten_nr_maps_window_rows;	/* rows rendered */
 
+/* V-E brk delegation ledger (MV_VMA_FREE_SPEC.md sec 3.5, OQ-MV-7):
+ * sys_brk arm answers on MODE mms -- one of the four arms per call,
+ * zero for every non-MODE mm -- plus the heap-domain find_vma-family
+ * lookups the J1 probe's window miss routed to the heap arm (the
+ * numerator of the heap-fault share; the denominator is the guest
+ * bpftrace total, the J1 (a)/(b) dual-caliber shape).  Observation
+ * only: nothing in the brk path reads them back.
+ */
+static atomic_long_t corten_nr_brk_grow;
+static atomic_long_t corten_nr_brk_shrink;
+static atomic_long_t corten_nr_brk_noop;
+static atomic_long_t corten_nr_brk_reject;
+static atomic_long_t corten_nr_heap_lookups;
+
+/* V-E whitelist ledger (spec sec 1.3 J2, the complete form): walks
+ * executed, window-domain classification violations (must stay 0 --
+ * same invariant as j2_violations, asserted over the full tree), heap
+ * VMAs classified (the sec 3.5 "brk VMA explicitly registered"
+ * observable), delegated VMAs classified, the disclosure bucket for
+ * delegated VMAs no predicate matched, and the anomaly count for an mm
+ * whose tree carries more than one heap VMA (a split heap cannot be
+ * produced by sys_brk; a positive count is a classification smell to
+ * read alongside j2_stale, never a WARN).
+ */
+static atomic_long_t corten_nr_wl_walks;
+static atomic_long_t corten_nr_wl_violations;
+static atomic_long_t corten_nr_wl_brk_vmas;
+static atomic_long_t corten_nr_wl_delegated_vmas;
+static atomic_long_t corten_nr_wl_unclassified;
+static atomic_long_t corten_nr_wl_brk_anomalies;
+
 /* V-A.2b: detached carrier VMAs created (cumulative; the live count is
  * the arenas ledger minus the parked/pool descriptors).
  */
@@ -2460,6 +2491,42 @@ void corten_j1_slow(struct mm_struct *mm, unsigned long start,
 }
 
 /*
+ * V-E (OQ-MV-7): the heap arm of the probe above -- a MODE-mm
+ * find_vma-family call whose query address landed in [start_brk, brk).
+ * The delegated-domain answer the legacy funnel gives is exactly what
+ * the V-E.1 verdict keeps (spec sec 3.5): the count exists so the
+ * heap-fault share of find_vma traffic is measurable, not optimized.
+ */
+void corten_j1_heap_note(struct mm_struct *mm)
+{
+	atomic_long_inc(&corten_nr_heap_lookups);
+}
+
+/* V-E (spec sec 3.5): the sys_brk arm ledger (see the enum in
+ * include/linux/corten_arena.h; the inline gate has already answered
+ * the double-gate question).
+ */
+void corten_brk_note_slow(struct mm_struct *mm, enum corten_brk_arm arm)
+{
+	switch (arm) {
+	case CORTEN_BRK_GROW:
+		atomic_long_inc(&corten_nr_brk_grow);
+		break;
+	case CORTEN_BRK_SHRINK:
+		atomic_long_inc(&corten_nr_brk_shrink);
+		break;
+	case CORTEN_BRK_NOOP:
+		atomic_long_inc(&corten_nr_brk_noop);
+		break;
+	case CORTEN_BRK_REJECT:
+		atomic_long_inc(&corten_nr_brk_reject);
+		break;
+	default:
+		break;
+	}
+}
+
+/*
  * V-A.3b audit #1: the fault fast hook's window arm.  A MODE mm's
  * window-domain address that reached the FALLBACK verdict has no VMA to
  * find -- post-A.1/A.2 both parked windows and never-declared holes are
@@ -2772,6 +2839,20 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_gup_probe_rejects));
 	seq_printf(m, "maps_window_rows    %ld\n",
 		   atomic_long_read(&corten_nr_maps_window_rows));
+	/* V-E: the brk delegation ledger (spec sec 3.5, OQ-MV-7) -- arm
+	 * answers per MODE-mm sys_brk call, and the heap-domain find_vma
+	 * lookups (the heap-fault share numerator).
+	 */
+	seq_printf(m, "brk_grow            %ld\n",
+		   atomic_long_read(&corten_nr_brk_grow));
+	seq_printf(m, "brk_shrink          %ld\n",
+		   atomic_long_read(&corten_nr_brk_shrink));
+	seq_printf(m, "brk_noop            %ld\n",
+		   atomic_long_read(&corten_nr_brk_noop));
+	seq_printf(m, "brk_reject          %ld\n",
+		   atomic_long_read(&corten_nr_brk_reject));
+	seq_printf(m, "heap_lookups        %ld\n",
+		   atomic_long_read(&corten_nr_heap_lookups));
 	seq_printf(m, "carriers            %ld\n",
 		   atomic_long_read(&corten_nr_carriers));
 	seq_printf(m, "zap_pinned          %ld\n",
@@ -3200,6 +3281,75 @@ long corten_arena_test_j2_first_violation(void)
 {
 	return atomic_long_read(&corten_j2_first_violation);
 }
+
+/* V-E: the brk delegation ledger and the whitelist (J2-complete)
+ * ledger.  The brk arm read takes the arm index (enum corten_brk_arm,
+ * shared header); the whitelist histogram anchor walks @mm once with
+ * the self-sufficient entry and fills @counts with this walk's
+ * per-class VMA counts (array of CORTEN_WL_NR_CLASSES unsigned long).
+ * Forward-declared: the scan body lives with the audit walkers below.
+ */
+static int corten_whitelist_scan(struct mm_struct *mm,
+				 const struct corten_implant_range *implants,
+				 unsigned int nr_implants,
+				 unsigned long *hist);
+long corten_arena_test_brk_arm(int arm)
+{
+	switch (arm) {
+	case CORTEN_BRK_GROW:
+		return atomic_long_read(&corten_nr_brk_grow);
+	case CORTEN_BRK_SHRINK:
+		return atomic_long_read(&corten_nr_brk_shrink);
+	case CORTEN_BRK_NOOP:
+		return atomic_long_read(&corten_nr_brk_noop);
+	case CORTEN_BRK_REJECT:
+		return atomic_long_read(&corten_nr_brk_reject);
+	default:
+		return 0;
+	}
+}
+
+long corten_arena_test_heap_lookups(void)
+{
+	return atomic_long_read(&corten_nr_heap_lookups);
+}
+
+long corten_arena_test_wl_walks(void)
+{
+	return atomic_long_read(&corten_nr_wl_walks);
+}
+
+long corten_arena_test_wl_violations(void)
+{
+	return atomic_long_read(&corten_nr_wl_violations);
+}
+
+long corten_arena_test_wl_brk_anomalies(void)
+{
+	return atomic_long_read(&corten_nr_wl_brk_anomalies);
+}
+
+long corten_arena_test_wl_brk_vmas(void)
+{
+	return atomic_long_read(&corten_nr_wl_brk_vmas);
+}
+
+void corten_arena_test_wl_histogram(struct mm_struct *mm,
+				    unsigned long *counts)
+{
+	struct corten_mm_state *state;
+
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+		return;
+	state = READ_ONCE(mm->corten_state);
+	if (!state)
+		return;
+
+	mutex_lock(&state->ctl_lock);
+	corten_whitelist_scan(mm, state->implants, state->nr_implants,
+			      counts);
+	mutex_unlock(&state->ctl_lock);
+}
 #endif
 
 /* ------------------------------------------------------------------ *
@@ -3549,9 +3699,13 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 * mm_users is 0, so both the tree and the registry are frozen and
 	 * the stable-registry walker entry needs no lock.  A violation here
 	 * is the process's final report card: every placement guard it ever
-	 * ran under had its say.
+	 * ran under had its say.  V-E appends the whitelist pass over the
+	 * full tree (the J2-complete form): same frozen picture, and the
+	 * delegated composition (heap/stack/special/file/anon buckets) of
+	 * every departing MODE mm is tallied for the audit gate.
 	 */
 	corten_audit_j2_walk_locked(mm);
+	corten_audit_whitelist_walk_locked(mm);
 
 	/* V-D: the pure-PT walk (zap + PTE/upper-table retirement) runs
 	 * before the unpublish below -- the zap's stats bookkeeping reads
@@ -11013,6 +11167,178 @@ int corten_arena_j2_walk_pid(pid_t pid)
 	return ret;
 }
 
+/* ------------------------------------------------------------------
+ * V-E whitelist classification (MV_VMA_FREE_SPEC.md sec 1.3 J2, the
+ * complete form; sec 3.5): one read-only pass over the *whole* maple
+ * tree of a MODE mm, classifying every VMA.  Read-only by construction
+ * (INV6): tree + registry reads only, no PTE is walked or written.
+ * ------------------------------------------------------------------
+ */
+
+/*
+ * The pure predicate (KUnit-covered through the scan histogram):
+ * window-intersecting VMAs must be the arena's own or an implant
+ * (VIOLATION otherwise -- the same invariant corten_audit_j2_scan
+ * asserts over the window segment; the whitelist form re-derives it
+ * from the full-tree walk so the delegated composition and the window
+ * closure come from one pass), and the delegated domain splits into
+ * the whitelist categories (see enum corten_wl_class).  The heap
+ * predicate accepts exactly the [start_brk, PAGE_ALIGN(brk)) span --
+ * the VMA sys_brk/do_brk_flags maintains; the grows flags carry the
+ * main stack; arch_vma_name() the vdso/vvar/vsyscall trio; vm_file
+ * any file mapping (exec-time and MAP_SHARED alike).
+ */
+static enum corten_wl_class
+corten_whitelist_classify(const struct corten_implant_range *implants,
+			  unsigned int nr, struct mm_struct *mm,
+			  struct vm_area_struct *vma)
+{
+	unsigned long top = PAGE_ALIGN(mm->brk);
+
+	if (vma->vm_end > CORTEN_MODE_WINDOW_START &&
+	    vma->vm_start < CORTEN_MODE_WINDOW_END) {
+		unsigned long s, e;
+
+		if (vma->vm_flags & VM_CORTEN)
+			return CORTEN_WL_SHADOW;
+		s = max(vma->vm_start, CORTEN_MODE_WINDOW_START);
+		e = min(vma->vm_end, CORTEN_MODE_WINDOW_END);
+		if (corten_audit_j2_covered(implants, nr, s, e))
+			return CORTEN_WL_IMPLANT;
+		return CORTEN_WL_VIOLATION;
+	}
+	if (vma->vm_start >= mm->start_brk && vma->vm_start < top &&
+	    vma->vm_end <= top && !vma->vm_file)
+		return CORTEN_WL_BRK;
+	if (vma->vm_flags & (VM_GROWSDOWN | VM_GROWSUP))
+		return CORTEN_WL_STACK;
+	if (arch_vma_name(vma))
+		return CORTEN_WL_SPECIAL;
+	if (vma->vm_file)
+		return CORTEN_WL_FILE;
+	if (vma_is_anonymous(vma))
+		return CORTEN_WL_ANON;
+	return CORTEN_WL_UNCLASSIFIED;
+}
+
+/*
+ * One audit pass (see the j2 scan above for the locking contract: RCU
+ * tree walk, @implants image stable for the duration).  @hist, when
+ * non-NULL, receives the per-class VMA count of this walk (KUnit).
+ * Return: window-domain violations found (0 = J2-complete holds).
+ */
+static int corten_whitelist_scan(struct mm_struct *mm,
+				 const struct corten_implant_range *implants,
+				 unsigned int nr_implants,
+				 unsigned long *hist)
+{
+	struct vm_area_struct *vma;
+	unsigned int brk_vmas = 0;
+	int violations = 0;
+
+	MA_STATE(mas, &mm->mm_mt, 0, ULONG_MAX);
+
+	if (hist)
+		memset(hist, 0, CORTEN_WL_NR_CLASSES * sizeof(*hist));
+
+	rcu_read_lock();
+	mas_for_each(&mas, vma, ULONG_MAX) {
+		enum corten_wl_class c;
+
+		c = corten_whitelist_classify(implants, nr_implants,
+					      mm, vma);
+
+		if (hist)
+			hist[c]++;
+		if (c == CORTEN_WL_VIOLATION) {
+			violations++;
+		} else if (c == CORTEN_WL_BRK) {
+			brk_vmas++;
+			atomic_long_inc(&corten_nr_wl_brk_vmas);
+		} else if (c >= CORTEN_WL_BRK) {
+			/* delegated whitelist (BRK handled above) */
+			atomic_long_inc(&corten_nr_wl_delegated_vmas);
+			if (c == CORTEN_WL_UNCLASSIFIED)
+				atomic_long_inc(&corten_nr_wl_unclassified);
+		}
+	}
+	rcu_read_unlock();
+
+	atomic_long_inc(&corten_nr_wl_walks);
+	if (violations) {
+		atomic_long_add(violations, &corten_nr_wl_violations);
+		WARN_ONCE(1,
+			  "corten: whitelist violated: %d window vma(s) unclassified as shadow/implant\n",
+			  violations);
+	}
+	if (brk_vmas > 1)
+		atomic_long_inc(&corten_nr_wl_brk_anomalies);
+
+	return violations;
+}
+
+/* The self-sufficient entry: see corten_audit_j2_walk() above. */
+int corten_audit_whitelist_walk(struct mm_struct *mm)
+{
+	struct corten_mm_state *state;
+	int violations;
+
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+		return 0;
+	state = READ_ONCE(mm->corten_state);
+	if (!state)
+		return 0;
+
+	mutex_lock(&state->ctl_lock);
+	violations = corten_whitelist_scan(mm, state->implants,
+					   state->nr_implants, NULL);
+	mutex_unlock(&state->ctl_lock);
+
+	return violations;
+}
+
+/* The stable-registry entry: see corten_audit_j2_walk_locked() above. */
+int corten_audit_whitelist_walk_locked(struct mm_struct *mm)
+{
+	struct corten_mm_state *state;
+
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+		return 0;
+	state = READ_ONCE(mm->corten_state);
+	if (!state)
+		return 0;
+
+	return corten_whitelist_scan(mm, state->implants,
+				     state->nr_implants, NULL);
+}
+
+/* debugfs "whitelist <pid>" backend (mm/corten.c owns the file). */
+int corten_arena_wl_audit_pid(pid_t pid)
+{
+	struct task_struct *task;
+	struct mm_struct *mm;
+	int ret;
+
+	if (!corten_enabled_static())
+		return -EOPNOTSUPP;
+
+	rcu_read_lock();
+	task = find_get_task_by_vpid(pid);
+	rcu_read_unlock();
+	if (!task)
+		return -ESRCH;
+
+	mm = get_task_mm(task);
+	put_task_struct(task);
+	if (!mm)
+		return -EINVAL;
+
+	ret = corten_audit_whitelist_walk(mm);
+	mmput(mm);
+
+	return ret;
+}
+
 /*
  * The A-series exit-gate one-stop read (debugfs "audit_gate", kselftest
  * output style): the J1 pair and the J2 walker ledger in one place so
@@ -11025,13 +11351,19 @@ int corten_arena_j2_walk_pid(pid_t pid)
  * terminals answer the msync/madvise/mincore window legs, so probes on
  * a pure-MODE workload should read zero too -- any residual belongs to
  * the V-C families (#3/#7) or a disclosed N-low row; stale is the
- * benign classification by design).
+ * benign classification by design).  V-E extends gate_pass with the
+ * whitelist ledger's two zeros (wl_violations, wl_brk_anomalies) and
+ * prints the composition raw: wl_brk_vmas/wl_delegated_vmas are
+ * workload-bound disclosure, wl_unclassified is the same shape as
+ * j2_stale (a bucket, not a verdict).
  */
 void corten_arena_audit_gate_report(struct seq_file *m)
 {
 	long probes = atomic_long_read(&corten_nr_j1_probes);
 	long hits = atomic_long_read(&corten_nr_j1_hits);
 	long viol = atomic_long_read(&corten_nr_j2_violations);
+	long wl_viol = atomic_long_read(&corten_nr_wl_violations);
+	long wl_anom = atomic_long_read(&corten_nr_wl_brk_anomalies);
 
 	seq_printf(m, "j1_probes          %ld\n", probes);
 	seq_printf(m, "j1_hits            %ld\n", hits);
@@ -11042,7 +11374,19 @@ void corten_arena_audit_gate_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_j2_stale));
 	seq_printf(m, "j2_first_violation 0x%lx\n",
 		   atomic_long_read(&corten_j2_first_violation));
-	seq_printf(m, "gate_pass          %d\n", !hits && !viol);
+	/* V-E: the whitelist (J2-complete) ledger. */
+	seq_printf(m, "wl_walks           %ld\n",
+		   atomic_long_read(&corten_nr_wl_walks));
+	seq_printf(m, "wl_violations      %ld\n", wl_viol);
+	seq_printf(m, "wl_brk_vmas        %ld\n",
+		   atomic_long_read(&corten_nr_wl_brk_vmas));
+	seq_printf(m, "wl_delegated_vmas  %ld\n",
+		   atomic_long_read(&corten_nr_wl_delegated_vmas));
+	seq_printf(m, "wl_unclassified    %ld\n",
+		   atomic_long_read(&corten_nr_wl_unclassified));
+	seq_printf(m, "wl_brk_anomalies   %ld\n", wl_anom);
+	seq_printf(m, "gate_pass          %d\n",
+		   !hits && !viol && !wl_viol && !wl_anom);
 }
 
 /*

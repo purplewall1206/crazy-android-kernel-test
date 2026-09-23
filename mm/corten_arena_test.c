@@ -11042,6 +11042,219 @@ static void corten_arena_test_exit_multi_segment(struct kunit *test)
 			puds0 + 1);
 }
 
+/* ------------------------------------------------------------------
+ * V-E (MV_VMA_FREE_SPEC.md sec 3.5): the brk delegation ledger and the
+ * whitelist (J2-complete) classifier.
+ * ------------------------------------------------------------------
+ */
+
+/*
+ * The arm ledger and the heap probe (OQ-MV-7's numerator).  sys_brk's
+ * four call sites are one-line notes reviewed next to the enum; this
+ * anchor pins the ledger semantics itself -- the double-gate (a
+ * non-MODE mm is silent), one counter per arm, and the J1 probe's
+ * heap arm: a MODE-mm find_vma on [start_brk, brk) counts as one heap
+ * lookup without touching the j1 window pair, and an address below
+ * the heap counts nowhere.
+ */
+static void corten_arena_test_brk_delegation(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	const unsigned long heap = 2 * PMD_SIZE;
+	struct vm_area_struct *vma;
+	long g0, s0, n0, r0, h0, p0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "brk ledger requires corten=on");
+
+	/* The pre-MODE control: the note is silent on a non-MODE mm. */
+	g0 = corten_arena_test_brk_arm(CORTEN_BRK_GROW);
+	corten_brk_note(mm, CORTEN_BRK_GROW);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_brk_arm(CORTEN_BRK_GROW),
+			g0);
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* One counter per arm, nothing cross-counted. */
+	g0 = corten_arena_test_brk_arm(CORTEN_BRK_GROW);
+	s0 = corten_arena_test_brk_arm(CORTEN_BRK_SHRINK);
+	n0 = corten_arena_test_brk_arm(CORTEN_BRK_NOOP);
+	r0 = corten_arena_test_brk_arm(CORTEN_BRK_REJECT);
+	corten_brk_note(mm, CORTEN_BRK_GROW);
+	corten_brk_note(mm, CORTEN_BRK_NOOP);
+	corten_brk_note(mm, CORTEN_BRK_REJECT);
+	corten_brk_note(mm, CORTEN_BRK_REJECT);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_brk_arm(CORTEN_BRK_GROW),
+			g0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_brk_arm(CORTEN_BRK_SHRINK),
+			s0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_brk_arm(CORTEN_BRK_NOOP),
+			n0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_brk_arm(CORTEN_BRK_REJECT),
+			r0 + 2);
+
+	/* The heap arm: a MODE-mm heap VMA below every test window, with
+	 * [start_brk, brk) covering exactly its span.
+	 */
+	vma = corten_arena_test_mkvm(mm, heap, heap + 4 * PAGE_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	mmap_write_lock(mm);
+	mm->start_brk = heap;
+	mm->brk = heap + 4 * PAGE_SIZE;
+	mmap_write_unlock(mm);
+
+	h0 = corten_arena_test_heap_lookups();
+	p0 = corten_arena_test_j1_probes();
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_NOT_NULL(test,
+			      find_vma(mm, heap + 2 * PAGE_SIZE));
+	KUNIT_EXPECT_NOT_NULL(test,
+			      find_vma_intersection(mm, heap + PAGE_SIZE,
+						    heap + 2 * PAGE_SIZE));
+	/* Below the heap: no arm answers. */
+	KUNIT_EXPECT_NOT_NULL(test, find_vma(mm, heap - PAGE_SIZE));
+	mmap_read_unlock(mm);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_heap_lookups(), h0 + 2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes(), p0);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/*
+ * The whitelist classifier (J2-complete): one full-tree pass buckets
+ * every VMA -- the arena's own shadow piece, a registered implant, the
+ * explicitly registered heap VMA (sec 3.5), a grows-flag stack, and
+ * the delegated anon remainder; a foreign window VMA is exactly one
+ * violation (the whitelist self-proof registers it clean); and a split
+ * heap (two BRK-classified VMAs in one mm -- sys_brk cannot produce
+ * the shape) counts one anomaly without a WARN.
+ */
+static void corten_arena_test_whitelist_audit(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	const unsigned long win = CORTEN_ARENA_TEST_WIN;
+	const unsigned long heap = 2 * PMD_SIZE, stack = 3 * PMD_SIZE;
+	unsigned long hist[CORTEN_WL_NR_CLASSES];
+	struct vm_area_struct *heap1, *heap2, *shadow, *impl, *stackv;
+	struct vm_area_struct *foreign;
+	long w0, v0, a0, b0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "whitelist audit requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm, win, PMD_SIZE), 0);
+
+	/* The delegated shapes: a split heap (both halves inside
+	 * [start_brk, brk)), a grows-flag stack, the harness's anon base
+	 * VMA from mm_setup -- plus, in the window, one shadow piece and
+	 * one registered implant.
+	 */
+	mmap_write_lock(mm);
+	mm->start_brk = heap;
+	mm->brk = heap + 4 * PAGE_SIZE;
+	mmap_write_unlock(mm);
+	heap1 = corten_arena_test_mkvm(mm, heap, heap + 2 * PAGE_SIZE,
+				       CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, heap1);
+	heap2 = corten_arena_test_mkvm(mm, heap + 2 * PAGE_SIZE,
+				       heap + 4 * PAGE_SIZE,
+				       CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, heap2);
+	stackv = corten_arena_test_mkvm(mm, stack, stack + PAGE_SIZE,
+					CORTEN_ARENA_TEST_FLAGS_OK |
+					VM_GROWSDOWN);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, stackv);
+	shadow = corten_arena_test_mkvm(mm, win + 3 * PMD_SIZE,
+					win + 3 * PMD_SIZE + PAGE_SIZE,
+					CORTEN_ARENA_TEST_FLAGS_OK |
+					VM_CORTEN);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, shadow);
+	impl = corten_arena_test_mkvm(mm, win + PMD_SIZE,
+				      win + PMD_SIZE + PAGE_SIZE,
+				      CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, impl);
+	mmap_write_lock(mm);
+	corten_implant_mark(mm, win + PMD_SIZE, PAGE_SIZE);
+	mmap_write_unlock(mm);
+
+	w0 = corten_arena_test_wl_walks();
+	v0 = corten_arena_test_wl_violations();
+	a0 = corten_arena_test_wl_brk_anomalies();
+	b0 = corten_arena_test_wl_brk_vmas();
+
+	memset(hist, 0, sizeof(hist));
+	corten_arena_test_wl_histogram(mm, hist);
+	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_SHADOW], 1);
+	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_IMPLANT], 1);
+	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_BRK], 2);
+	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_STACK], 1);
+	KUNIT_EXPECT_GE(test, hist[CORTEN_WL_ANON], 1);
+	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_VIOLATION], 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_walks(), w0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_violations(), v0);
+	/* The split heap: both halves registered, exactly one anomaly. */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_anomalies(), a0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_vmas(), b0 + 2);
+	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
+
+	/* The foreign window VMA: one violation, then the whitelist
+	 * self-proof (registering it clears the verdict) -- the same
+	 * contract the INV-MV2 inject anchor pins for the window-segment
+	 * walker.
+	 */
+	foreign = corten_arena_test_mkvm(mm, win + 2 * PMD_SIZE,
+					 win + 2 * PMD_SIZE + PAGE_SIZE,
+					 CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, foreign);
+	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_violations(), v0 + 1);
+	mmap_write_lock(mm);
+	corten_implant_mark(mm, win + 2 * PMD_SIZE, PAGE_SIZE);
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
+
+	/* The exit-gate one-stop read carries the V-E lines and the
+	 * extended verdict (wl_violations>0 here keeps this boot's
+	 * gate_pass honestly 0 -- the anchor is registered after every
+	 * gate_pass==1 assertion above).
+	 */
+	{
+		char *gate = corten_test_render_dbg(CORTEN_DBG_AUDIT_GATE);
+
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, gate);
+		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_walks"));
+		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_violations"));
+		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_brk_vmas"));
+		KUNIT_ASSERT_NOT_NULL(test,
+				      strstr(gate, "gate_pass          0"));
+		kfree(gate);
+	}
+
+	/* drop_vma (not munmap): the completion leg reads current->mm,
+	 * which is NULL in the KUnit case thread -- the harness contract
+	 * every synthetic-VMAs teardown here follows.
+	 */
+	corten_arena_test_drop_vma(shadow);
+	corten_arena_test_drop_vma(impl);
+	corten_arena_test_drop_vma(stackv);
+	corten_arena_test_drop_vma(heap1);
+	corten_arena_test_drop_vma(heap2);
+	corten_arena_test_drop_vma(foreign);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
@@ -11160,6 +11373,13 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_concurrent_window),
 	KUNIT_CASE(corten_arena_test_obs_ledger),
 	KUNIT_CASE(corten_arena_test_drain_timeout_stat),
+	/* V-E: the brk delegation ledger and the whitelist classifier.
+	 * Registered last: the whitelist anchor deliberately injects a
+	 * window violation (and reads the cumulative gate verdict), so it
+	 * must run after every gate_pass==1 assertion above.
+	 */
+	KUNIT_CASE(corten_arena_test_brk_delegation),
+	KUNIT_CASE(corten_arena_test_whitelist_audit),
 	{}
 };
 

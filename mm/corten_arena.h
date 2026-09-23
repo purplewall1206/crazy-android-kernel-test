@@ -558,6 +558,70 @@ int corten_arena_j2_walk_pid(pid_t pid);
 void corten_arena_j2_sample_set(bool on);
 
 /*
+ * V-E whitelist classification (MV_VMA_FREE_SPEC.md sec 1.3 J2, the
+ * complete form; sec 3.5): the J2-complete audit classifies *every*
+ * tree VMA of a MODE mm, not only the window segment.  A VMA that
+ * intersects the window domain must be the arena's own (SHADOW) or
+ * inside the implant registry (IMPLANT) -- anything else is a
+ * VIOLATION, the same invariant the A.3c walker asserts over the
+ * window segment.  A VMA outside the window is delegated-domain
+ * whitelist: the heap VMA (BRK, the sec 3.5 V-E.1 registration),
+ * grows-flag stacks (STACK), arch-named specials vdso/vvar/vsyscall
+ * (SPECIAL), any file mapping (FILE -- exec-time mappings and
+ * MAP_SHARED alike), anonymous leftovers (ANON), or UNCLASSIFIED when
+ * no predicate matched (disclosure-only: the legacy VMA layer
+ * legitimately serves anything outside the window, so an unclassified
+ * delegated VMA is a counting bucket, never a verdict).
+ */
+enum corten_wl_class {
+	CORTEN_WL_SHADOW = 0,
+	CORTEN_WL_IMPLANT,
+	CORTEN_WL_BRK,
+	CORTEN_WL_STACK,
+	CORTEN_WL_SPECIAL,
+	CORTEN_WL_FILE,
+	CORTEN_WL_ANON,
+	CORTEN_WL_UNCLASSIFIED,
+	CORTEN_WL_VIOLATION,
+	CORTEN_WL_NR_CLASSES,
+};
+
+/*
+ * One whitelist pass.  Same read-only/locking contract as the J2
+ * walkers above (RCU tree walk; the implants image must be stable).
+ * Return: window-domain violations found (0 = the J2-complete form
+ * holds; the heap-VMA anomaly -- more than one BRK-classified VMA in
+ * one mm -- is counted into the wl ledger separately, never a WARN).
+ */
+int corten_audit_whitelist_walk(struct mm_struct *mm);
+int corten_audit_whitelist_walk_locked(struct mm_struct *mm);
+
+/* V-E debugfs backend (mm/corten.c owns the file): the "whitelist
+ * <pid>" manual trigger, same shape as corten_arena_j2_walk_pid().
+ */
+int corten_arena_wl_audit_pid(pid_t pid);
+
+/*
+ * V-E brk delegation observation (spec sec 3.5): the sys_brk arm
+ * counters.  sys_brk notes which of its four arms answered -- GROW
+ * (do_brk_flags installed), SHRINK (do_vmi_align_munmap trimmed), NOOP
+ * (break unchanged), REJECT (a refused request left the break alone) --
+ * on every MODE-mm call; the OQ-MV-7 adjudication reads the split next
+ * to the heap probe below to decide whether brk region-ization ever
+ * becomes a project (no threshold crossed = the delegated-domain
+ * verdict stands).  The arm enum itself lives in the shared header:
+ * mm/mmap.c names it under both Kconfig faces.
+ */
+void corten_brk_note_slow(struct mm_struct *mm, enum corten_brk_arm arm);
+
+static inline void corten_brk_note(struct mm_struct *mm,
+				   enum corten_brk_arm arm)
+{
+	if (corten_enabled_static() && READ_ONCE(mm->corten_mode))
+		corten_brk_note_slow(mm, arm);
+}
+
+/*
  * V-A.2a J1 prelude (MV_VMA_FREE_SPEC.md sec 1.3): the find_vma-family
  * window probe.  The exported find_vma()/find_vma_intersection() and
  * lock_vma_under_rcu() call corten_j1_probe() after their lookup; the
@@ -566,17 +630,31 @@ void corten_arena_j2_sample_set(bool on);
  * probe: post-A.2 the only legal window find is a punch implant, which
  * the slice report discloses).  The inline gate pays one static-branch
  * read + one byte load for every mm -- the house double-gate shape.
+ *
+ * V-E appends the OQ-MV-7 heap arm: a MODE-mm lookup that missed the
+ * window domain but landed in [start_brk, brk) counts as one
+ * heap-domain find_vma -- the numerator of the heap-fault share the
+ * brk adjudication measures (the denominator is the bpftrace total;
+ * observation only, no behavior hangs off the count).  The brk fields
+ * are written under mmap_write and read here with plain loads: a torn
+ * read can only mis-bucket one call, and the metric is a ratio.
  */
 void corten_j1_slow(struct mm_struct *mm, unsigned long start,
 		    unsigned long end, struct vm_area_struct *vma);
+void corten_j1_heap_note(struct mm_struct *mm);
 
 static inline void corten_j1_probe(struct mm_struct *mm, unsigned long start,
 				   unsigned long end,
 				   struct vm_area_struct *vma)
 {
-	if (corten_enabled_static() && READ_ONCE(mm->corten_mode) &&
-	    end > CORTEN_MODE_WINDOW_START && start < CORTEN_MODE_WINDOW_END)
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+		return;
+	if (end > CORTEN_MODE_WINDOW_START && start < CORTEN_MODE_WINDOW_END) {
 		corten_j1_slow(mm, start, end, vma);
+		return;
+	}
+	if (start >= READ_ONCE(mm->start_brk) && start < READ_ONCE(mm->brk))
+		corten_j1_heap_note(mm);
 }
 
 /*
@@ -1097,6 +1175,12 @@ static inline int corten_file_may(struct file *file, unsigned long prot,
 static inline void corten_j1_probe(struct mm_struct *mm, unsigned long start,
 				   unsigned long end,
 				   struct vm_area_struct *vma)
+{
+}
+
+/* V-E brk arm note: no MODE mm can exist, never taken. */
+static inline void corten_brk_note(struct mm_struct *mm,
+				   enum corten_brk_arm arm)
 {
 }
 

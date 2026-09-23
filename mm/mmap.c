@@ -162,6 +162,12 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	oldbrk = __PAGE_ALIGN(mm->brk);
 	if (oldbrk == newbrk) {
 		mm->brk = brk;
+		/* V-E (spec sec 3.5): the brk delegation ledger -- the arm
+		 * notes (NOOP here, SHRINK/GROW on their success legs,
+		 * REJECT at the out: tail) count MODE-mm calls only; the
+		 * =n/=off/non-MODE cost is one folded branch.
+		 */
+		corten_brk_note(mm, CORTEN_BRK_NOOP);
 		goto success;
 	}
 
@@ -182,6 +188,7 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 					/* unlock = */ true))
 			goto out;
 
+		corten_brk_note(mm, CORTEN_BRK_SHRINK);
 		goto success_unlocked;
 	}
 
@@ -202,6 +209,7 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	if (do_brk_flags(&vmi, brkvma, oldbrk, newbrk - oldbrk, 0) < 0)
 		goto out;
 
+	corten_brk_note(mm, CORTEN_BRK_GROW);
 	mm->brk = brk;
 	if (mm->def_flags & VM_LOCKED)
 		populate = true;
@@ -215,6 +223,7 @@ success_unlocked:
 	return brk;
 
 out:
+	corten_brk_note(mm, CORTEN_BRK_REJECT);
 	mm->brk = origbrk;
 	mmap_write_unlock(mm);
 	return origbrk;
