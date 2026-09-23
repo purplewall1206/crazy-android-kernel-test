@@ -1822,6 +1822,106 @@ void folio_remove_rmap_pud(struct folio *folio, struct page *page,
 #endif
 }
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+/*
+ * CortenMM arena: vma-free rmap bookkeeping (W1.a, W1_NATIVE_RMAP_SPEC.md
+ * sec 2.2).  An arena window has no struct vm_area_struct, but its folios
+ * share the generic pagecache/anon folio world and are therefore counted
+ * through folio->_mapcount and the lruvec stats like any other mapping --
+ * borrowed, not stolen: every call site pairs add/remove symmetrically
+ * (INV7 anchor, W1.c), so folio->mapping stays untouched and the free
+ * path's page_expected_state() keeps passing (mapcount == -1, mapping
+ * clean).
+ *
+ * These four wrappers mirror the order-0 (PTE level, non-large) branches
+ * of __folio_add_rmap()/__folio_remove_rmap() with the vma-dependent
+ * parts moved to the caller's transaction: __folio_set_anon() (mapping +
+ * index), mlock_vma_folio()/munlock_vma_folio() and the address-range
+ * warning all need a vma the arena does not have.  Everything that does
+ * not (mapcount, stats, swapbacked, AnonExclusive) is owned here.
+ *
+ * The lruvec stat bucket is an explicit argument instead of the
+ * __folio_mod_stat() folio_test_anon() dispatch: that reads
+ * folio->mapping, which a novma folio legitimately lacks -- the W-2
+ * unanchored anon shape has mapping == NULL and would be miscounted as
+ * NR_FILE_MAPPED.  mod_mthp_stat() needs no mirror (order > 0 only,
+ * huge_mm.h) and deferred_split_folio() is large-folio only, both out of
+ * scope for these order-0-only wrappers.
+ */
+
+void folio_add_anon_rmap_novma(struct folio *folio)
+{
+	__folio_rmap_sanity_checks(folio, &folio->page, 1, PGTABLE_LEVEL_PTE);
+	VM_WARN_ON_FOLIO(folio_test_large(folio), folio);
+	/*
+	 * If anchored at all, anchored as anon: pointing the anon wrapper
+	 * at a pagecache folio would cross-charge the shared pagecache
+	 * mapcount (W1_NATIVE_RMAP_SPEC.md R-W1-4).
+	 */
+	VM_WARN_ON_FOLIO(folio->mapping && !folio_test_anon(folio), folio);
+	/* folio_add_new_anon_rmap() contract: a fresh (re)install. */
+	VM_WARN_ON_FOLIO(atomic_read(&folio->_mapcount) != -1, folio);
+
+	/*
+	 * folio_add_new_anon_rmap() minus the vma terms: the bit semantics
+	 * stay with the wrapper (VM_DROPPABLE is a vma property the arena
+	 * does not have), mapping/index with the caller.  The window page
+	 * is exclusive to its (single) mapping at install time; fork
+	 * sharing is decided by the arena metadata, not by a second rmap
+	 * entry.
+	 */
+	if (!folio_test_swapbacked(folio))
+		__folio_set_swapbacked(folio);
+	/* increment count (starts at -1) */
+	atomic_set(&folio->_mapcount, 0);
+	SetPageAnonExclusive(&folio->page);
+	__lruvec_stat_mod_folio(folio, NR_ANON_MAPPED, 1);
+}
+
+void folio_remove_anon_rmap_novma(struct folio *folio)
+{
+	__folio_rmap_sanity_checks(folio, &folio->page, 1, PGTABLE_LEVEL_PTE);
+	VM_WARN_ON_FOLIO(folio_test_large(folio), folio);
+
+	/* Order-0 PTE branch of __folio_remove_rmap(). */
+	if (atomic_add_negative(-1, &folio->_mapcount)) {
+		__lruvec_stat_mod_folio(folio, NR_ANON_MAPPED, -1);
+		/*
+		 * No vma world clears the bit for us (upstream leaves it
+		 * to fork/GUP/swap-encode): once the last mapping is gone
+		 * every consumer only ever sets it afresh, so hand the
+		 * next owner a deterministic slate (W1.a criterion 2).
+		 */
+		ClearPageAnonExclusive(&folio->page);
+	}
+}
+
+void folio_add_file_rmap_novma(struct folio *folio)
+{
+	__folio_rmap_sanity_checks(folio, &folio->page, 1, PGTABLE_LEVEL_PTE);
+	VM_WARN_ON_FOLIO(folio_test_large(folio), folio);
+	/* __folio_add_file_rmap()'s family guard: a pagecache folio must
+	 * never arrive at the anon wrapper and vice versa.
+	 */
+	VM_WARN_ON_FOLIO(folio_test_anon(folio), folio);
+
+	/* Order-0 PTE branch of __folio_add_rmap(). */
+	if (atomic_inc_and_test(&folio->_mapcount))
+		__lruvec_stat_mod_folio(folio, NR_FILE_MAPPED, 1);
+}
+
+void folio_remove_file_rmap_novma(struct folio *folio)
+{
+	__folio_rmap_sanity_checks(folio, &folio->page, 1, PGTABLE_LEVEL_PTE);
+	VM_WARN_ON_FOLIO(folio_test_large(folio), folio);
+	VM_WARN_ON_FOLIO(folio_test_anon(folio), folio);
+
+	/* Order-0 PTE branch of __folio_remove_rmap(). */
+	if (atomic_add_negative(-1, &folio->_mapcount))
+		__lruvec_stat_mod_folio(folio, NR_FILE_MAPPED, -1);
+}
+#endif /* CONFIG_CORTEN_MM_ARENA */
+
 static inline unsigned int folio_unmap_pte_batch(struct folio *folio,
 			struct page_vma_mapped_walk *pvmw,
 			enum ttu_flags flags, pte_t pte)

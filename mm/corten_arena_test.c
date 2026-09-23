@@ -31,6 +31,7 @@
 #include <linux/swap.h>
 #include <linux/swapops.h>
 #include <linux/uaccess.h>
+#include <linux/vmstat.h>
 #include <uapi/linux/mman.h>
 #include <uapi/linux/prctl.h>
 
@@ -11255,6 +11256,121 @@ static void corten_arena_test_whitelist_audit(struct kunit *test)
 						 0, 0), 0);
 }
 
+/*
+ * W1.a: the vma-free rmap wrappers (mm/rmap.c), driven directly on
+ * synthetic order-0 folios.  The piece has zero call sites (INV6: pure
+ * infrastructure), so the folio itself is the whole fixture:
+ *
+ * (1) add/remove roundtrip: _mapcount -1 -> 0 -> -1 with exact +/-1
+ *     NR_ANON_MAPPED / NR_FILE_MAPPED deltas -- exact because nothing
+ *     else maps user pages while KUnit runs at boot, and independent
+ *     because the bucket is the wrapper's contract, not a
+ *     folio_test_anon() dispatch over folio->mapping (which a novma
+ *     folio legitimately lacks);
+ * (2) swapbacked + AnonExclusive set at add, exclusive cleared by the
+ *     last remove, swapbacked kept (the folio's class, not a count);
+ * (3) free path: the wrappers leave mapping alone, so every term of the
+ *     page_expected_state() check free_pages_prepare() evaluates holds
+ *     -- asserted term by term (the helper is page_alloc.c-private and
+ *     the memcg/page_pool terms are zero for an uncharged plain alloc),
+ *     then proven through the real folio_put();
+ * (4) the folding seam: these calls go through mm/corten_arena.h, which
+ *     folds to empty static inline stubs at CONFIG_CORTEN_MM_ARENA=n
+ *     (zero corten symbols is the n-objects gate's assertion).
+ */
+static long corten_arena_test_node_stat(pg_data_t *pgdat,
+					enum node_stat_item item)
+{
+	/* The exact value: the fold-lagged global plus every per-cpu
+	 * differential.  node_page_state() alone only sees a delta after
+	 * the vmstat worker folds it -- too late for a synchronous
+	 * assertion.
+	 */
+	long sum = atomic_long_read(&pgdat->vm_stat[item]);
+
+#ifdef CONFIG_SMP
+	int cpu;
+
+	for_each_online_cpu(cpu)
+		sum += per_cpu_ptr(pgdat->per_cpu_nodestats,
+				   cpu)->vm_node_stat_diff[item];
+#endif
+	return sum;
+}
+
+static void corten_arena_test_novma_rmap(struct kunit *test)
+{
+	struct folio *anon_folio, *file_folio;
+	pg_data_t *pgdat;
+	long anon_base, file_base;
+
+	anon_folio = folio_alloc(GFP_KERNEL, 0);
+	KUNIT_ASSERT_NOT_NULL(test, anon_folio);
+	file_folio = folio_alloc(GFP_KERNEL, 0);
+	if (!file_folio) {
+		folio_put(anon_folio);
+		kunit_skip(test, "folio allocation failed");
+	}
+	pgdat = folio_pgdat(anon_folio);
+
+	/* Fresh from the allocator: the freelist's mapcount == -1
+	 * invariant, nothing mapped, nothing borrowed yet.
+	 */
+	KUNIT_EXPECT_EQ(test, atomic_read(&anon_folio->_mapcount), -1);
+	KUNIT_EXPECT_PTR_EQ(test, anon_folio->mapping, NULL);
+	KUNIT_EXPECT_FALSE(test, folio_test_swapbacked(anon_folio));
+	KUNIT_EXPECT_FALSE(test, PageAnonExclusive(&anon_folio->page));
+
+	anon_base = corten_arena_test_node_stat(pgdat, NR_ANON_MAPPED);
+	file_base = corten_arena_test_node_stat(pgdat, NR_FILE_MAPPED);
+
+	/* (1)+(2) anon: the new-folio install shape. */
+	folio_add_anon_rmap_novma(anon_folio);
+	KUNIT_EXPECT_EQ(test, atomic_read(&anon_folio->_mapcount), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_node_stat(pgdat, NR_ANON_MAPPED),
+			anon_base + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_node_stat(pgdat, NR_FILE_MAPPED),
+			file_base);
+	KUNIT_EXPECT_TRUE(test, folio_test_swapbacked(anon_folio));
+	KUNIT_EXPECT_TRUE(test, PageAnonExclusive(&anon_folio->page));
+
+	folio_remove_anon_rmap_novma(anon_folio);
+	KUNIT_EXPECT_EQ(test, atomic_read(&anon_folio->_mapcount), -1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_node_stat(pgdat, NR_ANON_MAPPED),
+			anon_base);
+	KUNIT_EXPECT_FALSE(test, PageAnonExclusive(&anon_folio->page));
+	KUNIT_EXPECT_TRUE(test, folio_test_swapbacked(anon_folio));
+
+	/* (1) file roundtrip, mapping left NULL on purpose: the bucket
+	 * must come from the wrapper's contract, not from folio->mapping.
+	 */
+	folio_add_file_rmap_novma(file_folio);
+	KUNIT_EXPECT_EQ(test, atomic_read(&file_folio->_mapcount), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_node_stat(pgdat, NR_FILE_MAPPED),
+			file_base + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_node_stat(pgdat, NR_ANON_MAPPED),
+			anon_base);
+
+	folio_remove_file_rmap_novma(file_folio);
+	KUNIT_EXPECT_EQ(test, atomic_read(&file_folio->_mapcount), -1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_node_stat(pgdat, NR_FILE_MAPPED),
+			file_base);
+
+	/* (3) the free-path shape, term by term (page_expected_state(),
+	 * mm/page_alloc.c): mapcount back at -1, mapping untouched, no
+	 * AT_FREE flag set -- swapbacked is deliberately not among them,
+	 * and refcount is 1 for the folio_put() below.
+	 */
+	KUNIT_EXPECT_EQ(test, atomic_read(&anon_folio->_mapcount), -1);
+	KUNIT_EXPECT_PTR_EQ(test, anon_folio->mapping, NULL);
+	KUNIT_EXPECT_EQ(test, folio_ref_count(anon_folio), 1);
+	KUNIT_EXPECT_EQ(test, anon_folio->flags.f & PAGE_FLAGS_CHECK_AT_FREE,
+			0UL);
+
+	folio_put(anon_folio);
+	folio_put(file_folio);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
@@ -11373,6 +11489,11 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_concurrent_window),
 	KUNIT_CASE(corten_arena_test_obs_ledger),
 	KUNIT_CASE(corten_arena_test_drain_timeout_stat),
+	/* W1.a: the vma-free rmap wrappers on synthetic folios (no arena
+	 * state, registered before the V-E pair -- the whitelist anchor
+	 * below stays last for its cumulative gate verdict).
+	 */
+	KUNIT_CASE(corten_arena_test_novma_rmap),
 	/* V-E: the brk delegation ledger and the whitelist classifier.
 	 * Registered last: the whitelist anchor deliberately injects a
 	 * window violation (and reads the cumulative gate verdict), so it

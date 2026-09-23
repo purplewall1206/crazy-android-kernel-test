@@ -913,6 +913,19 @@ int corten_swapin_sync_meta(struct mm_struct *mm, unsigned long addr,
 			    swp_entry_t entry, struct folio *folio);
 
 /*
+ * W1.a: vma-free rmap bookkeeping (W1_NATIVE_RMAP_SPEC.md sec 2.2), the
+ * order-0 mirrors of the add/remove rmap family with the vma-dependent
+ * parts (anon mapping/index, mlock_vma) left to the caller's transaction.
+ * Call sites pair add/remove symmetrically; the wrappers own mapcount,
+ * the lruvec stat bucket (explicit, not folio_test_anon() -- a novma
+ * folio has no mapping to dispatch on), swapbacked and AnonExclusive.
+ */
+void folio_add_anon_rmap_novma(struct folio *folio);
+void folio_remove_anon_rmap_novma(struct folio *folio);
+void folio_add_file_rmap_novma(struct folio *folio);
+void folio_remove_file_rmap_novma(struct folio *folio);
+
+/*
  * M6.T2 eviction driver (spec slice table: "debugfs evict N pages
  * entry, T2 ships a minimal shrink stub"): pick up to @nr resident,
  * unshared, unpinned arena pages of the process @pid and push them
@@ -1120,6 +1133,23 @@ static inline bool corten_rmap_swap_out(struct folio *folio,
 					pte_t *old_pte)
 {
 	return false;
+}
+
+/* W1.a novma rmap wrappers: no arena, nothing borrows folio->_mapcount. */
+static inline void folio_add_anon_rmap_novma(struct folio *folio)
+{
+}
+
+static inline void folio_remove_anon_rmap_novma(struct folio *folio)
+{
+}
+
+static inline void folio_add_file_rmap_novma(struct folio *folio)
+{
+}
+
+static inline void folio_remove_file_rmap_novma(struct folio *folio)
+{
 }
 
 static inline int corten_swapin_sync_meta(struct mm_struct *mm,
