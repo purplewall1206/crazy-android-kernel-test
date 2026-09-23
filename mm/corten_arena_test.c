@@ -10121,6 +10121,483 @@ static void corten_arena_test_fork_swapped(struct kunit *test)
 			0);
 }
 
+/* ------------------------------------------------------------------ *
+ * V-C (MV_VMA_FREE_SPEC.md sec 3.3): the dual-source consumers -- the
+ * window row stream (/proc maps rendering source), the GUP-slow MODE
+ * probe and the smaps/pagemap aggregations.  All cases run the real
+ * producers (auto route + attach, munmap-route park, punch-shaped
+ * frame erase + implant mark).
+ * ------------------------------------------------------------------
+ */
+
+/* One window region via the real takeover pair (route + attach),
+ * placed wherever the magazine hands the next window.
+ */
+static unsigned long corten_arena_test_mvc_attach(struct kunit *test,
+						  struct mm_struct *mm,
+						  unsigned long frames,
+						  unsigned long prot)
+{
+	unsigned long addr = 0, len = frames * PMD_SIZE;
+	unsigned long flags = MAP_PRIVATE | MAP_ANONYMOUS;
+
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, len, prot,
+						     &addr, &len, &flags), 1);
+	mmap_write_lock(mm);
+	KUNIT_ASSERT_EQ(test, corten_arena_auto_attach(mm, addr,
+						       frames * PMD_SIZE,
+						       prot), 0);
+	mmap_write_unlock(mm);
+
+	return addr;
+}
+
+static void corten_arena_test_mvc_row_stream(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_mm_state *state;
+	struct corten_row_iter it;
+	struct corten_region_row row;
+	unsigned long a, b, c, rows_before;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "row stream requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	a = corten_arena_test_mvc_attach(test, mm, 2, PROT_READ | PROT_WRITE);
+	b = corten_arena_test_mvc_attach(test, mm, 1, PROT_READ);
+	c = corten_arena_test_mvc_attach(test, mm, 1, 0);
+	KUNIT_ASSERT_EQ(test, b, a + 2 * PMD_SIZE);
+	KUNIT_ASSERT_EQ(test, c, b + PMD_SIZE);
+	/* With regions live the /proc walk is dual-source. */
+	KUNIT_ASSERT_TRUE(test, corten_maps_dual_source(mm));
+
+	/* Order + exact field shapes (the J3 render inputs): two frames
+	 * of one region dedup into a single row; prot/rclass derive from
+	 * the record; the carrier is the render context.
+	 */
+	rows_before = corten_arena_test_maps_window_rows();
+	mmap_read_lock(mm);
+	corten_row_iter_init(&it);
+
+	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &it, &row));
+	KUNIT_EXPECT_EQ(test, row.start, a);
+	KUNIT_EXPECT_EQ(test, row.end, a + 2 * PMD_SIZE);
+	KUNIT_EXPECT_EQ(test, row.ar->rclass, CORTEN_REGION_ANON);
+	KUNIT_EXPECT_EQ(test, row.ar->prot,
+			CORTEN_PERM_USER | CORTEN_PERM_READ | CORTEN_PERM_WRITE);
+	KUNIT_EXPECT_NOT_NULL(test, row.ar->carrier);
+
+	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &it, &row));
+	KUNIT_EXPECT_EQ(test, row.start, b);
+	KUNIT_EXPECT_EQ(test, row.end, b + PMD_SIZE);
+	KUNIT_EXPECT_EQ(test, row.ar->prot,
+			CORTEN_PERM_USER | CORTEN_PERM_READ);
+
+	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &it, &row));
+	KUNIT_EXPECT_EQ(test, row.start, c);
+	KUNIT_EXPECT_EQ(test, row.end, c + PMD_SIZE);
+	KUNIT_EXPECT_EQ(test, row.ar->prot, CORTEN_PERM_USER);
+	KUNIT_EXPECT_FALSE(test, corten_row_next(mm, &it, &row));
+
+	/* Covering-or-next: mid-region hits the covering row, a region
+	 * end advances to the next row, past the stream is false.
+	 */
+	KUNIT_EXPECT_TRUE(test, corten_row_query(mm, b, &row));
+	KUNIT_EXPECT_EQ(test, row.start, b);
+	KUNIT_EXPECT_TRUE(test, corten_row_query(mm, b + PMD_SIZE, &row));
+	KUNIT_EXPECT_EQ(test, row.start, c);
+	KUNIT_EXPECT_FALSE(test,
+			   corten_row_query(mm, c + 2 * PMD_SIZE, &row));
+	mmap_read_unlock(mm);
+	/* 3 streamed rows + 2 query resolutions (b covers itself; the
+	 * b-end query lands straight on c's frame).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_maps_window_rows(),
+			rows_before + 5);
+
+	/* Punch shape: erase the region's second frame and register the
+	 * implant over it (the punch route's end state) -- the row must
+	 * split, exactly like the shadow era's split tree VMA rows.
+	 */
+	state = corten_arena_state(mm);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, state);
+	mmap_write_lock(mm);
+	mutex_lock(&state->ctl_lock);
+	xa_erase(&state->arenas, (a + PMD_SIZE) >> PMD_SHIFT);
+	mutex_unlock(&state->ctl_lock);
+	corten_implant_mark(mm, a + PMD_SIZE, PMD_SIZE);
+	mmap_write_unlock(mm);
+
+	mmap_read_lock(mm);
+	corten_row_iter_init(&it);
+	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &it, &row));
+	KUNIT_EXPECT_EQ(test, row.start, a);
+	KUNIT_EXPECT_EQ(test, row.end, a + PMD_SIZE);
+	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &it, &row));
+	KUNIT_EXPECT_EQ(test, row.start, b);
+	mmap_read_unlock(mm);
+
+	/* S-4: a parked window does not render. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 b, PAGE_SIZE), 1);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_pool_idle(mm, b));
+
+	mmap_read_lock(mm);
+	corten_row_iter_init(&it);
+	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &it, &row));
+	KUNIT_EXPECT_EQ(test, row.start, a);
+	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &it, &row));
+	KUNIT_EXPECT_EQ(test, row.start, c);
+	KUNIT_EXPECT_FALSE(test, corten_row_next(mm, &it, &row));
+	mmap_read_unlock(mm);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* The J3 first-row anchor (the m_start/proc_get_vma merge cursor,
+ * fs/proc/task_mmu.c): a delegated-domain VMA ending exactly where the
+ * FIRST window region begins, plus a second region above it -- the
+ * oracle's delegated face.  The cursor's emission path leans on three
+ * stream contracts, each pinned here against the real producers:
+ *   1. a fresh prime (pos 0) heads at the FIRST region's row;
+ *   2. the merged two-stream order is [delegated, row1, row2]: the row
+ *	head is held while the delegated VMA wins, and the outbid tree
+ *	head is re-fetched (iterator re-pinned to the row's end), never
+ *	swallowed -- driving the cursor's discipline below emits exactly
+ *	that sequence, no duplicates, no omissions;
+ *   3. the restart/rewind dedup (corten_maps_prime's shape): a
+ *	re-prime at the delegated VMA's end -- the position m_start
+ *	rewinds a seq refill to -- reproduces row1, not row2, and each
+ *	emitted row's end re-primes to exactly the remaining suffix.
+ */
+static void corten_arena_test_mvc_merge_first_row(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *dv;
+	struct corten_row_iter it;
+	struct corten_region_row row, peek;
+	unsigned long a1, a2, pos;
+	unsigned long order[5];
+	int n = 0;
+	bool valid;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "row stream requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* The delegated face: a plain tree VMA whose end is the first
+	 * window region's start -- the maple tree's last row immediately
+	 * below the window stream's first one.
+	 */
+	dv = corten_arena_test_mkvm(mm, CORTEN_MODE_WINDOW_START - PMD_SIZE,
+				    CORTEN_MODE_WINDOW_START,
+				    CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_NULL(test, dv);
+
+	/* Region 1 spans 4 frames (the oracle's 8M RW shape) and is the
+	 * delegated VMA's immediate right neighbor; region 2 rides above.
+	 */
+	a1 = corten_arena_test_mvc_attach(test, mm, 4, PROT_READ | PROT_WRITE);
+	a2 = corten_arena_test_mvc_attach(test, mm, 1, PROT_READ | PROT_WRITE);
+	KUNIT_ASSERT_EQ(test, a1, CORTEN_MODE_WINDOW_START);
+	KUNIT_ASSERT_EQ(test, dv->vm_end, a1);
+	KUNIT_ASSERT_EQ(test, a2, a1 + 4 * PMD_SIZE);
+	KUNIT_ASSERT_TRUE(test, corten_maps_dual_source(mm));
+
+	mmap_read_lock(mm);
+
+	/* (1) fresh prime: the stream heads at the FIRST region's row. */
+	corten_row_iter_init(&it);
+	KUNIT_ASSERT_TRUE(test, corten_row_next(mm, &it, &row));
+	KUNIT_EXPECT_EQ(test, row.start, a1);
+	KUNIT_EXPECT_EQ(test, row.end, a1 + 4 * PMD_SIZE);
+
+	/* (2) the merged emission order, driven with proc_get_vma's exact
+	 * discipline: fetch the tree head, row wins while it starts below
+	 * (or the tree is exhausted), and a row emission re-pins the tree
+	 * iterator so the outbid head returns on the next fetch.  The
+	 * harness's own base VMA rides below everything as a second
+	 * delegated row.
+	 */
+	{
+		VMA_ITERATOR(vmi, mm, 0);
+
+		corten_row_iter_init(&it);
+		it.rit.frame = 0;
+		valid = false;
+		while (corten_row_next(mm, &it, &peek)) {
+			if (peek.end > 0) {
+				valid = true;
+				break;
+			}
+		}
+		KUNIT_ASSERT_TRUE(test, valid);
+
+		for (;;) {
+			struct vm_area_struct *vma = vma_next(&vmi);
+
+			if (valid &&
+			    (!vma || peek.start < vma->vm_start)) {
+				row = peek;
+				valid = corten_row_next(mm, &it, &peek);
+				order[n++] = row.start;
+				vma_iter_set(&vmi, row.end);
+				continue;
+			}
+			if (!vma)
+				break;
+			order[n++] = vma->vm_start;
+		}
+	}
+	KUNIT_EXPECT_EQ(test, n, 4);
+	KUNIT_EXPECT_EQ(test, order[0], CORTEN_ARENA_TEST_BASE);
+	KUNIT_EXPECT_EQ(test, order[1], dv->vm_start);
+	KUNIT_EXPECT_EQ(test, order[2], a1);
+	KUNIT_EXPECT_EQ(test, order[3], a2);
+
+	/* (3) the restart/rewind dedup, at every entry boundary: the
+	 * delegated VMA's end (the rewind target right after the tree's
+	 * last row -- where the oracle lost its 8M first row) reproduces
+	 * row1; each row's end re-primes to exactly the remaining suffix.
+	 */
+	pos = dv->vm_end;
+	corten_row_iter_init(&it);
+	it.rit.frame = pos >> PMD_SHIFT;
+	valid = false;
+	while (corten_row_next(mm, &it, &row)) {
+		if (row.end > pos) {
+			valid = true;
+			break;
+		}
+	}
+	KUNIT_EXPECT_TRUE(test, valid);
+	KUNIT_EXPECT_EQ(test, row.start, a1);
+
+	pos = a1 + 4 * PMD_SIZE;
+	corten_row_iter_init(&it);
+	it.rit.frame = pos >> PMD_SHIFT;
+	valid = false;
+	while (corten_row_next(mm, &it, &row)) {
+		if (row.end > pos) {
+			valid = true;
+			break;
+		}
+	}
+	KUNIT_EXPECT_TRUE(test, valid);
+	KUNIT_EXPECT_EQ(test, row.start, a2);
+
+	pos = a2 + PMD_SIZE;
+	corten_row_iter_init(&it);
+	it.rit.frame = pos >> PMD_SHIFT;
+	valid = false;
+	while (corten_row_next(mm, &it, &row)) {
+		if (row.end > pos) {
+			valid = true;
+			break;
+		}
+	}
+	KUNIT_EXPECT_FALSE(test, valid);
+
+	mmap_read_unlock(mm);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+static void corten_arena_test_mvc_gup_probe(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *carrier, *probe;
+	struct file *file;
+	unsigned long a, faddr, flen, fflags;
+	long probes, rejects;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "gup probe requires corten=on");
+
+	/* Pre-MODE: inert (NULL, the legacy walk answers). */
+	KUNIT_EXPECT_TRUE(test,
+			  IS_ERR_OR_NULL(corten_gup_probe(mm,
+							  CORTEN_MODE_WINDOW_START,
+							  0)));
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	a = corten_arena_test_mvc_attach(test, mm, 1, PROT_READ | PROT_WRITE);
+
+	probes = corten_arena_test_gup_probes();
+	rejects = corten_arena_test_gup_probe_rejects();
+
+	/* Below-window and above-window addresses stay the tree's. */
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_NULL(test, corten_gup_probe(mm, CORTEN_ARENA_TEST_BASE, 0));
+	KUNIT_EXPECT_NULL(test, corten_gup_probe(mm, CORTEN_MODE_WINDOW_END, 0));
+
+	/* Active region: the carrier (check_vma_flags' corten_own arm,
+	 * the PTE follow and the faultin hook all consume it verbatim).
+	 */
+	carrier = corten_arena_test_carrier_of(mm, a);
+	KUNIT_ASSERT_NOT_NULL(test, carrier);
+	probe = corten_gup_probe(mm, a, 0);
+	KUNIT_EXPECT_FALSE(test, IS_ERR_OR_NULL(probe));
+	KUNIT_EXPECT_PTR_EQ(test, probe, carrier);
+	probe = corten_gup_probe(mm, a, FOLL_WRITE);
+	KUNIT_EXPECT_FALSE(test, IS_ERR_OR_NULL(probe));
+	KUNIT_EXPECT_PTR_EQ(test, probe, carrier);
+
+	/* Parked/hole: the loud window reject (find_vma()'s own errno). */
+	KUNIT_EXPECT_PTR_EQ(test, corten_gup_probe(mm, a + 8 * PMD_SIZE, 0),
+			    ERR_PTR(-EFAULT));
+	mmap_read_unlock(mm);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 a, PAGE_SIZE), 1);
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_PTR_EQ(test, corten_gup_probe(mm, a, 0),
+			    ERR_PTR(-EFAULT));
+
+	/* Implant range: NULL -- find_vma() must see the real tree VMA
+	 * (the registry mark alone decides, no VMA needed here).
+	 */
+	corten_implant_mark(mm, a, PMD_SIZE);
+	KUNIT_EXPECT_NULL(test, corten_gup_probe(mm, a, 0));
+	mmap_read_unlock(mm);
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_gup_probes(), probes + 2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_gup_probe_rejects(),
+			rejects + 2);
+
+	/* FOLL_ANON on a FILE region: the one emulation corner the
+	 * carrier's anon shape cannot express (-EFAULT, the
+	 * vma_is_anonymous() verdict).  The FILE takeover pair (route +
+	 * file attach) places it wherever the window serves next -- the
+	 * parked frame above is pool-recycled, so the address is read
+	 * back from the route instead of assumed.
+	 */
+	file = shmem_file_setup("corten_mvc", PMD_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	faddr = 0;
+	flen = 2 * PAGE_SIZE;
+	fflags = MAP_PRIVATE;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_route(mm, file, flen, &faddr,
+						     &flen, &fflags), 1);
+	mmap_write_lock(mm);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_file_attach(mm, faddr, PMD_SIZE,
+						 PROT_READ, file, 1), 0);
+	mmap_write_unlock(mm);
+	fput(file);
+
+	mmap_read_lock(mm);
+	probe = corten_gup_probe(mm, faddr, 0);
+	KUNIT_EXPECT_FALSE(test, IS_ERR_OR_NULL(probe));
+	probe = corten_gup_probe(mm, faddr, FOLL_ANON);
+	KUNIT_EXPECT_TRUE(test, IS_ERR(probe));
+	KUNIT_EXPECT_PTR_EQ(test, probe, ERR_PTR(-EFAULT));
+	mmap_read_unlock(mm);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* pagemap emit sink: records up to 8 entries. */
+struct corten_arena_test_pm_sink {
+	u64 pme[8];
+	int n;
+};
+
+static int corten_arena_test_pm_emit(void *ctx, u64 pme)
+{
+	struct corten_arena_test_pm_sink *s = ctx;
+
+	if (s->n >= 8)
+		return 1;
+	s->pme[s->n++] = pme;
+
+	return 0;
+}
+
+static void corten_arena_test_mvc_smaps_pagemap(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_region_row row;
+	struct corten_smap_stats st;
+	struct corten_arena_test_pm_sink sink = { };
+	struct vm_area_struct *carrier;
+	unsigned long a;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "smaps/pagemap aggregation requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	a = corten_arena_test_mvc_attach(test, mm, 1, PROT_READ | PROT_WRITE);
+
+	/* The state-2 shape: commit RW, write-fault the first page
+	 * through the carrier (the GUP-slow fault arm's entry).
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, a), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_mark(mm, a,
+					       CORTEN_PERM_USER |
+					       CORTEN_PERM_READ |
+					       CORTEN_PERM_WRITE), 0);
+	carrier = corten_arena_test_carrier_of(mm, a);
+	KUNIT_ASSERT_NOT_NULL(test, carrier);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_handle_mm_fault(carrier, a,
+						     FAULT_FLAG_WRITE, NULL),
+			0);
+
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_TRUE(test, corten_row_query(mm, a, &row));
+	KUNIT_EXPECT_EQ(test, row.start, a);
+
+	corten_region_smap_stats(mm, &row, &st);
+	KUNIT_EXPECT_EQ(test, st.resident, PAGE_SIZE);
+	KUNIT_EXPECT_EQ(test, st.anon, PAGE_SIZE);
+	KUNIT_EXPECT_EQ(test, st.swapped, 0);
+	KUNIT_EXPECT_EQ(test, st.pss, (u64)PAGE_SIZE << CORTEN_PSS_SHIFT);
+
+	/* pagemap truth: the faulted page is present (+exclusive, the
+	 * fresh COW-free folio), the second page of the frame is a
+	 * never-faulted zero entry.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_pagemap_fill(mm, a, a + 2 * PAGE_SIZE, true,
+					    corten_arena_test_pm_emit, &sink),
+			0);
+	KUNIT_EXPECT_EQ(test, sink.n, 2);
+	KUNIT_EXPECT_TRUE(test, sink.pme[0] & CORTEN_PM_PRESENT);
+	KUNIT_EXPECT_TRUE(test, sink.pme[0] & CORTEN_PM_MMAP_EXCLUSIVE);
+	KUNIT_EXPECT_NE(test, sink.pme[0] & CORTEN_PM_PFRAME_MASK, 0);
+	KUNIT_EXPECT_EQ(test, sink.pme[1], 0);
+	mmap_read_unlock(mm);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
@@ -10181,6 +10658,14 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_mincore_route),
 	KUNIT_CASE(corten_arena_test_madvise_parked_terminal),
 	KUNIT_CASE(corten_arena_test_move_pages_window),
+	/* V-C: the dual-source faces (row stream, GUP-slow probe,
+	 * smaps/pagemap aggregation; the merge-first-row anchor pins the
+	 * cursor contracts behind the J3 first-row fix).
+	 */
+	KUNIT_CASE(corten_arena_test_mvc_row_stream),
+	KUNIT_CASE(corten_arena_test_mvc_merge_first_row),
+	KUNIT_CASE(corten_arena_test_mvc_gup_probe),
+	KUNIT_CASE(corten_arena_test_mvc_smaps_pagemap),
 	KUNIT_CASE(corten_arena_test_vma_free_reuse),
 	KUNIT_CASE(corten_arena_test_inv_mv3),
 	KUNIT_CASE(corten_arena_test_fork_vma_free),

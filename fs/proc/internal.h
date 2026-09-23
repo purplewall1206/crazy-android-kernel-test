@@ -13,6 +13,7 @@
 #include <linux/binfmts.h>
 #include <linux/sched/coredump.h>
 #include <linux/sched/task.h>
+#include <linux/corten_arena.h>
 #include <linux/mm.h>
 
 struct ctl_table_header;
@@ -393,6 +394,17 @@ struct proc_maps_private {
 	struct vma_iterator iter;
 	loff_t last_pos;
 	struct proc_maps_locking_ctx lock_ctx;
+	/* V-C dual-source cursor (task_mmu.c): the window-domain row
+	 * stream merged into the maple stream by address.  Only advanced
+	 * for MODE mms (corten_maps_dual_source()).  corten_row is the
+	 * row the current entry renders; corten_row_peek is the stream's
+	 * lookahead head (corten_row_valid says it holds a row).
+	 */
+	struct corten_row_iter corten_rows;
+	struct corten_region_row corten_row;
+	struct corten_region_row corten_row_peek;
+	bool corten_row_valid;
+	bool corten_row_active;
 #ifdef CONFIG_NUMA
 	struct mempolicy *task_mempolicy;
 #endif

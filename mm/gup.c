@@ -1294,25 +1294,37 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
  * historically expanded the stack in the GUP code.
  */
 static struct vm_area_struct *gup_vma_lookup(struct mm_struct *mm,
-	 unsigned long addr)
+	 unsigned long addr, unsigned int gup_flags)
 {
 #ifdef CONFIG_STACK_GROWSUP
+	struct vm_area_struct *vma = corten_gup_probe(mm, addr, gup_flags);
+
+	if (!IS_ERR_OR_NULL(vma))
+		return vma;
 	return vma_lookup(mm, addr);
 #else
 	static volatile unsigned long next_warn;
 	struct vm_area_struct *vma;
 	unsigned long now, next;
 
-	vma = find_vma(mm, addr);
-	if (!vma || addr >= vma->vm_start) {
-		/* V-A.3b audit #3, observation only: the GUP-slow window
-		 * miss (fix lands with V-C's corten_gup_probe); the J1
-		 * probe inside find_vma() already counted the walk.
-		 */
-		if (!vma)
-			corten_gup_note_window_miss(mm, addr);
+	/* V-C (j2-audit #3, MV_VMA_FREE_SPEC.md sec 3.3.2): a MODE mm's
+	 * window-domain address resolves through the region registry
+	 * BEFORE the tree walk -- the carrier comes back here (the rest
+	 * of __get_user_pages consumes it exactly like the shadow-VMA it
+	 * replaced), and a window reject falls into the NULL arm below
+	 * so the caller answers find_vma()'s own miss errno without the
+	 * walk (J1 stays zero).  Only the tree's own addresses (implants
+	 * included) reach find_vma().
+	 */
+	vma = corten_gup_probe(mm, addr, gup_flags);
+	if (IS_ERR(vma))
+		return NULL;	/* parked/hole window: -EFAULT below */
+	if (vma)
 		return vma;
-	}
+
+	vma = find_vma(mm, addr);
+	if (!vma || addr >= vma->vm_start)
+		return vma;
 
 	/* Only warn for half-way relevant accesses */
 	if (!(vma->vm_flags & VM_GROWSDOWN))
@@ -1431,7 +1443,7 @@ static long __get_user_pages(struct mm_struct *mm,
 				}
 				goto retry;
 			}
-			vma = gup_vma_lookup(mm, start);
+			vma = gup_vma_lookup(mm, start, gup_flags);
 			if (!vma && in_gate_area(mm, start)) {
 				ret = get_gate_page(mm, start & PAGE_MASK,
 						gup_flags, &vma,
@@ -1612,7 +1624,10 @@ int fixup_user_fault(struct mm_struct *mm,
 		fault_flags |= FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 
 retry:
-	vma = gup_vma_lookup(mm, address);
+	/* V-C: the window probe shares this path (no FOLL_ANON caller
+	 * here, so gup_flags stays 0 for the emulation corners).
+	 */
+	vma = gup_vma_lookup(mm, address, 0);
 	if (!vma)
 		return -EFAULT;
 

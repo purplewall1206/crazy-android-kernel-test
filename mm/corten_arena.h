@@ -611,6 +611,43 @@ void corten_remote_note_window_short(struct mm_struct *mm,
 				     unsigned long addr);
 
 /*
+ * V-C GUP-slow MODE branch (j2-audit #3/#7/#8, MV_VMA_FREE_SPEC.md
+ * sec 3.3.2).  corten_gup_probe() sits in front of gup_vma_lookup()'s
+ * find_vma(): for a MODE mm's window-domain address it answers from
+ * the region registry so the tree is never walked (J1 stays zero).
+ *
+ * Returns the region's carrier (the walk proceeds on it exactly like
+ * it did on the shadow-VMA: check_vma_flags()'s corten_own arm, the
+ * PTE follow and the faultin slow hook all take the carrier
+ * verbatim), NULL when the address is not the window stream's to
+ * answer (non-MODE, outside the window, or an implant range whose
+ * real tree VMA find_vma() must find), or ERR_PTR(-EFAULT) for the
+ * window shapes whose tree lookup is a guaranteed miss (parked S-1
+ * window, magazine reserve, hole) -- the errno check_vma_flags()'s
+ * own miss would have produced.  One emulation corner the carrier's
+ * shape cannot express: FOLL_ANON on a FILE region answers -EFAULT
+ * (check_vma_flags()' vma_is_anonymous() verdict).
+ *
+ * Carrier lifetime: the caller holds mmap_lock for read (the
+ * __get_user_pages contract); carriers are created and freed only
+ * under mmap_lock for writing, and an arena fault never returns
+ * VM_FAULT_RETRY (the mm/memory.c slow-hook contract), so the carrier
+ * pointer is never carried across a lock drop.
+ */
+struct vm_area_struct *corten_gup_probe(struct mm_struct *mm,
+					unsigned long addr,
+					unsigned int gup_flags);
+
+/*
+ * V-C #7/#8: true for a MODE mm's window-domain address that no tree
+ * VMA can cover (not an implant) -- __access_remote_vm() and
+ * __copy_remote_vm_str() skip their vma_lookup()+expand_stack()
+ * pre-checks there (a guaranteed miss, and expand_stack() would drop
+ * the mmap_read on failure) and let the GUP loop's probe answer.
+ */
+bool corten_remote_vm_window(struct mm_struct *mm, unsigned long addr);
+
+/*
  * V-A.2a: the window-domain fence for the generic gap walkers
  * (mm/mmap.c generic_get_unmapped_area{,_topdown}() and the x86 twins
  * in arch/x86/kernel/sys_x86_64.c).  With the live and parked windows
@@ -1093,6 +1130,19 @@ static inline void corten_gup_note_window_miss(struct mm_struct *mm,
 static inline void corten_remote_note_window_short(struct mm_struct *mm,
 						   unsigned long addr)
 {
+}
+
+static inline struct vm_area_struct *
+corten_gup_probe(struct mm_struct *mm, unsigned long addr,
+		 unsigned int gup_flags)
+{
+	return NULL;
+}
+
+static inline bool corten_remote_vm_window(struct mm_struct *mm,
+					   unsigned long addr)
+{
+	return false;
 }
 
 struct vm_unmapped_area_info;

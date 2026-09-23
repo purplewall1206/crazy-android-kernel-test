@@ -386,6 +386,17 @@ static atomic_long_t corten_nr_mincore_routes;	/* mincore chunks answered */
 static atomic_long_t corten_nr_madvise_parked;	/* madvise parked-terminal 0s */
 static atomic_long_t corten_nr_move_pages_window; /* stat legs short-circuited */
 
+/* V-C observation (MV_VMA_FREE_SPEC.md sec 3.3): GUP-slow window
+ * probes answered with a carrier (the io_uring/9p/process_vm/ptrace
+ * data face restored), the loud window rejects (parked/hole -- the
+ * errno find_vma()'s miss would have produced), and the window rows
+ * the dual-source /proc readers produced (maps/smaps/rollup/numa and
+ * the PROCMAP_QUERY resolutions share the row stream).
+ */
+static atomic_long_t corten_nr_gup_probes;	/* carrier answers */
+static atomic_long_t corten_nr_gup_probe_rejects; /* window -EFAULTs */
+static atomic_long_t corten_nr_maps_window_rows;	/* rows rendered */
+
 /* V-A.2b: detached carrier VMAs created (cumulative; the live count is
  * the arenas ledger minus the parked/pool descriptors).
  */
@@ -2713,6 +2724,13 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_madvise_parked));
 	seq_printf(m, "move_pages_window   %ld\n",
 		   atomic_long_read(&corten_nr_move_pages_window));
+	/* V-C: the dual-source data/observation faces. */
+	seq_printf(m, "gup_probes          %ld\n",
+		   atomic_long_read(&corten_nr_gup_probes));
+	seq_printf(m, "gup_probe_rejects   %ld\n",
+		   atomic_long_read(&corten_nr_gup_probe_rejects));
+	seq_printf(m, "maps_window_rows    %ld\n",
+		   atomic_long_read(&corten_nr_maps_window_rows));
 	seq_printf(m, "carriers            %ld\n",
 		   atomic_long_read(&corten_nr_carriers));
 	seq_printf(m, "zap_pinned          %ld\n",
@@ -2970,6 +2988,22 @@ long corten_arena_test_fault_fallback_window(void)
 long corten_arena_test_uffd_rejects(void)
 {
 	return atomic_long_read(&corten_nr_uffd_window_reject);
+}
+
+/* V-C: the dual-source counters (gup probe matrix + window rows). */
+long corten_arena_test_gup_probes(void)
+{
+	return atomic_long_read(&corten_nr_gup_probes);
+}
+
+long corten_arena_test_gup_probe_rejects(void)
+{
+	return atomic_long_read(&corten_nr_gup_probe_rejects);
+}
+
+long corten_arena_test_maps_window_rows(void)
+{
+	return atomic_long_read(&corten_nr_maps_window_rows);
 }
 
 /* V-B.2 (H7): the file-event route counter and the zap backstop. */
@@ -3349,6 +3383,462 @@ struct corten_arena *corten_region_next(struct mm_struct *mm,
 		it->last = ar;
 		return ar;
 	}
+}
+
+/* ------------------------------------------------------------------ *
+ * V-C: dual-source consumers (MV_VMA_FREE_SPEC.md sec 3.3) -- the
+ * window row stream (/proc rendering), the GUP-slow MODE branch and
+ * the remote-access pre-check bypass.  All PTE reads below take the
+ * PTE lock (INV6); all region/carrier reads run under mmap_read or
+ * better (sec 2.7: mmap_lock is the region record's lock).
+ * ------------------------------------------------------------------
+ */
+
+/* Implant-registry geometry for the row stream: the sorted, disjoint
+ * array is walked inline (nr_implants is small and bounded by the
+ * punch/P1b producers).  Both helpers take/return window addresses.
+ */
+static bool corten_implant_advance(struct mm_struct *mm,
+				   unsigned long *addr)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+	unsigned int i;
+
+	if (!state)
+		return false;
+
+	for (i = 0; i < state->nr_implants; i++) {
+		if (*addr < state->implants[i].start)
+			return false;	/* below the next range: keep */
+		if (*addr < state->implants[i].end) {
+			*addr = state->implants[i].end;
+			return true;	/* was inside: jumped to its end */
+		}
+	}
+	return false;
+}
+
+/* Clip *@end down to the start of the first implant inside
+ * [@start, *@end) -- the row must stop where a legacy implant begins.
+ */
+static void corten_implant_clip(struct mm_struct *mm, unsigned long start,
+				unsigned long *end)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+	unsigned int i;
+
+	if (!state)
+		return;
+
+	for (i = 0; i < state->nr_implants; i++) {
+		if (state->implants[i].start <= start)
+			continue;	/* spent (start is past it) */
+		if (state->implants[i].start < *end)
+			*end = state->implants[i].start;
+		return;
+	}
+}
+
+void corten_row_iter_init(struct corten_row_iter *it)
+{
+	corten_region_iter_init(&it->rit);
+	it->ar = NULL;
+	it->next = 0;
+}
+
+bool corten_row_next(struct mm_struct *mm, struct corten_row_iter *it,
+		     struct corten_region_row *row)
+{
+	for (;;) {
+		struct corten_arena *ar = it->ar;
+		unsigned long start, end;
+
+		if (ar) {
+			start = it->next;
+			/* Punch implants carve legacy-owned sub-ranges out
+			 * of the region; a row never spans one.
+			 */
+			while (start < ar->end &&
+			       corten_implant_advance(mm, &start))
+				;
+			if (start < ar->end) {
+				end = ar->end;
+				corten_implant_clip(mm, start, &end);
+				it->next = end;
+				row->ar = ar;
+				row->start = start;
+				row->end = end;
+				atomic_long_inc(&corten_nr_maps_window_rows);
+				return true;
+			}
+			/* Region exhausted: on to the registry stream. */
+			it->ar = NULL;
+		}
+
+		ar = corten_region_next(mm, &it->rit);
+		if (!ar)
+			return false;
+		/* S-4: a parked window was munmapped -- rendering it
+		 * would lie.
+		 */
+		if (READ_ONCE(ar->idle))
+			continue;
+		/* Tree-anchored (targeted-DECLARE) arenas are the tree
+		 * stream's own rows: producing them here would render
+		 * the range twice.
+		 */
+		if (READ_ONCE(ar->vma))
+			continue;
+		/* The window stream renders carrier regions only. */
+		if (!READ_ONCE(ar->carrier))
+			continue;
+		it->ar = ar;
+		it->next = ar->start;
+	}
+}
+
+bool corten_row_query(struct mm_struct *mm, unsigned long addr,
+		      struct corten_region_row *row)
+{
+	struct corten_row_iter it;
+
+	/* Covering-or-next: the registry stream starts at @addr's frame,
+	 * so regions ending at/below it are never opened, and rows of
+	 * the containing region are filtered by the end > @addr test
+	 * (the first row that may cover @addr).  A frame erased by a
+	 * punch is skipped naturally -- its implant is the tree's row.
+	 */
+	corten_row_iter_init(&it);
+	it.rit.frame = addr >> PMD_SHIFT;
+	while (corten_row_next(mm, &it, row)) {
+		if (row->end > addr)
+			return true;
+	}
+	return false;
+}
+
+bool corten_maps_dual_source(struct mm_struct *mm)
+{
+	struct corten_mm_state *state;
+
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+		return false;
+	/* Pairs with the registry publisher's smp_store_release(): the
+	 * state pointer and its arena count must read as one snapshot.
+	 */
+	state = smp_load_acquire(&mm->corten_state);
+	return state && refcount_read(&state->nr) != 0;
+}
+
+struct vm_area_struct *corten_gup_probe(struct mm_struct *mm,
+					unsigned long addr,
+					unsigned int gup_flags)
+{
+	struct vm_area_struct *carrier = NULL;
+	enum corten_region_class rclass = CORTEN_REGION_ANON;
+	struct corten_arena *ar;
+
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
+	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
+		return NULL;	/* the legacy walk answers */
+
+	/* Implants own real tree VMAs -- find_vma() must see them. */
+	if (corten_implant_covers(mm, addr, 1))
+		return NULL;
+
+	/* Region resolution under RCU (the registry's read contract);
+	 * the class/carrier reads ride the same section, the carrier
+	 * pointer itself is what the caller's mmap_read keeps alive.
+	 */
+	rcu_read_lock();
+	ar = corten_region_lookup(mm, addr);
+	if (ar) {
+		carrier = READ_ONCE(ar->carrier);
+		rclass = READ_ONCE(ar->rclass);
+	}
+	rcu_read_unlock();
+
+	if (ar && !carrier)
+		return NULL;	/* tree-anchored arena: find_vma() answers */
+
+	if (!ar) {
+		/* Parked (S-1), magazine reserve or window hole: the tree
+		 * lookup is a guaranteed miss -- answer its errno here so
+		 * the walk (and J1) never happens.
+		 */
+		atomic_long_inc(&corten_nr_gup_probe_rejects);
+		return ERR_PTR(-EFAULT);
+	}
+
+	/* check_vma_flags() emulation corner the carrier's anon shape
+	 * cannot express: FOLL_ANON must miss a file mapping.
+	 */
+	if ((gup_flags & FOLL_ANON) && rclass == CORTEN_REGION_FILE) {
+		atomic_long_inc(&corten_nr_gup_probe_rejects);
+		return ERR_PTR(-EFAULT);
+	}
+
+	atomic_long_inc(&corten_nr_gup_probes);
+	return carrier;
+}
+
+bool corten_remote_vm_window(struct mm_struct *mm, unsigned long addr)
+{
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
+	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
+		return false;
+	return !corten_implant_covers(mm, addr, 1);
+}
+
+/*
+ * smaps PT aggregation of one window row (sec 3.3.1): the
+ * mincore-fill skeleton (per-2M-frame PTE walk under ptl, INV6) with
+ * the smaps_account() accounting rule reduced to the Rss/Pss/
+ * Anonymous/Swap buckets the window truth carries.  PSS uses the
+ * folio mapcount divisor (exact for the window's order-0 pages, the
+ * same arithmetic smaps_account() applies); the sharing buckets
+ * (Shared/Private x Clean/Dirty), Referenced and the hugetlb/KSM
+ * families stay zero -- registered disclosure, not parity claims.
+ */
+/*
+ * Per-pte classification for the two /proc walkers below: the page (or
+ * NULL for the zero page / none entries) plus the pagemap flag bits
+ * and pfn/swap frame encoding (pte_to_pagemap_entry()'s arithmetic).
+ */
+static struct page *corten_pagemap_pte(struct vm_area_struct *carrier,
+				       pte_t pte, unsigned long addr,
+				       bool show_pfn, u64 *frame, u64 *flags)
+{
+	struct page *page = NULL;
+
+	*frame = 0;
+	*flags = 0;
+
+	if (pte_present(pte)) {
+		*flags |= CORTEN_PM_PRESENT;
+		if (show_pfn)
+			*frame = pte_pfn(pte);
+		page = vm_normal_page(carrier, addr, pte);
+	} else if (is_swap_pte(pte)) {
+		swp_entry_t entry = pte_to_swp_entry(pte);
+
+		*flags |= CORTEN_PM_SWAP;
+		if (show_pfn) {
+			pgoff_t offset;
+
+			if (is_pfn_swap_entry(entry))
+				offset = swp_offset_pfn(entry);
+			else
+				offset = swp_offset(entry);
+			*frame = swp_type(entry) |
+				((u64)offset << MAX_SWAPFILES_SHIFT);
+		}
+		if (is_pfn_swap_entry(entry))
+			page = pfn_swap_entry_to_page(entry);
+	}
+	/* pte_none: frame/flags stay 0 -- one pme per page, the pagemap
+	 * contract.
+	 */
+
+	if (page) {
+		struct folio *folio = page_folio(page);
+
+		if (!folio_test_anon(folio))
+			*flags |= CORTEN_PM_FILE;
+		/* PM_MMAP_EXCLUSIVE: the folio mapcount is exact for the
+		 * window's order-0 pages (fs/proc/internal.h's precise
+		 * page variant inlined).
+		 */
+		if ((*flags & CORTEN_PM_PRESENT) && folio_mapcount(folio) == 1)
+			*flags |= CORTEN_PM_MMAP_EXCLUSIVE;
+	}
+
+	return page;
+}
+
+/*
+ * smaps PT aggregation of one window row (sec 3.3.1): the
+ * mincore-fill skeleton (per-2M-frame PTE walk under ptl, INV6) with
+ * the smaps_account() accounting rule reduced to the Rss/Pss/
+ * Anonymous/Swap buckets the window truth carries.  PSS uses the
+ * folio mapcount divisor (exact for the window's order-0 pages, the
+ * same arithmetic smaps_account() applies); the sharing buckets
+ * (Shared/Private x Clean/Dirty), Referenced and the hugetlb/KSM
+ * families stay zero -- registered disclosure, not parity claims.
+ */
+static void corten_smap_pte(struct vm_area_struct *carrier, pte_t pte,
+			    unsigned long addr, struct corten_smap_stats *out)
+{
+	struct page *page;
+	struct folio *folio;
+	u64 pss;
+	int mapcount;
+
+	if (pte_none_mostly(pte))
+		return;
+	if (!pte_present(pte)) {
+		if (is_swap_pte(pte))
+			out->swapped += PAGE_SIZE;
+		return;
+	}
+	page = vm_normal_page(carrier, addr, pte);
+	if (!page)
+		return;		/* the shared zero page */
+	folio = page_folio(page);
+	out->resident += PAGE_SIZE;
+	if (folio_test_anon(folio))
+		out->anon += PAGE_SIZE;
+	pss = (u64)PAGE_SIZE << CORTEN_PSS_SHIFT;
+	mapcount = folio_mapcount(folio);
+	if (mapcount >= 2)
+		pss /= mapcount;
+	out->pss += pss;
+}
+
+void corten_region_smap_stats(struct mm_struct *mm,
+			      const struct corten_region_row *row,
+			      struct corten_smap_stats *out)
+{
+	struct vm_area_struct *carrier = READ_ONCE(row->ar->carrier);
+	unsigned long a;
+
+	out->resident = 0;
+	out->anon = 0;
+	out->swapped = 0;
+	out->pss = 0;
+
+	for (a = row->start; a < row->end;) {
+		unsigned long fe = min(a + PMD_SIZE, row->end);
+		pmd_t *pmdp = corten_arena_pmd(mm, a);
+		pte_t *ptep;
+		spinlock_t *ptl;
+		pmd_t pmd;
+
+		if (!pmdp)
+			goto hole;	/* no PT page: never faulted */
+		pmd = READ_ONCE(*pmdp);
+		if (unlikely(pmd_present(pmd) && pmd_leaf(pmd))) {
+			/* C20 structurally excludes THP from the window
+			 * (the defensive mincore shape): count resident.
+			 */
+			out->resident += fe - a;
+			out->anon += fe - a;
+			out->pss += (u64)(fe - a) << CORTEN_PSS_SHIFT;
+			a = fe;
+			continue;
+		}
+		if (!pmd_present(pmd))
+			goto hole;
+
+		ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
+		if (!ptep)
+			goto hole;
+		for (; a != fe; a += PAGE_SIZE, ptep++)
+			corten_smap_pte(carrier, ptep_get(ptep), a, out);
+		pte_unmap_unlock(ptep - 1, ptl);
+		cond_resched();
+		continue;
+
+hole:
+		/* No resident truth in this frame slice. */
+		a = fe;
+	}
+}
+
+/* One locked PT page's slice of the pagemap fill: classify and emit
+ * [a, fe), advancing *@ap.  Returns the first non-zero emit() verdict.
+ */
+static int corten_pagemap_fill_pt(struct vm_area_struct *carrier,
+				  pte_t *ptep, unsigned long *ap,
+				  unsigned long fe, bool show_pfn,
+				  int (*emit)(void *ctx, u64 pme), void *ctx)
+{
+	unsigned long a = *ap;
+
+	for (; a != fe; a += PAGE_SIZE, ptep++) {
+		u64 frame, flags;
+		int err;
+
+		corten_pagemap_pte(carrier, ptep_get(ptep), a, show_pfn,
+				   &frame, &flags);
+		err = emit(ctx,
+			   (frame & CORTEN_PM_PFRAME_MASK) | flags);
+		if (err) {
+			*ap = a;
+			return err;
+		}
+	}
+	*ap = a;
+
+	return 0;
+}
+
+/*
+ * pagemap truth of one window-domain span (j2-audit #11): the generic
+ * walk sees a VMA hole there and emits zero entries; this fill
+ * derives CORTEN_PM_PRESENT/CORTEN_PM_SWAP (and the pfn under
+ * CAP_SYS_ADMIN) from the real PTEs, the mincore skeleton under ptl.
+ * The bit layout is byte-compatible with the legacy entries around it
+ * (static_assert'ed in fs/proc/task_mmu.c).
+ */
+int corten_pagemap_fill(struct mm_struct *mm, unsigned long addr,
+			unsigned long end, bool show_pfn,
+			int (*emit)(void *ctx, u64 pme), void *ctx)
+{
+	struct vm_area_struct *carrier = NULL;
+	unsigned long a;
+	int err;
+
+	/* The carrier of the first covering region provides the
+	 * vm_normal_page() vma context (no VM_PFNMAP/VM_MIXEDMAP shapes
+	 * exist in the window, but the call wants a vma).
+	 */
+	{
+		struct corten_region_row row;
+
+		if (corten_row_query(mm, addr, &row))
+			carrier = READ_ONCE(row.ar->carrier);
+	}
+
+	/* Walk one PT page's slice [a, fe): classified entries, or the
+	 * zero entries of the no-PT-page/defensive-leaf shapes.  A
+	 * non-zero emit() verdict aborts the whole fill.
+	 */
+	for (a = addr; a < end;) {
+		unsigned long fe = min(a + PMD_SIZE, end);
+		pmd_t *pmdp = corten_arena_pmd(mm, a);
+		pte_t *ptep;
+		spinlock_t *ptl;
+		pmd_t pmd;
+
+		ptep = NULL;
+		if (pmdp) {
+			pmd = READ_ONCE(*pmdp);
+			if (pmd_present(pmd) && !pmd_leaf(pmd))
+				ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
+		}
+		if (ptep) {
+			pte_t *locked = ptep;
+
+			err = corten_pagemap_fill_pt(carrier, ptep, &a, fe,
+						     show_pfn, emit, ctx);
+			pte_unmap_unlock(locked, ptl);
+			cond_resched();
+		} else {
+			/* No PT page (never faulted) or a defensive leaf:
+			 * the window truth there is non-present zero
+			 * entries.
+			 */
+			for (; a != fe; a += PAGE_SIZE) {
+				err = emit(ctx, 0);
+				if (err)
+					return err;
+			}
+		}
+		if (err)
+			return err;
+	}
+	return 0;
 }
 
 int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,

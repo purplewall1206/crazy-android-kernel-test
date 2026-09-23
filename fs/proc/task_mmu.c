@@ -170,6 +170,14 @@ static void unlock_ctx_vma(struct proc_maps_locking_ctx *lock_ctx)
 static inline bool lock_vma_range(struct seq_file *m,
 				  struct proc_maps_locking_ctx *lock_ctx)
 {
+	/* V-C: a MODE mm's walk merges the window row stream, which is
+	 * only stable under mmap_read (region/carrier writers hold
+	 * mmap_write) -- take the lock arm up front instead of the RCU
+	 * per-VMA walk.  Non-MODE mms keep the lockless walk unchanged.
+	 */
+	if (corten_maps_dual_source(lock_ctx->mm))
+		return lock_ctx_mm(lock_ctx) == 0;
+
 	rcu_read_lock();
 	reset_lock_ctx(lock_ctx);
 
@@ -278,6 +286,41 @@ static inline void reacquire_rcu(struct proc_maps_private *priv) {}
 
 #endif /* CONFIG_PER_VMA_LOCK */
 
+/*
+ * V-C: prime the window row stream's lookahead for the walk starting
+ * (or restarting, after a seq buffer refill) at @pos.  The restart
+ * dedup rule mirrors the tree stream's iterator semantics: produce
+ * the first row whose end is past @pos (rows never straddle @pos --
+ * positions are entry ends, and the window/domain spans are disjoint
+ * from the tree's).
+ */
+#ifdef CONFIG_CORTEN_MM_ARENA
+static void corten_maps_prime(struct proc_maps_private *priv,
+			      unsigned long pos)
+{
+	priv->corten_row_valid = false;
+	priv->corten_row_active = false;
+
+	if (!corten_maps_dual_source(priv->lock_ctx.mm))
+		return;
+
+	corten_row_iter_init(&priv->corten_rows);
+	priv->corten_rows.rit.frame = pos >> PMD_SHIFT;
+	while (corten_row_next(priv->lock_ctx.mm, &priv->corten_rows,
+			       &priv->corten_row_peek)) {
+		if (priv->corten_row_peek.end > pos) {
+			priv->corten_row_valid = true;
+			return;
+		}
+	}
+}
+#else
+static inline void corten_maps_prime(struct proc_maps_private *priv,
+				     unsigned long pos)
+{
+}
+#endif
+
 static struct vm_area_struct *proc_get_vma(struct seq_file *m, loff_t *ppos)
 {
 	struct proc_maps_private *priv = m->private;
@@ -292,6 +335,38 @@ retry:
 
 		return vma;
 	}
+
+	/* V-C: merge the window row stream in by start address.  A row
+	 * wins while it starts below the tree's next VMA (or the tree is
+	 * exhausted); the carrier is returned so the .show callbacks can
+	 * spot the row via corten_row_active, and the lookahead advances
+	 * to the stream's next row.
+	 *
+	 * Cursor discipline (the J3 first-row fix): the row promoted into
+	 * corten_row here is the one .show renders -- the lookahead lives
+	 * in corten_row_peek and advances only as a row is actually
+	 * emitted (rendering the advanced head printed every window row
+	 * with the NEXT region's bounds and never printed the first
+	 * one).  last_pos keeps the vanilla end-of-last-shown-record
+	 * invariant (m_start rewinds a seq refill to it, so it must not
+	 * name this row's own end or the refill skips this row), and the
+	 * tree VMA fetched above and outbid here is handed back: the walk
+	 * iterator is re-pinned to the row's end so the next call
+	 * re-fetches that VMA instead of swallowing it.
+	 */
+	if (priv->corten_row_valid &&
+	    (!vma || priv->corten_row_peek.start < vma->vm_start)) {
+		priv->corten_row = priv->corten_row_peek;
+		priv->corten_row_valid =
+			corten_row_next(priv->lock_ctx.mm, &priv->corten_rows,
+					&priv->corten_row_peek);
+		priv->corten_row_active = true;
+		priv->last_pos = *ppos;
+		*ppos = priv->corten_row.end;
+		vma_iter_set(&priv->iter, priv->corten_row.end);
+		return priv->corten_row.ar->carrier;
+	}
+	priv->corten_row_active = false;
 
 	/* Store previous position to be able to restart if needed */
 	priv->last_pos = *ppos;
@@ -347,6 +422,7 @@ static void *m_start(struct seq_file *m, loff_t *ppos)
 	if (last_addr > 0)
 		*ppos = last_addr = priv->last_pos;
 	vma_iter_init(&priv->iter, mm, (unsigned long)last_addr);
+	corten_maps_prime(priv, (unsigned long)last_addr);
 	hold_task_mempolicy(priv);
 	if (last_addr == SENTINEL_VMA_GATE)
 		return get_gate_vma(mm);
@@ -497,6 +573,62 @@ static void show_vma_header_prefix(struct seq_file *m,
 	seq_putc(m, ' ');
 }
 
+/*
+ * V-C: render one window-domain row (MV_VMA_FREE_SPEC.md sec 3.3.1).
+ * Byte-for-byte the shape the shadow-VMA era printed: the region prot
+ * as rwxp (page-level mprotect never split the row, same contract the
+ * shadow-VMA's unsplit flags carried), dev 00:00/ino 0/pgoff 0 for
+ * ANON rows with the [anon:corten_arena] label, and the real
+ * file/offset/path for FILE rows (a punched piece's offset advances
+ * from the region start, exactly like the split VMA's vm_pgoff did).
+ */
+#ifdef CONFIG_CORTEN_MM_ARENA
+static void show_corten_map_row(struct seq_file *m,
+				const struct corten_region_row *row)
+{
+	struct corten_arena *ar = row->ar;
+	vm_flags_t flags = 0;
+	unsigned long long pgoff = 0;
+	unsigned long ino = 0;
+	dev_t dev = 0;
+	struct file *rfile = NULL;
+
+	if (READ_ONCE(ar->rclass) == CORTEN_REGION_FILE) {
+		const struct inode *inode;
+
+		rfile = READ_ONCE(ar->rfile);
+		if (rfile) {
+			inode = file_user_inode(rfile);
+			dev = inode->i_sb->s_dev;
+			ino = inode->i_ino;
+			pgoff = ((unsigned long long)READ_ONCE(ar->rpoff) +
+				 ((row->start - ar->start) >> PAGE_SHIFT)) <<
+				PAGE_SHIFT;
+		}
+	}
+	if (READ_ONCE(ar->prot) & CORTEN_PERM_READ)
+		flags |= VM_READ;
+	if (READ_ONCE(ar->prot) & CORTEN_PERM_WRITE)
+		flags |= VM_WRITE;
+	if (READ_ONCE(ar->prot) & CORTEN_PERM_EXEC)
+		flags |= VM_EXEC;
+
+	show_vma_header_prefix(m, row->start, row->end, flags, pgoff, dev,
+			       ino);
+	seq_pad(m, ' ');
+	if (rfile)
+		seq_path(m, file_user_path(rfile), "\n");
+	else
+		seq_puts(m, CORTEN_REGION_ROW_LABEL);
+	seq_putc(m, '\n');
+}
+#else
+static inline void show_corten_map_row(struct seq_file *m,
+				       const struct corten_region_row *row)
+{
+}
+#endif
+
 static void
 show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
 {
@@ -537,7 +669,13 @@ show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
 
 static int show_map(struct seq_file *m, void *v)
 {
+	struct proc_maps_private *priv = m->private;
 	struct vm_area_struct *vma = v;
+
+	if (priv->corten_row_active) {
+		show_corten_map_row(m, &priv->corten_row);
+		return 0;
+	}
 
 	if (vma_data_pages(vma))
 		show_map_vma(m, vma);
@@ -576,6 +714,13 @@ static int pid_maps_open(struct inode *inode, struct file *file)
 
 static int query_vma_setup(struct proc_maps_locking_ctx *lock_ctx)
 {
+	/* V-C: window rows resolve through the region registry, which is
+	 * only stable under mmap_read -- take the lock arm for MODE mms
+	 * (the RCU walk's carriers are not RCU-published objects).
+	 */
+	if (corten_maps_dual_source(lock_ctx->mm))
+		return lock_ctx_mm(lock_ctx);
+
 	reset_lock_ctx(lock_ctx);
 
 	return 0;
@@ -644,18 +789,75 @@ static struct vm_area_struct *query_vma_find_by_addr(struct proc_maps_locking_ct
 
 #endif  /* CONFIG_PER_VMA_LOCK */
 
-static struct vm_area_struct *query_matching_vma(struct proc_maps_locking_ctx *lock_ctx,
-						 unsigned long addr, u32 flags)
+/*
+ * V-C: merge a window row into the query answer (j2-audit #10).  A
+ * row can only win the covering-or-next race while the tree itself
+ * does not cover @addr and no tree VMA starts before the row.  The
+ * carrier's flags/vm_file carry the same shape the shadow-VMA's
+ * query consumed; @row_hit reports a row answer (@row_out filled).
+ */
+#ifdef CONFIG_CORTEN_MM_ARENA
+static struct vm_area_struct *query_merge_corten_row(struct mm_struct *mm,
+						     unsigned long addr,
+						     struct vm_area_struct *vma,
+						     struct corten_region_row *row_out,
+						     bool *row_hit)
 {
+	*row_hit = false;
+	if (!corten_maps_dual_source(mm))
+		return vma;
+	if (vma && vma->vm_start <= addr)
+		return vma;	/* the tree covers: the row cannot win */
+
+	if (corten_row_query(mm, addr, row_out) &&
+	    (!vma || row_out->start < vma->vm_start)) {
+		*row_hit = true;
+		return row_out->ar->carrier;
+	}
+	return vma;
+}
+#else
+static inline struct vm_area_struct *
+query_merge_corten_row(struct mm_struct *mm, unsigned long addr,
+		       struct vm_area_struct *vma,
+		       struct corten_region_row *row_out, bool *row_hit)
+{
+	*row_hit = false;
+	return vma;
+}
+#endif
+
+static struct vm_area_struct *query_matching_vma(struct proc_maps_locking_ctx *lock_ctx,
+						 unsigned long addr, u32 flags,
+						 struct corten_region_row *row_out,
+						 bool *row_hit)
+{
+	struct mm_struct *mm = lock_ctx->mm;
 	struct vm_area_struct *vma;
 
 next_vma:
+	/* V-C: a COVERING window row wins outright -- tree VMAs never
+	 * overlap row spans, so answering it first keeps the window
+	 * query off find_vma() entirely (J1).  The or-next races below
+	 * still need the tree's candidate.
+	 */
+	*row_hit = false;
+	if (corten_maps_dual_source(mm) &&
+	    corten_row_query(mm, addr, row_out) && row_out->start <= addr) {
+		*row_hit = true;
+		vma = row_out->ar->carrier;
+		goto have_vma;
+	}
+
 	vma = query_vma_find_by_addr(lock_ctx, addr);
 	if (IS_ERR(vma))
 		return vma;
 
+	vma = query_merge_corten_row(mm, addr, vma, row_out, row_hit);
+
 	if (!vma)
 		goto no_vma;
+have_vma:
 
 	/* user requested only file-backed VMA, keep iterating */
 	if ((flags & PROCMAP_QUERY_FILE_BACKED_VMA) && !vma->vm_file)
@@ -684,9 +886,11 @@ next_vma:
 
 skip_vma:
 	/*
-	 * If the user needs closest matching VMA, keep iterating.
+	 * If the user needs closest matching VMA, keep iterating.  A row
+	 * answer's carrier spans the whole region -- a punched piece must
+	 * skip to the ROW's end or the following pieces would be jumped.
 	 */
-	addr = vma->vm_end;
+	addr = *row_hit ? row_out->end : vma->vm_end;
 	if (flags & PROCMAP_QUERY_COVERING_OR_NEXT_VMA)
 		goto next_vma;
 
@@ -699,6 +903,8 @@ static int do_procmap_query(struct mm_struct *mm, void __user *uarg)
 	struct proc_maps_locking_ctx lock_ctx = { .mm = mm };
 	struct procmap_query karg;
 	struct vm_area_struct *vma;
+	struct corten_region_row row = {};
+	bool row_hit = false;
 	struct file *vm_file = NULL;
 	const char *name = NULL;
 	char build_id_buf[BUILD_ID_SIZE_MAX], *name_buf = NULL;
@@ -735,7 +941,8 @@ static int do_procmap_query(struct mm_struct *mm, void __user *uarg)
 		return err;
 	}
 
-	vma = query_matching_vma(&lock_ctx, karg.query_addr, karg.query_flags);
+	vma = query_matching_vma(&lock_ctx, karg.query_addr, karg.query_flags,
+				 &row, &row_hit);
 	if (IS_ERR(vma)) {
 		err = PTR_ERR(vma);
 		vma = NULL;
@@ -761,6 +968,11 @@ static int do_procmap_query(struct mm_struct *mm, void __user *uarg)
 		const struct inode *inode = file_user_inode(vma->vm_file);
 
 		karg.vma_offset = ((__u64)vma->vm_pgoff) << PAGE_SHIFT;
+		/* V-C: a punched piece's offset advances from the region
+		 * start, mirroring the split VMA's vm_pgoff.
+		 */
+		if (row_hit)
+			karg.vma_offset += (row.start - row.ar->start);
 		karg.dev_major = MAJOR(inode->i_sb->s_dev);
 		karg.dev_minor = MINOR(inode->i_sb->s_dev);
 		karg.inode = inode->i_ino;
@@ -778,6 +990,11 @@ static int do_procmap_query(struct mm_struct *mm, void __user *uarg)
 		size_t name_sz = 0;
 
 		get_vma_name(vma, &path, &name, &name_fmt);
+		/* V-C: ANON window rows carry the same label maps prints
+		 * (the shadow-VMA's anon_vma_name spelling).
+		 */
+		if (row_hit && !path && !name_fmt && !name)
+			name = CORTEN_REGION_ROW_LABEL;
 
 		if (path || name_fmt || name) {
 			name_buf = kmalloc(name_buf_sz, GFP_KERNEL);
@@ -1493,6 +1710,37 @@ static int show_smap(struct seq_file *m, void *v)
 	struct vm_area_struct *vma = v;
 	struct mem_size_stats mss = {};
 
+	if (priv->corten_row_active) {
+		struct corten_smap_stats cs = {};
+
+		/* V-C: the window row's PT aggregation (Rss/Pss/
+		 * Anonymous/Swap from the real PTEs; the remaining
+		 * buckets are registered-disclosure zeros).  The header,
+		 * sizes and VmFlags line come from the row/carrier.
+		 */
+		corten_region_smap_stats(priv->lock_ctx.mm,
+					 &priv->corten_row, &cs);
+		show_corten_map_row(m, &priv->corten_row);
+
+		SEQ_PUT_DEC("Size:           ",
+			    priv->corten_row.end - priv->corten_row.start);
+		SEQ_PUT_DEC(" kB\nKernelPageSize: ", PAGE_SIZE);
+		SEQ_PUT_DEC(" kB\nMMUPageSize:    ", PAGE_SIZE);
+		seq_puts(m, " kB\n");
+
+		mss.resident = cs.resident;
+		mss.anonymous = cs.anon;
+		mss.swap = cs.swapped;
+		mss.pss = cs.pss;
+		__show_smap(m, &mss, false);
+
+		seq_puts(m, "THPeligible:           0\n");
+		if (arch_pkeys_enabled())
+			seq_puts(m, "ProtectionKey:         0\n");
+		show_smap_vma_flags(m, priv->corten_row.ar->carrier);
+		return 0;
+	}
+
 	if (!vma_data_pages(vma))
 		goto show_pad;
 
@@ -1548,7 +1796,7 @@ static int show_smaps_rollup(struct seq_file *m, void *v)
 	vma = vma_next(&vmi);
 
 	if (unlikely(!vma))
-		goto empty_set;
+		goto corten_rollup;
 
 	vma_start = vma->vm_start;
 	do {
@@ -1624,7 +1872,31 @@ static int show_smaps_rollup(struct seq_file *m, void *v)
 		}
 	} for_each_vma(vmi, vma);
 
-empty_set:
+corten_rollup:
+	/* V-C: the window rows aggregate into the rollup with the same
+	 * simplified buckets the per-row smaps arm renders (the mmap
+	 * lock is held here -- the row stream's contract).
+	 */
+	if (corten_maps_dual_source(mm)) {
+		struct corten_row_iter it;
+		struct corten_region_row row;
+
+		corten_row_iter_init(&it);
+		while (corten_row_next(mm, &it, &row)) {
+			struct corten_smap_stats cs = {};
+
+			corten_region_smap_stats(mm, &row, &cs);
+			mss.resident += cs.resident;
+			mss.anonymous += cs.anon;
+			mss.swap += cs.swapped;
+			mss.pss += cs.pss;
+			if (!vma_start || row.start < vma_start)
+				vma_start = row.start;
+			if (row.end > last_vma_end)
+				last_vma_end = row.end;
+		}
+	}
+
 	show_vma_header_prefix(m, vma_start, last_vma_end, 0, 0, 0, 0);
 	seq_pad(m, ' ');
 	seq_puts(m, "[rollup]\n");
@@ -1998,6 +2270,17 @@ struct pagemapread {
 
 #define PM_END_OF_BUFFER    1
 
+/* V-C: the window fill (mm/corten_arena.c) spells the entry bits in
+ * its own prefix; pin the two spellings together at compile time so
+ * they can never drift.
+ */
+static_assert(PM_PRESENT == CORTEN_PM_PRESENT);
+static_assert(PM_SWAP == CORTEN_PM_SWAP);
+static_assert(PM_FILE == CORTEN_PM_FILE);
+static_assert(PM_MMAP_EXCLUSIVE == CORTEN_PM_MMAP_EXCLUSIVE);
+static_assert(PM_PFRAME_MASK == CORTEN_PM_PFRAME_MASK);
+static_assert(PSS_SHIFT == CORTEN_PSS_SHIFT);
+
 static inline pagemap_entry_t make_pme(u64 frame, u64 flags)
 {
 	return (pagemap_entry_t) { .pme = (frame & PM_PFRAME_MASK) | flags };
@@ -2018,6 +2301,25 @@ static bool __folio_page_mapped_exclusively(struct folio *folio, struct page *pa
 	return !folio_maybe_mapped_shared(folio);
 }
 
+/* V-C: the emit shim handing the arena's window fill into this
+ * file's pagemap buffer (the entry layout is byte-paired with the
+ * CORTEN_PM_* bits -- static_assert'ed below).
+ */
+#ifdef CONFIG_CORTEN_MM_ARENA
+static int corten_pagemap_emit(void *ctx, u64 pme_val)
+{
+	struct pagemapread *pm = ctx;
+	pagemap_entry_t pme = { .pme = pme_val };
+
+	return add_to_pagemap(&pme, pm);
+}
+#else
+static inline int corten_pagemap_emit(void *ctx, u64 pme_val)
+{
+	return 0;
+}
+#endif
+
 static int pagemap_pte_hole(unsigned long start, unsigned long end,
 			    __always_unused int depth, struct mm_walk *walk)
 {
@@ -2035,6 +2337,32 @@ static int pagemap_pte_hole(unsigned long start, unsigned long end,
 			hole_end = min(end, vma->vm_start);
 		else
 			hole_end = end;
+
+		/* V-C (j2-audit #11): a MODE mm's window-domain hole
+		 * carries its own truth (present/swap bits from the real
+		 * PTEs) -- zero entries only for the tree's own holes and
+		 * the window's parked/never-touched sub-ranges.
+		 */
+		if (hole_end > CORTEN_MODE_WINDOW_START &&
+		    addr < CORTEN_MODE_WINDOW_END &&
+		    corten_maps_dual_source(walk->mm)) {
+			unsigned long wstart = max(addr,
+						   CORTEN_MODE_WINDOW_START);
+			unsigned long wend = min(hole_end,
+						 CORTEN_MODE_WINDOW_END);
+
+			for (; addr < wstart; addr += PAGE_SIZE) {
+				err = add_to_pagemap(&pme, pm);
+				if (err)
+					goto out;
+			}
+			err = corten_pagemap_fill(walk->mm, addr, wend,
+						  pm->show_pfn,
+						  corten_pagemap_emit, pm);
+			if (err)
+				goto out;
+			addr = wend;
+		}
 
 		for (; addr < hole_end; addr += PAGE_SIZE) {
 			err = add_to_pagemap(&pme, pm);
@@ -3498,12 +3826,38 @@ static int show_numa_map(struct seq_file *m, void *v)
 	struct proc_maps_private *proc_priv = &numa_priv->proc_maps;
 	struct vm_area_struct *vma = v;
 	struct numa_maps *md = &numa_priv->md;
-	struct file *file = vma->vm_file;
-	struct mm_struct *mm = vma->vm_mm;
+	struct file *file;
+	struct mm_struct *mm;
 	char buffer[64];
 	struct mempolicy *pol;
 	pgoff_t ilx;
 	int nid;
+
+	if (proc_priv->corten_row_active) {
+		/* V-C: window rows get the simplified disclosure the spec
+		 * registers for numa_maps (MV_VMA_FREE_SPEC.md sec 3.3):
+		 * the header and the task policy, no per-node page walk
+		 * (the window's NUMA story is first-touch, OQ-MV-14).
+		 */
+		const struct corten_region_row *row = &proc_priv->corten_row;
+
+		memset(md, 0, sizeof(*md));
+		mpol_to_str(buffer, sizeof(buffer),
+			    proc_priv->task_mempolicy);
+		seq_printf(m, "%08lx %s", row->start, buffer);
+		if (READ_ONCE(row->ar->rclass) == CORTEN_REGION_FILE &&
+		    READ_ONCE(row->ar->rfile)) {
+			seq_puts(m, " file=");
+			seq_path(m, file_user_path(READ_ONCE(row->ar->rfile)),
+				 "\n\t= ");
+		}
+		seq_printf(m, " kernelpagesize_kB=%lu", PAGE_SIZE >> 10);
+		seq_putc(m, '\n');
+		return 0;
+	}
+
+	file = vma->vm_file;
+	mm = vma->vm_mm;
 
 	if (!mm)
 		return 0;

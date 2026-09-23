@@ -6981,13 +6981,19 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 	/* Untag the address before looking up the VMA */
 	addr = untagged_addr_remote(mm, addr);
 
-	/* Avoid triggering the temporary warning in __get_user_pages */
-	if (!vma_lookup(mm, addr) && !expand_stack(mm, addr)) {
-		/* V-A.3b audit #7, observation only: the remote-access
-		 * short answer (zero bytes) on a MODE mm's window
-		 * domain -- ptrace, /proc/pid/mem and process_vm_* read
-		 * nothing there until V-C routes remote access through
-		 * regions.
+	/* V-C (j2-audit #7): a MODE mm's window-domain address has no
+	 * tree VMA to look up and no stack to expand (expand_stack()
+	 * would drop the mmap_read on failure) -- the GUP loop's
+	 * corten_gup_probe() owns it: an active region pins through the
+	 * carrier, a parked/hole window short-circuits in the loop
+	 * below.  Implant ranges keep the original check (their tree
+	 * VMA is real).
+	 */
+	if (!corten_remote_vm_window(mm, addr) &&
+	    !vma_lookup(mm, addr) && !expand_stack(mm, addr)) {
+		/* V-A.3b audit #7 observation, now the parked/hole shape
+		 * only: the remote-access short answer (zero bytes) on a
+		 * MODE mm's window domain.
 		 */
 		corten_remote_note_window_short(mm, addr);
 		return 0;
@@ -7004,6 +7010,14 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 
 		if (IS_ERR(page)) {
 			/* We might need to expand the stack to access it */
+			if (corten_remote_vm_window(mm, addr)) {
+				/* V-C: the probe already ruled (parked or
+				 * perm-denied window page) -- nothing in
+				 * the tree can change the verdict.
+				 */
+				corten_remote_note_window_short(mm, addr);
+				return buf - old_buf;
+			}
 			vma = vma_lookup(mm, addr);
 			if (!vma) {
 				vma = expand_stack(mm, addr);
@@ -7114,8 +7128,13 @@ static int __copy_remote_vm_str(struct mm_struct *mm, unsigned long addr,
 
 	addr = untagged_addr_remote(mm, addr);
 
-	/* Avoid triggering the temporary warning in __get_user_pages */
-	if (!vma_lookup(mm, addr)) {
+	/* V-C (j2-audit #8): same window rule as __access_remote_vm() --
+	 * the pre-check's vma_lookup() is a guaranteed miss for a MODE
+	 * mm's window; the GUP loop's probe answers (region pin, or
+	 * -EFAULT for parked/hole which is exactly what the pre-check
+	 * would have said).
+	 */
+	if (!corten_remote_vm_window(mm, addr) && !vma_lookup(mm, addr)) {
 		err = -EFAULT;
 		goto out;
 	}

@@ -150,6 +150,29 @@ enum corten_region_class {
 	(CORTEN_RF_SOFTDIRTY | CORTEN_RF_DONTCOPY | CORTEN_RF_WIPEONFORK | \
 	 CORTEN_RF_SEQ_READ | CORTEN_RF_RAND_READ)
 
+/*
+ * pagemap entry bits and the PSS fixed-point shift, shared between the
+ * window fill (mm/corten_arena.c) and the /proc reader
+ * (fs/proc/task_mmu.c).  Numerically identical to that file's
+ * PM_xxx and PSS_SHIFT defines (stable pagemap ABI bits); task_mmu.c
+ * compile-time-pairs them so the two spellings cannot drift.
+ */
+#define CORTEN_PM_PFRAME_BITS		55
+#define CORTEN_PM_PFRAME_MASK		GENMASK_ULL(CORTEN_PM_PFRAME_BITS - 1, 0)
+#define CORTEN_PM_MMAP_EXCLUSIVE	BIT_ULL(56)
+#define CORTEN_PM_FILE			BIT_ULL(61)
+#define CORTEN_PM_SWAP			BIT_ULL(62)
+#define CORTEN_PM_PRESENT		BIT_ULL(63)
+#define CORTEN_PSS_SHIFT		12
+
+/*
+ * The label ANON window rows render under -- the exact byte string the
+ * shadow-VMA era printed through its anon_vma_name ("[anon:%s]" of
+ * mm/corten_arena.c's CORTEN_ARENA_VMA_NAME), kept verbatim so the J3
+ * byte-diff oracle cannot see the source switch.
+ */
+#define CORTEN_REGION_ROW_LABEL		"[anon:corten_arena]"
+
 /**
  * struct corten_arena - descriptor of one declared arena.
  * @start: first VA of the arena (PMD_SIZE aligned).
@@ -485,6 +508,64 @@ enum corten_fault_action {
 					 */
 };
 
+/**
+ * struct corten_region_iter - enumeration cursor of the region registry.
+ * @frame: next 2M frame index to examine.
+ * @last: arena pointer produced by the previous corten_region_next()
+ *        call (the pointer-dedup key: one region spans several frame
+ *        slots and must be produced exactly once).
+ *
+ * Stack-allocate, zero with corten_region_iter_init().
+ *
+ * V-C: the pure-data cursors below (corten_region_iter,
+ * corten_region_row, corten_row_iter, corten_smap_stats) live outside
+ * the CONFIG_CORTEN_MM_ARENA ifdef because fs/proc/internal.h embeds
+ * them by value in struct proc_maps_private; with the arena layer
+ * disabled the =n stubs below keep every consumer a no-op.
+ */
+struct corten_region_iter {
+	unsigned long frame;
+	struct corten_arena *last;
+};
+
+static inline void corten_region_iter_init(struct corten_region_iter *it)
+{
+	it->frame = 0;
+	it->last = NULL;
+}
+
+/** One renderable window-domain row (a region or a punched piece). */
+struct corten_region_row {
+	/** @ar: the owning region record. */
+	struct corten_arena	*ar;
+	/** @start: first VA of the row (page aligned). */
+	unsigned long		start;
+	/** @end: first VA past the row. */
+	unsigned long		end;
+};
+
+/** Row-stream cursor: the region iterator plus the open region state. */
+struct corten_row_iter {
+	/** @rit: underlying region-registry cursor. */
+	struct corten_region_iter rit;
+	/** @ar: region whose rows are being emitted (NULL between). */
+	struct corten_arena	*ar;
+	/** @next: next candidate row start inside @ar. */
+	unsigned long		next;
+};
+
+/** smaps aggregation of one window row (simplified mem_size_stats). */
+struct corten_smap_stats {
+	/** @resident: present non-special PTE bytes (Rss). */
+	unsigned long	resident;
+	/** @anon: present anonymous bytes (Anonymous). */
+	unsigned long	anon;
+	/** @swapped: swap-entry PTE bytes (Swap). */
+	unsigned long	swapped;
+	/** @pss: proportional bytes, PSS_SHIFT fixed point (Pss). */
+	u64		pss;
+};
+
 #ifdef CONFIG_CORTEN_MM_ARENA
 
 /*
@@ -553,26 +634,6 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
  * augmented rbtree, OQ-MV-13) without touching them.
  * ------------------------------------------------------------------
  */
-
-/**
- * struct corten_region_iter - enumeration cursor of the region registry.
- * @frame: next 2M frame index to examine.
- * @last: arena pointer produced by the previous corten_region_next()
- *        call (the pointer-dedup key: one region spans several frame
- *        slots and must be produced exactly once).
- *
- * Stack-allocate, zero with corten_region_iter_init().
- */
-struct corten_region_iter {
-	unsigned long frame;
-	struct corten_arena *last;
-};
-
-static inline void corten_region_iter_init(struct corten_region_iter *it)
-{
-	it->frame = 0;
-	it->last = NULL;
-}
 
 /**
  * corten_region_lookup - resolve the region covering @addr, if any.
@@ -664,6 +725,103 @@ void corten_region_register_file(struct corten_arena *ar, u8 may_prot,
  * arena of the registry.  The caller holds mmap_lock for read.
  */
 bool corten_region_invariants_ok(struct mm_struct *mm);
+
+/*
+ * ------------------------------------------------------------------ *
+ * V-C dual-source /proc rendering (MV_VMA_FREE_SPEC.md sec 3.3.1):
+ * the window-domain row stream.  A "row" is one renderable piece of
+ * one region -- the whole region while it is unpunched, each surviving
+ * sub-span when a MAP_FIXED punch carved legacy implants out of it
+ * (the shadow era rendered the same split through its tree VMA
+ * pieces).  Rows are produced in ascending address order, skipping
+ * parked regions (S-4: a parked window was munmapped, rendering it
+ * would lie) and tree-anchored targeted-DECLARE arenas (their
+ * shadow-VMA is the tree stream's own row).
+ *
+ * Locking: the caller holds mmap_lock for read or better (the row
+ * walk reads frame slots, implant ranges and carrier pointers, all of
+ * whose writers hold mmap_lock for writing).
+ * ------------------------------------------------------------------
+ */
+
+/**
+ * corten_row_iter_init - initialise a row-stream cursor.
+ * @it: the cursor to zero.
+ */
+void corten_row_iter_init(struct corten_row_iter *it);
+
+/**
+ * corten_row_next - produce the next window row in address order.
+ * @mm: address space whose regions to walk.
+ * @it: the caller's cursor (advanced by the call).
+ * @row: receives the produced row.
+ *
+ * Return: true and fills @row, or false when the stream is exhausted.
+ */
+bool corten_row_next(struct mm_struct *mm, struct corten_row_iter *it,
+		     struct corten_region_row *row);
+
+/**
+ * corten_row_query - first window row with row->end > @addr (the
+ * covering-or-next shape find_vma() gives the tree stream).
+ * @mm: address space to query.
+ * @addr: the probe address.
+ * @row: receives the answer.
+ *
+ * Return: true and fills @row, or false (no window row at/after @addr).
+ */
+bool corten_row_query(struct mm_struct *mm, unsigned long addr,
+		      struct corten_region_row *row);
+
+/**
+ * corten_maps_dual_source - should a /proc walk of @mm merge the
+ * window row stream?  True for a MODE mm (the only producer of
+ * carrier regions).  Such walks take the mmap_read locking arm: the
+ * window stream is only stable under it (carriers are created and
+ * freed under mmap_lock for writing), and it keeps the per-VMA-lock
+ * RCU walk -- whose lock_next_vma() would be a guaranteed window
+ * miss -- out of the J1 ledger.
+ */
+bool corten_maps_dual_source(struct mm_struct *mm);
+
+/**
+ * corten_region_smap_stats - PT aggregation of one window row.
+ * @mm: address space (the row's owner).
+ * @row: the row to aggregate (from corten_row_next/query()).
+ * @out: receives the counters (zeroed by the call).
+ *
+ * Walks the row's PTEs under the PTE lock (INV6 discipline, the
+ * mincore-fill skeleton): present pages count Rss/Anonymous and the
+ * mapcount-proportional Pss, swap entries count Swap.  The
+ * debugfs-same-source aggregation basis of MV_VMA_FREE_SPEC.md sec 3.3.1
+ * -- the smaps buckets beyond Rss/Pss/Anonymous/Swap stay zero on
+ * window rows (registered disclosure, not parity claims).
+ */
+void corten_region_smap_stats(struct mm_struct *mm,
+			      const struct corten_region_row *row,
+			      struct corten_smap_stats *out);
+
+/**
+ * corten_pagemap_fill - pagemap truth of a window-domain span.
+ * @mm: address space.
+ * @addr: span start (page aligned).
+ * @end: span end (page aligned, > @addr).
+ * @show_pfn: CAP_SYS_ADMIN pfn disclosure (the pagemap reader's).
+ * @emit: per-page entry callback (add_to_pagemap shape); a non-zero
+ *        return aborts the walk and is passed through.
+ * @ctx: @emit's opaque context.
+ *
+ * Fills the span [addr, end) with pagemap entries derived from the
+ * real PTEs (present/swap bits, pfn under @show_pfn, the
+ * PM_FILE/PM_MMAP_EXCLUSIVE classification): the frame-table truth a
+ * MODE mm's window pages carry, where the generic walk would see only
+ * a VMA hole.  All PTE reads take the PTE lock.
+ *
+ * Return: 0, or the non-zero @emit return verbatim.
+ */
+int corten_pagemap_fill(struct mm_struct *mm, unsigned long addr,
+			unsigned long end, bool show_pfn,
+			int (*emit)(void *ctx, u64 pme), void *ctx);
 
 /**
  * corten_prctl_arena - prctl(PR_CORTEN_ARENA) dispatcher.
@@ -786,6 +944,14 @@ long corten_arena_test_j2_first_violation(void);
 long corten_arena_test_fault_fallback_window(void);
 long corten_arena_test_uffd_rejects(void);
 
+/* V-C observation counters: GUP-slow window probes (carrier answers
+ * and loud window rejects) and the dual-source window rows produced
+ * for maps/smaps/PROCMAP_QUERY readers.
+ */
+long corten_arena_test_gup_probes(void);
+long corten_arena_test_gup_probe_rejects(void);
+long corten_arena_test_maps_window_rows(void);
+
 /* V-B.2 (H7) hooks: the file-event route counter (truncate/invalidation
  * events handed to the chunk-zap transaction) and the zap backstop
  * (must stay 0 -- every hit is a routing hole).
@@ -857,6 +1023,8 @@ static inline struct corten_arena *corten_region_lookup(struct mm_struct *mm,
 }
 
 struct corten_region_iter;
+struct corten_region_row;
+struct corten_row_iter;
 
 static inline struct corten_arena *
 corten_region_next(struct mm_struct *mm, struct corten_region_iter *it)
@@ -879,6 +1047,44 @@ corten_region_register_file(struct corten_arena *ar, u8 may_prot, u32 rflags,
 static inline bool corten_region_invariants_ok(struct mm_struct *mm)
 {
 	return true;
+}
+
+static inline void corten_row_iter_init(struct corten_row_iter *it)
+{
+}
+
+static inline bool corten_row_next(struct mm_struct *mm,
+				   struct corten_row_iter *it,
+				   struct corten_region_row *row)
+{
+	return false;
+}
+
+static inline bool corten_row_query(struct mm_struct *mm,
+				    unsigned long addr,
+				    struct corten_region_row *row)
+{
+	return false;
+}
+
+static inline bool corten_maps_dual_source(struct mm_struct *mm)
+{
+	return false;
+}
+
+static inline void corten_region_smap_stats(struct mm_struct *mm,
+					    const struct corten_region_row *row,
+					    struct corten_smap_stats *out)
+{
+}
+
+static inline int corten_pagemap_fill(struct mm_struct *mm,
+				      unsigned long addr, unsigned long end,
+				      bool show_pfn,
+				      int (*emit)(void *ctx, u64 pme),
+				      void *ctx)
+{
+	return 0;
 }
 
 static inline enum corten_fault_action
