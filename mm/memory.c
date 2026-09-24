@@ -7003,10 +7003,11 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 	/* V-C (j2-audit #7): a MODE mm's window-domain address has no
 	 * tree VMA to look up and no stack to expand (expand_stack()
 	 * would drop the mmap_read on failure) -- the GUP loop's
-	 * corten_gup_probe() owns it: an active region pins through the
-	 * carrier, a parked/hole window short-circuits in the loop
-	 * below.  Implant ranges keep the original check (their tree
-	 * VMA is real).
+	 * corten_gup_window() owns it (MV2 W-2: the carrier answer
+	 * retired with the carrier; an active region pins through the
+	 * corten arm's follow), a parked/hole window short-circuits in
+	 * the loop below.  Implant ranges keep the original check
+	 * (their tree VMA is real).
 	 */
 	if (!corten_remote_vm_window(mm, addr) &&
 	    !vma_lookup(mm, addr) && !expand_stack(mm, addr)) {

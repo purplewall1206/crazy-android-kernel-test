@@ -364,7 +364,11 @@ retry:
 		priv->last_pos = *ppos;
 		*ppos = priv->corten_row.end;
 		vma_iter_set(&priv->iter, priv->corten_row.end);
-		return priv->corten_row.ar->carrier;
+		/* MV2 W-2: NULL -- the row arm of .show renders from the
+		 * record; the carrier pointer it returned as the render
+		 * context is retired.
+		 */
+		return NULL;
 	}
 	priv->corten_row_active = false;
 
@@ -583,11 +587,38 @@ static void show_vma_header_prefix(struct seq_file *m,
  * from the region start, exactly like the split VMA's vm_pgoff did).
  */
 #ifdef CONFIG_CORTEN_MM_ARENA
+/* MV2 W-2: the row's flag word, derived from the record -- the render
+ * context the carrier VMA used to provide is retired with it.
+ */
+static vm_flags_t corten_row_flags(const struct corten_region_row *row)
+{
+	struct corten_arena *ar = row->ar;
+	vm_flags_t flags = VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC |
+			   VM_NORESERVE;
+
+	if (READ_ONCE(ar->prot) & CORTEN_PERM_READ)
+		flags |= VM_READ;
+	if (READ_ONCE(ar->prot) & CORTEN_PERM_WRITE)
+		flags |= VM_WRITE;
+	if (READ_ONCE(ar->prot) & CORTEN_PERM_EXEC)
+		flags |= VM_EXEC;
+
+	return flags;
+}
+
+/* The row's backing file (NULL for anon/reserved). */
+static struct file *corten_row_file(const struct corten_region_row *row)
+{
+	if (READ_ONCE(row->ar->rclass) == CORTEN_REGION_FILE)
+		return READ_ONCE(row->ar->rfile);
+	return NULL;
+}
+
 static void show_corten_map_row(struct seq_file *m,
 				const struct corten_region_row *row)
 {
 	struct corten_arena *ar = row->ar;
-	vm_flags_t flags = 0;
+	vm_flags_t flags = corten_row_flags(row);
 	unsigned long long pgoff = 0;
 	unsigned long ino = 0;
 	dev_t dev = 0;
@@ -606,12 +637,6 @@ static void show_corten_map_row(struct seq_file *m,
 				PAGE_SHIFT;
 		}
 	}
-	if (READ_ONCE(ar->prot) & CORTEN_PERM_READ)
-		flags |= VM_READ;
-	if (READ_ONCE(ar->prot) & CORTEN_PERM_WRITE)
-		flags |= VM_WRITE;
-	if (READ_ONCE(ar->prot) & CORTEN_PERM_EXEC)
-		flags |= VM_EXEC;
 
 	show_vma_header_prefix(m, row->start, row->end, flags, pgoff, dev,
 			       ino);
@@ -811,8 +836,10 @@ static struct vm_area_struct *query_merge_corten_row(struct mm_struct *mm,
 
 	if (corten_row_query(mm, addr, row_out) &&
 	    (!vma || row_out->start < vma->vm_start)) {
-		*row_hit = true;
-		return row_out->ar->carrier;
+		/* MV2 W-2: NULL -- the row fields render from the record
+		 * (the carrier render context is retired).
+		 */
+		return NULL;
 	}
 	return vma;
 }
@@ -844,8 +871,8 @@ next_vma:
 	*row_hit = false;
 	if (corten_maps_dual_source(mm) &&
 	    corten_row_query(mm, addr, row_out) && row_out->start <= addr) {
+		/* MV2 W-2: NULL, the record answers (see above). */
 		*row_hit = true;
-		vma = row_out->ar->carrier;
 		goto have_vma;
 	}
 
@@ -860,11 +887,14 @@ next_vma:
 have_vma:
 
 	/* user requested only file-backed VMA, keep iterating */
-	if ((flags & PROCMAP_QUERY_FILE_BACKED_VMA) && !vma->vm_file)
+	if ((flags & PROCMAP_QUERY_FILE_BACKED_VMA) &&
+	    !(*row_hit ? corten_row_file(row_out) : vma->vm_file))
 		goto skip_vma;
 
 	/* VMA permissions should satisfy query flags */
 	if (flags & PROCMAP_QUERY_VMA_FLAGS) {
+		vm_flags_t vflags = *row_hit ? corten_row_flags(row_out) :
+					       vma->vm_flags;
 		u32 perm = 0;
 
 		if (flags & PROCMAP_QUERY_VMA_READABLE)
@@ -876,12 +906,13 @@ have_vma:
 		if (flags & PROCMAP_QUERY_VMA_SHARED)
 			perm |= VM_MAYSHARE;
 
-		if ((vma->vm_flags & perm) != perm)
+		if ((vflags & perm) != perm)
 			goto skip_vma;
 	}
 
 	/* found covering VMA or user is OK with the matching next VMA */
-	if ((flags & PROCMAP_QUERY_COVERING_OR_NEXT_VMA) || vma->vm_start <= addr)
+	if ((flags & PROCMAP_QUERY_COVERING_OR_NEXT_VMA) ||
+	    (*row_hit || vma->vm_start <= addr))
 		return vma;
 
 skip_vma:
@@ -949,38 +980,54 @@ static int do_procmap_query(struct mm_struct *mm, void __user *uarg)
 		goto out;
 	}
 
-	karg.vma_start = vma->vm_start;
-	karg.vma_end = vma->vm_end;
+	/* MV2 W-2: a row answer renders every field from the record --
+	 * the carrier vma the reads used to ride is retired.
+	 */
+	karg.vma_start = row_hit ? row.start : vma->vm_start;
+	karg.vma_end = row_hit ? row.end : vma->vm_end;
 
 	karg.vma_flags = 0;
-	if (vma->vm_flags & VM_READ)
-		karg.vma_flags |= PROCMAP_QUERY_VMA_READABLE;
-	if (vma->vm_flags & VM_WRITE)
-		karg.vma_flags |= PROCMAP_QUERY_VMA_WRITABLE;
-	if (vma->vm_flags & VM_EXEC)
-		karg.vma_flags |= PROCMAP_QUERY_VMA_EXECUTABLE;
-	if (vma->vm_flags & VM_MAYSHARE)
-		karg.vma_flags |= PROCMAP_QUERY_VMA_SHARED;
+	{
+		vm_flags_t vflags = row_hit ? corten_row_flags(&row) :
+					      vma->vm_flags;
 
-	karg.vma_page_size = vma_kernel_pagesize(vma);
+		if (vflags & VM_READ)
+			karg.vma_flags |= PROCMAP_QUERY_VMA_READABLE;
+		if (vflags & VM_WRITE)
+			karg.vma_flags |= PROCMAP_QUERY_VMA_WRITABLE;
+		if (vflags & VM_EXEC)
+			karg.vma_flags |= PROCMAP_QUERY_VMA_EXECUTABLE;
+		if (vflags & VM_MAYSHARE)
+			karg.vma_flags |= PROCMAP_QUERY_VMA_SHARED;
+	}
 
-	if (vma->vm_file) {
-		const struct inode *inode = file_user_inode(vma->vm_file);
+	karg.vma_page_size = PAGE_SIZE;
 
-		karg.vma_offset = ((__u64)vma->vm_pgoff) << PAGE_SHIFT;
-		/* V-C: a punched piece's offset advances from the region
-		 * start, mirroring the split VMA's vm_pgoff.
-		 */
-		if (row_hit)
-			karg.vma_offset += (row.start - row.ar->start);
-		karg.dev_major = MAJOR(inode->i_sb->s_dev);
-		karg.dev_minor = MINOR(inode->i_sb->s_dev);
-		karg.inode = inode->i_ino;
-	} else {
-		karg.vma_offset = 0;
-		karg.dev_major = 0;
-		karg.dev_minor = 0;
-		karg.inode = 0;
+	{
+		struct file *qfile = row_hit ? corten_row_file(&row) :
+					       vma->vm_file;
+
+		if (qfile) {
+			const struct inode *inode = file_user_inode(qfile);
+
+			karg.vma_offset = ((__u64)(row_hit ?
+						   READ_ONCE(row.ar->rpoff) :
+						   vma->vm_pgoff)) << PAGE_SHIFT;
+			/* V-C: a punched piece's offset advances from the
+			 * region start, mirroring the split VMA's vm_pgoff.
+			 */
+			if (row_hit)
+				karg.vma_offset += (row.start -
+						    row.ar->start);
+			karg.dev_major = MAJOR(inode->i_sb->s_dev);
+			karg.dev_minor = MINOR(inode->i_sb->s_dev);
+			karg.inode = inode->i_ino;
+		} else {
+			karg.vma_offset = 0;
+			karg.dev_major = 0;
+			karg.dev_minor = 0;
+			karg.inode = 0;
+		}
 	}
 
 	if (karg.vma_name_size) {
@@ -989,7 +1036,15 @@ static int do_procmap_query(struct mm_struct *mm, void __user *uarg)
 		const char *name_fmt;
 		size_t name_sz = 0;
 
-		get_vma_name(vma, &path, &name, &name_fmt);
+		if (row_hit) {
+			struct file *rfile = corten_row_file(&row);
+
+			path = rfile ? file_user_path(rfile) : NULL;
+			name_fmt = NULL;
+			name = NULL;
+		} else {
+			get_vma_name(vma, &path, &name, &name_fmt);
+		}
 		/* V-C: ANON window rows carry the same label maps prints
 		 * (the shadow-VMA's anon_vma_name spelling).
 		 */
@@ -1021,8 +1076,16 @@ static int do_procmap_query(struct mm_struct *mm, void __user *uarg)
 		karg.vma_name_size = name_sz;
 	}
 
-	if (karg.build_id_size && vma->vm_file)
-		vm_file = get_file(vma->vm_file);
+	/* The build_id parse runs past the teardown, so it needs the
+	 * file reference (MV2 W-2: a row's file is the record's rfile).
+	 */
+	if (karg.build_id_size && !vm_file) {
+		struct file *qfile = row_hit ? corten_row_file(&row) :
+					       vma->vm_file;
+
+		if (qfile)
+			vm_file = get_file(qfile);
+	}
 
 	/* unlock vma or mmap_lock, and put mm_struct before copying data to user */
 	query_vma_teardown(&lock_ctx);
@@ -1398,7 +1461,8 @@ out:
 	return 0;
 }
 
-static void show_smap_vma_flags(struct seq_file *m, struct vm_area_struct *vma)
+static void show_smap_vma_flags_word(struct seq_file *m, vm_flags_t flags,
+				     unsigned long pad)
 {
 	/*
 	 * Don't forget to update Documentation/ on changes.
@@ -1481,7 +1545,6 @@ static void show_smap_vma_flags(struct seq_file *m, struct vm_area_struct *vma)
 		[ilog2(VM_SEALED)] = "sl",
 #endif
 	};
-	unsigned long pad_pages = vma_pad_pages(vma);
 	size_t i;
 
 	seq_puts(m, "VmFlags: ");
@@ -1490,13 +1553,18 @@ static void show_smap_vma_flags(struct seq_file *m, struct vm_area_struct *vma)
 			continue;
 		if ((1UL << i) & VM_PAD_MASK)
 			continue;
-		if (vma->vm_flags & (1UL << i))
+		if (flags & (1UL << i))
 			seq_printf(m, "%s ", mnemonics[i]);
 	}
-	if (pad_pages)
-		seq_printf(m, "pad=%lukB", pad_pages << (PAGE_SHIFT - 10));
+	if (pad)
+		seq_printf(m, "pad=%lukB", pad << (PAGE_SHIFT - 10));
 
 	seq_putc(m, '\n');
+}
+
+static void show_smap_vma_flags(struct seq_file *m, struct vm_area_struct *vma)
+{
+	show_smap_vma_flags_word(m, vma->vm_flags, vma_pad_pages(vma));
 }
 
 #ifdef CONFIG_HUGETLB_PAGE
@@ -1737,7 +1805,8 @@ static int show_smap(struct seq_file *m, void *v)
 		seq_puts(m, "THPeligible:           0\n");
 		if (arch_pkeys_enabled())
 			seq_puts(m, "ProtectionKey:         0\n");
-		show_smap_vma_flags(m, priv->corten_row.ar->carrier);
+		show_smap_vma_flags_word(m, corten_row_flags(&priv->corten_row),
+					 0);
 		return 0;
 	}
 

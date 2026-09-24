@@ -313,7 +313,17 @@ struct corten_arena {
 	loff_t			rpoff;	  /* FILE class: start page offset */
 	unsigned int		npieces;  /* >1 = punched multi-piece */
 	struct list_head	rpieces;  /* piece list; empty if <=1 */
-	struct vm_area_struct	*carrier; /* sec 2.3 detached VMA (V-A.2b) */
+	/* MV2 W-2: the detached carrier is retired -- an auto arena is
+	 * now wholly vma-less (the region record + the frames + the
+	 * metadata are the whole object).  @auto_shape survives as the
+	 * record of which declare/take arm took the vm_stat_account()
+	 * charge: an auto window's pages are refounded by no tree VMA,
+	 * so RELEASE hands the charge back itself (a shadow piece's
+	 * charge rides the VMA the munmap funnel refunds).  A shadow
+	 * arena's anchor is its tree shadow-VMA (@vma) and stays there
+	 * until W-4 sweeps the tree.
+	 */
+	bool			auto_shape;
 	struct list_head	rfile_node; /* W1.b per-inode registry node */
 	struct corten_inode_regions *rinodes; /* W1.b registry head */
 
@@ -943,11 +953,12 @@ long corten_arena_test_seg_claims(void);
 long corten_arena_test_va_recycles(void);
 
 /* T1c pool hooks: the named counters, the pool occupancy of @mm's
- * registry, and the parked-state probe for one frame.
+ * registry, and the parked-state probe for one frame.  MV2 W-2: the
+ * carrier probe retired with the object -- the tests read the region
+ * record itself.
  */
-struct vm_area_struct *corten_arena_test_carrier_of(struct mm_struct *mm,
-						    unsigned long addr);
-long corten_arena_test_carriers(void);
+struct corten_arena *corten_arena_test_region_of(struct mm_struct *mm,
+						 unsigned long addr);
 long corten_arena_test_auto_vgate(void);
 long corten_arena_test_j1_probes(void);
 long corten_arena_test_j1_hits(void);

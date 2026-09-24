@@ -1920,6 +1920,43 @@ void folio_remove_file_rmap_novma(struct folio *folio)
 	if (atomic_add_negative(-1, &folio->_mapcount))
 		__lruvec_stat_mod_folio(folio, NR_FILE_MAPPED, -1);
 }
+
+/*
+ * MV2 W-2: the fork-dup shapes of the same order-0 branches -- the
+ * corten-owned window copy arm duplicates a mapping at fork instead of
+ * folio_try_dup_anon_rmap_pte()/folio_dup_file_rmap_pte(), whose vma
+ * arguments and folio_test_anon() family guards an unanchored folio
+ * cannot serve (mapping == NULL reads as file and would misfile the
+ * caller's rss bookkeeping, W1_NATIVE_RMAP_SPEC.md fact F7).  The
+ * GUP-pinned "try" verdict belongs to the caller: it decides
+ * share-vs-copy before reaching here, so the dup is unconditional.
+ * No lruvec stat: like upstream's dup, the shared mapping neither
+ * enters nor leaves a stat bucket (first/last-mapper bookkeeping).
+ */
+void folio_dup_anon_rmap_novma(struct folio *folio, struct page *page)
+{
+	__folio_rmap_sanity_checks(folio, page, 1, PGTABLE_LEVEL_PTE);
+	VM_WARN_ON_FOLIO(folio_test_large(folio), folio);
+	/* If anchored at all, anchored as anon (R-W1-4, as above). */
+	VM_WARN_ON_FOLIO(folio->mapping && !folio_test_anon(folio), folio);
+
+	/* Order-0 branch of __folio_try_dup_anon_rmap(): the mapping is
+	 * about to become shared, so the exclusive mark must go.
+	 */
+	if (PageAnonExclusive(page))
+		ClearPageAnonExclusive(page);
+	atomic_inc(&folio->_mapcount);
+}
+
+void folio_dup_file_rmap_novma(struct folio *folio)
+{
+	__folio_rmap_sanity_checks(folio, &folio->page, 1, PGTABLE_LEVEL_PTE);
+	VM_WARN_ON_FOLIO(folio_test_large(folio), folio);
+	/* __folio_dup_file_rmap()'s family guard, mirrored. */
+	VM_WARN_ON_FOLIO(folio_test_anon(folio), folio);
+
+	atomic_inc(&folio->_mapcount);
+}
 #endif /* CONFIG_CORTEN_MM_ARENA */
 
 static inline unsigned int folio_unmap_pte_batch(struct folio *folio,

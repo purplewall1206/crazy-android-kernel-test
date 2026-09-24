@@ -699,32 +699,32 @@ void corten_remote_note_window_short(struct mm_struct *mm,
 				     unsigned long addr);
 
 /*
- * V-C GUP-slow MODE branch (j2-audit #3/#7/#8, MV_VMA_FREE_SPEC.md
- * sec 3.3.2).  corten_gup_probe() sits in front of gup_vma_lookup()'s
- * find_vma(): for a MODE mm's window-domain address it answers from
- * the region registry so the tree is never walked (J1 stays zero).
+ * V-C GUP-slow MODE branch, MV2 W-2 form (j2-audit #3/#7/#8,
+ * MV_VMA_FREE_SPEC.md sec 3.3.2).  corten_gup_window() sits in front
+ * of gup_vma_lookup()'s find_vma() inside __get_user_pages(): a MODE
+ * mm's window-domain address is answered from the region registry and
+ * its own page tables so the tree is never walked (J1 stays zero).
+ * The carrier answer it replaces is retired with the carrier -- a
+ * window has no vm_area_struct for the generic loop to consume any
+ * more (the D28 criterion), so this arm IS the walk: the
+ * check_vma_flags() emulation (recorded perm, region class for
+ * FOLL_ANON), the follow_page_pte() order-0 shape with the PTE/folio
+ * verdicts, and the arena fault route for the faultin leg.
  *
- * Returns the region's carrier (the walk proceeds on it exactly like
- * it did on the shadow-VMA: check_vma_flags()'s corten_own arm, the
- * PTE follow and the faultin slow hook all take the carrier
- * verbatim), NULL when the address is not the window stream's to
- * answer (non-MODE, outside the window, or an implant range whose
- * real tree VMA find_vma() must find), or ERR_PTR(-EFAULT) for the
- * window shapes whose tree lookup is a guaranteed miss (parked S-1
- * window, magazine reserve, hole) -- the errno check_vma_flags()'s
- * own miss would have produced.  One emulation corner the carrier's
- * shape cannot express: FOLL_ANON on a FILE region answers -EFAULT
- * (check_vma_flags()' vma_is_anonymous() verdict).
+ * Return: 0 = answered (the grabbed page in *@pagep when the caller
+ * asked for pages), a negative errno (-EFAULT for the parked S-1 /
+ * magazine reserve / hole shapes -- find_vma()'s own miss errno --
+ * -ENOMEM, -EHWPOISON, -EINTR, -EAGAIN), or 1 when the address is not
+ * the window stream's to answer (non-MODE, outside the window, an
+ * implant range or a tree-anchored arena): the legacy walk owns it.
  *
- * Carrier lifetime: the caller holds mmap_lock for read (the
- * __get_user_pages contract); carriers are created and freed only
- * under mmap_lock for writing, and an arena fault never returns
- * VM_FAULT_RETRY (the mm/memory.c slow-hook contract), so the carrier
- * pointer is never carried across a lock drop.
+ * Lifetime: the caller holds mmap_lock for read (the __get_user_pages
+ * contract) and the arena fault never returns VM_FAULT_RETRY (the
+ * mm/memory.c slow-hook contract, P2-6), so no reference is carried
+ * across a lock drop.
  */
-struct vm_area_struct *corten_gup_probe(struct mm_struct *mm,
-					unsigned long addr,
-					unsigned int gup_flags);
+int corten_gup_window(struct mm_struct *mm, unsigned long addr,
+		      unsigned int gup_flags, struct page **pagep);
 
 /*
  * V-C #7/#8: true for a MODE mm's window-domain address that no tree
@@ -908,8 +908,9 @@ bool corten_rmap_unmap_one(struct folio *folio, struct vm_area_struct *vma,
  * metadata = CORTEN_SWAPPED); false = declined inside the transaction
  * (metadata shape, PTE mismatch, -EAGAIN/-ENOMEM), nothing written.
  */
-bool corten_rmap_swap_out(struct folio *folio, struct vm_area_struct *vma,
-			  unsigned long address, bool defer, pte_t *old_pte);
+bool corten_rmap_swap_out(struct folio *folio, struct mm_struct *mm,
+			  struct vm_area_struct *vma, unsigned long address,
+			  bool defer, pte_t *old_pte);
 
 /*
  * W1.e1 (W1_NATIVE_RMAP_SPEC.md sec 3.4): the native anonymous swap-out
@@ -1026,6 +1027,16 @@ void folio_add_anon_rmap_novma(struct folio *folio);
 void folio_remove_anon_rmap_novma(struct folio *folio);
 void folio_add_file_rmap_novma(struct folio *folio);
 void folio_remove_file_rmap_novma(struct folio *folio);
+
+/*
+ * MV2 W-2: the fork-dup shapes of the same family -- the corten-owned
+ * window copy arm duplicates a mapping at fork.  The GUP-pinned
+ * share-vs-copy verdict belongs to the caller; the dup is a bare
+ * order-0 mapcount bump (plus the anon exclusive-mark clear), no stat
+ * either way (first/last-mapper bookkeeping, like upstream's dup).
+ */
+void folio_dup_anon_rmap_novma(struct folio *folio, struct page *page);
+void folio_dup_file_rmap_novma(struct folio *folio);
 
 /*
  * M6.T2 eviction driver (spec slice table: "debugfs evict N pages
@@ -1234,6 +1245,7 @@ static inline bool corten_rmap_unmap_one(struct folio *folio,
 }
 
 static inline bool corten_rmap_swap_out(struct folio *folio,
+					struct mm_struct *mm,
 					struct vm_area_struct *vma,
 					unsigned long address, bool defer,
 					pte_t *old_pte)
@@ -1282,6 +1294,16 @@ static inline void folio_add_file_rmap_novma(struct folio *folio)
 }
 
 static inline void folio_remove_file_rmap_novma(struct folio *folio)
+{
+}
+
+/* MV2 W-2: the fork-dup shapes (no arena, nothing borrows _mapcount). */
+static inline void folio_dup_anon_rmap_novma(struct folio *folio,
+					     struct page *page)
+{
+}
+
+static inline void folio_dup_file_rmap_novma(struct folio *folio)
 {
 }
 
@@ -1385,11 +1407,12 @@ static inline void corten_remote_note_window_short(struct mm_struct *mm,
 {
 }
 
-static inline struct vm_area_struct *
-corten_gup_probe(struct mm_struct *mm, unsigned long addr,
-		 unsigned int gup_flags)
+static inline int corten_gup_window(struct mm_struct *mm,
+				    unsigned long addr,
+				    unsigned int gup_flags,
+				    struct page **pagep)
 {
-	return NULL;
+	return 1;	/* no arena mode: the legacy walk owns it */
 }
 
 static inline bool corten_remote_vm_window(struct mm_struct *mm,

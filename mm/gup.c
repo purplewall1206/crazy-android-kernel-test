@@ -1297,31 +1297,18 @@ static struct vm_area_struct *gup_vma_lookup(struct mm_struct *mm,
 	 unsigned long addr, unsigned int gup_flags)
 {
 #ifdef CONFIG_STACK_GROWSUP
-	struct vm_area_struct *vma = corten_gup_probe(mm, addr, gup_flags);
-
-	if (!IS_ERR_OR_NULL(vma))
-		return vma;
 	return vma_lookup(mm, addr);
 #else
 	static volatile unsigned long next_warn;
 	struct vm_area_struct *vma;
 	unsigned long now, next;
 
-	/* V-C (j2-audit #3, MV_VMA_FREE_SPEC.md sec 3.3.2): a MODE mm's
-	 * window-domain address resolves through the region registry
-	 * BEFORE the tree walk -- the carrier comes back here (the rest
-	 * of __get_user_pages consumes it exactly like the shadow-VMA it
-	 * replaced), and a window reject falls into the NULL arm below
-	 * so the caller answers find_vma()'s own miss errno without the
-	 * walk (J1 stays zero).  Only the tree's own addresses (implants
-	 * included) reach find_vma().
+	/* MV2 W-2: the V-C probe (a MODE window's carrier answer) retired
+	 * with the carrier -- window addresses are answered before this
+	 * lookup by corten_gup_window(), so a window domain never reaches
+	 * find_vma() (J1 stays zero) and only the tree's own addresses
+	 * (implants included) walk below.
 	 */
-	vma = corten_gup_probe(mm, addr, gup_flags);
-	if (IS_ERR(vma))
-		return NULL;	/* parked/hole window: -EFAULT below */
-	if (vma)
-		return vma;
-
 	vma = find_vma(mm, addr);
 	if (!vma || addr >= vma->vm_start)
 		return vma;
@@ -1443,6 +1430,23 @@ static long __get_user_pages(struct mm_struct *mm,
 				}
 				goto retry;
 			}
+#ifdef CONFIG_CORTEN_MM_ARENA
+			/* MV2 W-2: a MODE window page has no VMA anywhere
+			 * (the detached carrier retired) -- the corten arm
+			 * answers it entirely, probe (check_vma_flags
+			 * emulation) + follow + fault on the region record
+			 * and the page tables.  1 = not a window address:
+			 * the tree walk below owns it.
+			 */
+			ret = corten_gup_window(mm, start, gup_flags,
+						pages ? &page : NULL);
+			if (ret != 1) {
+				if (ret)
+					goto out;
+				page_mask = 0;
+				goto next_page;
+			}
+#endif
 			vma = gup_vma_lookup(mm, start, gup_flags);
 			if (!vma && in_gate_area(mm, start)) {
 				ret = get_gate_page(mm, start & PAGE_MASK,

@@ -2065,7 +2065,6 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm, *child;
-	struct vm_area_struct *carrier;
 	struct corten_pte_meta m;
 	struct corten_arena *ar;
 	struct file *file;
@@ -2131,11 +2130,9 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, ar->rpoff, pgoff);
 	rcu_read_unlock();
 
-	carrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_WIN);
-	KUNIT_ASSERT_NOT_NULL(test, carrier);
-	KUNIT_EXPECT_PTR_EQ(test, carrier->vm_file, file);
-	KUNIT_EXPECT_EQ(test, carrier->vm_pgoff, pgoff);
-
+	/* MV2 W-2: the pairing is the record itself (rfile/rpoff above);
+	 * no carrier object mirrors it any more.
+	 */
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
 	mmap_read_unlock(mm);
@@ -2167,10 +2164,6 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 		KUNIT_EXPECT_FALSE(test, corten_region_invariants_ok(mm));
 		WRITE_ONCE(ar->rfile, rfile);
 
-		WRITE_ONCE(carrier->vm_pgoff, pgoff + 1);
-		KUNIT_EXPECT_FALSE(test, corten_region_invariants_ok(mm));
-		WRITE_ONCE(carrier->vm_pgoff, pgoff);
-
 		WRITE_ONCE(ar->rclass, CORTEN_REGION_ANON);
 		KUNIT_EXPECT_FALSE(test, corten_region_invariants_ok(mm));
 		WRITE_ONCE(ar->rclass, CORTEN_REGION_FILE);
@@ -2182,8 +2175,8 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 	/* Registry visibility (W1.b): the region is a member of the
 	 * mapping's per-inode registry -- the interval-tree membership
 	 * became this list link, and the invalidation enumeration reads
-	 * exactly it.  The carrier is NOT in i_mmap anymore (the flip's
-	 * structural assertion).
+	 * exactly it.  No window object ever joined i_mmap (W1.b's flip,
+	 * and since MV2 W-2 there is no window object at all).
 	 */
 	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
 	i_mmap_lock_read(mapping);
@@ -2193,8 +2186,8 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 	i_mmap_unlock_read(mapping);
 
 	/* Park (the munmap full-coverage shape): the payload dies with
-	 * the park -- reference back, carrier disarmed, registry empty,
-	 * window reusable as the ANON contract.
+	 * the park -- reference back, the record's payload cleared,
+	 * registry empty, window reusable as the ANON contract.
 	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
@@ -2205,7 +2198,6 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 			  corten_arena_test_pool_idle(mm,
 						      CORTEN_ARENA_TEST_WIN));
 	KUNIT_EXPECT_EQ(test, file_count(file), base);
-	KUNIT_EXPECT_NULL(test, carrier->vm_file);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 0);
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
@@ -2257,8 +2249,9 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
 
 	/* Fork: the child mirrors the payload -- its own reference (same
-	 * file object), the same pgoff, a FILE carrier of its own; the
-	 * child's exit (the mm_exit arm) drops the mirror.
+	 * file object), the same pgoff (the record's rfile/rpoff, MV2
+	 * W-2: no carrier object); the child's exit (the mm_exit arm)
+	 * drops the mirror.
 	 */
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 	KUNIT_EXPECT_EQ(test,
@@ -2273,11 +2266,6 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
 	KUNIT_EXPECT_EQ(test, file_count(file), base + 2);
 
-	carrier = corten_arena_test_carrier_of(child,
-					       CORTEN_ARENA_TEST_WIN);
-	KUNIT_ASSERT_NOT_NULL(test, carrier);
-	KUNIT_EXPECT_PTR_EQ(test, carrier->vm_file, file);
-	KUNIT_EXPECT_EQ(test, carrier->vm_pgoff, pgoff);
 	mmap_read_lock(child);
 	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(child));
 	mmap_read_unlock(child);
@@ -2327,7 +2315,7 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
  * through the bare legacy PTE writer; both backstops -- the
  * zap_page_range_single refusal and the demoted i_mmap-keyed gate
  * (stale-node shape, must stay zero-hit after the flip) -- refuse a
- * carrier loudly; the B.1 dark-gate fault verdict (SEGV_MAPERR)
+ * stale VM_CORTEN vma loudly; the B.1 dark-gate fault verdict (SEGV_MAPERR)
  * survives the demotion instead of synthesizing anonymous zero pages.
  * ------------------------------------------------------------------
  */
@@ -2335,7 +2323,7 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
-	struct vm_area_struct *carrier, *plain;
+	struct vm_area_struct *synth, *plain;
 	const unsigned long pgoff = 3;
 	struct address_space *mapping;
 	struct corten_pte_meta m;
@@ -2360,8 +2348,6 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 			corten_arena_test_file_attach(mm,
 						      CORTEN_ARENA_TEST_WIN,
 						      file, pgoff), 0);
-	carrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_WIN);
-	KUNIT_ASSERT_NOT_NULL(test, carrier);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
 
 	/* Pre-state: the whole region is the B.1 FILE_MAPPED virtual
@@ -2373,9 +2359,9 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, m.perm, CORTEN_PERM_READ | CORTEN_PERM_EXEC |
 				       CORTEN_PERM_USER);
 
-	/* The backstop's negative arm: a plain (non-carrier) VMA is none
-	 * of its business -- both the direct call and the zap backstop
-	 * stay quiet, and the legacy zap of an untouched range changes
+	/* The backstop's negative arm: a plain VMA is none of its
+	 * business -- both the direct call and the zap backstop stay
+	 * quiet, and the legacy zap of an untouched range changes
 	 * nothing.
 	 */
 	plain = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
@@ -2413,7 +2399,6 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 			  vma_interval_tree_iter_first(&mapping->i_mmap, pgoff,
 						       pgoff));
 	i_mmap_unlock_read(mapping);
-	KUNIT_EXPECT_PTR_EQ(test, carrier->vm_file, file);
 	KUNIT_EXPECT_EQ(test, file_count(file), base + 1);
 
 	/* Re-fault on a demoted slot: V-B.3's rclass-aware FRESH arm
@@ -2477,7 +2462,7 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
 
 	/* Single-folio invalidation (the hwpoison/migrate re-check shape):
-	 * a locked pagecache folio inside the second carrier's window
+	 * a locked pagecache folio inside the second region's window
 	 * re-invalidates one page -- the registry arm derives the
 	 * one-page window range from folio->index (the first region's
 	 * rpoff=3 window misses the [2,2] event by derivation alone).
@@ -2502,12 +2487,22 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 	folio_unlock(folio);
 	folio_put(folio);
 
-	/* The zap backstop's negative sample: a carrier arriving at the
-	 * bare legacy writer is refused, counted, and changes nothing --
-	 * the still-FILE_MAPPED slot must survive the refused zap
-	 * verbatim.
+	/* The zap backstop's positive sample (MV2 W-2 form): a VM_CORTEN
+	 * tree VMA (the shadow-piece shape -- the carrier that used to
+	 * play it is retired) arriving at the bare legacy writer is
+	 * refused, counted, and changes nothing -- the still-FILE_MAPPED
+	 * slot must survive the refused zap verbatim.
 	 */
-	zap_page_range_single(carrier, CORTEN_ARENA_TEST_START2 + PAGE_SIZE,
+	synth = corten_arena_test_mkvm(mm,
+				       CORTEN_ARENA_TEST_START2 +
+				       2 * PMD_SIZE,
+				       CORTEN_ARENA_TEST_START2 +
+				       2 * PMD_SIZE + PAGE_SIZE,
+				       CORTEN_ARENA_TEST_FLAGS_OK |
+				       VM_CORTEN | VM_NOHUGEPAGE);
+	KUNIT_ASSERT_NOT_NULL(test, synth);
+	zap_page_range_single(synth,
+			      CORTEN_ARENA_TEST_START2 + PAGE_SIZE,
 			      PAGE_SIZE, NULL);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_zap_single_refuses(),
 			refuses + 1);
@@ -2519,10 +2514,11 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 
 	/* The demoted i_mmap-keyed gate (W1.b): after the flip it answers
 	 * zero hits on every real event (asserted above), and a direct
-	 * carrier hand-over -- the B.2 shape that cannot occur anymore --
-	 * is refused, counted and inert, exactly like the zap backstop.
+	 * stale-VM_CORTEN-vma hand-over -- the B.2 shape that cannot
+	 * occur anymore -- is refused, counted and inert, exactly like
+	 * the zap backstop.
 	 */
-	KUNIT_EXPECT_TRUE(test, corten_arena_imap_stale_guard(carrier));
+	KUNIT_EXPECT_TRUE(test, corten_arena_imap_stale_guard(synth));
 	KUNIT_EXPECT_EQ(test, corten_arena_test_imap_stale_refuses(),
 			stales + 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(), routes + 3);
@@ -2530,6 +2526,8 @@ static void corten_arena_test_truncate_route(struct kunit *test)
 			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_START2 +
 						  PAGE_SIZE, &m), 0);
 	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	corten_arena_test_unmap(mm, CORTEN_ARENA_TEST_START2 + 2 * PMD_SIZE,
+				PAGE_SIZE);
 
 	/* The registry is still INV-MV3 clean after the whole event
 	 * family, and the teardown returns the ledger.
@@ -2657,22 +2655,28 @@ static void corten_arena_test_registry_inval(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
 
 	/* The flip's zero-hit anchor: no event above ever surfaced a
-	 * carrier through the legacy i_mmap walk, and the demoted gate
-	 * refuses the direct B.2 hand-over (a shape that cannot occur
-	 * anymore) without touching any slot.
+	 * window through the legacy i_mmap walk, and the demoted gate
+	 * refuses the direct stale-VM_CORTEN-vma hand-over (a shape that
+	 * cannot occur anymore, played by a synthetic shadow-piece VMA
+	 * since MV2 W-2 retired the carrier) without touching any slot.
 	 */
 	{
-		struct vm_area_struct *carrier;
+		struct vm_area_struct *synth;
 
-		carrier = corten_arena_test_carrier_of(mm,
-						       CORTEN_ARENA_TEST_WIN);
-		KUNIT_ASSERT_NOT_NULL(test, carrier);
+		synth = corten_arena_test_mkvm(mm,
+					       CORTEN_ARENA_TEST_START2 +
+					       2 * PMD_SIZE,
+					       CORTEN_ARENA_TEST_START2 +
+					       2 * PMD_SIZE + PAGE_SIZE,
+					       CORTEN_ARENA_TEST_FLAGS_OK |
+					       VM_CORTEN | VM_NOHUGEPAGE);
+		KUNIT_ASSERT_NOT_NULL(test, synth);
 		i_mmap_lock_read(mapping);
 		KUNIT_EXPECT_NULL(test,
 				  vma_interval_tree_iter_first(&mapping->i_mmap,
 							       0, ULONG_MAX));
 		i_mmap_unlock_read(mapping);
-		KUNIT_EXPECT_TRUE(test, corten_arena_imap_stale_guard(carrier));
+		KUNIT_EXPECT_TRUE(test, corten_arena_imap_stale_guard(synth));
 		KUNIT_EXPECT_EQ(test, corten_arena_test_imap_stale_refuses(),
 				stales + 1);
 		KUNIT_EXPECT_EQ(test, corten_arena_test_truncate_routes(),
@@ -2682,6 +2686,9 @@ static void corten_arena_test_registry_inval(struct kunit *test)
 						       CORTEN_ARENA_TEST_WIN,
 						       &m), 0);
 		KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+		corten_arena_test_unmap(mm,
+					CORTEN_ARENA_TEST_START2 +
+					2 * PMD_SIZE, PAGE_SIZE);
 	}
 
 	/* Teardown symmetry: A's park unlinks its node (B stays), the
@@ -2718,7 +2725,7 @@ static void corten_arena_test_registry_inval(struct kunit *test)
 /* V-B.4: the file rss family of a mapping -- mm_counter_file()'s answer
  * for its folios (a shmem/tmpfs host is MM_SHMEMPAGES, a real file
  * MM_FILEPAGES).  The read arm, the COW split and the fork PTE copy
- * (copy_page_range over the carriers) all account this family; the
+ * (the W-2 window copy arm) all account this family; the
  * B.3-era everything-is-FILEPAGES spelling drifted the child's counters
  * against its own zap at fork time.
  */
@@ -2740,7 +2747,6 @@ static void corten_arena_test_file_read(struct kunit *test)
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
 	struct address_space *mapping;
-	struct vm_area_struct *carrier;
 	struct corten_pte_meta m;
 	struct file *file;
 	struct folio *folio;
@@ -2773,8 +2779,6 @@ static void corten_arena_test_file_read(struct kunit *test)
 			corten_arena_test_file_attach(mm,
 						      CORTEN_ARENA_TEST_WIN,
 						      file, 0), 0);
-	carrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_WIN);
-	KUNIT_ASSERT_NOT_NULL(test, carrier);
 	filepg_family = corten_arena_test_file_rss(mapping);
 	filepg = corten_arena_test_mm_counter(mm, filepg_family);
 
@@ -3113,7 +3117,7 @@ static void corten_arena_test_file_cow(struct kunit *test)
 	 * the reclaim arm) spares the private copies -- a file-driven
 	 * unmap_mapping_pages over pgoff 0 leaves the COWed MAPPED slot
 	 * and its content alone (should_zap_cows()'s verdict).  Both
-	 * regions' carriers sit on pgoff 0, so the event routes twice;
+	 * regions sit on pgoff 0, so the event routes twice;
 	 * START2's FILE_MAPPED virtual allocation demotes (that side is
 	 * the file's business), WIN's private copy survives verbatim.
 	 */
@@ -3604,12 +3608,12 @@ static void corten_arena_test_ttu_file_route(struct kunit *test)
  * keeps its folio_mapped -> -EBUSY terminal state -- identical to the
  * pre-upgrade behavior, registered), and migration of a window file
  * page stays structurally excluded -- post-W1.b the migrate walker's
- * i_mmap walk cannot even produce the carrier, so the M6.T1 guard is
- * no longer the defense there; the folio_mapped() verdict at the
- * migrate callers is (the guard itself stays armed for the anon leg
- * and keeps answering "refuse" when driven directly).  A mapping with
- * no corten regions costs one xarray probe: ttu behaves exactly
- * upstream.
+ * i_mmap walk cannot even produce a window mapping (and since MV2 W-2
+ * there is no window object at all), so the M6.T1 guard is no longer
+ * the defense there; the folio_mapped() verdict at the migrate callers
+ * is (the guard itself stays armed for the shadow/anon leg and keeps
+ * answering "refuse" when driven directly).  A mapping with no corten
+ * regions costs one xarray probe: ttu behaves exactly upstream.
  * ------------------------------------------------------------------
  */
 static void corten_arena_test_ttu_declines(struct kunit *test)
@@ -3617,7 +3621,7 @@ static void corten_arena_test_ttu_declines(struct kunit *test)
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
 	struct corten_arena_test_op omap, ounmap;
-	struct vm_area_struct *carrier, *legacy;
+	struct vm_area_struct *synth, *legacy;
 	struct address_space *mapping, *mapping2;
 	struct corten_pte_meta m;
 	struct file *file, *file2;
@@ -3647,8 +3651,17 @@ static void corten_arena_test_ttu_declines(struct kunit *test)
 			corten_arena_test_file_attach(mm,
 						      CORTEN_ARENA_TEST_WIN,
 						      file, 0), 0);
-	carrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_WIN);
-	KUNIT_ASSERT_NOT_NULL(test, carrier);
+	/* MV2 W-2: the guard-drive sample is a synthetic VM_CORTEN tree
+	 * VMA (the shadow-piece shape -- the carrier is retired).
+	 */
+	synth = corten_arena_test_mkvm(mm,
+				       CORTEN_ARENA_TEST_START2 +
+				       2 * PMD_SIZE,
+				       CORTEN_ARENA_TEST_START2 +
+				       2 * PMD_SIZE + PAGE_SIZE,
+				       CORTEN_ARENA_TEST_FLAGS_OK |
+				       VM_CORTEN | VM_NOHUGEPAGE);
+	KUNIT_ASSERT_NOT_NULL(test, synth);
 	fflags = 0;
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
@@ -3698,7 +3711,7 @@ static void corten_arena_test_ttu_declines(struct kunit *test)
 	 * driven directly (the anon leg's posture; the file side no
 	 * longer needs it, the count documents the difference).
 	 */
-	KUNIT_EXPECT_FALSE(test, corten_rmap_unmap_one(folio, carrier,
+	KUNIT_EXPECT_FALSE(test, corten_rmap_unmap_one(folio, synth,
 						       CORTEN_ARENA_TEST_WIN,
 						       0, true));
 	KUNIT_EXPECT_EQ(test,
@@ -3754,6 +3767,9 @@ static void corten_arena_test_ttu_declines(struct kunit *test)
 	folio_put(folio2);
 	fput(file2);
 
+	corten_arena_test_unmap(mm,
+				CORTEN_ARENA_TEST_START2 + 2 * PMD_SIZE,
+				PAGE_SIZE);
 	folio_put(folio);
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
@@ -3778,7 +3794,6 @@ static void corten_arena_test_file_fork_mirror(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm, *child;
-	struct vm_area_struct *carrier, *ccarrier;
 	struct address_space *mapping;
 	struct corten_pte_meta m;
 	struct corten_arena *ar;
@@ -3823,8 +3838,6 @@ static void corten_arena_test_file_fork_mirror(struct kunit *test)
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_named_counter(test, "file_mmaps"),
 			mmaps + 1);
-	carrier = corten_arena_test_carrier_of(mm, addr);
-	KUNIT_ASSERT_NOT_NULL(test, carrier);
 
 	/* The resident page: the read arm's install on the pagecache
 	 * folio (mapcount 1, the parent's PTE the only mapper).  The
@@ -3854,8 +3867,9 @@ static void corten_arena_test_file_fork_mirror(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, pte_present(pte) && !pte_write(pte));
 	KUNIT_EXPECT_EQ(test, pte_pfn(pte), folio_pfn);
 
-	/* Fork: register_child mirrors the payload, copy_page_range rides
-	 * the carrier pair, the window pass replays the metadata.
+	/* Fork: register_child mirrors the payload, the corten window
+	 * copy arm rides the page tables (MV2 W-2), the window pass
+	 * replays the metadata.
 	 */
 	child = mm_alloc();
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
@@ -3886,17 +3900,17 @@ static void corten_arena_test_file_fork_mirror(struct kunit *test)
 	KUNIT_EXPECT_PTR_EQ(test, ar->rfile, file);
 	KUNIT_EXPECT_EQ(test, ar->rpoff, pgoff);
 	rcu_read_unlock();
-	ccarrier = corten_arena_test_carrier_of(child, addr);
-	KUNIT_ASSERT_NOT_NULL(test, ccarrier);
-	KUNIT_EXPECT_PTR_EQ(test, ccarrier->vm_file, file);
-	KUNIT_EXPECT_EQ(test, ccarrier->vm_pgoff, pgoff);
+	/* MV2 W-2: the mirror is the record itself -- no carrier object
+	 * carries a second copy of the pairing.
+	 */
 	mmap_read_lock(child);
 	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(child));
 	mmap_read_unlock(child);
 
 	/* Both regions are registry members (W1.b): the fork duplication
-	 * of the publish pairing, parent and child alike.  No carrier is
-	 * an i_mmap member anymore.
+	 * of the publish pairing, parent and child alike.  No window
+	 * object is an i_mmap member (and since MV2 W-2 no window object
+	 * exists).
 	 */
 	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 2);
 	i_mmap_lock_read(mapping);
@@ -4415,8 +4429,8 @@ static void corten_arena_test_file_hugetlb_route(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, lenp, 2 * PAGE_SIZE);
 	KUNIT_EXPECT_EQ(test, flags, MAP_PRIVATE);
 	KUNIT_EXPECT_NULL(test,
-			  corten_arena_test_carrier_of(mm,
-						       CORTEN_ARENA_TEST_WIN));
+			  corten_arena_test_region_of(mm,
+						      CORTEN_ARENA_TEST_WIN));
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_named_counter(test, "file_mmaps"),
 			mmaps);
@@ -4507,13 +4521,10 @@ static int corten_arena_test_fork_seed_mapped(struct mm_struct *mm,
 	int ret;
 
 	vma = vma_lookup(mm, addr);
-	if (!vma)
-		/* V-A.2b: an auto arena's rmap anchor is its detached
-		 * carrier -- seed onto it, exactly like map_anon().
-		 */
-		vma = corten_arena_test_carrier_of(mm, addr);
-	if (!vma)
-		return -ENOENT;
+	/* MV2 W-2: an auto arena has no anchor vma -- the seed rides the
+	 * same novma forms (pte_mkwrite_novma + the W1.a add wrapper)
+	 * map_anon() runs for it.
+	 */
 
 	folio = folio_alloc(GFP_KERNEL | __GFP_ZERO, 0);
 	if (!folio)
@@ -4552,9 +4563,17 @@ static int corten_arena_test_fork_seed_mapped(struct mm_struct *mm,
 		return -EAGAIN;
 	}
 	pgprot = vm_get_page_prot(VM_READ | VM_WRITE);
-	entry = pte_mkwrite(pte_mkdirty(mk_pte(page, pgprot)), vma);
+	entry = mk_pte(page, pgprot);
+	entry = pte_mkdirty(entry);
+	if (vma)
+		entry = pte_mkwrite(entry, vma);
+	else
+		entry = pte_mkwrite_novma(entry);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
-	folio_add_new_anon_rmap(folio, vma, addr, RMAP_EXCLUSIVE);
+	if (vma)
+		folio_add_new_anon_rmap(folio, vma, addr, RMAP_EXCLUSIVE);
+	else
+		folio_add_anon_rmap_novma(folio);
 	set_ptes(mm, addr, ptep, entry, 1);
 	pte_unmap_unlock(ptep, ptl);
 
@@ -8747,8 +8766,6 @@ static void corten_arena_test_mincore_route(struct kunit *test)
 		pmd_t *pmdp = corten_arena_test_pmd(mm, win + PAGE_SIZE);
 
 		KUNIT_ASSERT_NOT_NULL(test, pmdp);
-		vma = corten_arena_test_carrier_of(mm, win + PAGE_SIZE);
-		KUNIT_ASSERT_NOT_NULL(test, vma);
 		ptep = pte_offset_map_lock(mm, pmdp, win + PAGE_SIZE, &ptl);
 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
 		pte = ptep_get_and_clear(mm, win + PAGE_SIZE, ptep);
@@ -8756,7 +8773,10 @@ static void corten_arena_test_mincore_route(struct kunit *test)
 		set_pte_at(mm, win + PAGE_SIZE, ptep, swp_entry_to_pte(entry));
 		pte_unmap_unlock(ptep, ptl);
 		folio = page_folio(pte_page(pte));
-		folio_remove_rmap_pte(folio, folio_page(folio, 0), vma);
+		/* MV2 W-2: the fault-installed window folio is unanchored
+		 * (the novma add) -- its removal is the novma wrapper.
+		 */
+		folio_remove_anon_rmap_novma(folio);
 		add_mm_counter(mm, MM_ANONPAGES, -1);
 		add_mm_counter(mm, MM_SWAPENTS, 1);
 		folio_put(folio);
@@ -9449,12 +9469,11 @@ static void corten_arena_test_fork_vma_free(struct kunit *test)
  * 前置: pool 复活窗（无 VMA）+ 一页 rmap-less 驻留内容（map_anon 的
  * 无 VMA 形态: 计数 +1、无 folio_add_new_anon_rmap）。
  */
-/* F1 重写: 同一 declare→park→re-declare 构造, 但修复后的前提是
- * reactivate 无条件重武装 carrier -- 活窗不再 anchor-less。  该形状
- * 因此与 carrier_shrink_pick 同为 pick 放行形态; B1 的 ptl 纪律回归锚
- * （两遍 scan 走 pick 路径, 不再出现解锁后二次解锁）保留, 内容改用
- * 真实 fault（rmap 锚在重武装的 carrier 上, 不能再用 rmap-less 植入
- * -- 那是在有锚窗口上制造 B1 修复所要杜绝的 freed-under-live-PTE）。
+/* F1/W-2 重写: 同一 declare→park→re-declare 构造。  W-2 后活窗无锚
+ * 对象（carrier 退役, auto_shape 记录入档）, pick 门随之摘除 -- 该
+ * 形状与 carrier_shrink_pick 同为 pick 放行形态; B1 的 ptl 纪律回归
+ * 锚（两遍 scan 走 pick 路径, 不再出现解锁后二次解锁）保留, 内容用
+ * 真实 fault（novma rmap 记账, 与 map_anon 的 vma-less 形态一致）。
  */
 static void corten_arena_test_vma_free_shrink_pick(struct kunit *test)
 {
@@ -9483,10 +9502,8 @@ static void corten_arena_test_vma_free_shrink_pick(struct kunit *test)
 
 	/* Park + DECLARE-side reactivation: the arena is live and
 	 * VMA-less (no tree shadow -- the park removed it), and since
-	 * F1 re-arms unconditionally it CARRIES a carrier: the
-	 * anchor-less mixed state this test used to assert is gone
-	 * (its fork shape lost content -- see
-	 * corten_arena_test_fork_redeclare_content).
+	 * MV2 W-2 it has NO anchor object at all (the reactivation is a
+	 * pure metadata flip recording the auto shape).
 	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
@@ -9497,13 +9514,15 @@ static void corten_arena_test_vma_free_shrink_pick(struct kunit *test)
 			corten_arena_declare(mm, CORTEN_ARENA_TEST_WIN,
 					     PMD_SIZE), 0);
 	KUNIT_EXPECT_NOT_NULL(test,
-			      corten_arena_test_carrier_of(mm,
-							   CORTEN_ARENA_TEST_WIN));
+			      corten_arena_test_region_of(mm,
+							  CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_region_of(mm,
+							    CORTEN_ARENA_TEST_WIN)->auto_shape);
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
 	mmap_read_unlock(mm);
 
-	/* One resident page, rmap-anchored on the re-armed carrier. */
+	/* One resident page, novma-rmap-accounted (the W-2 flip). */
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_user_fault(mm, addr, 0, NULL,
 						&fault_flags),
@@ -9538,11 +9557,11 @@ static void corten_arena_test_vma_free_shrink_pick(struct kunit *test)
 						 0, 0), 0);
 }
 
-/* V-A.2b: the carrier reopens the pick gate -- a carrier arena's
- * faulted page is rmap-anchored, so the pick runs (no skip), the ttu
- * leg of reclaim finds its mapping, and without swap the page comes
- * back kept: translation, metadata and folio intact, refcount
- * restored.
+/* MV2 W-2: an auto arena's faulted page is novma-accounted and the
+ * W1.e2 anchorless pick gate is retired with the carrier, so the pick
+ * runs (no skip), the driver resolves the window on its vma-less
+ * forms, and without swap the page comes back kept: translation,
+ * metadata and folio intact, refcount restored.
  */
 static void corten_arena_test_carrier_shrink_pick(struct kunit *test)
 {
@@ -9565,7 +9584,7 @@ static void corten_arena_test_carrier_shrink_pick(struct kunit *test)
 			corten_arena_test_pool_attach(mm, CORTEN_ARENA_TEST_WIN,
 						      PMD_SIZE), 0);
 
-	/* Real fault content: map_anon() anchored it on the carrier. */
+	/* Real fault content: map_anon() novma-accounted it (W-2). */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_user_fault(mm, addr, 0, NULL,
 						&fault_flags),
@@ -9641,60 +9660,22 @@ static int corten_arena_test_page_word(struct mm_struct *mm,
 	return ret;
 }
 
-/* C1 回归锚: fork 子 carrier 的 anon_vma 链必须是 dup_mmap 同形 --
- * 恰好两条（克隆到父 carrier 的 anon_vma + 子自己的 fork 根）, 绝无
- * 第三条来自 alloc 侧 prepare 的孤儿链。  孤儿根的 num_active_vmas
- * 无人回减, unlink_anon_vmas() pass-2 在 CONFIG_DEBUG_VM 下 WARN
- * （本轮基线实测还先触发 rmap.c lock_anon_vma_root 的 WARN_ON_ONCE
- * (root) -- 同一根因）; 裸化（fork 侧 alloc 跳过 prepare）后链形
- * 唯一, 两个锚的 active 计数各自恰好为 1。
+/* C1 回归锚（MV2 W-2 重写）: fork 子侧镜像即 region record
+ * （auto_shape/vma 配对）-- anon_vma 链形锚随 carrier 退役（auto 窗
+ * 无锚对象, 子侧无 anon_vma 树可对拍; shadow 侧仍走 dup_mmap 的
+ * 原生链形, 由上游自证）。
  */
-static void corten_arena_test_child_carrier_chain(struct kunit *test,
-						  struct vm_area_struct *ccarrier,
-						  struct vm_area_struct *pcarrier)
-{
-	struct anon_vma_chain *avc;
-	int nr = 0;
-	bool parent_link = false, own_link = false;
-
-	KUNIT_ASSERT_NOT_NULL(test, ccarrier->anon_vma);
-	KUNIT_ASSERT_NOT_NULL(test, pcarrier->anon_vma);
-	KUNIT_EXPECT_TRUE(test, ccarrier->anon_vma != pcarrier->anon_vma);
-
-	list_for_each_entry(avc, &ccarrier->anon_vma_chain, same_vma) {
-		nr++;
-		if (avc->anon_vma == pcarrier->anon_vma)
-			parent_link = true;
-		if (avc->anon_vma == ccarrier->anon_vma)
-			own_link = true;
-	}
-	KUNIT_EXPECT_EQ(test, nr, 2);
-	KUNIT_EXPECT_TRUE(test, parent_link);
-	KUNIT_EXPECT_TRUE(test, own_link);
-	KUNIT_EXPECT_TRUE(test,
-			  ccarrier->anon_vma->parent == pcarrier->anon_vma);
-	KUNIT_EXPECT_TRUE(test,
-			  ccarrier->anon_vma->root == pcarrier->anon_vma->root);
-	/* Each anchor's active count is exactly its one carrier -- the
-	 * WARN shape is an orphan with a count nothing will drop.
-	 */
-	KUNIT_EXPECT_EQ(test, ccarrier->anon_vma->num_active_vmas, 1);
-	KUNIT_EXPECT_EQ(test, pcarrier->anon_vma->num_active_vmas, 1);
-}
-
-/* F1 回归锚（阻断项）: declare→park→re-declare 混合构造的 fork 内容
- * 继承。  修复前 reactivate 对 declare 侧（novma=false）不重武装
- * carrier -- 活窗无锚, fork_mirror 既不跳过也不复制（copy_page_range
- * 无源）, 子窗真空, 首次 fault 拿全新页: fork 对私有匿名内存的继承
- * 语义被静默破坏（A.1 的 novma 复制臂删除后该形状失去一切覆盖）。
- * 修复后 reactivate 无条件重武装: 子窗逐页内容非空且与父窗 checksum
- * 一致（M5 判据 1 口径）, 父窗内容 fork 后原样。
+/* F1/W-2 回归锚（阻断项）: declare→park→re-declare 混合构造的 fork
+ * 内容继承。  W-2 后 reactivate 是纯 metadata 翻转（无锚对象可重武
+ * 装）, fork 的 PTE 复制由 corten 自有窗口拷贝臂承担（novma rmap 对
+ * 账）: 子窗逐页内容非空且与父窗 checksum 一致（M5 判据 1 口径）,
+ * 父窗内容 fork 后原样。
  */
 static void corten_arena_test_fork_redeclare_content(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm, *child;
-	struct vm_area_struct *pcarrier, *ccarrier;
+	struct corten_arena *par;
 	struct corten_pte_meta m;
 	unsigned long addr;
 	long timeouts = corten_arena_test_drain_timeouts();
@@ -9727,21 +9708,23 @@ static void corten_arena_test_fork_redeclare_content(struct kunit *test)
 						 CORTEN_ARENA_TEST_LEN), 1);
 
 	/* Re-declare the same window: declare_locked's pool probe
-	 * short-circuits the reactivation before any vma_lookup -- F1
-	 * makes it re-arm the carrier unconditionally, so the live
-	 * window is VMA-less but anchored.
+	 * short-circuits the reactivation before any vma_lookup -- MV2
+	 * W-2 makes it a pure metadata flip: the live window is
+	 * VMA-less with no anchor object, its record stamped auto.
 	 */
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
 					     CORTEN_ARENA_TEST_LEN), 0);
-	pcarrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_BASE);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pcarrier);
+	par = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_BASE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, par);
+	KUNIT_EXPECT_TRUE(test, par->auto_shape);
+	KUNIT_EXPECT_NULL(test, READ_ONCE(par->vma));
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_BASE));
 	mmap_read_unlock(mm);
 
-	/* Content: FRESH write faults through the carrier anchor, then
-	 * a distinct pattern at both ends of every page of the first
+	/* Content: FRESH write faults through the novma install, then a
+	 * distinct pattern at both ends of every page of the first
 	 * window (page-granular, per-page checksum).
 	 */
 	for (i = 0; i < CORTEN_ARENA_TEST_PAGES; i++) {
@@ -9784,18 +9767,23 @@ static void corten_arena_test_fork_redeclare_content(struct kunit *test)
 
 	/* No parked arenas left (the slot was reactivated), so the flush
 	 * is a no-op and the mirror runs inline like fork_vma_free; no
-	 * child VMA exists -- the carrier pair carries the copy.
+	 * child VMA exists -- the corten copy arm carries the copy (the
+	 * W-2 fork: the carrier pair it replaced is retired).
 	 */
 	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
 
 	KUNIT_EXPECT_EQ(test, corten_arena_query(child,
 						 CORTEN_ARENA_TEST_BASE), 1);
-	ccarrier = corten_arena_test_carrier_of(child, CORTEN_ARENA_TEST_BASE);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ccarrier);
+	{
+		struct corten_arena *car;
 
-	/* C1: the child carrier's chain is the dup_mmap shape. */
-	corten_arena_test_child_carrier_chain(test, ccarrier, pcarrier);
+		car = corten_arena_test_region_of(child,
+						  CORTEN_ARENA_TEST_BASE);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, car);
+		KUNIT_EXPECT_TRUE(test, car->auto_shape);
+		KUNIT_EXPECT_NULL(test, READ_ONCE(car->vma));
+	}
 
 	/* 逐页校验: 子窗每页两端内容非空且与父窗 checksum 一致 --
 	 * the pre-fix shape answered zero pages (silent data loss).
@@ -9946,90 +9934,63 @@ static void corten_arena_test_auto_validate(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, READ_ONCE(mm->corten_state));
 }
 
-/* V-A.2b: the detached carrier -- creation shape, detachment
- * assertions, the total_vm charge the declare now owes, and the
- * lifecycle (RELEASE frees the carrier; park/reactivate keeps it).
+/* MV2 W-2: the auto arena is wholly vma-less (the D28 criterion) --
+ * no detached object is allocated (vm_area_alloc count stays flat),
+ * the region record carries the whole shape (auto_shape, no tree
+ * shadow), the total_vm charge the takeover owes still lands, and
+ * RELEASE refunds it and retires the record.
  */
 static void corten_arena_test_carrier_vma(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
-	struct vm_area_struct *carrier;
 	struct corten_arena *ar;
 	/* mm_setup's harness VMA is charged (the park's do_munmap uncharge
 	 * must land on a charged counter) -- the deltas below are on top
 	 * of this baseline.
 	 */
 	unsigned long base_vm = mm->total_vm;
-	long carriers0 = corten_arena_test_carriers();
 
 	if (!corten_enabled_static())
-		kunit_skip(test, "carrier lifecycle requires corten=on");
+		kunit_skip(test, "auto-arena record requires corten=on");
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_test_pool_attach(mm, CORTEN_ARENA_TEST_WIN,
 						      PMD_SIZE), 0);
 
-	carrier = corten_arena_test_carrier_of(mm, CORTEN_ARENA_TEST_WIN);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, carrier);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_carriers(), carriers0 + 1);
-
-	/* Detached: not in the tree (J1), never attached (upstream's own
-	 * detached refcount shape), bound to the arena extent.
+	/* Detached: not in the tree (J1), and no anchor object exists
+	 * for the record to point at.
 	 */
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
 	mmap_read_unlock(mm);
-	KUNIT_EXPECT_EQ(test, refcount_read(&carrier->vm_refcnt), 0);
-	KUNIT_EXPECT_EQ(test, carrier->vm_start, CORTEN_ARENA_TEST_WIN);
-	KUNIT_EXPECT_EQ(test, carrier->vm_end,
-			CORTEN_ARENA_TEST_WIN + PMD_SIZE);
 
-	/* The anchor shape: private anonymous, CORTEN+NOHUGEPAGE, the
-	 * full private MAY bound; the anon_vma chain is prepared (the
-	 * rmap anchor duties).
-	 */
-	KUNIT_EXPECT_TRUE(test, vma_is_anonymous(carrier));
-	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_CORTEN);
-	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_NOHUGEPAGE);
-	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_MAYREAD);
-	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_MAYWRITE);
-	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_MAYEXEC);
-	KUNIT_EXPECT_TRUE(test, carrier->vm_flags & VM_NORESERVE);
-	KUNIT_EXPECT_NOT_NULL(test, carrier->anon_vma);
-
-	/* The accounting mmap_region() used to do. */
-	KUNIT_EXPECT_EQ(test, mm->total_vm,
-			base_vm + (PMD_SIZE >> PAGE_SHIFT));
-
-	/* The record knows its anchor; the descriptor's tree cache is
-	 * empty (the two anchor kinds are mutually exclusive).
+	/* The record IS the object: the auto shape, no tree shadow, no
+	 * carrier (a struct vm_area_struct the old shape allocated).
 	 */
 	rcu_read_lock();
 	ar = xa_load(&READ_ONCE(mm->corten_state)->arenas,
 		     CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
-	if (ar) {
-		KUNIT_EXPECT_PTR_EQ(test, READ_ONCE(ar->carrier), carrier);
-		KUNIT_EXPECT_NULL(test, READ_ONCE(ar->vma));
-	}
+	KUNIT_EXPECT_TRUE(test, ar->auto_shape);
+	KUNIT_EXPECT_NULL(test, READ_ONCE(ar->vma));
 	rcu_read_unlock();
 
-	/* RELEASE frees the carrier with the descriptor. */
+	/* The accounting mmap_region() used to do. */
+	KUNIT_EXPECT_EQ(test, mm->total_vm,
+			base_vm + (PMD_SIZE >> PAGE_SHIFT));
+
+	/* RELEASE retires the record and refunds the charge. */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_release(mm, CORTEN_ARENA_TEST_WIN,
 					     PMD_SIZE), 0);
 	KUNIT_EXPECT_NULL(test,
-			  corten_arena_test_carrier_of(mm,
-						       CORTEN_ARENA_TEST_WIN));
+			  corten_arena_test_region_of(mm,
+						      CORTEN_ARENA_TEST_WIN));
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_EQ(test, mm->total_vm, base_vm);
 	mmap_read_unlock(mm);
-	/* The counter is cumulative creations, not liveness -- the free
-	 * shows up as the descriptor's carrier probe going NULL above.
-	 */
-	KUNIT_EXPECT_EQ(test, corten_arena_test_carriers(), carriers0 + 1);
 
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
@@ -10188,7 +10149,7 @@ static void corten_arena_test_region_record(struct kunit *test)
 	/* Truth table on a detached holder (no registry involvement):
 	 * the class lands, the MAY bound absorbs the recorded prot (the
 	 * superset rule, sec 2.2), the flag reflection round-trips, the
-	 * record is born single-piece with clear FILE/carrier payloads.
+	 * record is born single-piece with a clear FILE payload.
 	 */
 	memset(&synth, 0, sizeof(synth));
 	synth.prot = CORTEN_PERM_USER | CORTEN_PERM_READ | CORTEN_PERM_WRITE;
@@ -10202,7 +10163,6 @@ static void corten_arena_test_region_record(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, synth.npieces, 1);
 	KUNIT_EXPECT_TRUE(test, list_empty(&synth.rpieces));
 	KUNIT_EXPECT_NULL(test, synth.rfile);
-	KUNIT_EXPECT_NULL(test, synth.carrier);
 
 	/* Every CORTEN_RF_* round-trips; the empty-MAY park shape still
 	 * satisfies may_prot >= prot by construction.  V-A.1: the park
@@ -10999,7 +10959,7 @@ static void corten_arena_test_mvc_row_stream(struct kunit *test)
 
 	/* Order + exact field shapes (the J3 render inputs): two frames
 	 * of one region dedup into a single row; prot/rclass derive from
-	 * the record; the carrier is the render context.
+	 * the record (MV2 W-2: the record is the render context).
 	 */
 	rows_before = corten_arena_test_maps_window_rows();
 	mmap_read_lock(mm);
@@ -11011,7 +10971,8 @@ static void corten_arena_test_mvc_row_stream(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, row.ar->rclass, CORTEN_REGION_ANON);
 	KUNIT_EXPECT_EQ(test, row.ar->prot,
 			CORTEN_PERM_USER | CORTEN_PERM_READ | CORTEN_PERM_WRITE);
-	KUNIT_EXPECT_NOT_NULL(test, row.ar->carrier);
+	KUNIT_EXPECT_NULL(test, READ_ONCE(row.ar->vma));
+	KUNIT_EXPECT_TRUE(test, row.ar->auto_shape);
 
 	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &it, &row));
 	KUNIT_EXPECT_EQ(test, row.start, b);
@@ -11243,7 +11204,7 @@ static void corten_arena_test_mvc_gup_probe(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
-	struct vm_area_struct *carrier, *probe;
+	struct page *page = NULL;
 	struct file *file;
 	unsigned long a, faddr, flen, fflags;
 	long probes, rejects;
@@ -11251,11 +11212,10 @@ static void corten_arena_test_mvc_gup_probe(struct kunit *test)
 	if (!corten_enabled_static())
 		kunit_skip(test, "gup probe requires corten=on");
 
-	/* Pre-MODE: inert (NULL, the legacy walk answers). */
-	KUNIT_EXPECT_TRUE(test,
-			  IS_ERR_OR_NULL(corten_gup_probe(mm,
-							  CORTEN_MODE_WINDOW_START,
-							  0)));
+	/* Pre-MODE: inert (1, the legacy walk answers). */
+	KUNIT_EXPECT_EQ(test,
+			corten_gup_window(mm, CORTEN_MODE_WINDOW_START, 0,
+					  NULL), 1);
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 	a = corten_arena_test_mvc_attach(test, mm, 1, PROT_READ | PROT_WRITE);
@@ -11265,24 +11225,34 @@ static void corten_arena_test_mvc_gup_probe(struct kunit *test)
 
 	/* Below-window and above-window addresses stay the tree's. */
 	mmap_read_lock(mm);
-	KUNIT_EXPECT_NULL(test, corten_gup_probe(mm, CORTEN_ARENA_TEST_BASE, 0));
-	KUNIT_EXPECT_NULL(test, corten_gup_probe(mm, CORTEN_MODE_WINDOW_END, 0));
+	KUNIT_EXPECT_EQ(test,
+			corten_gup_window(mm, CORTEN_ARENA_TEST_BASE, 0,
+					  NULL), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_gup_window(mm, CORTEN_MODE_WINDOW_END, 0,
+					  NULL), 1);
 
-	/* Active region: the carrier (check_vma_flags' corten_own arm,
-	 * the PTE follow and the faultin hook all consume it verbatim).
+	/* Active region: the whole walk -- probe (the check_vma_flags
+	 * emulation), fault (the fresh slot's first touch through the
+	 * arena route) and follow all run inside the arm; the grabbed
+	 * page comes back.  A read answer maps the shared zero page
+	 * (the fresh slot's read shape); the write answer breaks it to
+	 * a real exclusive page.
 	 */
-	carrier = corten_arena_test_carrier_of(mm, a);
-	KUNIT_ASSERT_NOT_NULL(test, carrier);
-	probe = corten_gup_probe(mm, a, 0);
-	KUNIT_EXPECT_FALSE(test, IS_ERR_OR_NULL(probe));
-	KUNIT_EXPECT_PTR_EQ(test, probe, carrier);
-	probe = corten_gup_probe(mm, a, FOLL_WRITE);
-	KUNIT_EXPECT_FALSE(test, IS_ERR_OR_NULL(probe));
-	KUNIT_EXPECT_PTR_EQ(test, probe, carrier);
+	KUNIT_EXPECT_EQ(test, corten_gup_window(mm, a, 0, &page), 0);
+	KUNIT_EXPECT_NOT_NULL(test, page);
+	put_page(page);
+	page = NULL;
+	KUNIT_EXPECT_EQ(test, corten_gup_window(mm, a, FOLL_WRITE, &page), 0);
+	KUNIT_EXPECT_NOT_NULL(test, page);
+	KUNIT_EXPECT_TRUE(test, PageAnonExclusive(page));
+	put_page(page);
+	page = NULL;
 
 	/* Parked/hole: the loud window reject (find_vma()'s own errno). */
-	KUNIT_EXPECT_PTR_EQ(test, corten_gup_probe(mm, a + 8 * PMD_SIZE, 0),
-			    ERR_PTR(-EFAULT));
+	KUNIT_EXPECT_EQ(test,
+			corten_gup_window(mm, a + 8 * PMD_SIZE, 0,
+					  NULL), -EFAULT);
 	mmap_read_unlock(mm);
 
 	KUNIT_EXPECT_EQ(test,
@@ -11290,22 +11260,23 @@ static void corten_arena_test_mvc_gup_probe(struct kunit *test)
 						 corten_arena_test_op_munmap_route,
 						 a, PAGE_SIZE), 1);
 	mmap_read_lock(mm);
-	KUNIT_EXPECT_PTR_EQ(test, corten_gup_probe(mm, a, 0),
-			    ERR_PTR(-EFAULT));
+	KUNIT_EXPECT_EQ(test, corten_gup_window(mm, a, 0, NULL), -EFAULT);
 
-	/* Implant range: NULL -- find_vma() must see the real tree VMA
+	/* Implant range: 1 -- find_vma() must see the real tree VMA
 	 * (the registry mark alone decides, no VMA needed here).
 	 */
 	corten_implant_mark(mm, a, PMD_SIZE);
-	KUNIT_EXPECT_NULL(test, corten_gup_probe(mm, a, 0));
+	KUNIT_EXPECT_EQ(test, corten_gup_window(mm, a, 0, NULL), 1);
 	mmap_read_unlock(mm);
 
+	/* Two answered probes (read + write), three rejects (hole,
+	 * parked, FOLL_ANON below).
+	 */
 	KUNIT_EXPECT_EQ(test, corten_arena_test_gup_probes(), probes + 2);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_gup_probe_rejects(),
 			rejects + 2);
 
-	/* FOLL_ANON on a FILE region: the one emulation corner the
-	 * carrier's anon shape cannot express (-EFAULT, the
+	/* FOLL_ANON on a FILE region: the emulation corner (-EFAULT, the
 	 * vma_is_anonymous() verdict).  The FILE takeover pair (route +
 	 * file attach) places it wherever the window serves next -- the
 	 * parked frame above is pool-recycled, so the address is read
@@ -11327,11 +11298,9 @@ static void corten_arena_test_mvc_gup_probe(struct kunit *test)
 	fput(file);
 
 	mmap_read_lock(mm);
-	probe = corten_gup_probe(mm, faddr, 0);
-	KUNIT_EXPECT_FALSE(test, IS_ERR_OR_NULL(probe));
-	probe = corten_gup_probe(mm, faddr, FOLL_ANON);
-	KUNIT_EXPECT_TRUE(test, IS_ERR(probe));
-	KUNIT_EXPECT_PTR_EQ(test, probe, ERR_PTR(-EFAULT));
+	KUNIT_EXPECT_EQ(test, corten_gup_window(mm, faddr, 0, NULL), 0);
+	KUNIT_EXPECT_EQ(test, corten_gup_window(mm, faddr, FOLL_ANON, NULL),
+			-EFAULT);
 	mmap_read_unlock(mm);
 
 	KUNIT_EXPECT_EQ(test,
@@ -11364,7 +11333,6 @@ static void corten_arena_test_mvc_smaps_pagemap(struct kunit *test)
 	struct corten_region_row row;
 	struct corten_smap_stats st;
 	struct corten_arena_test_pm_sink sink = { };
-	struct vm_area_struct *carrier;
 	unsigned long a;
 
 	if (!corten_enabled_static())
@@ -11374,7 +11342,8 @@ static void corten_arena_test_mvc_smaps_pagemap(struct kunit *test)
 	a = corten_arena_test_mvc_attach(test, mm, 1, PROT_READ | PROT_WRITE);
 
 	/* The state-2 shape: commit RW, write-fault the first page
-	 * through the carrier (the GUP-slow fault arm's entry).
+	 * through the vma-less GUP window arm (MV2 W-2: the fault arm's
+	 * entry; the carrier shape it replaced is retired).
 	 */
 	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, a), 0);
 	KUNIT_ASSERT_EQ(test,
@@ -11382,12 +11351,7 @@ static void corten_arena_test_mvc_smaps_pagemap(struct kunit *test)
 					       CORTEN_PERM_USER |
 					       CORTEN_PERM_READ |
 					       CORTEN_PERM_WRITE), 0);
-	carrier = corten_arena_test_carrier_of(mm, a);
-	KUNIT_ASSERT_NOT_NULL(test, carrier);
-	KUNIT_EXPECT_EQ(test,
-			corten_arena_handle_mm_fault(carrier, a,
-						     FAULT_FLAG_WRITE, NULL),
-			0);
+	KUNIT_EXPECT_EQ(test, corten_gup_window(mm, a, FOLL_WRITE, NULL), 0);
 
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_TRUE(test, corten_row_query(mm, a, &row));
@@ -11453,7 +11417,6 @@ static void corten_arena_test_exit_lifecycle(struct kunit *test)
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm, *child;
 	struct corten_arena *ar;
-	struct vm_area_struct *carrier;
 	struct corten_pte_meta sm;
 	struct folio *folio;
 	struct corten_txn txn;
@@ -11483,7 +11446,7 @@ static void corten_arena_test_exit_lifecycle(struct kunit *test)
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 
-	/* mmap: two VMA-less carrier windows (the auto takeover). */
+	/* mmap: two VMA-less auto windows (the takeover). */
 	KUNIT_ASSERT_EQ(test, corten_arena_test_pool_attach(mm, win,
 							    2 * PMD_SIZE),
 			0);
@@ -11536,8 +11499,6 @@ static void corten_arena_test_exit_lifecycle(struct kunit *test)
 	/* swap: the M6.T2 hand-rolled swap-out shape on the surviving
 	 * page -- synthetic entry, counted MM_SWAPENTS, Swapped metadata.
 	 */
-	carrier = corten_arena_test_carrier_of(mm, keep);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, carrier);
 	pmdp = corten_arena_test_pmd(mm, keep);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
 	ptep = pte_offset_map_lock(mm, pmdp, keep, &ptl);
@@ -11548,7 +11509,10 @@ static void corten_arena_test_exit_lifecycle(struct kunit *test)
 	set_pte_at(mm, keep, ptep, swp_pte);
 	pte_unmap_unlock(ptep, ptl);
 	folio = page_folio(pte_page(pte));
-	folio_remove_rmap_pte(folio, folio_page(folio, 0), carrier);
+	/* MV2 W-2: the seeded window folio is unanchored (the novma
+	 * install) -- its removal is the novma wrapper.
+	 */
+	folio_remove_anon_rmap_novma(folio);
 	add_mm_counter(mm, MM_ANONPAGES, -1);
 	add_mm_counter(mm, MM_SWAPENTS, 1);
 	folio_put(folio);

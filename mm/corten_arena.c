@@ -153,8 +153,16 @@ static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
  */
 #define CORTEN_UNMAP_FILE_EVENT		BIT(2)
 
-/* V-A.2b detached carrier, defined in the shadow-VMA section below. */
-static void corten_arena_carrier_free(struct vm_area_struct *vma);
+/* V-A.2b detached carrier: retired by MV2 W-2 (an auto arena is
+ * wholly vma-less; no object, no lifecycle).
+ */
+static struct folio *corten_arena_folio_alloc_novma(struct mm_struct *mm,
+						    unsigned long addr);
+static vm_fault_t __corten_arena_handle_mm_fault(struct mm_struct *mm,
+						 struct vm_area_struct *vma,
+						 unsigned long address,
+						 unsigned int flags,
+						 struct pt_regs *regs);
 
 /* V-B.1 file-may MAY bound, defined in the auto-mmap section below. */
 static u8 corten_file_may_bound(struct file *file);
@@ -494,10 +502,18 @@ static atomic_long_t corten_nr_wl_delegated_vmas;
 static atomic_long_t corten_nr_wl_unclassified;
 static atomic_long_t corten_nr_wl_brk_anomalies;
 
-/* V-A.2b: detached carrier VMAs created (cumulative; the live count is
- * the arenas ledger minus the parked/pool descriptors).
+/* MV2 W-2: the detached-carrier counter retired with the object -- a
+ * MODE mm allocates no vm_area_struct, detached included (the D28
+ * criterion; the fork window copy and the GUP probe answer run on the
+ * region record and the page tables directly).
  */
-static atomic_long_t corten_nr_carriers;
+
+/* MV2 W-2 disclosure (matrix C25): auto DECLAREs whose mmap_region()
+ * fidelity PERF_RECORD_MMAP note died with the carrier.  The window
+ * mapping is no longer announced on the perf mmap stream; the
+ * /proc/maps dual-source render stays the observer face.
+ */
+static atomic_long_t corten_nr_declare_notes;
 
 /* M6.T3 shrinker pressure channel (M6_RMAP_SPEC.md sec 2.1 D2):
  * shrink_scans counts scan_objects() invocations, aging_passes the
@@ -755,29 +771,15 @@ static bool corten_arena_drain(struct corten_arena *arena)
 
 static void corten_arena_free(struct corten_arena *arena)
 {
-	struct vm_area_struct *carrier = READ_ONCE(arena->carrier);
-
 	/* V-B.1: the FILE payload dies with the descriptor -- out of the
-	 * mapping's per-inode registry (W1.b), the carrier back to the
-	 * anonymous NULL shape, the region's file reference dropped
-	 * (corten_region_file_teardown).  Before the carrier free below
-	 * (the unlink needs the registry head); every caller runs under
-	 * the owner mm's mmap_write (or at mm_users == 0), the teardown's
-	 * lock contract.  RELEASE / mode_exit / mm_exit all converge
-	 * here; the park path tears the payload down by itself (the
-	 * descriptor survives it).
+	 * mapping's per-inode registry (W1.b) and the region's file
+	 * reference dropped (corten_region_file_teardown).  Every caller
+	 * runs under the owner mm's mmap_write (or at mm_users == 0),
+	 * the teardown's lock contract.  RELEASE / mode_exit / mm_exit
+	 * all converge here; the park path tears the payload down by
+	 * itself (the descriptor survives it).
 	 */
 	corten_region_file_teardown(arena);
-
-	/* V-A.2b: the carrier dies with the descriptor (its lifetime
-	 * contract) -- the anon_vma chain reference and the avc node live
-	 * in the vma, so the unlink precedes the free.  Every caller runs
-	 * under the owner mm's mmap_write (or at mm_users == 0).
-	 */
-	if (carrier) {
-		WRITE_ONCE(arena->carrier, NULL);
-		corten_arena_carrier_free(carrier);
-	}
 
 	percpu_ref_exit(&arena->active);
 	mutex_destroy(&arena->fill_lock);
@@ -900,6 +902,21 @@ static inline bool corten_pte_set_access_flags(struct vm_area_struct *vma,
 	return true;
 }
 
+/*
+ * MV2 W-2: the folio family of a window slot's resident page.  The old
+ * folio_test_anon() discriminator died with the anchor -- an auto
+ * window's anon folio is unanchored (mapping == NULL) and would read
+ * as file.  The pagecache members still carry a non-anon mapping; an
+ * unanchored anon folio has none.  A swapcache member behind a live
+ * PTE is a transient the covering transaction excludes; kept out
+ * defensively (folio_mapping() would report the swap cache's mapping).
+ */
+static inline bool corten_folio_is_filemap(struct folio *folio)
+{
+	return !folio_test_anon(folio) && !folio_test_swapcache(folio) &&
+	       folio_mapping(folio);
+}
+
 /* Convert @vma into the arena's shadow-VMA.  Called with mmap_lock held
  * for writing; vm_flags_set() takes the per-VMA write mark itself.  The
  * VMA keeps its plain anonymous identity: no vm_ops, no file, no split,
@@ -968,158 +985,47 @@ static void corten_arena_unshadow(struct corten_arena *arena,
 }
 
 /* ------------------------------------------------------------------ *
- * the detached carrier (MV_VMA_FREE_SPEC.md sec 2.3, V-A.2b)
+ * the anchor (V-A.2b carrier, retired by MV2 W-2)
  * ------------------------------------------------------------------
  *
- * The VMA *layer* is what a MODE window must not touch: the maple tree,
- * the tree walkers, the vma_merge/split/munmap funnel and the per-VMA
- * lock audience.  The rmap/PTE-API consumers, however, are all
- * vma-keyed -- folio_add_new_anon_rmap()/folio_remove_rmap_pte(),
- * pte_mkwrite(), anon_vma_prepare(), copy_page_range() -- and A.1's
- * rmap-less world (no anchor: reclaim could not pick, fork needed a
- * hand-rolled copy arm) is exactly the cost of dropping the object
- * instead of the layer.  The carrier is the answer: a fully
- * initialized vm_area_struct that never enters mm_mt (never
- * vma_mark_attached(), refcount stays 0/detached -- upstream's own
- * detached shape from the munmap gather) and is reachable only through
- * the descriptor cache, under the same [FAIL-2] contract as the old
- * shadow-VMA pointer: created/destroyed under mmap_write, read only
- * while an active reference fences RELEASE.
+ * Through V-A.2b an auto arena anchored its pages on a detached
+ * vm_area_struct (the carrier): a fully initialized VMA that never
+ * entered mm_mt, reachable only through the descriptor cache.  It
+ * existed to give the vma-keyed rmap/PTE-API consumers a shape to
+ * consume.  W-1 replaced those consumers: the rmap mapcount rides the
+ * W1.a novma wrappers (order-0 arithmetic that never wanted the vma,
+ * W1_NATIVE_RMAP_SPEC.md fact F1), the file side walks the per-inode
+ * registry (W1.b), ttu routes without a vma (W1.d), the swap-out
+ * driver owns its known address (W1.e), and fork copies the window's
+ * page tables itself (the corten-owned arm below).  With the last
+ * consumer gone the shell went too: an auto arena allocates no
+ * vm_area_struct at all -- the D28 criterion -- and its anchor is
+ * NULL, which every fault/protect/zap arm has taken since V-A.1 (the
+ * vma-less flush/encoding/prealloc shapes).
  *
- * One anchor per live arena, never both: a targeted-DECLARE arena
- * keeps its tree shadow-VMA (and no carrier), an auto arena gets a
- * carrier (and no tree VMA).  corten_arena_anchor_vma() is what every
- * rmap/PTE-API consumer reads; the tree-only readers (park's do_munmap
- * arm, punch split surgery, fork's piece scan, mm_exit's skip test)
- * keep reading ar->vma directly.
+ * One anchor per live arena, still never both: a targeted-DECLARE
+ * arena keeps its tree shadow-VMA (whose anon-anchored pages keep the
+ * legacy dup_mmap() fork copy, the hwpoison probe and the mlock
+ * verdicts working verbatim until W-4 sweeps the tree), an auto arena
+ * has none.  corten_arena_anchor_vma() is what every rmap/PTE-API
+ * consumer reads; the tree-only readers (park's do_munmap arm, punch
+ * split surgery, fork's piece scan, mm_exit's skip test) keep reading
+ * ar->vma directly.
  */
 
 /*
- * Allocate and initialize a carrier for one arena spanning
- * [start, end).  The MAY bits are the private-anonymous full bound and
- * the access bits mirror @perm -- PTE encoding re-derives the hardware
- * protection from the metadata perm either way (the perm_pgprot()
- * contract); the flag word exists so that the rmap/ttu/PTE-API readers
- * see exactly the shape a legacy private-anonymous VMA would carry
- * (plus VM_CORTEN|VM_NOHUGEPAGE, which keep the reclaim guards and the
- * THP exclusion working verbatim).
- *
- * @prepare arms the anon_vma anchor (anon_vma_prepare): every owner of
- * the carrier prepares its own root.  The fork child passes false --
- * anon_vma_fork() must start from a NULL chain (the dup_mmap() shape),
- * so the child never owns a prepare'd root whose num_active_vmas
- * nothing will drop at unlink (the CONFIG_DEBUG_VM WARN shape in
- * unlink_anon_vmas(), review C1).
- *
- * V-B.1: @file non-NULL selects the FILE shape -- the carrier carries
- * the mapping's page offset (vma_set_range's @pgoff argument, the
- * INV-MV3(d) pgoff derivation) and vm_file = @file (a *borrowed*
- * pointer: the region record owns the reference, register_file() takes
- * it, teardown drops it -- carrier and rfile same source, same drop).
- * VM_SHARED stays clear (private mapping, write goes COW) and
- * vma_set_anonymous() (vm_ops = NULL) still applies: the carrier is
- * detached, no fault/method dispatch may ever reach it.  The page
- * offset of an anon carrier stays 0 as before.
- *
- * Called under the owner mm's mmap_write (vma_start_write() needs it).
- * Return: the carrier, or NULL on allocation failure.
- */
-static struct vm_area_struct *corten_arena_carrier_alloc(struct mm_struct *mm,
-							 unsigned long start,
-							 unsigned long end,
-							 u8 perm,
-							 struct file *file,
-							 unsigned long pgoff,
-							 bool prepare)
-{
-	vm_flags_t flags = VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC |
-			   VM_NORESERVE;
-	struct vm_area_struct *vma;
-	int ret = 0;
-
-	vma = vm_area_alloc(mm);
-	if (!vma)
-		return NULL;
-
-	if (file) {
-		vma_set_range(vma, start, end, pgoff);
-		vma->vm_file = file;
-	} else {
-		vma_set_range(vma, start, end, 0);
-	}
-	/* vm_ops = NULL: the detached contract (no .fault/.open dispatch
-	 * can reach a carrier), the same anonymous spelling as before --
-	 * for a FILE carrier the backing is expressed by vm_file/rpoff,
-	 * never by vm_ops.
-	 */
-	vma_set_anonymous(vma);
-
-	if (perm & CORTEN_PERM_READ)
-		flags |= VM_READ;
-	if (perm & CORTEN_PERM_WRITE)
-		flags |= VM_WRITE;
-	if (perm & CORTEN_PERM_EXEC)
-		flags |= VM_EXEC;
-	flags |= VM_CORTEN | VM_NOHUGEPAGE;
-
-	/* "Use when VMA is not part of the VMA tree and needs no locking"
-	 * (mm.h) -- this is the detached-carrier contract in one line.
-	 */
-	vm_flags_init(vma, flags);
-	vma->vm_page_prot = vm_get_page_prot(flags);
-
-	/* The write mark pairs the descriptor's lifecycle writers
-	 * (create/destroy/fork-dup), matching what mmap_region does for
-	 * a fresh tree VMA; copy_page_range()'s
-	 * vma_assert_write_locked(src) leans on it during fork.
-	 */
-	vma_start_write(vma);
-
-	if (prepare) {
-		ret = anon_vma_prepare(vma);
-		if (ret) {
-			vm_area_free(vma);
-			return NULL;
-		}
-	}
-
-	atomic_long_inc(&corten_nr_carriers);
-	return vma;
-}
-
-/*
- * Destroy a carrier: detach the anon_vma chain (the prepared anon_vma
- * reference and the avc node live in the vma) and free the object.
- * Callers hold the owner mm's mmap_write (or run at mm_users==0);
- * the never-attached refcount (0) is exactly what vm_area_free()'s
- * vma_assert_detached() demands.  vm_file needs no handling here: a
- * FILE carrier borrows the region record's reference and
- * corten_region_file_teardown() (always run before this) already
- * returned it to the anonymous NULL shape.
- */
-static void corten_arena_carrier_free(struct vm_area_struct *vma)
-{
-	unlink_anon_vmas(vma);
-	vm_area_free(vma);
-}
-
-/*
- * The rmap/PTE-API anchor of @ar: the detached carrier for an auto
- * arena, the tree shadow-VMA for a targeted-DECLARE arena, NULL only
- * for a parked descriptor (whose carrier persists but whose anchor
- * duties ended with the content zap -- the zap that parked it ran with
- * the anchor, so the rmap symmetry is already closed).
+ * The rmap/PTE-API anchor of @ar: the tree shadow-VMA for a
+ * targeted-DECLARE arena, NULL for an auto arena (whose consumers are
+ * all vma-free now) and for a parked descriptor (whose anchor duties
+ * ended with the content zap -- the zap that parked it ran with the
+ * anchor, so the rmap symmetry is already closed).
  *
  * Same stability contract as corten_arena_shadow_vma(): callers hold
  * an active reference or mmap_write, so the pointer cannot be freed
- * underneath ([FAIL-2], carrier edition).
+ * underneath ([FAIL-2]).
  */
 static inline struct vm_area_struct *corten_arena_anchor_vma(struct corten_arena *ar)
 {
-	struct vm_area_struct *carrier = READ_ONCE(ar->carrier);
-
-	if (carrier)
-		return carrier;
 	return READ_ONCE(ar->vma);
 }
 
@@ -1191,23 +1097,15 @@ static u8 corten_region_may_full(void)
  *     contract (register() ORs prot into the bound; a violation is a
  *     torn record);
  *   - idle <=> RESERVED: the parked flag and the region class agree.
- * V-A.2b adds the anchor pairing: a live ANON region carries at most
- * one anchor -- the detached carrier (auto arenas) or the tree
- * shadow-VMA (targeted DECLARE); both at once is a torn record.  A
- * parked one has no tree shadow (its reservation VMA went at park;
- * the carrier persists, which is why the check is on @vma only).
- * "At most one" and not "exactly one": a punched targeted-DECLARE
- * arena degrades to a NULL piece cache (its surviving pieces still
- * hold the rmap anchors in the tree), and since F1 every pool
- * reactivation re-arms a carrier -- the A.1 anchor-less mixed state
- * is gone.
- * V-B.1 adds the FILE payload pairing (sec 2.5, rule (d)): a FILE
- * region carries a live file reference, its carrier is armed with the
- * same file, and the pgoff derivation agrees (carrier->vm_pgoff ==
- * rpoff) -- and no other class carries a stale rfile.  Checked by
- * corten_region_invariants_ok() -- the anchor publish order (carrier
- * before the registry stores, [FAIL-2]) means register() itself can
- * still observe the pre-publish state.
+ * A parked region has no tree shadow (its reservation VMA went at
+ * park); "at most one" and not "exactly one" shadow-VMA: a punched
+ * targeted-DECLARE arena degrades to a NULL piece cache (its surviving
+ * pieces still hold the rmap anchors in the tree), and since MV2 W-2
+ * an auto arena carries no anchor object at all.
+ * V-B.1's FILE payload pairing (sec 2.5, rule (d)) survives as the
+ * rfile half: a FILE region carries a live file reference and no other
+ * class carries a stale rfile.  Checked by
+ * corten_region_invariants_ok().
  */
 static bool corten_region_record_ok(const struct corten_arena *ar)
 {
@@ -1219,19 +1117,11 @@ static bool corten_region_record_ok(const struct corten_arena *ar)
 	if (!!READ_ONCE(ar->idle) !=
 	    (READ_ONCE(ar->rclass) == CORTEN_REGION_RESERVED))
 		return false;
-	if (!READ_ONCE(ar->idle) &&
-	    READ_ONCE(ar->carrier) && READ_ONCE(ar->vma))
-		return false;
 	if (READ_ONCE(ar->idle) && READ_ONCE(ar->vma))
 		return false;
 
 	if (READ_ONCE(ar->rclass) == CORTEN_REGION_FILE) {
-		const struct vm_area_struct *carrier =
-			READ_ONCE(ar->carrier);
-
-		if (!READ_ONCE(ar->rfile) || !carrier ||
-		    carrier->vm_file != ar->rfile ||
-		    carrier->vm_pgoff != READ_ONCE(ar->rpoff))
+		if (!READ_ONCE(ar->rfile))
 			return false;
 	} else if (READ_ONCE(ar->rfile)) {
 		return false;
@@ -1255,10 +1145,7 @@ void corten_region_register(struct corten_arena *ar,
 	 * stamp (the park runs corten_region_file_teardown() first);
 	 * silently dropping a live reference here would leak it, so the
 	 * stale payload is loud instead.  The pieces table is born
-	 * single-piece.  The carrier is NOT touched: its lifetime is the
-	 * descriptor's (created at DECLARE/fork-dup, freed at
-	 * RELEASE/mm_exit by corten_arena_free()) and the park/reactivate
-	 * flips must not churn it.
+	 * single-piece.
 	 */
 	if (ar->rfile) {
 		WARN_ON_ONCE(1);
@@ -1282,19 +1169,16 @@ void corten_region_register(struct corten_arena *ar,
  * land before the class flip -- register()'s own tripwire (and every
  * lockless reader) sees a fully-armed FILE record or none at all.  The
  * record takes the file's reference here (get_file cannot fail -- the
- * caller's own reference pins the object); the caller's carrier must
- * already carry the same file pointer and pgoff (the carrier borrows
- * this reference; INV-MV3 rule (d) checks the pairing).  The registry
+ * caller's own reference pins the object).  The registry
  * membership is deliberately NOT taken here: it is the publication's
  * last step (after every failure path is behind), so a never-published
  * region never dangles in the mapping's registry (W1.b: the per-inode
  * corten region list the interval-tree membership became).
  *
- * Caller contract: the owner mm's mmap_lock for writing, the carrier
- * published into @ar (the tripwire reads it), and the registry head
- * pre-allocated into @ar->rinodes (W1.b: the tripwire asserts it -- the
- * link at the publication's last step allocates nothing and must not
- * fail).
+ * Caller contract: the owner mm's mmap_lock for writing, and the
+ * registry head pre-allocated into @ar->rinodes (W1.b: the tripwire
+ * asserts it -- the link at the publication's last step allocates
+ * nothing and must not fail).
  */
 void corten_region_register_file(struct corten_arena *ar, u8 may_prot,
 				 u32 rflags, struct file *file,
@@ -1417,10 +1301,9 @@ static void corten_file_registry_remove(struct corten_arena *ar)
 }
 
 /*
- * Tear down a live FILE payload: leave the per-inode registry (W1.b),
- * return the carrier to the anonymous NULL shape (it survives a park to
- * serve the next ANON incarnation -- vm_file/vm_pgoff must not dangle),
- * drop the region's file reference.  No-op for every non-FILE record.
+ * Tear down a live FILE payload: leave the per-inode registry (W1.b)
+ * and drop the region's file reference.  No-op for every non-FILE
+ * record.
  *
  * Called at each region death point, all under the owner mm's
  * mmap_write (or at mm_users == 0, where no walker can race):
@@ -1432,41 +1315,31 @@ static void corten_file_registry_remove(struct corten_arena *ar)
  */
 static void corten_region_file_teardown(struct corten_arena *ar)
 {
-	struct vm_area_struct *carrier = READ_ONCE(ar->carrier);
 	struct file *file = ar->rfile;
 
 	if (!file)
 		return;
 
-	if (carrier && carrier->vm_file == file) {
-		corten_file_registry_remove(ar);
-		carrier->vm_file = NULL;
-		carrier->vm_pgoff = 0;
-	}
+	corten_file_registry_remove(ar);
 	ar->rfile = NULL;
 	ar->rpoff = 0;
 	fput(file);
 }
 
 /*
- * Disarm a FILE payload whose carrier never joined the per-inode
- * registry -- the publication error paths of the FILE attach and the
- * fork child registration (a mark/store failure unwinds between
- * register_file() and the registry link).  The same drops as teardown
- * minus the registry unlink: the node was never linked, so the
- * pre-allocated head is simply returned.
+ * Disarm a FILE payload that never joined the per-inode registry --
+ * the publication error paths of the FILE attach and the fork child
+ * registration (a mark/store failure unwinds between register_file()
+ * and the registry link).  The same drops as teardown minus the
+ * registry unlink: the node was never linked, so the pre-allocated
+ * head is simply returned.
  */
 static void corten_region_file_disarm(struct corten_arena *ar)
 {
-	struct vm_area_struct *carrier = READ_ONCE(ar->carrier);
 	struct file *file = ar->rfile;
 
 	if (!file)
 		return;
-	if (carrier && carrier->vm_file == file) {
-		carrier->vm_file = NULL;
-		carrier->vm_pgoff = 0;
-	}
 	ar->rfile = NULL;
 	ar->rpoff = 0;
 	kfree(ar->rinodes);
@@ -2009,15 +1882,15 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	if (novma) {
 		/* V-A.2a: the auto takeover needs no VMA.  The validation
 		 * checklist ran in corten_auto_validate() before placement
-		 * (the may_expand_vm gate), [C1] ran above, and the anchor
-		 * is the V-A.2b carrier -- anon_vma_prepare() can fail
-		 * (-ENOMEM), so it happens before any publication.  V-B.1:
-		 * a FILE carrier also carries vm_file/@pgoff (the region's
-		 * borrowed pointer -- register_file takes the reference
-		 * after this succeeds).  W1.b: a FILE attach also
-		 * pre-allocates its registry head here, the arm's first
-		 * allocation, so the link at the publication's last step
-		 * (past every failure path) allocates nothing.
+		 * (the may_expand_vm gate) and [C1] ran above.  MV2 W-2:
+		 * the anchor object itself is gone too -- the region
+		 * record, the frames and the metadata are the whole
+		 * object, no vm_area_struct is allocated (the D28
+		 * criterion), and the fault arms run on their V-A.1
+		 * vma-less forms.  W1.b: a FILE attach pre-allocates its
+		 * registry head here, the arm's first allocation, so the
+		 * link at the publication's last step (past every failure
+		 * path) allocates nothing.
 		 */
 		if (file) {
 			arena->rinodes = corten_inode_regions_new();
@@ -2026,15 +1899,11 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 				goto out_free_arena;
 			}
 		}
-		vma = corten_arena_carrier_alloc(mm, addr, addr + len, perm,
-						 file, pgoff, true);
-		if (!vma) {
-			ret = -ENOMEM;
-			goto out_free_arena;
-		}
 		arena->prot = perm;
+		arena->auto_shape = true;
 		may_prot = file ? corten_file_may_bound(file)
 				: corten_region_may_full();
+		vma = NULL;
 	} else {
 		/* Validation and conversion happen together under the
 		 * write lock (held by the caller): the VMA must survive as
@@ -2061,20 +1930,20 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 			goto out_free_arena;
 	}
 
-	/* Publish the anchor (cached shadow-VMA, or the detached carrier)
-	 * before the arena becomes visible in the xarray below ([FAIL-2]):
-	 * every reader that resolves the arena also resolves the anchor.
+	/* Publish the anchor (the cached shadow-VMA; an auto arena has
+	 * none since MV2 W-2) before the arena becomes visible in the
+	 * xarray below ([FAIL-2]): every reader that resolves the arena
+	 * also resolves the anchor.
 	 */
-	if (novma)
-		WRITE_ONCE(arena->carrier, vma);
-	else
+	if (!novma)
 		WRITE_ONCE(arena->vma, vma);
 
 	/* The region record is born with the arena (V-A.0 sec 3.1.0):
 	 * live == CORTEN_REGION_ANON.  register()'s INV-MV3 tripwire
-	 * reads the anchor pairings, so the publish above must precede
-	 * it.  V-B.1: the FILE arm takes the file payload instead (the
-	 * carrier above already carries the same pointer and pgoff).
+	 * reads the record pairings, so the publish above must precede
+	 * it.  V-B.1: the FILE arm takes the file payload (the record's
+	 * rfile/rpoff are its only backing since W-2 -- INV-MV3(d)'s
+	 * pgoff derivation reads the record).
 	 */
 	if (file)
 		corten_region_register_file(arena, may_prot, rflags, file,
@@ -2139,37 +2008,34 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 
 	mutex_unlock(&state->ctl_lock);
 
-	/* V-A.2a fidelity: mmap_region() emitted PERF_RECORD_MMAP for the
-	 * takeover mapping; the carrier carries the same fields (bounds,
-	 * pgoff, private-anon flags), so the observer contract (matrix
-	 * C25) is preserved verbatim.  mmap_write is held, exactly the
-	 * mmap_region() context.  The targeted-DECLARE arm skips this:
-	 * the declaring VMA's own mmap() already reported it.
+	/* The targeted-DECLARE arm skips the perf note below -- the
+	 * declaring VMA's own mmap() already reported it.  MV2 W-2
+	 * disclosure: the auto arm's mmap_region() fidelity PERF note
+	 * rode the carrier (matrix C25) and dies with it -- a window
+	 * mapping is no longer announced on the perf mmap stream (the
+	 * /proc/maps dual-source render of V-C remains the observer
+	 * face; a metadata-shaped perf_event_mmap() would need an
+	 * upstream signature change and is not taken in W-2).
 	 */
 	if (novma)
-		perf_event_mmap(arena->carrier);
+		atomic_long_inc(&corten_nr_declare_notes);
 
 	return 0;
 
 out_unwind:
-	/* The arena is dead here (nothing published but the anchor and
-	 * some frame slots) -- undo the stores and the anchor; the record
-	 * is never re-read after this (the descriptor is freed below),
-	 * so no register() stamp is owed.  V-B.1: the file payload's
-	 * reference (register_file's get_file) is disarmed before the
-	 * carrier free; the region was never linked into the registry
-	 * (the link is past every failure path -- W1.b).
+	/* The arena is dead here (nothing published but some frame
+	 * slots) -- undo the stores; the record is never re-read after
+	 * this (the descriptor is freed below), so no register() stamp
+	 * is owed.  V-B.1: the file payload's reference (register_file's
+	 * get_file) is disarmed; the region was never linked into the
+	 * registry (the link is past every failure path -- W1.b).
 	 */
 	while (frame > first_frame)
 		xa_erase(&state->arenas, --frame);
 	if (file)
 		corten_region_file_disarm(arena);
-	if (novma) {
-		WRITE_ONCE(arena->carrier, NULL);
-		corten_arena_carrier_free(vma);
-	} else {
+	if (!novma)
 		corten_arena_unshadow(arena, vma);
-	}
 out_free_arena:
 	mutex_unlock(&state->ctl_lock);
 	percpu_ref_exit(&arena->active);
@@ -2411,7 +2277,7 @@ static int corten_arena_release_arena_locked(struct mm_struct *mm,
 			 * transactional zap + PT retirement runs here for
 			 * the remainder (over the emptied implant windows
 			 * it no-ops).  The hand-refund is keyed on the
-			 * carrier: a carrier arena's live charge was
+			 * recorded shape: an auto arena's live charge was
 			 * taken by reactivate/declare (no tree VMA ever
 			 * carried it), while a shadow piece's charge rode
 			 * the VMA the funnel just refunded.
@@ -2425,7 +2291,7 @@ static int corten_arena_release_arena_locked(struct mm_struct *mm,
 			tlb_finish_mmu(&tlb);
 			corten_arena_free_ptes_novma(mm, arena->start,
 						     arena->end);
-			if (!was_idle && READ_ONCE(arena->carrier))
+			if (!was_idle && READ_ONCE(arena->auto_shape))
 				vm_stat_account(mm,
 						corten_take_vm_flags(READ_ONCE(arena->prot)),
 						-(long)((arena->end -
@@ -2812,23 +2678,24 @@ void corten_arena_arenas_report(struct seq_file *m)
 {
 	struct corten_arena *ar;
 
-	seq_puts(m, "            mm               anchor [start,end)                prot cls  rflg pcs status               rfile     poff\n");
+	seq_puts(m, "            mm              shadow [start,end)                prot cls  rflg pcs status               rfile     poff\n");
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(ar, &corten_arena_list, obs) {
-		struct vm_area_struct *carrier = READ_ONCE(ar->carrier);
 		struct file *rfile = READ_ONCE(ar->rfile);
 
 		/* V-B.4 (H10): the FILE payload columns -- the region's file
-		 * (NULL for anon/reserved, the carrier's own vm_file for a
-		 * live FILE region) and the mapping's start pgoff.  Each is
-		 * a racing snapshot by design (see above).
+		 * (NULL for anon/reserved, the record's rfile for a live
+		 * FILE region) and the mapping's start pgoff.  Each is a
+		 * racing snapshot by design (see above).  MV2 W-2: the
+		 * anchor column renders the tree shadow-VMA only -- an
+		 * auto arena has no anchor object (the column reads 0;
+		 * the record itself is the whole object).
 		 */
 		seq_printf(m,
 			   "%016lx %016lx [%lx,%lx)           %02x %-4s %04x %-3u %s %016lx %08lx\n",
 			   (unsigned long)READ_ONCE(ar->mm),
-			   (unsigned long)(carrier ? carrier :
-				READ_ONCE(ar->vma)),
+			   (unsigned long)READ_ONCE(ar->vma),
 			   ar->start, ar->end, ar->prot,
 			   corten_region_class_name(READ_ONCE(ar->rclass)),
 			   READ_ONCE(ar->rflags), READ_ONCE(ar->npieces),
@@ -2960,7 +2827,7 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_park_unmap_fails));
 	/* V-A.2a: the validation-gate refusals and the J1 prelude pair
 	 * (probes/hits, sec 1.3; the full J1/J2 audit walker is V-A.3).
-	 * V-A.2b: the carrier creation count.
+	 * MV2 W-2: the carrier creation count retired with the object.
 	 */
 	seq_printf(m, "auto_vgate          %ld\n",
 		   atomic_long_read(&corten_nr_auto_vgate));
@@ -3021,8 +2888,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_brk_reject));
 	seq_printf(m, "heap_lookups        %ld\n",
 		   atomic_long_read(&corten_nr_heap_lookups));
-	seq_printf(m, "carriers            %ld\n",
-		   atomic_long_read(&corten_nr_carriers));
+	seq_printf(m, "declare_notes       %ld\n",
+		   atomic_long_read(&corten_nr_declare_notes));
 	seq_printf(m, "zap_pinned          %ld\n",
 		   atomic_long_read(&corten_nr_zap_pinned));
 	/* M6.T1 reclaim-path guards (M6_RMAP_SPEC.md sec 1.3 V1/V2). */
@@ -3252,12 +3119,12 @@ long corten_arena_test_park_unmap_fails(void)
 	return atomic_long_read(&corten_nr_park_unmap_fails);
 }
 
-/* V-A.2a/A.2b hooks: the carrier of the arena at @addr (NULL when the
- * arena anchors on a tree shadow-VMA), the carrier creation counter,
- * and the J1 prelude pair.
+/* V-A.2a hooks, MV2 W-2 form: the region record of the arena at @addr
+ * (the tests read its rfile/rpoff/vma/auto_shape fields directly; the
+ * carrier probe retired with the object), and the J1 prelude pair.
  */
-struct vm_area_struct *corten_arena_test_carrier_of(struct mm_struct *mm,
-						    unsigned long addr)
+struct corten_arena *corten_arena_test_region_of(struct mm_struct *mm,
+						 unsigned long addr)
 {
 	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
 	struct corten_arena *ar;
@@ -3267,12 +3134,7 @@ struct vm_area_struct *corten_arena_test_carrier_of(struct mm_struct *mm,
 
 	ar = xa_load(&state->arenas, addr >> PMD_SHIFT);
 
-	return ar ? READ_ONCE(ar->carrier) : NULL;
-}
-
-long corten_arena_test_carriers(void)
-{
-	return atomic_long_read(&corten_nr_carriers);
+	return ar;
 }
 
 long corten_arena_test_auto_vgate(void)
@@ -4210,12 +4072,11 @@ bool corten_row_next(struct mm_struct *mm, struct corten_row_iter *it,
 			continue;
 		/* Tree-anchored (targeted-DECLARE) arenas are the tree
 		 * stream's own rows: producing them here would render
-		 * the range twice.
+		 * the range twice.  Everything else is an auto ( wholly
+		 * vma-less since MV2 W-2) region: the window stream's
+		 * whole audience.
 		 */
 		if (READ_ONCE(ar->vma))
-			continue;
-		/* The window stream renders carrier regions only. */
-		if (!READ_ONCE(ar->carrier))
 			continue;
 		it->ar = ar;
 		it->next = ar->start;
@@ -4255,36 +4116,69 @@ bool corten_maps_dual_source(struct mm_struct *mm)
 	return state && refcount_read(&state->nr) != 0;
 }
 
-struct vm_area_struct *corten_gup_probe(struct mm_struct *mm,
-					unsigned long addr,
-					unsigned int gup_flags)
+/*
+ * MV2 W-2: the GUP-slow window arm -- the corten_gup_probe() carrier
+ * answer retired with the carrier (a window has no vm_area_struct for
+ * the generic loop to consume any more, and the D28 criterion forbids
+ * minting one).  The arm answers the window addresses inside
+ * __get_user_pages() entirely, in three legs that mirror what the loop
+ * did with the carrier VMA:
+ *
+ *   1. the check_vma_flags() emulation (this probe): the recorded perm
+ *      plays the access bits, the region class the anon/file split
+ *      (FOLL_ANON must miss a FILE region), the private-mapping
+ *      contract the FOLL_FORCE cow clause.  A parked (S-1), magazine
+ *      reserve or window-hole address is the loud window reject
+ *      (find_vma()'s own miss errno, J1 stays zero); a tree-anchored
+ *      arena or an implant range is left to the legacy walk
+ *      (return 1).
+ *
+ *   2. the follow: follow_page_pte()'s order-0 shape with the vma
+ *      verdicts read off the PTE and the folio -- present/special/
+ *      protnone gates, the can_follow_write emulation (FOLL_FORCE may
+ *      follow a RO translation only when the page is exclusive to us,
+ *      the PG_anon_exclusive mark an arena write COW left behind),
+ *      gup_must_unshare() for a fork-shared PIN, try_grab_folio() for
+ *      the GET/PIN reference, the FOLL_TOUCH bookkeeping.
+ *
+ *   3. the faultin: __corten_arena_handle_mm_fault() on the same
+ *      metadata (the route never drops the mmap lock and never returns
+ *      VM_FAULT_RETRY, P2-6), so the follow/fault loop converges like
+ *      the loop's own retry arm -- bounded defensively.
+ *
+ * Return: 0 = answered (the grabbed page in *@pagep when the caller
+ * asked for pages), a negative errno = the answer is an error, 1 = not
+ * a window address, the legacy walk owns it.
+ */
+int corten_gup_window(struct mm_struct *mm, unsigned long addr,
+		      unsigned int gup_flags, struct page **pagep)
 {
-	struct vm_area_struct *carrier = NULL;
 	enum corten_region_class rclass = CORTEN_REGION_ANON;
 	struct corten_arena *ar;
+	u8 perm = 0;
+	int tries;
 
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
 	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
-		return NULL;	/* the legacy walk answers */
+		return 1;
 
 	/* Implants own real tree VMAs -- find_vma() must see them. */
 	if (corten_implant_covers(mm, addr, 1))
-		return NULL;
+		return 1;
 
 	/* Region resolution under RCU (the registry's read contract);
-	 * the class/carrier reads ride the same section, the carrier
-	 * pointer itself is what the caller's mmap_read keeps alive.
+	 * the record reads ride the same section.
 	 */
 	rcu_read_lock();
 	ar = corten_region_lookup(mm, addr);
 	if (ar) {
-		carrier = READ_ONCE(ar->carrier);
 		rclass = READ_ONCE(ar->rclass);
+		perm = READ_ONCE(ar->prot);
 	}
 	rcu_read_unlock();
 
-	if (ar && !carrier)
-		return NULL;	/* tree-anchored arena: find_vma() answers */
+	if (ar && READ_ONCE(ar->vma))
+		return 1;	/* tree-anchored arena: find_vma() answers */
 
 	if (!ar) {
 		/* Parked (S-1), magazine reserve or window hole: the tree
@@ -4292,19 +4186,185 @@ struct vm_area_struct *corten_gup_probe(struct mm_struct *mm,
 		 * the walk (and J1) never happens.
 		 */
 		atomic_long_inc(&corten_nr_gup_probe_rejects);
-		return ERR_PTR(-EFAULT);
+		return -EFAULT;
 	}
 
-	/* check_vma_flags() emulation corner the carrier's anon shape
-	 * cannot express: FOLL_ANON must miss a file mapping.
+	/* check_vma_flags() emulation.  FOLL_ANON must miss a file
+	 * mapping; a write needs the recorded perm (FOLL_FORCE may
+	 * override on the private mapping the whitelist admits), a read
+	 * cannot be forced (check_vma_flags()'s own shape).
 	 */
 	if ((gup_flags & FOLL_ANON) && rclass == CORTEN_REGION_FILE) {
 		atomic_long_inc(&corten_nr_gup_probe_rejects);
-		return ERR_PTR(-EFAULT);
+		return -EFAULT;
+	}
+	if (gup_flags & FOLL_WRITE) {
+		if (!(perm & CORTEN_PERM_WRITE) && !(gup_flags & FOLL_FORCE)) {
+			atomic_long_inc(&corten_nr_gup_probe_rejects);
+			return -EFAULT;
+		}
+	} else if (!(perm & CORTEN_PERM_READ)) {
+		atomic_long_inc(&corten_nr_gup_probe_rejects);
+		return -EFAULT;
 	}
 
 	atomic_long_inc(&corten_nr_gup_probes);
-	return carrier;
+
+	/* The cross-iteration carries: a read-PIN unshare and a write
+	 * COW break both fault on the NEXT pass (the follow unlocked its
+	 * PTE first; faultin_page() re-follows through the loop's own
+	 * retry, this is that retry in arm-local form).
+	 */
+	bool unshare = false, refault = false;
+
+	for (tries = 0; tries < 8; tries++) {
+		pmd_t *pmdp;
+		pte_t *ptep, pte = { };
+		spinlock_t *ptl;	/* guards the follow verdict */
+		struct page *page = NULL;
+		struct folio *folio;
+		unsigned int fault_flags = 0;
+		vm_fault_t cret;
+		bool fault = unshare || refault;
+		int ret;
+
+		if (fatal_signal_pending(current))
+			return -EINTR;
+		cond_resched();
+
+		if (fault)
+			goto faultin;	/* the carried fault runs below */
+
+		pmdp = corten_arena_pmd(mm, addr);
+		if (!pmdp)
+			goto faultin;
+
+		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+		if (!ptep)
+			return -EAGAIN;	/* transient; retry */
+		pte = ptep_get(ptep);
+		/* The NUMA protnone shape: followed like upstream
+		 * (gup_can_follow_protnone()'s default arm) unless the
+		 * caller honors hinting faults.
+		 */
+		if (!pte_present(pte) ||
+		    (pte_protnone(pte) &&
+		     (gup_flags & FOLL_HONOR_NUMA_FAULT))) {
+			pte_unmap_unlock(ptep, ptl);
+			goto faultin;
+		}
+
+		/* The follow leg: the present shapes. */
+		page = pte_special(pte) ? NULL : pte_page(pte);
+		if ((gup_flags & FOLL_WRITE) && !pte_write(pte)) {
+			/* can_follow_write_pte()'s emulation: FOLL_FORCE
+			 * follows a RO translation only for an exclusive
+			 * anon page (the PG_anon_exclusive mark a write
+			 * COW left behind; PG_anon_exclusive is only ever
+			 * set on anon pages, so the PageAnon() term of the
+			 * upstream test is implicit).
+			 */
+			if (!(gup_flags & FOLL_FORCE) || !page ||
+			    !PageAnonExclusive(page)) {
+				pte_unmap_unlock(ptep, ptl);
+				refault = true;	/* break COW via the fault */
+				continue;
+			}
+		}
+		if (!page) {
+			/* The shared zero page (present special): the same
+			 * page the legacy follow hands back.  Any other
+			 * special shape (PFNMap, structurally excluded
+			 * from a window) is the loud error.
+			 */
+			if ((gup_flags & FOLL_DUMP) ||
+			    !is_zero_pfn(pte_pfn(pte))) {
+				pte_unmap_unlock(ptep, ptl);
+				atomic_long_inc(&corten_nr_gup_probe_rejects);
+				return -EFAULT;
+			}
+			page = pte_page(pte);
+		}
+		folio = page_folio(page);
+
+		/* gup_must_unshare(): a PIN of a fork-shared anon page
+		 * must unshare -- the verdict sends the NEXT fault in
+		 * with FAULT_FLAG_UNSHARE alone (faultin_page()'s
+		 * -EMLINK mapping).  The unanchored shapes reach the
+		 * same coherence through their write-COW above.
+		 */
+		if (!pte_write(pte) && (gup_flags & FOLL_PIN) &&
+		    folio_test_anon(folio) && !PageAnonExclusive(page)) {
+			pte_unmap_unlock(ptep, ptl);
+			unshare = true;
+			continue;
+		}
+		VM_WARN_ON_ONCE_PAGE((gup_flags & FOLL_PIN) &&
+				     folio_test_anon(folio) &&
+				     !PageAnonExclusive(page), page);
+
+		ret = try_grab_folio(folio, 1, gup_flags);
+		if (unlikely(ret)) {
+			pte_unmap_unlock(ptep, ptl);
+			return ret;
+		}
+		if (gup_flags & FOLL_PIN) {
+			ret = arch_make_folio_accessible(folio);
+			if (ret) {
+				unpin_user_page(page);
+				pte_unmap_unlock(ptep, ptl);
+				return -EFAULT;
+			}
+		}
+		if (gup_flags & FOLL_TOUCH) {
+			if ((gup_flags & FOLL_WRITE) && !pte_dirty(pte) &&
+			    !folio_test_dirty(folio))
+				folio_mark_dirty(folio);
+			folio_mark_accessed(folio);
+		}
+		pte_unmap_unlock(ptep, ptl);
+
+		if (pagep)
+			*pagep = page;
+		return 0;
+
+faultin:
+		/* The faultin leg (faultin_page()'s flag mapping, minus
+		 * the retry-contract flags -- the arena route never
+		 * drops the mmap lock and never returns VM_FAULT_RETRY,
+		 * P2-6, so the loop re-follows under the same hold).
+		 */
+		if (unshare)
+			/* FAULT_FLAG_UNSHARE and _WRITE are incompatible:
+			 * the read-PIN unshare of a fork-shared page rides
+			 * alone (OQ-4).
+			 */
+			fault_flags |= FAULT_FLAG_UNSHARE;
+		else if (gup_flags & FOLL_WRITE)
+			fault_flags |= FAULT_FLAG_WRITE;
+		if (gup_flags & FOLL_REMOTE)
+			fault_flags |= FAULT_FLAG_REMOTE;
+		cret = __corten_arena_handle_mm_fault(mm, NULL, addr,
+						      fault_flags, NULL);
+		unshare = false;
+		refault = false;
+		if (cret & CORTEN_FAULT_FALLBACK_BIT)
+			return -EFAULT;	/* unreachable in a window */
+		if (cret & VM_FAULT_OOM)
+			return -ENOMEM;
+		if (cret & (VM_FAULT_HWPOISON | VM_FAULT_HWPOISON_LARGE))
+			return -EHWPOISON;
+		if (cret & VM_FAULT_ERROR)
+			return -EFAULT;
+		continue;	/* re-follow the committed shape */
+	}
+
+	/* The bounded loop lost its race eight times: the shape is a
+	 * transaction the retry budget cannot converge on -- answer the
+	 * conservative errno (faultin_page()'s EFAULT is what a
+	 * non-converging follow/fault loop would hit in the end).
+	 */
+	return -EFAULT;
 }
 
 bool corten_remote_vm_window(struct mm_struct *mm, unsigned long addr)
@@ -4330,8 +4390,7 @@ bool corten_remote_vm_window(struct mm_struct *mm, unsigned long addr)
  * NULL for the zero page / none entries) plus the pagemap flag bits
  * and pfn/swap frame encoding (pte_to_pagemap_entry()'s arithmetic).
  */
-static struct page *corten_pagemap_pte(struct vm_area_struct *carrier,
-				       pte_t pte, unsigned long addr,
+static struct page *corten_pagemap_pte(pte_t pte, unsigned long addr,
 				       bool show_pfn, u64 *frame, u64 *flags)
 {
 	struct page *page = NULL;
@@ -4343,7 +4402,15 @@ static struct page *corten_pagemap_pte(struct vm_area_struct *carrier,
 		*flags |= CORTEN_PM_PRESENT;
 		if (show_pfn)
 			*frame = pte_pfn(pte);
-		page = vm_normal_page(carrier, addr, pte);
+		/* MV2 W-2: the page recognition is PTE-direct -- no
+		 * VM_PFNMAP/VM_MIXEDMAP shape exists in a window (the
+		 * anchor vma the vm_normal_page() call used to borrow
+		 * carried no such flag either, so this is numerically
+		 * the same verdict); the special PTE (the shared zero
+		 * page) yields no page.
+		 */
+		if (!pte_special(pte))
+			page = pte_page(pte);
 	} else if (is_swap_pte(pte)) {
 		swp_entry_t entry = pte_to_swp_entry(pte);
 
@@ -4368,7 +4435,11 @@ static struct page *corten_pagemap_pte(struct vm_area_struct *carrier,
 	if (page) {
 		struct folio *folio = page_folio(page);
 
-		if (!folio_test_anon(folio))
+		/* MV2 W-2: file means "carries a file mapping" (the
+		 * unanchored anon folio has none -- folio_test_anon()
+		 * would misfile it).
+		 */
+		if (corten_folio_is_filemap(folio))
 			*flags |= CORTEN_PM_FILE;
 		/* PM_MMAP_EXCLUSIVE: the folio mapcount is exact for the
 		 * window's order-0 pages (fs/proc/internal.h's precise
@@ -4391,8 +4462,8 @@ static struct page *corten_pagemap_pte(struct vm_area_struct *carrier,
  * (Shared/Private x Clean/Dirty), Referenced and the hugetlb/KSM
  * families stay zero -- registered disclosure, not parity claims.
  */
-static void corten_smap_pte(struct vm_area_struct *carrier, pte_t pte,
-			    unsigned long addr, struct corten_smap_stats *out)
+static void corten_smap_pte(pte_t pte, unsigned long addr,
+			    struct corten_smap_stats *out)
 {
 	struct page *page;
 	struct folio *folio;
@@ -4406,12 +4477,17 @@ static void corten_smap_pte(struct vm_area_struct *carrier, pte_t pte,
 			out->swapped += PAGE_SIZE;
 		return;
 	}
-	page = vm_normal_page(carrier, addr, pte);
+	/* MV2 W-2: PTE-direct recognition (see corten_pagemap_pte). */
+	page = pte_special(pte) ? NULL : pte_page(pte);
 	if (!page)
 		return;		/* the shared zero page */
 	folio = page_folio(page);
 	out->resident += PAGE_SIZE;
-	if (folio_test_anon(folio))
+	/* MV2 W-2: the anon family is "not a file mapping" -- the
+	 * unanchored anon folio has no mapping for folio_test_anon()
+	 * to see.
+	 */
+	if (!corten_folio_is_filemap(folio))
 		out->anon += PAGE_SIZE;
 	pss = (u64)PAGE_SIZE << CORTEN_PSS_SHIFT;
 	mapcount = folio_mapcount(folio);
@@ -4424,7 +4500,6 @@ void corten_region_smap_stats(struct mm_struct *mm,
 			      const struct corten_region_row *row,
 			      struct corten_smap_stats *out)
 {
-	struct vm_area_struct *carrier = READ_ONCE(row->ar->carrier);
 	unsigned long a;
 
 	out->resident = 0;
@@ -4459,7 +4534,7 @@ void corten_region_smap_stats(struct mm_struct *mm,
 		if (!ptep)
 			goto hole;
 		for (; a != fe; a += PAGE_SIZE, ptep++)
-			corten_smap_pte(carrier, ptep_get(ptep), a, out);
+			corten_smap_pte(ptep_get(ptep), a, out);
 		pte_unmap_unlock(ptep - 1, ptl);
 		cond_resched();
 		continue;
@@ -4473,8 +4548,7 @@ hole:
 /* One locked PT page's slice of the pagemap fill: classify and emit
  * [a, fe), advancing *@ap.  Returns the first non-zero emit() verdict.
  */
-static int corten_pagemap_fill_pt(struct vm_area_struct *carrier,
-				  pte_t *ptep, unsigned long *ap,
+static int corten_pagemap_fill_pt(pte_t *ptep, unsigned long *ap,
 				  unsigned long fe, bool show_pfn,
 				  int (*emit)(void *ctx, u64 pme), void *ctx)
 {
@@ -4484,7 +4558,7 @@ static int corten_pagemap_fill_pt(struct vm_area_struct *carrier,
 		u64 frame, flags;
 		int err;
 
-		corten_pagemap_pte(carrier, ptep_get(ptep), a, show_pfn,
+		corten_pagemap_pte(ptep_get(ptep), a, show_pfn,
 				   &frame, &flags);
 		err = emit(ctx,
 			   (frame & CORTEN_PM_PFRAME_MASK) | flags);
@@ -4510,20 +4584,8 @@ int corten_pagemap_fill(struct mm_struct *mm, unsigned long addr,
 			unsigned long end, bool show_pfn,
 			int (*emit)(void *ctx, u64 pme), void *ctx)
 {
-	struct vm_area_struct *carrier = NULL;
 	unsigned long a;
 	int err;
-
-	/* The carrier of the first covering region provides the
-	 * vm_normal_page() vma context (no VM_PFNMAP/VM_MIXEDMAP shapes
-	 * exist in the window, but the call wants a vma).
-	 */
-	{
-		struct corten_region_row row;
-
-		if (corten_row_query(mm, addr, &row))
-			carrier = READ_ONCE(row.ar->carrier);
-	}
 
 	/* Walk one PT page's slice [a, fe): classified entries, or the
 	 * zero entries of the no-PT-page/defensive-leaf shapes.  A
@@ -4545,7 +4607,7 @@ int corten_pagemap_fill(struct mm_struct *mm, unsigned long addr,
 		if (ptep) {
 			pte_t *locked = ptep;
 
-			err = corten_pagemap_fill_pt(carrier, ptep, &a, fe,
+			err = corten_pagemap_fill_pt(ptep, &a, fe,
 						     show_pfn, emit, ctx);
 			pte_unmap_unlock(locked, ptl);
 			cond_resched();
@@ -5994,15 +6056,13 @@ corten_arena_fork_mark_window(struct corten_arena *ar, unsigned long addr,
  * The cached shadow-VMA mirrors the parent's cache exactly: the piece
  * the parent cached, when the child inherited it; NULL on a punch-hole
  * cache (the multi-piece degradation the fault paths already handle).
- * V-A.2b: the child of a carrier arena gets its own detached carrier
- * -- created here (same bounds/flags), its anon_vma forked off the
- * parent's (the exact shape dup_mmap() establishes for tree VMAs, so
- * copy_page_range()'s rmap duplication on the child carrier is the
- * standard one) and published before the registry stores ([FAIL-2]).
- * Registered under the child state's ctl_lock.  The caller holds the
- * parent registry's lock nowhere on this path: the two mutexes share
- * one lockdep class, so nesting them -- however singleton -- is not
- * expressible and is avoided (see fork_commit).
+ * MV2 W-2: an auto parent carries no anchor object any more, so the
+ * child's mirror is a pure record copy too (its window copy is
+ * corten-owned, the fork arm below).  Registered under the child
+ * state's ctl_lock.  The caller holds the parent registry's lock
+ * nowhere on this path: the two mutexes share one lockdep class, so
+ * nesting them -- however singleton -- is not expressible and is
+ * avoided (see fork_commit).
  */
 static int corten_arena_fork_register_child(struct mm_struct *mm,
 					    struct corten_mm_state *state,
@@ -6010,7 +6070,6 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 					    struct vm_area_struct *cvma)
 {
 	unsigned long frame, first, last;
-	struct vm_area_struct *pcarrier, *ccarrier = NULL;
 	struct corten_arena *child;
 	struct file *rfile = NULL;
 	int ret;
@@ -6023,39 +6082,15 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	child->end = ar->end;
 	child->mm = mm;
 	child->prot = READ_ONCE(ar->prot);
+	child->auto_shape = READ_ONCE(ar->auto_shape);
 
 	/* V-B.1: a FILE parent mirrors its payload into the child -- the
-	 * child's carrier is born in FILE shape (the parent's file
-	 * pointer, borrowed: register_file below takes the child's own
-	 * reference, same object) with the parent's pgoff.
+	 * child's own reference (get_file in register_file below) and
+	 * the pgoff copy.
 	 */
 	if (READ_ONCE(ar->rclass) == CORTEN_REGION_FILE) {
 		rfile = READ_ONCE(ar->rfile);
-		WARN_ON_ONCE(!rfile || !READ_ONCE(ar->carrier));
-	}
-
-	/* V-A.2b/C1: the child carrier of an auto arena, allocated BARE
-	 * (no anon_vma_prepare) so anon_vma_fork() starts from a NULL
-	 * chain -- the exact dup_mmap() shape.  Both failures
-	 * (-ENOMEM from the alloc or the fork) unwind before any
-	 * publication.
-	 */
-	pcarrier = READ_ONCE(ar->carrier);
-	if (pcarrier) {
-		ccarrier = corten_arena_carrier_alloc(mm, ar->start, ar->end,
-						      READ_ONCE(child->prot),
-						      rfile,
-						      READ_ONCE(ar->rpoff),
-						      false);
-		if (!ccarrier) {
-			ret = -ENOMEM;
-			goto out_free_child;
-		}
-		ret = anon_vma_fork(ccarrier, pcarrier);
-		if (ret) {
-			corten_arena_carrier_free(ccarrier);
-			goto out_free_child;
-		}
+		WARN_ON_ONCE(!rfile);
 	}
 
 	/* W1.b: a FILE parent pre-allocates the child's registry head
@@ -6079,10 +6114,9 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	 * pgoff copy, so INV-MV3 rule (d) holds on both sides of the
 	 * fork.  The pieces payload is always empty (no file punch
 	 * producer), so single-piece IS the copy.  register()'s INV-MV3
-	 * tripwire reads the anchor pairings, so the publishes below must
+	 * tripwire reads the record pairings, so the publishes below must
 	 * precede it.
 	 */
-	WRITE_ONCE(child->carrier, ccarrier);
 	WRITE_ONCE(child->vma, cvma);
 	if (rfile)
 		corten_region_register_file(child, READ_ONCE(ar->may_prot),
@@ -6098,7 +6132,7 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	ret = percpu_ref_init(&child->active, corten_arena_active_release,
 			      PERCPU_REF_INIT_ATOMIC, GFP_KERNEL);
 	if (ret)
-		goto out_put_carrier;
+		goto out_put_child;
 
 	mutex_lock(&state->ctl_lock);
 
@@ -6135,23 +6169,13 @@ out_unwind:
 		xa_erase(&state->arenas, --frame);
 	mutex_unlock(&state->ctl_lock);
 	percpu_ref_exit(&child->active);
-out_put_carrier:
+out_put_child:
 	mutex_destroy(&child->fill_lock);
-	/* V-B.1: the half-published FILE payload's reference (and the
-	 * carrier's borrowed pointer) -- the registry node was never
-	 * linked (the link is past every failure path), so the disarm
-	 * spelling, not the teardown one.
+	/* V-B.1: the half-published FILE payload's reference -- the
+	 * registry node was never linked (the link is past every failure
+	 * path), so the disarm spelling, not the teardown one.
 	 */
 	corten_region_file_disarm(child);
-	if (ccarrier) {
-		/* The child mm is being discarded wholesale on this path
-		 * (fork_abort / MMF_UNSTABLE); dropping the half-forked
-		 * carrier here keeps the anon_vma tree clean of a node no
-		 * one will ever walk again.
-		 */
-		corten_arena_carrier_free(ccarrier);
-		WRITE_ONCE(child->carrier, NULL);
-	}
 out_free_child:
 	kfree(child);
 	return ret;
@@ -6187,6 +6211,232 @@ out_free_child:
  *     "rogue ACCERR" shape re-created on the child side.
  *   - CORTEN_INVALID without perm: never recorded, skipped.
  */
+/*
+ * MV2 W-2: the window PT copy of an auto arena -- the corten-owned arm
+ * that replaced copy_page_range() over the retired carrier pair.  An
+ * auto window has no VMA for the generic vma-keyed copier, and its
+ * anon folios are unanchored (the W-2 novma flip), so
+ * copy_present_ptes()'s folio_test_anon fork would misfile the child's
+ * rss family (W1_NATIVE_RMAP_SPEC.md fact F7).  The walk carries the
+ * copy_page_range() contract over, with the vma-shaped verdicts read
+ * off the PTE and the folio instead:
+ *
+ *   - present, not special: the COW share -- the parent wrprotected,
+ *     the child inherits the RO translation, the folio reference is
+ *     the child PTE's, the mapcount duplicated through the novma
+ *     wrapper with the exclusive mark cleared (folio_try_dup_anon_
+ *     rmap_pte()'s order-0 shape); a pagecache folio (the FILE
+ *     region's read-arm install) takes the bare mapcount bump and the
+ *     file rss family (folio_dup_file_rmap_pte()'s order-0 shape, the
+ *     W1.c numeric equivalence).  A GUP-pinned anon folio takes
+ *     copy_present_page()'s answer instead: the child gets a private
+ *     copy, the parent keeps the pinned original writable and
+ *     exclusive -- fork_mark_window()'s pinned-private verdict keys on
+ *     exactly that surviving shape to spare the SHARED mark.
+ *   - present special: the shared zero page -- a plain PTE copy, no
+ *     rmap, no COW (vm_normal_page()'s NULL).
+ *   - a swap entry: swap_duplicate + the entry shared, the exclusive
+ *     bit cleared on the parent (copy_nonpresent_pte()'s swap arm) --
+ *     every other non-present family (migration/device/markers) is
+ *     structurally excluded from a window (no migration route, R2).
+ *
+ * The metadata replay (④-4) of the same window runs right after and
+ * reads the child PTEs this arm installs.
+ *
+ * Lock shape = copy_pte_range()'s: both mms write-locked (fork_commit
+ * asserts), the child PT lock first and the parent's nested, inside
+ * the parent's write_protect_seq write section (the GUP-fast
+ * wrprotect-race envelope copy_page_range establishes) and the
+ * PROTECTION_PAGE notifier window.  The child cannot schedule inside
+ * dup_mmap(), so no transaction can race the walk; the per-window
+ * descriptor transactions belong to the mark/replay passes around
+ * this arm.
+ */
+static int corten_arena_fork_copy_ptes(struct mm_struct *dst_mm,
+				       struct mm_struct *src_mm,
+				       unsigned long addr,
+				       unsigned long win_end)
+{
+	pgd_t *pgdp;
+	p4d_t *p4dp;
+	pud_t *pudp;
+	pmd_t *spmdp, *dpmdp;
+	pte_t *sptep, *dptep;
+	spinlock_t *sptl, *dptl;
+	struct mmu_notifier_range range;
+	unsigned long a;
+	int ret = 0;
+
+	spmdp = corten_arena_pmd(src_mm, addr);
+	if (!spmdp || !pmd_present(READ_ONCE(*spmdp)) ||
+	    pmd_leaf(READ_ONCE(*spmdp)))
+		return 0;	/* no parent content: nothing to copy */
+
+	pgdp = pgd_offset(dst_mm, addr);
+	p4dp = p4d_alloc(dst_mm, pgdp, addr);
+	if (!p4dp)
+		return -ENOMEM;
+	pudp = pud_alloc(dst_mm, p4dp, addr);
+	if (!pudp)
+		return -ENOMEM;
+	dpmdp = pmd_alloc(dst_mm, pudp, addr);
+	if (!dpmdp)
+		return -ENOMEM;
+
+	/* copy_page_range()'s is_cow envelope (the PROTECTION_PAGE
+	 * notifier window; no secondary-MMU user maps arena ranges,
+	 * R6-2, taken for contract parity).
+	 */
+	mmu_notifier_range_init(&range, MMU_NOTIFY_PROTECTION_PAGE, 0,
+				src_mm, addr, win_end);
+	mmu_notifier_invalidate_range_start(&range);
+	raw_write_seqcount_begin(&src_mm->write_protect_seq);
+
+	sptep = pte_offset_map(spmdp, addr);
+	if (!sptep) {
+		ret = -EAGAIN;
+		goto out_seq;
+	}
+	dptep = pte_alloc_map_lock(dst_mm, dpmdp, addr, &dptl);
+	if (!dptep) {
+		pte_unmap(sptep);
+		ret = -ENOMEM;
+		goto out_seq;
+	}
+	sptl = pte_lockptr(src_mm, spmdp);
+	spin_lock_nested(sptl, SINGLE_DEPTH_NESTING);
+
+	for (a = addr; a < win_end; a += PAGE_SIZE, sptep++, dptep++) {
+		pte_t pte = ptep_get(sptep), npte;
+		struct page *page;
+		struct folio *folio;
+		bool copied = false;
+
+		if (pte_none(pte))
+			continue;
+
+		if (!pte_present(pte)) {
+			/* The swap-entry share.  A foreign entry leaves
+			 * the slot unrecorded, the clean-slate contract
+			 * (the replay arm re-verdicts it).
+			 */
+			swp_entry_t entry = pte_to_swp_entry(pte);
+
+			if (non_swap_entry(entry))
+				continue;
+			if (unlikely(swap_duplicate(entry) < 0)) {
+				ret = -EIO;
+				break;
+			}
+			/* Make sure dst_mm is on swapoff's mmlist. */
+			if (unlikely(list_empty(&dst_mm->mmlist))) {
+				spin_lock(&mmlist_lock);
+				if (list_empty(&dst_mm->mmlist))
+					list_add(&dst_mm->mmlist,
+						 &src_mm->mmlist);
+				spin_unlock(&mmlist_lock);
+			}
+			/* Mark the entry as shared: copy_nonpresent_pte()
+			 * clears the exclusive bit and installs the
+			 * cleared spelling on BOTH sides (parent first).
+			 */
+			npte = pte;
+			if (pte_swp_exclusive(pte)) {
+				npte = pte_swp_clear_exclusive(pte);
+				set_pte_at(src_mm, a, sptep, npte);
+			}
+			add_mm_counter(dst_mm, MM_SWAPENTS, 1);
+			set_pte_at(dst_mm, a, dptep, npte);
+			continue;
+		}
+
+		if (pte_special(pte)) {
+			/* The shared zero page: no rmap, no COW, the RO
+			 * translation copies verbatim (fresh access age
+			 * for the child).
+			 */
+			set_pte_at(dst_mm, a, dptep, pte_mkold(pte));
+			continue;
+		}
+
+		page = pte_page(pte);
+		folio = page_folio(page);
+		folio_get(folio);
+
+		if (!corten_folio_is_filemap(folio)) {
+			/* The unanchored anon share (the fork's COW
+			 * shape), unless GUP holds it pinned: the child
+			 * then gets its own copy so the pinned folio is
+			 * never randomly replaced on a later write
+			 * (copy_present_page()).  The family verdict is
+			 * the folio's own mapping state, NOT
+			 * folio_test_swapbacked() -- a shmem pagecache
+			 * folio is swap-backed too and would misfile the
+			 * child's rss family (this is fact F7 with the
+			 * polarities reversed).
+			 */
+			if (folio_maybe_dma_pinned(folio)) {
+				struct folio *newfolio;
+
+				newfolio =
+				corten_arena_folio_alloc_novma(dst_mm, a);
+				if (!newfolio) {
+					folio_put(folio);
+					ret = -ENOMEM;
+					break;
+				}
+				folio_copy(newfolio, folio);
+				__folio_mark_uptodate(newfolio);
+				folio_add_anon_rmap_novma(newfolio);
+				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
+				/* The copy's writable bit follows the
+				 * parent's encoding (the recorded perm):
+				 * a RO parent's copy re-arms on the
+				 * child's first write through the COW
+				 * reuse branch, the conservative
+				 * direction of the PTE-encodes-perm
+				 * contract.
+				 */
+				npte = folio_mk_pte(newfolio,
+						    pte_pgprot(pte));
+				npte = pte_mkdirty(npte);
+				if (pte_write(pte))
+					npte = pte_mkwrite_novma(npte);
+				set_pte_at(dst_mm, a, dptep, npte);
+				copied = true;
+			} else {
+				folio_dup_anon_rmap_novma(folio, page);
+				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
+			}
+		} else {
+			/* A pagecache folio: dup is a bare mapcount bump
+			 * (order-0, no stat either way -- W1.c).
+			 */
+			folio_dup_file_rmap_novma(folio);
+			add_mm_counter(dst_mm, mm_counter_file(folio), 1);
+		}
+
+		if (!copied) {
+			/* The COW share: write protect it in both
+			 * processes; the child's translation inherits the
+			 * (now RO) encoding, young cleared.
+			 */
+			if (pte_write(pte))
+				ptep_set_wrprotect(src_mm, a, sptep);
+			npte = pte_mkold(pte_wrprotect(pte));
+			set_pte_at(dst_mm, a, dptep, npte);
+		}
+	}
+
+	spin_unlock(sptl);
+	pte_unmap_unlock(dptep - 1, dptl);
+	pte_unmap(sptep - 1);
+out_seq:
+	raw_write_seqcount_end(&src_mm->write_protect_seq);
+	mmu_notifier_invalidate_range_end(&range);
+	return ret;
+}
+
 static int corten_arena_fork_copy_window(struct mm_struct *mm,
 					 unsigned long addr,
 					 unsigned long win_end,
@@ -6333,14 +6583,12 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 				    struct corten_arena *ar,
 				    struct corten_pte_meta *snap)
 {
-	struct vm_area_struct *vma, *pvma, *cvma, *pcarrier;
+	struct vm_area_struct *vma, *pvma, *cvma;
 	pmd_t *cpmdp;
 	unsigned long addr;
 	bool any_piece = false;
 	int ret;
 
-	/* V-A.2b: the parent carrier (the PTE copy source below). */
-	pcarrier = NULL;
 	cvma = NULL;
 
 	/* ④-1 child-side skip.  [F-B] Since the D-G'' punch route an arena
@@ -6354,10 +6602,10 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 	 * marks are needed, and any residue self-heals through the COW
 	 * reuse branch.  Counted as fork_skips.
 	 *
-	 * The test reads the TREE shadow only: an auto arena's anchor is
-	 * its detached carrier (ar->vma == NULL), which never reaches the
-	 * dup_mmap() loop -- the copy below carries it (V-A.2b), so the
-	 * carrier shapes must not skip.
+	 * The test reads the TREE shadow only: an auto arena has no tree
+	 * shape at all (ar->vma == NULL since V-A.2b, and no anchor
+	 * object since W-2) -- the copy arm above carries it, so the
+	 * auto shapes must not skip.
 	 */
 	VMA_ITERATOR(vmi, mm, ar->start);
 	for_each_vma_range(vmi, vma, ar->end) {
@@ -6396,39 +6644,36 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 	if (ret)
 		return ret;
 
-	/* V-A.2b: the PTE copy of an auto arena rides the carrier pair --
-	 * copy_page_range() over the child/parent carriers is the exact
-	 * machinery the dup_mmap() loop runs for tree VMAs (whitelist #1,
-	 * DEV-14): COW wrprotect on both sides, folio ref + child rmap
-	 * duplication (folio_try_dup_anon_rmap_pte clears the exclusive
-	 * mark), swap-entry doubling, the GUP-pinned parent-page copy.
-	 * The explicit A.1 arm (hand-rolled present/swap duplication
-	 * without any rmap) is gone: restoring the anchor made its
-	 * bookkeeping a partial re-derivation of copy_present_ptes().
-	 *
-	 * Lock shape = dup_mmap()'s: both mms write-locked (asserted in
-	 * fork_commit), the parent carrier write-marked (the src_vma
-	 * vma_assert_write_locked() inside copy_page_range), the child
-	 * carrier write-marked at creation.  Punched holes inside the
-	 * arena have no parent PT pages -- copy_page_range() walks by the
-	 * parent's tables and costs nothing there.
+	/* MV2 W-2: the PTE copy of an auto arena is corten-owned (the
+	 * carrier pair that used to ride copy_page_range() is retired --
+	 * an auto window has no VMA for the generic vma-keyed copier,
+	 * and its anon folios are unanchored, so copy_present_ptes()'s
+	 * folio_test_anon fork would misfile the child's rss family
+	 * anyway: W1_NATIVE_RMAP_SPEC.md fact F7).  The arm carries the
+	 * copy_page_range() contract over: COW wrprotect on the parent,
+	 * folio ref + child mapcount duplication (the exclusive mark
+	 * cleared), swap-entry doubling, the GUP-pinned parent-page
+	 * copy.  A shadow arena's copy below still rides the ordinary
+	 * dup_mmap() loop (whitelist #1, DEV-14): its pieces are tree
+	 * VMAs and its pages stay anon-anchored, the F7 fork stays
+	 * verbatim until W-4 sweeps the tree.
 	 */
-	pcarrier = READ_ONCE(ar->carrier);
-	if (pcarrier) {
-		/* register_child() stored the child at the arena's first
-		 * frame; its carrier is the dst_vma of the copy.
-		 */
-		struct corten_arena *child_ar;
-		struct vm_area_struct *ccarrier;
+	if (READ_ONCE(ar->auto_shape)) {
+		for (addr = ar->start; addr < ar->end;
+		     addr = min((addr | (PMD_SIZE - 1)) + 1, ar->end)) {
+			unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1,
+						    ar->end);
 
-		child_ar = xa_load(&state->arenas, ar->start >> PMD_SHIFT);
-		ccarrier = child_ar ? READ_ONCE(child_ar->carrier) : NULL;
-		if (WARN_ON_ONCE(!ccarrier))
-			return -ENOENT;
-		vma_start_write(pcarrier);
-		ret = copy_page_range(ccarrier, pcarrier);
-		if (ret)
-			return -ENOMEM;
+			/* The child PT page of a window exists exactly
+			 * where the parent had content: the arm walks by
+			 * the parent's tables and pte_alloc's the child's,
+			 * so punched holes cost nothing.
+			 */
+			ret = corten_arena_fork_copy_ptes(mm, ar->mm, addr,
+							  win_end);
+			if (ret)
+				return ret;
+		}
 	}
 
 	/* ④-2 + ④-4 per window: parent snapshot + SHARED marks, then the
@@ -6444,7 +6689,7 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 		 * is absent from the child (the dup_mmap loop skips it) and
 		 * a VM_WIPEONFORK piece lost its translations (its copy is
 		 * skipped).  Marking such pages SHARED would leave residue
-		 * whose parent PTE is still writable (copy_page_range never
+		 * whose parent PTE is still writable (the copy never
 		 * wrprotected the piece): exactly the INV7-drift shape,
 		 * plus a needless first-write COW detour the COW reuse
 		 * branch would only have to unwind.  The child replay has
@@ -6452,10 +6697,9 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 		 * test): skip the window.  A window that DID get a child PT
 		 * page marks normally -- page-granular piece borders inside
 		 * one 2M window are tolerated as benign residue (they
-		 * self-heal and stay INV7-clean only per-window).  For a
-		 * carrier arena the gate reads the tables the carrier
-		 * copy_page_range() just allocated (only where the parent
-		 * had content).
+		 * self-heal and stay INV7-clean only per-window).  For an
+		 * auto arena the gate reads the tables the copy arm above
+		 * just allocated (only where the parent had content).
 		 */
 		cpmdp = corten_arena_pmd(mm, addr);
 		if (!cpmdp || !pmd_present(READ_ONCE(*cpmdp)) ||
@@ -6721,34 +6965,34 @@ bool corten_arena_fault_owned(struct corten_arena *ar, struct mm_struct *mm,
 			      unsigned long addr)
 {
 	struct vm_area_struct *vma;
+	struct corten_mm_state *state;
 	bool owned;
 
-	/* V-A.2b: tier 1 reads the anchor -- the carrier (auto arenas)
-	 * bounds the arena exactly like the shadow-VMA did (same start/
-	 * end by construction), so the zero-walk fast path works for
-	 * both shapes.
+	/* MV2 W-2: tier 1 reads the record -- the bounds are the same
+	 * ones the anchor-VMA spans check carried (same start/end by
+	 * construction), so the zero-walk fast path is pure metadata for
+	 * both shapes (an auto arena has no anchor object at all).
 	 */
-	vma = corten_arena_anchor_vma(ar);
-	if (vma && corten_arena_vma_spans(vma, addr))
+	if (addr >= READ_ONCE(ar->start) && addr < READ_ONCE(ar->end))
 		return true;
 
-	if (!vma) {
-		/* Tier 1b: metadata-only ownership (VMA-less arena). */
-		struct corten_mm_state *state;
+	/* Tier 2: the frame's residency -- a punched or tearing-down
+	 * arena's slot is not this arena's any more.
+	 */
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state)
+		return false;
 
-		/* Pairs with the store in corten_arena_state_create(). */
-		state = smp_load_acquire(&mm->corten_state);
+	rcu_read_lock();
+	owned = xa_load(&state->arenas, addr >> PMD_SHIFT) == ar;
+	rcu_read_unlock();
+	if (!owned)
+		return false;
 
-		if (addr < ar->start || addr >= ar->end || !state)
-			return false;
-
-		rcu_read_lock();
-		owned = xa_load(&state->arenas, addr >> PMD_SHIFT) == ar;
-		rcu_read_unlock();
-		return owned;
-	}
-
-	/* Tier 2: rare -- only punched or tearing-down arenas get here. */
+	/* Tier 3: rare -- the surviving piece must still cover the
+	 * address (the tree walk the old tier 2 ran).
+	 */
+	vma = NULL;
 	rcu_read_lock();
 	vma = corten_vma_find(mm, addr, addr + 1);
 	owned = corten_arena_fault_covered(NULL, vma, addr);
@@ -7298,18 +7542,19 @@ static int corten_arena_map_anon(struct corten_fault_ctx *ctx,
 	 * no folio_ref_add() (legacy nr_pages - 1 == 0).
 	 */
 	add_mm_counter(mm, MM_ANONPAGES, 1);
-	/* V-A.1: a VMA-less arena's pages carry no rmap anchor -- there is
-	 * no vma for folio_add_new_anon_rmap() to hang the anon_vma chain
-	 * on.  The PTE reference (refcount) is the only binding; every
-	 * rmap-walking consumer of arena folios is structurally excluded
-	 * (migration/hwpoison reject them, the reclaim guards refuse
-	 * them, GUP-slow needs a VMA), and the zap/mprotect paths keep
-	 * the mapcount symmetry by skipping the removal for the same
-	 * shape.  The V-A.2b carrier restores the anchor.
+	/* MV2 W-2 (R1 flip): the anon window page's mapcount is exact
+	 * bookkeeping on every shape now -- the auto (vma-less) shapes
+	 * through the W1.a novma wrapper, the shadow shapes through the
+	 * anchored call (their legacy dup_mmap() fork copy, hwpoison
+	 * probe and mlock verdicts read that anchor until W-4 sweeps
+	 * the tree).  The mapcount symmetry of zap/COW/driver removals
+	 * keys on the same discriminator.
 	 */
 	if (vma)
 		folio_add_new_anon_rmap(arena_folio, vma, ctx->addr,
 					RMAP_EXCLUSIVE);
+	else
+		folio_add_anon_rmap_novma(arena_folio);
 	/* M3 difference vs do_anonymous_page(): no folio_add_lru_vma() --
 	 * arena pages stay off the LRU so reclaim/migration can never
 	 * write to them outside a transaction (sec 4.6, matrix 5.17).
@@ -7547,7 +7792,11 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 
 	page = pte_page(cur);
 	old = page_folio(page);
-	old_is_file = !folio_test_anon(old);
+	/* MV2 W-2: the family discriminator is the folio's own state
+	 * (corten_folio_is_filemap), not folio_test_anon() -- the auto
+	 * window's anon folio is unanchored.
+	 */
+	old_is_file = corten_folio_is_filemap(old);
 
 	/* V-B.3 (H6): a pagecache folio (the FILE_MAPPED read arm's
 	 * install) never takes the reuse answer -- its mapcount is the
@@ -7652,22 +7901,27 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 	if (vma)
 		folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr,
 					RMAP_EXCLUSIVE);
+	else
+		folio_add_anon_rmap_novma(ctx->folio);
 	set_ptes(mm, ctx->addr, ptep, entry, 1);
 	if (vma)
 		update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
 
-	/* V-A.1: the old folio of a VMA-less arena carries no rmap anchor
-	 * (see map_anon); the removal stays symmetric with the add.
-	 * W1.c (R3): a pagecache old folio's rmap is the file mapping's
-	 * own mapcount (the read arm's novma install) -- its removal is
-	 * vma-free now, numerically the same -1 mapper the vma-ful call
-	 * ran.  V-B.3 (H6): its counter is mm_counter_file()'s family
-	 * (V-B.4) -- the same split corten_zap_release_page() makes.
+	/* MV2 W-2 (R2/R3 flip): the removal stays symmetric with the add
+	 * on every shape -- the auto (vma-less) anon folios through the
+	 * W1.a novma wrapper, the shadow anon folios through the
+	 * anchored call.  W1.c (R3): a pagecache old folio's rmap is the
+	 * file mapping's own mapcount (the read arm's novma install) --
+	 * its removal is vma-free, numerically the same -1 mapper.
+	 * V-B.3 (H6): its counter is mm_counter_file()'s family (V-B.4)
+	 * -- the same split corten_zap_release_page() makes.
 	 */
 	if (old_is_file)
 		folio_remove_file_rmap_novma(old);
 	else if (vma)
 		folio_remove_rmap_pte(old, page, vma);
+	else
+		folio_remove_anon_rmap_novma(old);
 	add_mm_counter(mm, old_is_file ? mm_counter_file(old) :
 				    MM_ANONPAGES, -1);
 	pte_unmap_unlock(ptep, ptl);
@@ -8018,10 +8272,18 @@ retry:
 
 	/* No folio_add_lru(): arena pages stay off the LRU (DEV-10).
 	 * The fresh folio gets the new-anon rmap shape (upstream's
-	 * non-swapcache branch); VMA-less arenas skip it (see map_anon).
+	 * non-swapcache branch): the anchored call on a shadow window,
+	 * the W1.a novma wrapper on an auto one (MV2 W-2, R6).  The
+	 * non-exclusive fork-shared shape re-arms SHARED below; the
+	 * exclusive flag it carried steers the AnonExclusive the
+	 * wrappers set, so a shared swap-in drops the mark again.
 	 */
 	if (vma)
 		folio_add_new_anon_rmap(folio, vma, ctx->addr, rmap_flags);
+	else
+		folio_add_anon_rmap_novma(folio);
+	if (!vma && !(rmap_flags & RMAP_EXCLUSIVE))
+		ClearPageAnonExclusive(folio_page(folio, 0));
 	/* No TLB invalidate: the PTE was a swap entry (non-present), so
 	 * no CPU can hold a translation for it.
 	 */
@@ -8282,7 +8544,10 @@ static int corten_arena_file_read(struct corten_fault_ctx *ctx,
 	int ret;
 
 	vma = corten_arena_get_vma(ctx);
-	if (!vma || !ar->rfile)
+	/* MV2 W-2: an auto FILE region has no anchor VMA any more; the
+	 * payload (@rfile) is what makes the region a FILE one.
+	 */
+	if (!ar->rfile)
 		return -EFAULT;
 
 	pgoff = ar->rpoff + ((ctx->addr - ar->start) >> PAGE_SHIFT);
@@ -8352,7 +8617,8 @@ static int corten_arena_file_read(struct corten_fault_ctx *ctx,
 	 * is the source of truth).  No TLB invalidate: the PTE was
 	 * pte_none() above, so no CPU can hold a stale translation.
 	 */
-	entry = mk_pte(page, corten_arena_perm_pgprot(vma, m2.perm));
+	entry = mk_pte(page, vma ? corten_arena_perm_pgprot(vma, m2.perm) :
+				   corten_arena_perm_pgprot_pure(m2.perm));
 	entry = pte_sw_mkyoung(entry);
 	/* V-B.4: the rss family follows mm_counter_file() -- a shmem
 	 * folio is MM_SHMEMPAGES, exactly what legacy's do_read_fault()
@@ -8373,7 +8639,8 @@ static int corten_arena_file_read(struct corten_fault_ctx *ctx,
 	 */
 	folio_add_file_rmap_novma(folio);
 	set_ptes(mm, ctx->addr, ptep, entry, 1);
-	update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
+	if (vma)
+		update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
 	pte_unmap_unlock(ptep, ptl);
 	corten_unlock(&txn);
 
@@ -8428,7 +8695,10 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 	int ret;
 
 	vma = corten_arena_get_vma(ctx);
-	if (!vma || !ar->rfile)
+	/* MV2 W-2: an auto FILE region has no anchor VMA any more; the
+	 * payload (@rfile) is what makes the region a FILE one.
+	 */
+	if (!ar->rfile)
 		return -EFAULT;
 
 	pgoff = ar->rpoff + ((ctx->addr - ar->start) >> PAGE_SHIFT);
@@ -8530,20 +8800,33 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 	/* do_cow_fault()'s body: copy the file contents into the private
 	 * folio under ptl (the folio stays alive on the fetch reference
 	 * until the put below).  No break-before-make flush: the PTE was
-	 * pte_none(), so no CPU can hold a cached translation.
+	 * pte_none(), so no CPU can hold a cached translation.  MV2 W-2:
+	 * the vma-less shapes copy through folio_copy() (the cache
+	 * policy term copy_user_highpage() takes is the vma's; an arena
+	 * whitelist admits no exotic policy).
 	 */
-	copy_user_highpage(folio_page(ctx->folio, 0), page, ctx->addr, vma);
+	if (vma)
+		copy_user_highpage(folio_page(ctx->folio, 0), page,
+				   ctx->addr, vma);
+	else
+		folio_copy(ctx->folio, page_folio(page));
 	__folio_mark_uptodate(ctx->folio);
 
 	entry = folio_mk_pte(ctx->folio,
-			     corten_arena_perm_pgprot(vma, m2.perm));
+			     vma ? corten_arena_perm_pgprot(vma, m2.perm) :
+				   corten_arena_perm_pgprot_pure(m2.perm));
 	entry = pte_mkyoung(entry);
 	entry = corten_pte_mkwrite(pte_mkdirty(entry), vma);
 
 	add_mm_counter(mm, MM_ANONPAGES, 1);
-	folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr, RMAP_EXCLUSIVE);
+	if (vma)
+		folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr,
+					RMAP_EXCLUSIVE);
+	else
+		folio_add_anon_rmap_novma(ctx->folio);
 	set_ptes(mm, ctx->addr, ptep, entry, 1);
-	update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
+	if (vma)
+		update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
 	pte_unmap_unlock(ptep, ptl);
 
 	/* FILE_MAPPED -> MAPPED ("any -> MAPPED" is the protocol's legal
@@ -9002,10 +9285,11 @@ out:
  * and in_atomic exits are the hook's (mm/memory.c); this function runs
  * with no retry contract on mmap_lock -- it never returns VM_FAULT_RETRY.
  */
-vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma,
-					unsigned long address,
-					unsigned int flags,
-					struct pt_regs *regs)
+static vm_fault_t __corten_arena_handle_mm_fault(struct mm_struct *mm,
+						 struct vm_area_struct *vma,
+						 unsigned long address,
+						 unsigned int flags,
+						 struct pt_regs *regs)
 {
 	struct corten_fault_ctx ctx = { };
 	struct corten_mm_state *state;
@@ -9014,7 +9298,7 @@ vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma,
 	int tries = 0;
 	int st;
 
-	ar = corten_arena_lookup_get(vma->vm_mm, address);
+	ar = corten_arena_lookup_get(mm, address);
 	if (!ar) {
 		/* Raced with RELEASE (frames erased): the shadow-VMA is
 		 * being torn down anyway -- legacy will fail naturally.
@@ -9026,8 +9310,12 @@ vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma,
 		return CORTEN_FAULT_FALLBACK_BIT | VM_FAULT_FALLBACK;
 	}
 
-	ctx.mm = vma->vm_mm;
+	ctx.mm = mm;
 	ctx.ar = ar;
+	/* @vma is the caller's cached anchor (the slow hook's shadow-VMA)
+	 * or NULL -- the W-2 vma-less GUP arm and every auto-arena shape
+	 * (ctx->vma arms re-resolve through the anchor when non-NULL).
+	 */
 	ctx.vma = vma;
 	ctx.addr = address & PAGE_MASK;
 	ctx.write = flags & FAULT_FLAG_WRITE;
@@ -9152,6 +9440,18 @@ vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma,
 	}
 }
 
+vm_fault_t corten_arena_handle_mm_fault(struct vm_area_struct *vma,
+					unsigned long address,
+					unsigned int flags,
+					struct pt_regs *regs)
+{
+	/* MV2 W-2: the vma is the slow hook's cached shadow-VMA; the
+	 * vma-less GUP window arm enters the same body with NULL.
+	 */
+	return __corten_arena_handle_mm_fault(vma->vm_mm, vma, address,
+					      flags, regs);
+}
+
 /* ------------------------------------------------------------------ *
  * S6: space-operation routing (M3B_DESIGN.md sec 5)
  * ------------------------------------------------------------------
@@ -9272,44 +9572,36 @@ struct corten_zap_win {
  */
 /*
  * The zap-side page release: rmap removal plus the anon/file counter
- * split.  V-A.1: @vma is NULL for a VMA-less arena, whose pages carry
- * no rmap anchor (see corten_arena_map_anon()) -- the removal must not
- * run for them or the mapcount underflows, and the folio is not flagged
- * anon, so the window's vma-ness owns the counter split.  W1.c (R7):
- * the *file* family's rmap is the pagecache folio's own mapcount (the
- * read arm's novma install), so its removal is vma-free too and the
- * folio family, not the window's vma-ness, keys the arm; the anon
- * family keeps the carrier-anchored call (its flip is W-2's).
+ * split.  W1.c (R7): the *file* family's rmap is the pagecache folio's
+ * own mapcount (the read arm's novma install), so its removal is
+ * vma-free and the folio family, not the window's vma-ness, keys the
+ * arm.  MV2 W-2: the anon family's removal runs on every shape too --
+ * the auto (vma-less) anon folios through the W1.a novma wrapper, the
+ * shadow anon folios through the anchored call.  The family
+ * discriminator is the folio's own state (corten_folio_is_filemap):
+ * an unanchored anon folio has no mapping and would read as file.
  */
 static void corten_zap_release_page(struct mm_struct *mm,
 				    struct vm_area_struct *vma,
 				    struct page *page, unsigned long addr)
 {
 	struct folio *folio = page_folio(page);
-	bool anon = folio_test_anon(folio);
+	bool file = corten_folio_is_filemap(folio);
 
-	/* V-A.1: a VMA-less arena's pages carry no rmap anchor (see
-	 * corten_arena_map_anon()) -- the removal must not run for them
-	 * or the mapcount underflows, and the folio is not flagged anon,
-	 * so the window's vma-ness owns the counter split.  W1.c (R7):
-	 * the file family removes through the novma wrapper (symmetric
-	 * with the read arm's install); the anon family stays on the
-	 * vma-anchored call.
-	 */
-	if (vma) {
-		if (anon)
-			folio_remove_rmap_pte(folio, page, vma);
-		else
-			folio_remove_file_rmap_novma(folio);
-	}
+	if (file)
+		folio_remove_file_rmap_novma(folio);
+	else if (vma)
+		folio_remove_rmap_pte(folio, page, vma);
+	else
+		folio_remove_anon_rmap_novma(folio);
 	/* V-B.4: the file family is mm_counter_file()'s (shmem-backed
 	 * folios are MM_SHMEMPAGES), symmetric with the read arm's
-	 * install and upstream's copy_page_range() at fork.
+	 * install and upstream's fork dup.
 	 */
-	if (!vma || anon)
-		add_mm_counter(mm, MM_ANONPAGES, -1);
-	else
+	if (file)
 		add_mm_counter(mm, mm_counter_file(folio), -1);
+	else
+		add_mm_counter(mm, MM_ANONPAGES, -1);
 }
 
 /*
@@ -10044,30 +10336,15 @@ static int corten_arena_pool_reactivate(struct mm_struct *mm,
 	 * check inside register() never observes "live ANON region,
 	 * still idle".
 	 *
-	 * V-A.2b: the carrier persists across the park (descriptor
-	 * lifetime) and resumes its anchor duties with the flip -- for a
-	 * slot that already has one, the reactivate stays a pure
-	 * metadata flip.  A slot whose last incarnation was a targeted
-	 * DECLARE (tree shadow, removed at its park) has none: re-arm it
-	 * unconditionally (F1: the declare-side route, novma == false,
-	 * re-arms too) -- an anchor-less live window would lose its
-	 * content at fork (no copy_page_range source) and stay
-	 * unpickable, so the A.1 mixed state is not a legal outcome any
-	 * more.  -ENOMEM keeps the slot parked -- the same degrade
-	 * contract as the accounting gate.
+	 * MV2 W-2: the reactivation is a pure metadata flip -- there is
+	 * no anchor object to re-arm any more (the carrier is retired;
+	 * an auto window's consumers are vma-free and its fork copy is
+	 * corten-owned, so an anchor-less live window loses nothing).
+	 * The reactivated slot is an auto shape by definition (the pool
+	 * take route).
 	 */
 	WRITE_ONCE(ar->idle, false);
-	if (!READ_ONCE(ar->carrier)) {
-		struct vm_area_struct *carrier;
-
-		carrier = corten_arena_carrier_alloc(mm, ar->start, ar->end,
-						     perm, NULL, 0, true);
-		if (!carrier) {
-			WRITE_ONCE(ar->idle, true);
-			return -ENOMEM;
-		}
-		WRITE_ONCE(ar->carrier, carrier);
-	}
+	ar->auto_shape = true;
 	corten_region_register(ar, CORTEN_REGION_ANON, corten_region_may_full(),
 			       0);
 	list_del(&ar->pool);
@@ -13561,10 +13838,10 @@ bool corten_rmap_unmap_one(struct folio *folio, struct vm_area_struct *vma,
  * Return: true = swapped out (PTE holds @entry, metadata =
  * CORTEN_SWAPPED with the entry encoded in __resv).
  */
-bool corten_rmap_swap_out(struct folio *folio, struct vm_area_struct *vma,
-			  unsigned long address, bool defer, pte_t *old_pte)
+bool corten_rmap_swap_out(struct folio *folio, struct mm_struct *mm,
+			  struct vm_area_struct *vma, unsigned long address,
+			  bool defer, pte_t *old_pte)
 {
-	struct mm_struct *mm = vma->vm_mm;
 	struct page *page = folio_page(folio, 0);
 	struct corten_pte_meta m, sm;
 	struct corten_txn txn;
@@ -13632,10 +13909,21 @@ bool corten_rmap_swap_out(struct folio *folio, struct vm_area_struct *vma,
 	/* --- committed to the swap-out from here (mirrors rmap.c) --- */
 	anon_exclusive = PageAnonExclusive(page);
 
-	flush_cache_range(vma, address, address + PAGE_SIZE);
+	/* MV2 W-2: the vma-less flush shapes for an auto window (the
+	 * cache term is a no-op on x86/arm64, the ranged TLB flush
+	 * degrades to the mm-range bounded one -- the
+	 * corten_pte_clear_flush() precedent); a shadow window keeps
+	 * its ranged flush.
+	 */
+	if (vma)
+		flush_cache_range(vma, address, address + PAGE_SIZE);
 	pteval = ptep_get_and_clear(mm, address, ptep);
-	if (!defer)
-		flush_tlb_range(vma, address, address + PAGE_SIZE);
+	if (vma) {
+		if (!defer)
+			flush_tlb_range(vma, address, address + PAGE_SIZE);
+	} else if (!defer) {
+		corten_tlb_flush_page_novma(mm, address);
+	}
 	/* @defer: the walker registers the deferred flush after this
 	 * transaction returns (set_tlb_ubc_flush_pending() is an
 	 * rmap.c static; see the R6-1 note in the header comment).
@@ -13697,7 +13985,16 @@ bool corten_rmap_swap_out(struct folio *folio, struct vm_area_struct *vma,
 	 * be pending for a shadow-VMA.
 	 */
 
-	folio_remove_rmap_ptes(folio, page, 1, vma);
+	/* MV2 W-2 (R8 flip): the removal through the W1.a novma wrapper
+	 * for an auto window (the anchored call on a shadow window) --
+	 * order-0 numerics identical, the vma terms were dead weight
+	 * (fact F1).  W1.e2 registered this flip for the driver's
+	 * de-carrier pass.
+	 */
+	if (vma)
+		folio_remove_rmap_ptes(folio, page, 1, vma);
+	else
+		folio_remove_anon_rmap_novma(folio);
 	folio_put_refs(folio, 1);
 
 	/* The metadata transition, same critical section: state
@@ -13784,11 +14081,14 @@ static int corten_rmap_ttu_file_one(struct corten_arena *ar,
 
 	/* The mlock contract, the M6.T1 prefilter's shape: a locked
 	 * window keeps its mappings until the reclaim passes
-	 * TTU_IGNORE_MLOCK (unmap_poisoned_folio's shape).  The carrier
-	 * carries the VM_LOCKED verdict the same way it carries the
-	 * committed perm.
+	 * TTU_IGNORE_MLOCK (unmap_poisoned_folio's shape).  The verdict
+	 * rides a shadow-VMA's flags; an auto FILE region has no anchor
+	 * VMA since MV2 W-2, and no mlock(2) can ever reach a
+	 * non-tree VMA either -- the carrier's VM_LOCKED bit was
+	 * structurally unsettable all along (the W-2 survey), so the
+	 * metadata world has nothing to read here.
 	 */
-	vma = READ_ONCE(ar->carrier);
+	vma = corten_arena_anchor_vma(ar);
 	if (!(flags & TTU_IGNORE_MLOCK) && vma &&
 	    (vma->vm_flags & VM_LOCKED)) {
 		atomic_long_inc(&corten_nr_rmap_rejects);
@@ -13806,15 +14106,11 @@ static int corten_rmap_ttu_file_one(struct corten_arena *ar,
 	if (m.state != CORTEN_FILE_MAPPED)
 		goto out_unlock;
 
-	/* The demotion is a PTE removal: it needs the carrier for the
-	 * cache/tlb flush shapes.  A live FILE region has one (the
-	 * parked/frozen windows were skipped by the enumeration).
+	/* The demotion is a PTE removal: the flush shapes take the
+	 * anchor when a shadow window has one, the vma-less forms when
+	 * it does not (MV2 W-2: an auto FILE region has none).
 	 */
 	vma = corten_arena_anchor_vma(ar);
-	if (unlikely(!vma)) {
-		WARN_ONCE(1, "corten: live FILE region without a carrier\n");
-		goto out_unlock;
-	}
 
 	pmdp = corten_arena_pmd(mm, addr);
 	if (unlikely(!pmdp))
@@ -13840,10 +14136,17 @@ static int corten_rmap_ttu_file_one(struct corten_arena *ar,
 
 	/* Committed (mirrors try_to_unmap_one()'s file branch): clear
 	 * + flush, dirty propagation, counter, rmap, PTE reference.
+	 * The flush shapes: ranged on a shadow window, the mm-range
+	 * bounded forms on an auto one (MV2 W-2, the
+	 * corten_pte_clear_flush() precedent).
 	 */
-	flush_cache_range(vma, addr, addr + PAGE_SIZE);
+	if (vma)
+		flush_cache_range(vma, addr, addr + PAGE_SIZE);
 	pteval = ptep_get_and_clear(mm, addr, ptep);
-	flush_tlb_range(vma, addr, addr + PAGE_SIZE);
+	if (vma)
+		flush_tlb_range(vma, addr, addr + PAGE_SIZE);
+	else
+		corten_tlb_flush_page_novma(mm, addr);
 	if (pte_dirty(pteval))
 		folio_mark_dirty(folio);
 
@@ -14159,13 +14462,13 @@ static int corten_arena_unuse_cache_pull(struct mm_struct *mm,
 	 * epoch before the shrinker may pick the page again.
 	 */
 	newpte = pte_mkyoung(newpte);
-	/* unuse_pte()'s rmap fork: a real-device keep's folio is the
-	 * original window page (still anon, mapcount returned by the
-	 * swap-out transaction), while a readahead-created cache member
-	 * was never faulted and carries no anon mapping yet.  A VMA-less
-	 * arena skips the rmap (the swap-in's own precedent); the
-	 * driver never swaps out an anchorless window, so that shape is
-	 * defensive only.
+	/* unuse_pte()'s rmap fork.  Shadow window (anchor present): the
+	 * original window page is still anon-mapped (folio_add_anon_
+	 * rmap_pte re-add), a readahead-created cache member never was
+	 * (new-anon).  MV2 W-2: an auto window's folios are unanchored
+	 * either way, so both shapes collapse into the W1.a novma
+	 * wrapper -- the swap entry's exclusive bit steers the
+	 * AnonExclusive mark (the swap-in's own contract).
 	 */
 	if (vma) {
 		if (!folio_test_anon(folio)) {
@@ -14175,6 +14478,10 @@ static int corten_arena_unuse_cache_pull(struct mm_struct *mm,
 			folio_add_anon_rmap_pte(folio, page, vma, addr,
 						rmap_flags);
 		}
+	} else {
+		folio_add_anon_rmap_novma(folio);
+		if (!(rmap_flags & RMAP_EXCLUSIVE))
+			ClearPageAnonExclusive(page);
 	}
 	/* No TLB invalidate: the slot held a swap entry (non-present),
 	 * so no CPU can hold a translation for it.
@@ -14524,31 +14831,35 @@ bool corten_swap_out_driver(struct mm_struct *mm, unsigned long addr,
 	/* vmscan.c:1360-1365.  The order-0 gate mirrors both the pick
 	 * budget and the ttu prefilter's folio_nr_pages() check; the
 	 * large-folio arm (1366-1378) is structurally unreachable.
+	 * MV2 W-2: the folio_test_anon() term is gone -- an auto
+	 * window's folio is unanchored (mapping == NULL); the picks are
+	 * anon window pages by construction (the pick gate read meta
+	 * CORTEN_MAPPED and unshared) and swapbacked is what the entry
+	 * leg needs.
 	 */
-	if (!folio_test_anon(folio) || !folio_test_swapbacked(folio) ||
+	if (!folio_test_swapbacked(folio) ||
 	    folio_nr_pages(folio) != 1 || folio_maybe_dma_pinned(folio))
 		goto keep_locked;
 
-	/* The carrier, for the flush shapes and the mlock verdict (the
-	 * corten_rmap_ttu_file_one() resolve shape): the active reference
-	 * pins the arena, and the carrier cannot be freed or flag-changed
-	 * under it.  A lookup loss here is a torn window the pick raced
-	 * with -- keep, the state is somebody else's transaction now.
+	/* The anchor, for the shadow-window flush shapes and the mlock
+	 * verdict (the corten_rmap_ttu_file_one() resolve shape): the
+	 * active reference pins the arena, and the anchor cannot be
+	 * freed or flag-changed under it.  A lookup loss here is a torn
+	 * window the pick raced with -- keep, the state is somebody
+	 * else's transaction now.  An auto window has no anchor (MV2
+	 * W-2): no mlock verdict exists to read (mlock(2) cannot reach a
+	 * non-tree VMA), the flushes take the vma-less forms.
 	 */
 	ar = corten_arena_lookup_get(mm, addr);
 	if (!ar)
 		goto keep_locked;
 	vma = corten_arena_anchor_vma(ar);
-	if (unlikely(!vma)) {
-		percpu_ref_put(&ar->active);
-		goto keep_locked;
-	}
 	/* The M6.T1 prefilter's mlock shape (upstream reclaim respects
 	 * VM_LOCKED at ttu -- no TTU_IGNORE_MLOCK in shrink_folio_list's
 	 * flags): a locked window keeps its page.  Counted in the same
 	 * ledger the walker refusal used.
 	 */
-	if (vma->vm_flags & VM_LOCKED) {
+	if (vma && (vma->vm_flags & VM_LOCKED)) {
 		percpu_ref_put(&ar->active);
 		atomic_long_inc(&corten_nr_rmap_rejects);
 		goto keep_locked;
@@ -14589,7 +14900,8 @@ bool corten_swap_out_driver(struct mm_struct *mm, unsigned long addr,
 	 * took; @corten_pte is the defer bookkeeping's scratch and stays
 	 * unwritten on the flush-now shape).
 	 */
-	swapped = corten_rmap_swap_out(folio, vma, addr, false, &corten_pte);
+	swapped = corten_rmap_swap_out(folio, mm, vma, addr, false,
+				       &corten_pte);
 
 	mmu_notifier_invalidate_range_end(&range);
 	percpu_ref_put(&ar->active);
@@ -14970,16 +15282,12 @@ static void corten_arena_shrink_walk(struct mm_struct *mm,
 				     unsigned long fstart, unsigned long fend,
 				     struct corten_shrink_walk *w)
 {
-	/* V-A.2b: the anchor -- a carrier arena's pages are rmap-anchored
-	 * and the driver's verdict shapes resolve the carrier for them
-	 * (the flush/mlock legs); a punched DECLARE arena whose piece
-	 * cache went NULL stays unpickable (counted -- the conservative
-	 * residue; F1 removed the A.1 anchor-less window this arm also
-	 * used to carry).  The driver no longer needs rmap to find the
-	 * address (W1.e2: no ttu leg), but an anchorless pick would
-	 * deterministically keep at the carrier lookup -- not picking it
-	 * saves the doomed trip; W-2 revisits when the driver
-	 * de-carriers.
+	/* MV2 W-2: the anchor is optional and only cosmetic -- the
+	 * shadow-window aging notifier and (defensively) the mlock
+	 * verdict read it; an auto arena has none and every leg of the
+	 * walk and the driver runs on its vma-less forms.  The W1.e2
+	 * "!vma pick gate" is retired with the carrier: an anchorless
+	 * pick no longer deterministically keeps (the driver de-carried).
 	 */
 	struct vm_area_struct *vma = corten_arena_anchor_vma(ar);
 	struct corten_txn txn;
@@ -15057,20 +15365,10 @@ static void corten_arena_shrink_walk(struct mm_struct *mm,
 			 * loses its mapping before the drain is kept by
 			 * the driver, not corrupted -- the transaction
 			 * re-checks everything under the covering lock.
-			 *
-			 * V-A.1 boundary: a VMA-less arena's pages carry
-			 * no rmap anchor and no carrier for the driver's
-			 * verdict shapes -- such a pick would
-			 * deterministically keep at the driver's carrier
-			 * lookup, so the window stays unpickable (the
-			 * pages stay resident until their munmap/exit,
-			 * counted); the V-A.2b carrier restores
-			 * reclaimability.
+			 * MV2 W-2: the W1.e2 "!vma pick gate" is retired
+			 * with the carrier -- the driver resolves an
+			 * anchorless window on its vma-less forms.
 			 */
-			if (!vma) {
-				atomic_long_inc(&corten_nr_shrink_skipped);
-				continue;
-			}
 			{
 				/* W1.e2: every leg picks (addr, folio)
 				 * pairs for the native driver -- the
