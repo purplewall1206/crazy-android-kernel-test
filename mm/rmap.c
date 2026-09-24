@@ -1974,43 +1974,40 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 	int ptes = 0;
 
 	/*
-	 * CortenMM (M6.T1/M6.T2, M6_RMAP_SPEC.md sec 2.1 D1 / sec 1.3 V2):
-	 * arena PTEs are transaction property and reclaim must never write
-	 * them bare -- the metadata records what a zap does not (INV6/INV7).
-	 * The prefilter refuses every shape the swap-out transaction
-	 * cannot take (hwpoison, mlock, pin, no swap entry, order != 0);
-	 * the walker then reports "still mapped" and the caller keeps the
-	 * page resident.  The completion arm (M6.T2) swaps the page out
-	 * transactionally and reports success for this VMA without
-	 * touching page_vma_mapped_walk().  The prefilter writes nothing,
-	 * so it stays ahead of the notifier range and secondary-MMU users
-	 * see nothing on a decline; the completion arm writes PTEs and
-	 * therefore runs INSIDE the invalidate window (R6-2), with the
-	 * deferred-flush bookkeeping done after it returns (R6-1: the
-	 * batching statics are rmap.c-local; registering after the
-	 * transaction preserves the upstream happens-after order, both
-	 * flushes are address-keyed, and the swap PTE installed in
-	 * between is read only under the ptl the transaction holds).
+	 * CortenMM (W1.e2, W1_NATIVE_RMAP_SPEC.md sec 3.2; the M6.T1/T2
+	 * guard this replaces: M6_RMAP_SPEC.md sec 2.1 D1 / sec 1.3 V2):
+	 * arena PTEs are transaction property and reclaim must never
+	 * write them bare (INV6/INV7).  The window's anonymous page no
+	 * longer takes the M6 completion arm (and the __reclaim_pages()
+	 * chain that fed it -- the W1.e2 shrinker rewire retired the
+	 * last feed); instead the walker hands the ttu context straight
+	 * to the native swap-out driver: the shape gate's true arm
+	 * routes to corten_swap_out_driver_ttu(), which runs the whole
+	 * lifecycle (entry, the unchanged M6.T2 transaction, writeout,
+	 * removal) with the address the walk just discovered.
+	 *
+	 * The gate's false arm is the M6 refusal, kept as the
+	 * unreachable backstop: after the rewire no production path
+	 * feeds a window's anonymous page to ttu (off-LRU, migration and
+	 * hwpoison isolation-gated), so a refusal here means a path the
+	 * analysis missed -- warn once and count (rmap_rejects), leave
+	 * the page resident.
+	 *
+	 * The route is a transfer: the driver consumes this walker's
+	 * folio lock and reference on every arm (success frees the
+	 * folio), so this VMA's verdict is delivered by returning false
+	 * -- the walk breaks before folio_not_mapped() could touch a
+	 * freed folio -- and the driver's inline flush stands in for the
+	 * old notifier window + deferred-flush bookkeeping (R6-1/R6-2
+	 * moved inside the driver at W1.e1).
 	 */
 	if (corten_enabled_static() && (vma->vm_flags & VM_CORTEN)) {
-		pte_t corten_pte;
-		bool swapped;
-
-		if (!corten_rmap_unmap_one(folio, vma, address, flags, false))
+		if (!corten_rmap_unmap_one(folio, vma, address, flags, false)) {
+			WARN_ON_ONCE(1);
 			return false;
-
-		range.end = vma_address_end(&pvmw);
-		mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, mm,
-					address, range.end);
-		mmu_notifier_invalidate_range_start(&range);
-		swapped = corten_rmap_swap_out(folio, vma, address,
-					       should_defer_flush(mm, flags),
-					       &corten_pte);
-		mmu_notifier_invalidate_range_end(&range);
-		if (swapped && should_defer_flush(mm, flags))
-			set_tlb_ubc_flush_pending(mm, corten_pte, address,
-						  address + PAGE_SIZE);
-		return swapped;
+		}
+		corten_swap_out_driver_ttu(mm, address, folio, flags);
+		return false;
 	}
 
 	/*
@@ -2423,9 +2420,12 @@ void try_to_unmap(struct folio *folio, enum ttu_flags flags)
 	 * window side first: the registry hook demotes every window
 	 * mapping through its single-page transaction, then the ordinary
 	 * walk -- and folio_not_mapped()'s verdict over the shared
-	 * mapcount -- proceeds exactly upstream.  Anon folios and the
-	 * hwpoison shape are declined inside the hook (the M6 postures;
-	 * the hook folds to nothing on corten=off).
+	 * mapcount -- proceeds exactly upstream.  Anon folios are
+	 * declined in the hook itself: since W1.e2 the flipped _one guard
+	 * routes them to the native driver inside the walk (the walk is
+	 * what discovers their address), and the hwpoison shape stays
+	 * refused (the M6 posture; the hook folds to nothing on
+	 * corten=off).
 	 */
 	corten_rmap_ttu(folio, flags);
 
@@ -2455,13 +2455,14 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 	unsigned long hsz = 0;
 
 	/*
-	 * CortenMM (M6.T1, M6_RMAP_SPEC.md sec 2.1 D1 / sec 1.2 P7): same
-	 * guard as try_to_unmap_one() -- the anon_vma of a shadow-VMA can
-	 * hand arena folios to the migration walker, and a migration entry
-	 * is as bare a PTE write as a zap.  Stage 1 refuses every shape
-	 * (migration interop is OQ-M6-3); the callers (compaction, hotplug)
-	 * already require an LRU-anchored folio, so this only arms the
-	 * future door-opener, counted in rmap_rejects.
+	 * CortenMM (M6.T1, M6_RMAP_SPEC.md sec 2.1 D1 / sec 1.2 P7): the
+	 * migration walker stays all-refuse (spec R2, OQ-M6-3) -- only
+	 * the plain-unmap family flipped to the driver at W1.e2.  The
+	 * anon_vma of a shadow-VMA can hand arena folios here, and a
+	 * migration entry is as bare a PTE write as a zap; the callers
+	 * (compaction, hotplug) already require an LRU-anchored folio,
+	 * so like the unmap backstop this is unreachable after W1.e1's
+	 * channel analysis -- warn once and count (rmap_rejects).
 	 */
 	if (corten_enabled_static() && (vma->vm_flags & VM_CORTEN)) {
 		/* The migrate caller has no completion arm: the ttu flags
@@ -2471,6 +2472,7 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 		 */
 		if (corten_rmap_unmap_one(folio, vma, address, flags, true))
 			return true;
+		WARN_ON_ONCE(1);
 		return false;
 	}
 

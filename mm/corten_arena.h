@@ -866,16 +866,21 @@ void corten_arena_hwpoison_check(struct folio *folio);
 bool corten_oom_reap_skip_vma(struct vm_area_struct *vma);
 
 /*
- * V2: the rmap-walker guard / transaction slow path (spec D1 interface).
+ * V2: the rmap-walker shape gate (the M6.T2 prefilter, spec D1
+ * interface, flipped by W1.e2 -- W1_NATIVE_RMAP_SPEC.md sec 3.2).
  * Called from try_to_unmap_one()/try_to_migrate_one() behind the
  * corten_enabled_static() && VM_CORTEN gate, holding the folio lock and
- * reference, before the notifier invalidation window opens.
- * Return: true = the shape can be taken transactionally -- the walker
- * opens its notifier window and calls corten_rmap_swap_out() (M6.T2);
- * false = declined -- the walker aborts without writing anything and
- * the folio stays resident (hwpoison/migration shapes, mlocked VMAs,
- * pinned folios, folios without a swap entry: reclaim without an entry
- * would destroy content).  Counted (rmap_rejects) on every refusal.
+ * reference, before any notifier traffic.
+ * Return: true = the shape is the plain exclusive-unmap swap-out --
+ * the walker hands the folio to corten_swap_out_driver_ttu() (the
+ * transfer contract documented there); false = declined -- the walker
+ * aborts without writing anything and the folio stays resident
+ * (hwpoison/migration shapes, mlocked VMAs, pinned folios).  The old
+ * "no swap entry" refusal retired with the M6 completion arm: the
+ * driver owns the entry leg itself.  Counted (rmap_rejects) on every
+ * refusal -- after the flip this is the unreachable backstop's ledger
+ * (no production ttu path reaches a window's anonymous page), held at
+ * zero by the KUnit anchors.
  */
 bool corten_rmap_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 			   unsigned long address, enum ttu_flags flags,
@@ -918,10 +923,11 @@ bool corten_rmap_swap_out(struct folio *folio, struct vm_area_struct *vma,
  * leg.  Every leg is the bit-for-bit mirror of shrink_folio_list()'s
  * anonymous arm catalogued at the definition site (R-W1-1).
  *
- * The M6 ttu anonymous arm and this driver coexist for W1.e1: the
- * shrinker pressure leg still reaches the folio through ttu
- * (__reclaim_pages()), the evict/debugfs leg goes through here; W1.e2
- * rewires the shrinker leg and retires the guard's anon arm.
+ * The M6 ttu anonymous arm retired with W1.e2: the shrinker pressure
+ * leg and the evict/debugfs leg both drain (addr, folio) picks through
+ * here, and ttu arrivals route through corten_swap_out_driver_ttu()
+ * below -- every swap-out of a window's anonymous page converges on
+ * this driver; the folio trylock arbitrates concurrent entries.
  *
  * Return: true = the folio was freed behind the swap PTE; false = kept
  * resident (every keep arm counted in driver_kept), pick reference
@@ -929,6 +935,30 @@ bool corten_rmap_swap_out(struct folio *folio, struct vm_area_struct *vma,
  */
 bool corten_swap_out_driver(struct mm_struct *mm, unsigned long addr,
 			    struct folio *folio);
+
+/*
+ * W1.e2 (W1_NATIVE_RMAP_SPEC.md sec 3.2): the from-ttu entry arm -- the
+ * flipped guard in try_to_unmap_one() routes a window's anonymous page
+ * to the W1.e1 driver through here.  The flags mapping: TTU_HWPOISON
+ * and the migration caller never arrive (the guard's backstop refuses
+ * them first, WARN + rmap_rejects); the mlock verdict stays with the
+ * driver (a TTU_IGNORE_MLOCK caller gets the safe keep, not the
+ * ignore); the defer-flush family maps to the driver's inline flush
+ * (the non-defer first version, OQ-W1-1/W1.d resolution).
+ *
+ * The caller contract is a transfer: ttu hands the folio over locked
+ * and referenced and this arm consumes both -- the lock is released for
+ * the driver's trylock leg and the reference plays the pick's role in
+ * the driver's closed ledger (success frees the folio, every keep drops
+ * it).  No production ttu caller exists after the W1.e2 shrinker
+ * rewire (off-LRU, migration/hwpoison isolation-gated); the double
+ * entry with the shrinker's own driver run arbitrates on the folio
+ * trylock -- exactly one side swaps, the other keeps.
+ *
+ * Return: the driver's verdict, true = swapped out (folio freed).
+ */
+bool corten_swap_out_driver_ttu(struct mm_struct *mm, unsigned long addr,
+				struct folio *folio, enum ttu_flags flags);
 
 /*
  * W1.d (W1_NATIVE_RMAP_SPEC.md sec 3.2): the try_to_unmap() layer's
@@ -943,10 +973,11 @@ bool corten_swap_out_driver(struct mm_struct *mm, unsigned long addr,
  * folio_not_mapped() then run exactly upstream over the shared
  * mapcount; there is no corten-specific return channel.
  *
- * Declines: anon folios (the M6.T2 anchored arm's family, W1.e's
- * territory), large folios (and with them the TTU_RMAP_LOCKED callers,
- * who hold i_mmap_rwsem themselves), and TTU_HWPOISON (counted -- the
- * M6 refusal posture; the hwpoison caller keeps its -EBUSY verdict).
+ * Declines: anon folios (W1.e2: the flipped _one guard routes those to
+ * the driver itself, this hook stays file-only), large folios (and with
+ * them the TTU_RMAP_LOCKED callers, who hold i_mmap_rwsem themselves),
+ * and TTU_HWPOISON (counted -- the M6 refusal posture; the hwpoison
+ * caller keeps its -EBUSY verdict).
  */
 void corten_rmap_ttu(struct folio *folio, enum ttu_flags flags);
 
@@ -1204,6 +1235,18 @@ static inline void corten_rmap_ttu(struct folio *folio, enum ttu_flags flags)
 static inline bool corten_swap_out_driver(struct mm_struct *mm,
 					  unsigned long addr,
 					  struct folio *folio)
+{
+	return false;
+}
+
+/* W1.e2: the ttu route folds with the guard's gate on corten=off -- the
+ * stub is unreachable (the VM_CORTEN test is the gate), pure folding
+ * shape.
+ */
+static inline bool corten_swap_out_driver_ttu(struct mm_struct *mm,
+					      unsigned long addr,
+					      struct folio *folio,
+					      enum ttu_flags flags)
 {
 	return false;
 }

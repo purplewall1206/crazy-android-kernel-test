@@ -2521,15 +2521,15 @@ static struct folio *ft_populate(struct kunit *test, struct ft_mm *t,
 	return folio;
 }
 
-/* V2: try_to_unmap() on an arena folio must be refused at the walker
- * guard -- counted, PTE/metadata untouched, folio still mapped.  This
- * drives the real reclaim entry (rmap_walk over the shadow-VMA's
- * anon_vma -> try_to_unmap_one -> corten_rmap_unmap_one): the path any
- * future folio_add_lru() would arm (risk R6-3).  The deliberate
- * Stage-1 semantics: refuse, do NOT transaction-zap -- a zap without a
- * swap entry destroys content, and reclaim = data loss is not a
- * semantic (M6_RMAP_SPEC.md sec 2.1 D1 adjusted; the swap-out
- * transaction is M6.T2).
+/* W1.e2 (W1_NATIVE_RMAP_SPEC.md sec 3.2): the flipped guard's flag map
+ * at the D1 predicate.  The takeable shapes (the plain unmap family,
+ * whatever the flags -- the mlock verdict moved into the driver) must
+ * ROUTE now: true, uncounted -- the M6 "no swap entry" refusal retired
+ * with the completion arm, the driver owns the entry leg.  The
+ * untakeable shapes stay refused and counted: this is the backstop's
+ * ledger, driven here at the predicate (never through the walk, whose
+ * refusal branch WARNs -- production-unreachable and suite-unreachable
+ * alike).  A plain VMA stays none of the guard's business.
  */
 static void corten_fault_test_rmap_guard(struct kunit *test)
 {
@@ -2543,58 +2543,52 @@ static void corten_fault_test_rmap_guard(struct kunit *test)
 	unsigned long addr = FT_BASE + 3 * PAGE_SIZE;
 	unsigned long ref_before = ft_named_counter(test, "rmap_rejects");
 	struct vm_area_struct *legacy;
-	struct corten_pte_meta m;
 	struct folio *folio;
-	pte_t *ptep, pte, installed;
+	pte_t installed;
 	long after;
 
 	folio = ft_populate(test, t, addr, &installed);
-	KUNIT_ASSERT_EQ(test, folio_ref_count(folio), 1); /* the PTE ref */
 
-	/* The upstream caller contract: folio locked, reference held. */
-	folio_lock(folio);
-	try_to_unmap(folio, 0);
-	folio_unlock(folio);
-
-	after = ft_named_counter(test, "rmap_rejects");
-	KUNIT_EXPECT_EQ(test, after, ref_before + 1);
-
-	/* The refusal is invisible: mapping, content pointer and
-	 * metadata exactly as before -- the INV7 pairing intact.
+	/* The flip: every plain-unmap shape routes, swapcache-less
+	 * included -- the driver self-serves the entry.
 	 */
-	KUNIT_EXPECT_EQ(test, folio_mapped(folio), 1);
-	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
-	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1);
-	ptep = ft_pte(t, addr);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
-	pte = ptep_get(ptep);
-	pte_unmap(ptep);
-	KUNIT_EXPECT_TRUE(test, pte_present(pte));
-	KUNIT_EXPECT_EQ(test, pte_val(pte), pte_val(installed));
-	KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
-	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_rmap_unmap_one(folio, t->vma, addr, 0,
+						false));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_rmap_unmap_one(folio, t->vma, addr,
+						TTU_SYNC, false));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_rmap_unmap_one(folio, t->vma, addr,
+						TTU_IGNORE_MLOCK, false));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_rmap_unmap_one(folio, t->vma, addr,
+						TTU_BATCH_FLUSH, false));
 
-	/* Direct drive of the D1 interface: the refusal arm fires for
-	 * every ttu shape (unmap / sync / migration-era flags are all
-	 * Stage-1 rejections) and each one counts.
+	/* The backstop: hwpoison and the migration caller are refused
+	 * and counted, one each.
 	 */
-	KUNIT_EXPECT_FALSE(test,
-			   corten_rmap_unmap_one(folio, t->vma, addr, 0, false));
-	KUNIT_EXPECT_FALSE(test,
-			   corten_rmap_unmap_one(folio, t->vma, addr,
-						 TTU_SYNC, false));
-	KUNIT_EXPECT_FALSE(test,
-			   corten_rmap_unmap_one(folio, t->vma, addr,
-						 TTU_IGNORE_MLOCK, false));
 	KUNIT_EXPECT_FALSE(test,
 			   corten_rmap_unmap_one(folio, t->vma, addr,
 						 TTU_HWPOISON, false));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_rmap_unmap_one(folio, t->vma, addr, 0,
+						 true));
 	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "rmap_rejects"),
-			after + 4);
+			ref_before + 2);
 
-	/* A plain VMA is none of the guard's business: no refusal, no
-	 * count (the legacy walkers of a MODE process keep working).
+	/* The page is untouched: the predicate writes nothing on either
+	 * arm (INV6: the routing decision precedes all traffic).
 	 */
+	KUNIT_EXPECT_EQ(test, folio_mapped(folio), 1);
+	KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+	KUNIT_EXPECT_FALSE(test, folio_test_swapcache(folio));
+
+	/* A plain VMA is none of the guard's business: no route, no
+	 * refusal, no count (the legacy walkers of a MODE process keep
+	 * working).
+	 */
+	after = ft_named_counter(test, "rmap_rejects");
 	legacy = ft_mkvm(t->mm, FT_BASE + FT_ARENA_LEN + PMD_SIZE,
 			 FT_BASE + FT_ARENA_LEN + 2 * PMD_SIZE,
 			 FT_FLAGS_OK);
@@ -2604,8 +2598,7 @@ static void corten_fault_test_rmap_guard(struct kunit *test)
 						 legacy->vm_start, 0,
 						 false));
 	KUNIT_EXPECT_FALSE(test, corten_oom_reap_skip_vma(legacy));
-	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "rmap_rejects"),
-			after + 4);
+	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "rmap_rejects"), after);
 }
 
 /* V1, by equivalent injection: __oom_reap_task_mm() is not reachable
@@ -2709,18 +2702,24 @@ static bool ft_swap_up(void)
 	return val.totalswap != 0;
 }
 
-/* One arena page through the real swap-out transaction: populate,
- * write a pattern, add the folio to the swap cache (the
- * shrink_folio_list() preamble) and run the real try_to_unmap() -- the
- * guard's completion arm does the rest.  Returns the swap entry.
+/* One arena page through the real ttu route (W1.e2): populate, write a
+ * pattern, add the folio to the swap cache (the shrink_folio_list()
+ * preamble), then run the real try_to_unmap() -- the flipped guard
+ * hands the folio to the native driver, which runs the cache
+ * shortcut, the transaction, the writeout and the removal end to end.
+ * The route is a transfer (the guard's contract): the folio's lock and
+ * the pick reference this helper contributes are consumed on every
+ * arm, so nothing past the call may dereference @folio -- the
+ * verification and the returned entry go through the address.
+ * Returns the swap entry.
  */
 static swp_entry_t ft_swap_out(struct kunit *test, struct ft_mm *t,
-			       unsigned long addr, struct folio **out_folio)
+			       unsigned long addr)
 {
 	struct folio *folio;
 	void *kaddr;
 	pte_t *ptep, pte;
-	swp_entry_t zero = { };
+	swp_entry_t zero = { }, entry = { };
 	bool ok = true;
 
 	folio = ft_populate(test, t, addr, &pte);
@@ -2733,28 +2732,33 @@ static swp_entry_t ft_swap_out(struct kunit *test, struct ft_mm *t,
 
 	KUNIT_ASSERT_EQ(test, folio_lock_killable(folio), 0);
 	/* folio_alloc_swap(): entry + swapcache + the swap-side memcg
-	 * charge -- exactly shrink_folio_list()'s preamble.  EXPECT
-	 * only from here on: an ASSERT abort while the folio lock (or
-	 * a transaction lock) is held would leak it into the teardown.
+	 * charge -- exactly shrink_folio_list()'s preamble (the driver's
+	 * folio_test_swapcache() check then short-circuits its entry
+	 * leg).  EXPECT only from here on: an ASSERT abort while the
+	 * folio lock (or a transaction lock) is held would leak it into
+	 * the teardown.
 	 */
-	if (folio_alloc_swap(folio, GFP_KERNEL))
+	if (folio_alloc_swap(folio, GFP_KERNEL)) {
 		ok = false;
-	if (ok) {
+	} else {
+		entry = folio->swap;	/* capture while alive */
 		folio_mark_dirty(folio);
+	}
 
-		/* The reclaim shape: the plain unmap family (this
-		 * tree's ttu has no TTU_IGNORE_ACCESS any more --
-		 * aging lives in folio_referenced()), no
-		 * TTU_BATCH_FLUSH (the test is the whole "batch",
-		 * flush included).
+	if (ok) {
+		/* The reclaim shape: the plain unmap family (this tree's
+		 * ttu has no TTU_IGNORE_ACCESS any more -- aging lives
+		 * in folio_referenced()), no TTU_BATCH_FLUSH (the test
+		 * is the whole "batch", flush included).  The folio_get
+		 * below is the pick reference the route transfers.
 		 */
+		folio_get(folio);
 		try_to_unmap(folio, TTU_IGNORE_MLOCK);
 
-		/* The transaction happened: folio unmapped, PTE a swap
-		 * entry, metadata CORTEN_SWAPPED with the entry
-		 * encoded.
+		/* The route happened: the folio is gone (zero derefs),
+		 * the PTE a swap entry, metadata CORTEN_SWAPPED with the
+		 * entry encoded.
 		 */
-		KUNIT_EXPECT_EQ(test, folio_mapped(folio), 0);
 		ptep = ft_pte(t, addr);
 		if (!ptep) {
 			ok = false;
@@ -2770,20 +2774,22 @@ static swp_entry_t ft_swap_out(struct kunit *test, struct ft_mm *t,
 				KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
 				KUNIT_EXPECT_EQ(test,
 						corten_swap_decode(&m).val,
-						folio->swap.val);
+						entry.val);
 				KUNIT_EXPECT_EQ(test,
 						pte_to_swp_entry(pte).val,
-						folio->swap.val);
+						entry.val);
 			}
 		}
+	} else {
+		/* No entry, no route: the folio is exactly as populated,
+		 * still locked (the transfer never happened).
+		 */
+		folio_unlock(folio);
 	}
-	folio_unlock(folio);
 
 	if (!ok)
 		return zero;
-	*out_folio = folio;
-
-	return folio->swap;
+	return entry;
 }
 
 /* Round-trip: swap-out through the real guard, read the pattern back
@@ -2794,7 +2800,6 @@ static void corten_fault_test_swap_roundtrip(struct kunit *test)
 {
 	struct ft_mm *t;
 	unsigned long addr = FT_BASE + 3 * PAGE_SIZE;
-	struct folio *folio;
 	swp_entry_t entry;
 	struct corten_pte_meta m;
 	pte_t *ptep, pte;
@@ -2808,22 +2813,12 @@ static void corten_fault_test_swap_roundtrip(struct kunit *test)
 
 	t = ft_setup(test);
 
-	entry = ft_swap_out(test, t, addr, &folio);
-	KUNIT_ASSERT_TRUE(test, entry.val != 0);
-
-	/* Writeback through the swap path (the folio is dirty).
-	 * swap_writeout() unlocks the folio on every path, like the
-	 * shrink's pageout() does.
+	/* W1.e2: the route's driver runs the writeout itself (the
+	 * M6.T2 shape needed the explicit swap_writeout() here); zram
+	 * settles it inline before try_to_unmap() returns.
 	 */
-	{
-		struct swap_iocb *plug = NULL;
-
-		folio_lock(folio);
-		KUNIT_ASSERT_EQ(test, swap_writeout(folio, &plug), 0);
-		if (plug)
-			swap_write_unplug(plug);
-		folio_wait_writeback(folio);
-	}
+	entry = ft_swap_out(test, t, addr);
+	KUNIT_ASSERT_TRUE(test, entry.val != 0);
 
 	/* The readback fault: dispatch CORTEN_SWAPPED -> SWAPIN. */
 	ret = ft_write_fault(t, addr);
@@ -2860,12 +2855,9 @@ static void corten_fault_test_swap_zap_free(struct kunit *test)
 {
 	struct ft_mm *t;
 	unsigned long addr = FT_BASE + 4 * PAGE_SIZE;
-	struct folio *folio;
 	swp_entry_t entry;
 	struct corten_arena *ar;
 	struct corten_pte_meta m;
-
-	(void)folio;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "swap transaction requires corten=on");
@@ -2873,10 +2865,10 @@ static void corten_fault_test_swap_zap_free(struct kunit *test)
 		kunit_skip(test, "swap zap test requires a swap area");
 
 	t = ft_setup(test);
-	entry = ft_swap_out(test, t, addr, &folio);
+	entry = ft_swap_out(test, t, addr);
 	KUNIT_ASSERT_TRUE(test, entry.val != 0);
-	/* The swapcache owns the folio now (the PTE reference was the
-	 * transaction's drop); the test holds no reference.
+	/* The route's transfer consumed the folio (freed behind the swap
+	 * PTE); the test holds no reference.
 	 */
 
 	/* munmap-route the window (chunk unmap, KEEP_PERM). */
@@ -3066,6 +3058,230 @@ static void corten_fault_test_driver_swap_roundtrip(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 0);
 }
 
+/* W1.e2 (W1_NATIVE_RMAP_SPEC.md sec 3.2), the routing anchor: a
+ * synthetic anonymous window page goes through the REAL ttu entry --
+ * try_to_unmap() over the shadow-VMA's anon_vma into the flipped
+ * guard -- and the driver swaps it out (swap-up boot) or keeps it
+ * symmetrically (swapless boot, the entry leg fails there).  The
+ * guard's backstop must stay home either way: rmap_rejects frozen.
+ * On the swap shape the route is a transfer -- the folio is freed past
+ * the call, every face goes through the address.
+ */
+static void corten_fault_test_ttu_route(struct kunit *test)
+{
+	struct ft_mm *t;
+	unsigned long addr = FT_BASE + 7 * PAGE_SIZE;
+	unsigned long rej0, kept0, drv0, anon0, swpin0;
+	struct corten_pte_meta m;
+	struct folio *folio;
+	void *kaddr;
+	pte_t *ptep, pte, installed;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "ttu route requires corten=on");
+
+	t = ft_setup(test);
+	folio = ft_populate(test, t, addr, &installed);
+	kaddr = kmap_local_page(folio_page(folio, 0));
+	memset(kaddr, 0x5c, PAGE_SIZE);
+	kunmap_local(kaddr);
+	__folio_mark_uptodate(folio);
+
+	rej0 = ft_named_counter(test, "rmap_rejects");
+	kept0 = ft_named_counter(test, "driver_kept");
+	drv0 = ft_named_counter(test, "driver_swapped");
+	anon0 = get_mm_counter(t->mm, MM_ANONPAGES);
+	swpin0 = ft_named_counter(test, "swapins");
+
+	/* The ttu caller's contract: folio locked, reference held --
+	 * both are the route's transfer input.
+	 */
+	KUNIT_ASSERT_EQ(test, folio_ref_count(folio), 1);
+	KUNIT_ASSERT_EQ(test, folio_lock_killable(folio), 0);
+	folio_get(folio);
+	try_to_unmap(folio, TTU_IGNORE_MLOCK);
+
+	if (!ft_swap_up()) {
+		/* The keep shape: the driver's entry leg failed, the
+		 * pick came back resident and byte-identical -- its
+		 * reference consumed (only the PTE's remains), the
+		 * folio unlocked by the keep arm.
+		 */
+		KUNIT_EXPECT_FALSE(test, folio_test_locked(folio));
+		KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1);
+		KUNIT_EXPECT_EQ(test, folio_mapped(folio), 1);
+		KUNIT_EXPECT_EQ(test, folio_mapcount(folio), 1);
+		KUNIT_EXPECT_FALSE(test, folio_test_swapcache(folio));
+		ptep = ft_pte(t, addr);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+		pte = ptep_get(ptep);
+		pte_unmap(ptep);
+		KUNIT_EXPECT_TRUE(test, pte_present(pte));
+		KUNIT_EXPECT_EQ(test, pte_val(pte), pte_val(installed));
+		KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+		KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+		KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_ANONPAGES),
+				anon0);
+		KUNIT_EXPECT_EQ(test, ft_named_counter(test, "driver_kept"),
+				kept0 + 1);
+		KUNIT_EXPECT_EQ(test, ft_named_counter(test, "driver_swapped"),
+				drv0);
+	} else {
+		/* The swap shape: the driver freed the folio -- zero
+		 * folio dereferences from here on.
+		 */
+		swp_entry_t entry;
+
+		ptep = ft_pte(t, addr);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+		pte = ptep_get(ptep);
+		pte_unmap(ptep);
+		KUNIT_EXPECT_TRUE(test, !pte_present(pte) && !pte_none(pte));
+		entry = pte_to_swp_entry(pte);
+		KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+		KUNIT_EXPECT_EQ(test, m.state, CORTEN_SWAPPED);
+		KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+		KUNIT_EXPECT_EQ(test, corten_swap_decode(&m).val, entry.val);
+		KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_ANONPAGES),
+				anon0 - 1);
+		KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 1);
+		KUNIT_EXPECT_EQ(test, ft_named_counter(test, "driver_swapped"),
+				drv0 + 1);
+		KUNIT_EXPECT_EQ(test, ft_named_counter(test, "driver_kept"),
+				kept0);
+		/* The entry is exactly PTE-referenced (the swapcache
+		 * member was released by the removal).
+		 */
+		KUNIT_EXPECT_EQ(test, swap_duplicate(entry), 0);
+		swap_free(entry);
+
+		/* The round trip through the real fault: the content
+		 * comes back off the device.
+		 */
+		KUNIT_EXPECT_EQ(test, ft_write_fault(t, addr), 0);
+		ptep = ft_pte(t, addr);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+		pte = ptep_get(ptep);
+		pte_unmap(ptep);
+		KUNIT_EXPECT_TRUE(test, pte_present(pte));
+		kaddr = kmap_local_page(pte_page(pte));
+		KUNIT_EXPECT_EQ(test, ((u8 *)kaddr)[0], 0x5c);
+		KUNIT_EXPECT_EQ(test, ((u8 *)kaddr)[PAGE_SIZE / 2], 0x5c);
+		kunmap_local(kaddr);
+		KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+		KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+		KUNIT_EXPECT_GE(test, ft_named_counter(test, "swapins"),
+				swpin0 + 1);
+		KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_ANONPAGES),
+				anon0);
+		KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 0);
+	}
+
+	/* The backstop never fired: the routing decision took every
+	 * shape (rmap_rejects frozen -- spec W1.e anchor, ttu anon arm
+	 * count zero outside the backstop itself).
+	 */
+	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "rmap_rejects"), rej0);
+}
+
+/* W1.e2, the two-channel convergence anchor (spec W1.e: the shrinker
+ * pick and ttu both end at the driver): entry A models the shrinker's
+ * driver run holding the folio lock -- the direct driver call must
+ * lose the trylock and keep, inert; entry B is the ttu route, which
+ * releases the lock into the driver's trylock and proceeds.  Exactly
+ * one side swaps: on a swap-up boot B swaps while A kept; on a
+ * swapless boot both keep and the ledger stays inert.  The true-
+ * concurrency face (an interleaved shrinker/ttu race) is the guest
+ * stress gate; this pins the deterministic schedule.
+ */
+static void corten_fault_test_ttu_dual_entry(struct kunit *test)
+{
+	struct ft_mm *t;
+	unsigned long addr = FT_BASE + 8 * PAGE_SIZE;
+	unsigned long rej0, kept0, drv0, anon0;
+	struct corten_pte_meta m;
+	struct folio *folio;
+	void *kaddr;
+	pte_t *ptep, pte, installed;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "ttu dual entry requires corten=on");
+
+	t = ft_setup(test);
+	folio = ft_populate(test, t, addr, &installed);
+	kaddr = kmap_local_page(folio_page(folio, 0));
+	memset(kaddr, 0x5c, PAGE_SIZE);
+	kunmap_local(kaddr);
+	__folio_mark_uptodate(folio);
+
+	rej0 = ft_named_counter(test, "rmap_rejects");
+	kept0 = ft_named_counter(test, "driver_kept");
+	drv0 = ft_named_counter(test, "driver_swapped");
+	anon0 = get_mm_counter(t->mm, MM_ANONPAGES);
+
+	/* Entry A: the shrinker-driver's shape (pick reference, the
+	 * folio locked mid-run) -- the trylock must fail into the keep
+	 * arm, pick reference returned, state untouched.
+	 */
+	folio_get(folio);
+	folio_lock(folio);
+	KUNIT_EXPECT_FALSE(test, corten_swap_out_driver(t->mm, addr, folio));
+	KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1); /* pick dropped */
+	KUNIT_EXPECT_TRUE(test, folio_test_locked(folio));
+	KUNIT_EXPECT_EQ(test, folio_mapped(folio), 1);
+
+	/* Entry B: the ttu route -- the transfer's unlock hands the
+	 * lock to the driver's trylock, which now wins.
+	 */
+	folio_get(folio);
+	try_to_unmap(folio, TTU_IGNORE_MLOCK);
+
+	if (!ft_swap_up()) {
+		/* Both keeps, everything inert. */
+		KUNIT_EXPECT_FALSE(test, folio_test_locked(folio));
+		KUNIT_EXPECT_EQ(test, folio_ref_count(folio), 1);
+		KUNIT_EXPECT_EQ(test, folio_mapped(folio), 1);
+		KUNIT_EXPECT_EQ(test, ft_named_counter(test, "driver_kept"),
+				kept0 + 2);
+		KUNIT_EXPECT_EQ(test, ft_named_counter(test, "driver_swapped"),
+				drv0);
+		KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_ANONPAGES),
+				anon0);
+		ptep = ft_pte(t, addr);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+		pte = ptep_get(ptep);
+		pte_unmap(ptep);
+		KUNIT_EXPECT_TRUE(test, pte_present(pte));
+		KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+		KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	} else {
+		/* B swapped (the folio is gone -- no derefs), A's keep
+		 * was the only one: exactly one success.
+		 */
+		swp_entry_t entry;
+
+		KUNIT_EXPECT_EQ(test, ft_named_counter(test, "driver_kept"),
+				kept0 + 1);
+		KUNIT_EXPECT_EQ(test, ft_named_counter(test, "driver_swapped"),
+				drv0 + 1);
+		KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_ANONPAGES),
+				anon0 - 1);
+		KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 1);
+		ptep = ft_pte(t, addr);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+		pte = ptep_get(ptep);
+		pte_unmap(ptep);
+		KUNIT_EXPECT_TRUE(test, !pte_present(pte) && !pte_none(pte));
+		entry = pte_to_swp_entry(pte);
+		KUNIT_EXPECT_EQ(test, ft_meta(t, addr, &m), 0);
+		KUNIT_EXPECT_EQ(test, m.state, CORTEN_SWAPPED);
+		KUNIT_EXPECT_EQ(test, corten_swap_decode(&m).val, entry.val);
+	}
+
+	/* The backstop stayed home on both channels. */
+	KUNIT_EXPECT_EQ(test, ft_named_counter(test, "rmap_rejects"), rej0);
+}
+
 /* The mprotect consumer over a Swapped slot (spec D7): pure-metadata
  * perm rewrite, the swap PTE untouched, the pending perm recorded for
  * the swap-in to honor.  Synthetic entry bits only -- nothing here
@@ -3221,6 +3437,8 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_punch_hole),
 	KUNIT_CASE(corten_fault_test_punch_head),
 	KUNIT_CASE(corten_fault_test_rmap_guard),
+	KUNIT_CASE(corten_fault_test_ttu_route),
+	KUNIT_CASE(corten_fault_test_ttu_dual_entry),
 	KUNIT_CASE(corten_fault_test_reap_skip),
 	KUNIT_CASE(corten_fault_test_swap_encode),
 	KUNIT_CASE(corten_fault_test_swap_roundtrip),

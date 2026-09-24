@@ -13460,11 +13460,16 @@ bool corten_oom_reap_skip_vma(struct vm_area_struct *vma)
 }
 
 /*
- * The M6.T2 prefilter for the ttu walkers (V2, spec sec 2.1 D1): refuse
- * every shape the swap-out transaction cannot or must not take, before
- * any lock or notifier traffic (the refusal writes nothing, so
- * secondary-MMU users see nothing -- the T1 posture for the declined
- * shapes is unchanged).
+ * The W1.e2 shape gate for the ttu walkers (the M6.T2 prefilter, V2,
+ * spec sec 2.1 D1, flipped by W1_NATIVE_RMAP_SPEC.md sec 3.2): refuse
+ * every shape the driver cannot or must not take, before any lock or
+ * notifier traffic (the refusal writes nothing, so secondary-MMU users
+ * see nothing -- the T1 posture for the declined shapes is unchanged).
+ * What changed with the flip: the shape is no longer served by the M6
+ * completion arm (retired) but routed to the native swap-out driver,
+ * which owns the entry leg itself -- so the old "no swap entry"
+ * refusal is retired with it and a swapcache-less folio is now a
+ * routable shape.
  *
  * @migrate distinguishes the try_to_migrate_one() caller: the ttu_flags
  * alone cannot (migrate.c passes plain TTU_BATCH_FLUSH/0, the same
@@ -13473,10 +13478,13 @@ bool corten_oom_reap_skip_vma(struct vm_area_struct *vma)
  * isolation side of kernel migration never sees arena folios anyway
  * (no LRU, compaction skips !LRU, migrate_pages is routed off).
  *
- * Return: true = the shape is the plain exclusive-unmap swap-out and the
- * walker must open its notifier window and call corten_rmap_swap_out();
- * false = declined, the walker aborts this VMA without writing
- * anything.  Counted (rmap_rejects) on every refusal.
+ * Return: true = the shape is the plain exclusive-unmap swap-out and
+ * the walker hands the folio to corten_swap_out_driver_ttu() (the
+ * transfer contract documented there); false = declined, the walker
+ * aborts this VMA without writing anything.  Counted (rmap_rejects)
+ * on every refusal -- after the flip this counter is the unreachable
+ * backstop's ledger: production has no ttu path to a window's
+ * anonymous page any more, and the KUnit anchors hold it at zero.
  */
 bool corten_rmap_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 			   unsigned long address, enum ttu_flags flags,
@@ -13492,8 +13500,7 @@ bool corten_rmap_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 	if (migrate || (flags & TTU_HWPOISON) ||
 	    (!(flags & TTU_IGNORE_MLOCK) && (vma->vm_flags & VM_LOCKED)) ||
 	    folio_maybe_dma_pinned(folio) ||
-	    folio_nr_pages(folio) != 1 ||
-	    !folio_test_swapcache(folio)) {
+	    folio_nr_pages(folio) != 1) {
 		atomic_long_inc(&corten_nr_rmap_rejects);
 		return false;
 	}
@@ -13871,9 +13878,11 @@ out_range:
  *
  * Declines (the M6 exclusion postures, each deliberately silent unless
  * counted):
- *   - anon folios: the W1.e territory.  The anchored ttu anon leg
- *     (try_to_unmap_one()'s M6.T2 arm) keeps serving them, file-COW
- *     copies included -- they are anon folios.
+ *   - anon folios: W1.e2 routed them at the _one guard instead --
+ *     try_to_unmap_one() hands them to the native driver inside the
+ *     walk (the walk is what discovers their address); this hook's
+ *     registry derivation is file-shaped and stays out of the way,
+ *     file-COW copies included -- they are anon folios.
  *   - large folios: every window install is order-0 (the novma
  *     wrapper's contract); this also keeps the TTU_RMAP_LOCKED
  *     callers (split/collapse hold i_mmap_rwsem themselves) out of
@@ -14284,13 +14293,65 @@ keep_locked:
 		folio_free_swap(folio);
 	folio_unlock(folio);
 keep:
-	/* No folio_putback_lru() -- DEV-10.  The kept folio's isolation
-	 * reference is dropped here, the exact contract
-	 * corten_shrink_reclaim() implements for the ttu leg's survivors.
+	/* No folio_putback_lru() -- DEV-10.  The kept folio's pick
+	 * reference is dropped here.
 	 */
 	folio_put(folio);
 	atomic_long_inc(&corten_nr_driver_kept);
 	return false;
+}
+
+/*
+ * W1.e2 (W1_NATIVE_RMAP_SPEC.md sec 3.2): the from-ttu entry arm -- the
+ * flipped guard in try_to_unmap_one() hands the window's context (mm,
+ * address, folio) over to the W1.e1 driver here.  The shape mapping is
+ * by flags:
+ *
+ *   - TTU_HWPOISON and the migration caller never reach this arm: the
+ *     guard's backstop refuses them first (WARN + rmap_rejects), the
+ *     M6 exclusion postures unchanged.
+ *   - The mlock verdict is flags-blind and stays with the driver: a
+ *     TTU_IGNORE_MLOCK caller asking for a locked window's page gets
+ *     the safe keep (counted in rmap_rejects by the driver) rather
+ *     than the ignore it asked for -- reclaim must never widen what a
+ *     ttu shape may take.
+ *   - The defer-flush family (TTU_BATCH_FLUSH and friends) maps to the
+ *     driver's inline flush: this arm is its own batch boundary (the
+ *     OQ-W1-1 non-defer first version, the W1.d resolution), so no
+ *     rmap.c tlb_ubc bookkeeping happens on this route.
+ *
+ * The caller contract is a transfer: ttu hands the folio over locked
+ * and referenced, and this arm consumes both -- the lock is released
+ * for the driver's trylock leg, and the reference becomes the pick
+ * reference the driver's ledger consumes on every arm (success frees
+ * the folio, every keep drops it).  A ttu caller that expects its lock
+ * and reference back would be broken by design; none exists -- after
+ * the W1.e2 shrinker rewire no production path feeds a window's
+ * anonymous page to ttu any more (off-LRU, migration and hwpoison
+ * isolation-gated), the arm is the walk's route for whatever arrives
+ * anyway, and the double-entry arbitration with the shrinker's own
+ * driver runs is the folio trylock: whoever wins swaps, the loser
+ * keeps, both converge (KUnit-anchored, guest stress gate).
+ *
+ * Return: the driver's verdict, true = swapped out (folio freed).
+ */
+bool corten_swap_out_driver_ttu(struct mm_struct *mm, unsigned long addr,
+				struct folio *folio, enum ttu_flags flags)
+{
+	/* The transfer's input contract (the debug face of it): a folio
+	 * handed over unlocked is a caller bug -- keep it intact (WARN
+	 * plus recovery: nothing is consumed on this arm) rather than
+	 * trip folio_unlock's VM_BUG_ON one call later.
+	 */
+	if (WARN_ON_ONCE(!folio_test_locked(folio)))
+		return false;
+
+	/* The lock is ttu's contribution to the handover; the reference
+	 * stays and plays the pick's role in the driver's ledger.
+	 */
+	folio_unlock(folio);
+
+	return corten_swap_out_driver(mm, addr, folio);
 }
 
 /*
@@ -14306,10 +14367,13 @@ keep:
  * try_to_unmap existed only to hand it back through the rmap walk.  The
  * transaction, writeout and removal stay the upstream-mirrored legs
  * inside the driver; the ttu machinery is no longer reachable from the
- * evict path.  The shrinker pressure leg below still rides
- * __reclaim_pages() until W1.e2 rewires it the same way (the M6.T2 ttu
- * completion arm keeps serving it -- the two channels coexist until the
- * guard's anon arm retires in W1.e2).
+ * evict path.  W1.e2 rewired the shrinker pressure leg the same way:
+ * both channels -- shrinker pick and evict -- drain through the driver,
+ * and the guard's flipped anon arm routes whatever ttu arrivals exist
+ * to the same driver (corten_swap_out_driver_ttu()), so every swap-out
+ * of a window's anonymous page converges on one transaction; the
+ * folio trylock arbitrates concurrent entries and the M6 guard's
+ * reject arm remains only as the unreachable WARN backstop.
  *
  * The old private-cookie kept-folio contract (folio_putback_lru() is
  * forbidden, DEV-10) moved into the driver's keep arms, which drop the
@@ -14349,16 +14413,15 @@ keep:
  *
  * Batch shape (the T2 evict lesson, spec sec 2.2): victim selection
  * runs under the per-mm shrink trylock -- one picker per mm; two
- * pickers could isolate the same folio onto two lists -- in bounded
- * slices so no spinlock hold is long, and every pick of a scan feeds
- * ONE __reclaim_pages() list.  Everything after the pick (folio_alloc_
- * swap, try_to_unmap -- the ttu guard, then the corten_rmap_swap_out
- * transaction inside its notifier window -- swap_writeout and the
- * final unmap/free) is upstream's, batched exactly like kswapd's.  The
- * T2 stub was per-page slow because it re-scanned from frame 0 on
- * every debugfs call and paid a full window transaction per pick; the
- * rotation cursor and the shared walker amortize that to one lock per
- * window and one reclaim per scan.
+ * pickers could isolate the same folio twice -- in bounded slices so
+ * no spinlock hold is long, and every pick of a scan feeds one
+ * (addr, folio) list.  Everything after the pick is the native
+ * driver's (W1.e2: entry, the unchanged transaction, writeout, the
+ * final unmap/free), drained with the lock dropped like kswapd's
+ * batch.  The T2 stub was per-page slow because it re-scanned from
+ * frame 0 on every debugfs call and paid a full window transaction per
+ * pick; the rotation cursor and the shared walker amortize that to one
+ * lock per window and one reclaim per scan.
  */
 
 /* Victim-walk bounds: a shrink_lock hold spans one slice, capped by
@@ -14370,9 +14433,10 @@ keep:
 #define CORTEN_SHRINK_SLICE_PAGES	512
 #define CORTEN_SHRINK_MAX_SLICES	2
 
-/* One (address, folio) pick of the W1.e1 native-driver evict leg: the
- * driver owns the address (the ttu detour existed to hand it back) and
- * consumes the pick's folio reference at drain time.
+/* One (address, folio) pick of the native swap-out driver (W1.e1 added
+ * the struct for the evict leg, W1.e2 made it the shrinker leg's shape
+ * too): the driver owns the address (the ttu detour existed to hand it
+ * back) and consumes the pick's folio reference at drain time.
  */
 struct corten_swap_pick {
 	unsigned long addr;
@@ -14380,14 +14444,15 @@ struct corten_swap_pick {
 	struct list_head link;
 };
 
-/* One shrinker victim walk over a window set.  @list collects the
- * isolated folios (with references); @budget counts candidate pages
- * (MAPPED slots with a present PTE), not raw slots, so sparse windows
- * do not burn the scan allowance.  @picks is the force shape's (addr,
- * folio) list for the native driver -- unread unless @force.
+/* One shrinker victim walk over a window set.  @budget counts candidate
+ * pages (MAPPED slots with a present PTE), not raw slots, so sparse
+ * windows do not burn the scan allowance.  @picks collects the
+ * isolated victims as (addr, folio) pairs for the native swap-out
+ * driver (W1.e2: the shrinker leg's shape -- the ttu/`__reclaim_pages`
+ * detour that used to hand the address back is gone, and the pick
+ * itself owns the reference the driver consumes at drain time).
  */
 struct corten_shrink_walk {
-	struct list_head *list;
 	struct list_head *picks;
 	int budget;
 	int nr_scanned;
@@ -14478,21 +14543,26 @@ out:
  * get their young bit cleared (pass 1 and pass 2 -- vmscan.c:3717
  * mirrored, ptl nested under the covering desc write lock, same order
  * the MGLRU walker establishes for its ptep_clear_young_notify()) and,
- * in the pass-2/evict shapes, the cold (or any) ones are isolated onto
- * @w->list.  Lock failures skip the window: a -EAGAIN is the Fig.7
- * descriptor transition, retried on a later pass.
+ * in the pass-2/evict shapes, the cold (or any) ones are isolated as
+ * (addr, folio) pairs onto @w->picks.  Lock failures skip the window:
+ * a -EAGAIN is the Fig.7 descriptor transition, retried on a later
+ * pass.
  */
 static void corten_arena_shrink_walk(struct mm_struct *mm,
 				     struct corten_arena *ar,
 				     unsigned long fstart, unsigned long fend,
 				     struct corten_shrink_walk *w)
 {
-	/* V-A.2b: the anchor -- a carrier arena's pages are rmap-anchored,
-	 * so the pick gate below reopens for them and the ttu leg of
-	 * __reclaim_pages() finds its mapping; a punched DECLARE arena
-	 * whose piece cache went NULL stays unpickable (counted -- the
-	 * conservative residue; F1 removed the A.1 anchor-less window
-	 * this arm also used to carry).
+	/* V-A.2b: the anchor -- a carrier arena's pages are rmap-anchored
+	 * and the driver's verdict shapes resolve the carrier for them
+	 * (the flush/mlock legs); a punched DECLARE arena whose piece
+	 * cache went NULL stays unpickable (counted -- the conservative
+	 * residue; F1 removed the A.1 anchor-less window this arm also
+	 * used to carry).  The driver no longer needs rmap to find the
+	 * address (W1.e2: no ttu leg), but an anchorless pick would
+	 * deterministically keep at the carrier lookup -- not picking it
+	 * saves the doomed trip; W-2 revisits when the driver
+	 * de-carriers.
 	 */
 	struct vm_area_struct *vma = corten_arena_anchor_vma(ar);
 	struct corten_txn txn;
@@ -14567,25 +14637,33 @@ static void corten_arena_shrink_walk(struct mm_struct *mm,
 			/* Isolation criteria (spec sec 3 red line 3,
 			 * OQ-M6-2): unshared (checked above), unpinned,
 			 * order-0, no writeback in flight.  A pick that
-			 * loses its mapping before the reclaim is kept by
-			 * __reclaim_pages(), not corrupted -- the ttu
-			 * transaction re-checks everything under the
-			 * covering lock.
+			 * loses its mapping before the drain is kept by
+			 * the driver, not corrupted -- the transaction
+			 * re-checks everything under the covering lock.
 			 *
 			 * V-A.1 boundary: a VMA-less arena's pages carry
-			 * no rmap anchor, so the ttu leg of
-			 * __reclaim_pages() finds no mapping, reports
-			 * success, and the folio is freed under a live
-			 * PTE.  Such windows are therefore not pickable
-			 * yet -- the pages stay resident until their
-			 * munmap/exit (counted); the V-A.2b carrier
-			 * restores the rmap anchor and reclaimability.
+			 * no rmap anchor and no carrier for the driver's
+			 * verdict shapes -- such a pick would
+			 * deterministically keep at the driver's carrier
+			 * lookup, so the window stays unpickable (the
+			 * pages stay resident until their munmap/exit,
+			 * counted); the V-A.2b carrier restores
+			 * reclaimability.
 			 */
 			if (!vma) {
 				atomic_long_inc(&corten_nr_shrink_skipped);
 				continue;
 			}
 			{
+				/* W1.e2: every leg picks (addr, folio)
+				 * pairs for the native driver -- the
+				 * driver holds the address, so no LRU
+				 * link is borrowed and no ttu walk is
+				 * owed a mapping.  A NOWAIT entry
+				 * failure just skips this pick (counted,
+				 * reference returned).
+				 */
+				struct corten_swap_pick *p;
 				struct folio *folio = page_folio(pte_page(cur));
 
 				if (folio_nr_pages(folio) != 1 ||
@@ -14595,29 +14673,15 @@ static void corten_arena_shrink_walk(struct mm_struct *mm,
 					continue;
 				}
 				folio_get(folio);
-				if (w->force) {
-					/* W1.e1: the native-driver leg picks
-					 * (addr, folio) pairs -- the driver
-					 * holds the address, so no LRU link
-					 * is borrowed and no ttu walk is
-					 * owed a mapping.  A NOWAIT entry
-					 * failure just skips this pick
-					 * (counted, reference returned).
-					 */
-					struct corten_swap_pick *p;
-
-					p = kmalloc(sizeof(*p), GFP_NOWAIT);
-					if (!p) {
-						folio_put(folio);
-						atomic_long_inc(&corten_nr_shrink_skipped);
-						continue;
-					}
-					p->addr = a;
-					p->folio = folio;
-					list_add_tail(&p->link, w->picks);
-				} else {
-					list_add_tail(&folio->lru, w->list);
+				p = kmalloc(sizeof(*p), GFP_NOWAIT);
+				if (!p) {
+					folio_put(folio);
+					atomic_long_inc(&corten_nr_shrink_skipped);
+					continue;
 				}
+				p->addr = a;
+				p->folio = folio;
+				list_add_tail(&p->link, w->picks);
 				w->nr_picked++;
 			}
 		}
@@ -14746,60 +14810,16 @@ static void corten_shrink_age_slice(struct mm_struct *mm,
 	state->shrink_cursor = idx;
 }
 
-/* One batched reclaim pass over the picked folios: upstream machinery
- * end to end (folio_alloc_swap -> try_to_unmap -- the ttu guard, then
- * the M6.T2 swap-out transaction inside its notifier window -- ->
- * swap_writeout -> __remove_mapping).  The kept survivors are drained
- * by the body below (the private-cookie form never puts back to the
- * LRU: folio_putback_lru() is forbidden for arena pages, DEV-10);
- * their count goes to *@nr_kept when the caller wants the
- * picked-minus-kept swap-out attribution (T4 shrink_swapped, exact
- * under concurrency).
- */
-static unsigned long corten_shrink_reclaim(struct list_head *list,
-					   int *nr_kept)
-{
-	unsigned long reclaimed = 0;
-	int kept = 0;
-
-	/* __reclaim_pages() with a private cookie does NOT return the
-	 * kept folios on @list: it drains @list into its internal
-	 * per-node list and leaves the survivors on that (the putback
-	 * loop the NULL-private form runs is the only mover back), so
-	 * draining @list after a batch call -- the pre-V-A.2b body, whose
-	 * pick gate the anchor-less window kept shut -- found nothing and
-	 * leaked one pick reference per kept folio with folio->lru still
-	 * chained to the dead stack head (a no-swap boot keeps every
-	 * pick).  One folio per call makes the survivor identity
-	 * derivable from the return value: reclaimed means freed inside
-	 * (the pick reference was consumed), 0 means kept -- re-init the
-	 * links (the stranded head is dead and never read again; nothing
-	 * is written through the stale link) and drop the pick reference,
-	 * the exact private-cookie contract corten needs
-	 * (folio_putback_lru() is forbidden for arena pages, DEV-10).
-	 */
-	while (!list_empty(list)) {
-		struct folio *folio = lru_to_folio(list);
-		LIST_HEAD(one);
-		unsigned long n;
-
-		list_move(&folio->lru, &one);
-		n = __reclaim_pages(&one, &corten_nr_swapped_out);
-		reclaimed += n;
-		if (!n) {
-			INIT_LIST_HEAD(&folio->lru);
-			folio_put(folio);
-			kept++;
-		}
-	}
-	if (nr_kept)
-		*nr_kept = kept;
-	return reclaimed;
-}
-
 /* The per-mm scan: alternating pass-2/pass-1 slices under the per-mm
  * shrink trylock, one reclaim per slice with the lock dropped.  Returns
  * the pages freed; *@scanned_out reports the candidate-page budget used.
+ *
+ * W1.e2: the picks drain through the native swap-out driver (the evict
+ * leg's shape) -- the __reclaim_pages()-through-ttu detour is gone, and
+ * with it the M6.T2 ttu completion arm's last feed.  The lock is held
+ * across a slice's aging only: the drain sleeps (folio trylock,
+ * synchronous zram writeout), so each slice drops the lock before
+ * driving its picks, exactly like the evict loop.
  */
 static unsigned long corten_shrink_mm(struct mm_struct *mm,
 				      struct corten_mm_state *state,
@@ -14811,13 +14831,9 @@ static unsigned long corten_shrink_mm(struct mm_struct *mm,
 
 	while (budget > 0 && rounds++ < CORTEN_SHRINK_MAX_SLICES) {
 		struct corten_shrink_walk w;
-		LIST_HEAD(list);
+		LIST_HEAD(picks);
 
-		w.list = &list;
-		/* The (addr, folio) list is the force shape's; this aging
-		 * walker never touches it (W1.e2 rewires this leg).
-		 */
-		w.picks = NULL;
+		w.picks = &picks;
 		w.budget = min(budget, CORTEN_SHRINK_SLICE_PAGES);
 		w.nr_scanned = w.nr_young = w.nr_picked = 0;
 		w.eval = false;
@@ -14838,11 +14854,23 @@ static unsigned long corten_shrink_mm(struct mm_struct *mm,
 		budget -= w.nr_scanned;
 		picked += w.nr_picked;
 
-		if (!list_empty(&list)) {
-			int slice_kept = 0;
+		/* W1.e2: the native driver drains the picks itself -- no
+		 * __reclaim_pages()/ttu detour.  Each pick's folio
+		 * reference is consumed inside (freed on success, dropped
+		 * on every keep arm); the keep verdict feeds the
+		 * picked-minus-kept swap-out attribution below.
+		 */
+		while (!list_empty(&picks)) {
+			struct corten_swap_pick *p;
 
-			freed += corten_shrink_reclaim(&list, &slice_kept);
-			kept += slice_kept;
+			p = list_first_entry(&picks, struct corten_swap_pick,
+					     link);
+			list_del(&p->link);
+			if (corten_swap_out_driver(mm, p->addr, p->folio))
+				freed++;
+			else
+				kept++;
+			kfree(p);
 		}
 		if (!w.nr_scanned)
 			break;	/* nothing left to age or evaluate */
@@ -14850,8 +14878,8 @@ static unsigned long corten_shrink_mm(struct mm_struct *mm,
 	}
 
 	/* Exact shrinker swap-out attribution: every freed pick of an
-	 * anonymous arena page reached swap through the M6.T2 transaction
-	 * (picked minus kept), race-free by construction.
+	 * anonymous arena page reached swap through the native driver's
+	 * transaction (picked minus kept), race-free by construction.
 	 */
 	if (picked > kept)
 		atomic_long_add(picked - kept, &corten_nr_shrink_swapped);
@@ -15041,9 +15069,9 @@ late_initcall(corten_shrinker_init);
  * are metadata CORTEN_MAPPED (content, not the zero page), COW-unshared
  * (OQ-M6-2), not DMA-pinned, not in writeback, present PTE.  W1.e1: the
  * picks are (addr, folio) pairs drained by the native swap-out driver
- * (the ttu walk no longer rejoins this path; the shrinker leg keeps
- * __reclaim_pages() until W1.e2).  zram is a synchronous-write device,
- * so the batch settles inline.
+ * (the ttu walk no longer rejoins this path; W1.e2 put the shrinker leg
+ * on the same shape).  zram is a synchronous-write device, so the batch
+ * settles inline.
  *
  * Lock order: shrink trylock > [lookup_get active ref implicitly via
  * the arenas walk] > corten_lock_range > ptl for the pick.  All of
@@ -15087,7 +15115,6 @@ static int corten_arena_evict_mm(struct mm_struct *mm, int nr)
 		struct corten_shrink_walk w;
 		LIST_HEAD(picks);
 
-		w.list = NULL;
 		w.picks = &picks;
 		w.budget = min(nr - scanned, CORTEN_SHRINK_SLICE_PAGES);
 		w.nr_scanned = w.nr_young = w.nr_picked = 0;
