@@ -998,6 +998,23 @@ int corten_swapin_sync_meta(struct mm_struct *mm, unsigned long addr,
 			    swp_entry_t entry, struct folio *folio);
 
 /*
+ * W1.f (W1_NATIVE_RMAP_SPEC.md sec 3.2 swapoff row): the unuse
+ * enumeration arm -- sweep every CORTEN_SWAPPED slot of @mm's windows
+ * whose entry belongs to the swapoff'ing @type back to residency, so
+ * the registry-held windows are visible to swapoff without any VMA
+ * walk.  Two entry shapes ride that meta (W1.f2): the cache-less one
+ * pulls through the M6 swap-in transaction, a swapcache-backed one (a
+ * real device's asynchronous writeout keep) through the unuse_pte-
+ * style cached-folio map -- the direct path's swapcache_prepare() only
+ * spins on SWAP_HAS_CACHE (the S-3 branch-B finding).  Called from
+ * unuse_mm() under its mmap read lock, before the legacy tree walk
+ * (which continues to own the non-window shapes untouched).  Transient
+ * races report success and lean on try_to_unuse()'s outer retry; only
+ * hard failures propagate (and drive the residual blind ledger).
+ */
+int corten_arena_unuse_windows(struct mm_struct *mm, unsigned int type);
+
+/*
  * W1.a: vma-free rmap bookkeeping (W1_NATIVE_RMAP_SPEC.md sec 2.2), the
  * order-0 mirrors of the add/remove rmap family with the vma-dependent
  * parts (anon mapping/index, mlock_vma) left to the caller's transaction.
@@ -1272,6 +1289,12 @@ static inline int corten_swapin_sync_meta(struct mm_struct *mm,
 					  unsigned long addr,
 					  swp_entry_t entry,
 					  struct folio *folio)
+{
+	return 0;
+}
+
+static inline int corten_arena_unuse_windows(struct mm_struct *mm,
+					     unsigned int type)
 {
 	return 0;
 }

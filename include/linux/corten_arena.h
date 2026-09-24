@@ -1040,6 +1040,11 @@ bool corten_arena_test_registry_empty(void);
  */
 long corten_arena_test_ttu_routes(void);
 
+/* W1.f hook: the per-mm swapoff step (unuse_mm() is static to
+ * mm/swapfile.c) -- the entry-sweep anchor drives exactly it.
+ */
+int corten_arena_test_unuse_mm(struct mm_struct *mm, unsigned int type);
+
 /* M6.T3 shrinker hooks: drive the count/scan bodies directly (the
  * shrinker is only registered on a corten=on boot; the bodies are the
  * same functions the shrinker calls, with a synthetic shrink_control),

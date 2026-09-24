@@ -395,12 +395,18 @@ static atomic_long_t corten_nr_implant_drops;
 static atomic_long_t corten_nr_exit_upper_pmds;
 static atomic_long_t corten_nr_exit_upper_puds;
 static atomic_long_t corten_nr_exit_upper_p4ds;
-/* V-D (S-3 disclosure): swapoff unuse passes that visited an mm whose
- * window domain they cannot walk -- unuse_mm() is VMA-bounded and the
- * post-A.2 carrier windows are tree-free, so their swap entries ride
- * until a fault or the exit walk releases them.  Counted per unuse_mm()
- * visit with arenas registered; the behavior characterization itself is
- * the guest retest's (spec sec 4, S-3).
+/* V-D (S-3 disclosure) / W1.f flip: the ledger kept its name and its
+ * debugfs line for the historical record, but the blind spot itself is
+ * closed -- unuse_mm() sweeps the window swap entries through the
+ * registry enumeration arm (corten_arena_unuse_windows()) before its
+ * legacy walk.  Historical shape (V-D): swapoff unuse passes that
+ * visited an mm whose window domain they cannot walk -- unuse_mm() was
+ * VMA-bounded and the post-A.2 carrier windows were tree-free, so
+ * their swap entries rode until a fault or the exit walk released
+ * them.  Residual shape (W1.f): an mm counts iff the arm failed hard
+ * (-ENOMEM / broken pair); a successful sweep -- the only shape the
+ * KUnit anchor and the guest retest observe -- must leave this at its
+ * prior value.
  */
 static atomic_long_t corten_nr_unuse_blind_mms;
 
@@ -2913,6 +2919,13 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_zap_single_refuses));
 	seq_printf(m, "imap_stale_refuses  %ld\n",
 		   atomic_long_read(&corten_nr_imap_stale_refuses));
+	/* W1.f render close-out: the V-A.3a implant ledger's "normally
+	 * zero" drop counter -- it counted since A.3a but had no reader;
+	 * a hit means an implant lost its whitelist entry to allocation
+	 * failure (the implant still works, J2 just can't see it).
+	 */
+	seq_printf(m, "implant_drops       %ld\n",
+		   atomic_long_read(&corten_nr_implant_drops));
 	/* W1.d: the ttu hook's file demotions (the reclaim family). */
 	seq_printf(m, "ttu_routes          %ld\n",
 		   atomic_long_read(&corten_nr_ttu_routes));
@@ -3043,6 +3056,10 @@ void corten_arena_stats_report(struct seq_file *m)
 	seq_printf(m, "exit_upper_p4ds     %ld\n",
 		   atomic_long_read(&corten_nr_exit_upper_p4ds));
 	/* V-D (S-3 disclosure): swapoff unuse visits blind to windows. */
+	/* V-D S-3 disclosure, W1.f residual shape: expected zero (the
+	 * registry arm sweeps the window entries; only a hard arm
+	 * failure counts).
+	 */
 	seq_printf(m, "unuse_blind_mms     %ld\n",
 		   atomic_long_read(&corten_nr_unuse_blind_mms));
 	/* M6.T3 shrinker pressure channel + M6.T4 observability. */
@@ -3989,17 +4006,15 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 }
 
 /*
- * V-D (S-3 disclosure, MV_VMA_FREE_SPEC.md sec 4/C18): swapoff's
- * try_to_unuse() reaches this mm's swap entries only through tree
- * VMAs (unuse_mm() is VMA-bounded), and the post-A.2 carrier windows
- * are tree-free -- their swap entries are invisible to the early
- * swap-in optimization and ride until a fault (do_swap_page through
- * the window fault gate) or this mm's exit walk releases them.
- * unuse_mm() calls this under its mmap_read; the counter is pure
- * observation (a disclosure, not a route -- swapoff is not a hot
- * path, and the semantics are the registered S-3 verdict to
- * characterize in the guest retest: bounded spin until the entries
- * drop, never a leak).
+ * W1.f residual shape (the V-D disclosure's flip, same ledger and
+ * debugfs line): unuse_mm() calls this only when the registry
+ * enumeration arm (corten_arena_unuse_windows()) failed hard for the
+ * mm -- the window entries it could not sweep ride until a fault
+ * (do_swap_page through the window fault gate) or the mm's exit walk
+ * releases them, the same bounded-spin, never-a-leak contract the
+ * S-3 verdict registered.  A successful sweep (the only shape the
+ * anchors observe) must leave the counter untouched: expected-zero,
+ * the historical blindness exists only on this page.
  */
 void corten_arena_unuse_blind_note(struct mm_struct *mm)
 {
@@ -14005,6 +14020,408 @@ int corten_swapin_sync_meta(struct mm_struct *mm, unsigned long addr,
 			 CORTEN_MAP_FORCE);
 	corten_unlock(&txn);
 	return ret;
+}
+
+/* W1.f per-window drain slice: how many matching slots one scan pass
+ * collects before the transaction is dropped and the swap-ins run
+ * (cold path -- 512 slots per 2M window bound the array), and how many
+ * passes one unuse call spends on one window before leaving the rest
+ * to try_to_unuse()'s outer retry (the legacy convergence mechanism:
+ * reinserted entries and lost races are revisited on the next mmlist
+ * pass, never a hard failure).
+ */
+#define CORTEN_UNUSE_BATCH	32
+#define CORTEN_UNUSE_PASSES	8
+
+/*
+ * W1.f2 (V-D report sec 6 arm, the S-3 branch-B gate finding): the
+ * pull for a swapcache-backed entry.  On a real device the W1.e1
+ * driver's post-transaction keep mirrors upstream's writeback keep --
+ * the folio stays in the swap cache until a later reclaim pass removes
+ * it.  An arena folio is never LRU-anchored (DEV-10), so that later
+ * pass never comes, and until the window's PTE reference moves, the
+ * entry reads (PTE + SWAP_HAS_CACHE): the direct swapin's
+ * swapcache_prepare() spins out its deadline on every slot and unuse
+ * never converges (the gate's branch-B D-state with swapins=0 and the
+ * blind ledger at zero -- the arm scanned fine, the pulls all
+ * -EAGAIN'd).  unuse_pte_range() answers this same shape by mapping
+ * THE CACHED FOLIO; this is that semantic through the M6 transaction
+ * (INV6): no device I/O (the cached folio is already uptodate), and
+ * once swap_free() drops the PTE reference the entry is cache-only --
+ * try_to_unuse()'s folio_free_swap() loop retires it and the device
+ * drains.
+ *
+ * @folio arrives locked, writeback-drained and cache-matching @entry
+ * (the unuse_pte_range() discipline, mirrored in the pull leg).
+ * Locking: folio lock > desc write lock > ptl, the driver/fault order;
+ * the caller runs under unuse_mm's mmap read (arena lifetimes stable).
+ *
+ * Return: 0 = the slot is consumed (pulled here, or a racing actor
+ * moved it -- the next scan pass re-examines); 1 = the folio is not
+ * (or no longer) this entry's cache shape, the caller falls back to
+ * the direct swapin; the negative errno otherwise (-EAGAIN soft,
+ * -ENOMEM/-EFAULT the arm's hard pair).
+ */
+static int corten_arena_unuse_cache_pull(struct mm_struct *mm,
+					 struct corten_arena *ar,
+					 unsigned long addr,
+					 struct folio *folio,
+					 swp_entry_t entry)
+{
+	struct vm_area_struct *vma;
+	struct corten_txn txn;
+	struct corten_pte_meta m, nm;
+	struct page *page = folio_page(folio, 0);
+	pmd_t *pmdp;
+	pte_t *ptep, cur, newpte;
+	spinlock_t *ptl;	/* nested inside the txn's desc write lock */
+	rmap_t rmap_flags = RMAP_NONE;
+	bool exclusive;
+	int ret;
+
+	/* The poison answers stay the arm's loud pair (W1.f): a poisoned
+	 * or never-uptodate cache folio cannot back a resident slot.
+	 */
+	if (PageHWPoison(page) || unlikely(!folio_test_uptodate(folio)))
+		return -EFAULT;
+
+	/* The driver only swaps out anchored windows (the anchorless
+	 * shape keeps), so a NULL anchor is a torn-window race: soft.
+	 */
+	vma = corten_arena_anchor_vma(ar);
+
+	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+	if (ret)
+		return -EAGAIN;
+	if (corten_query(&txn, addr, &m) ||
+	    m.state != CORTEN_SWAPPED ||
+	    corten_swap_decode(&m).val != entry.val) {
+		/* Not (any more) this entry: a fault or a zap committed
+		 * under the lookup; the next pass sees the new shape
+		 * through the plain scan.
+		 */
+		corten_unlock(&txn);
+		return 0;
+	}
+	pmdp = corten_arena_pmd(mm, addr);
+	if (!pmdp) {
+		corten_unlock(&txn);
+		return -EAGAIN;
+	}
+	/* The commit turns the slot resident: the swap-in's own shape
+	 * pins the metadata array first (a no-op here -- the producer
+	 * ensured it -- but the paired shape, and the -ENOMEM is the
+	 * arm's hard pair).
+	 */
+	if (corten_meta_ensure_locked(txn.covering)) {
+		corten_unlock(&txn);
+		return -ENOMEM;
+	}
+	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	if (!ptep) {
+		corten_unlock(&txn);
+		return -EAGAIN;
+	}
+	cur = ptep_get(ptep);
+	if (pte_present(cur) || pte_to_swp_entry(cur).val != entry.val) {
+		/* A racing fault owns the translation now (its own
+		 * commit heals the pair); rescan re-examines.
+		 */
+		pte_unmap_unlock(ptep, ptl);
+		corten_unlock(&txn);
+		return 0;
+	}
+
+	/* The commit: unuse_pte()'s counter/rmap/setpte shape, then the
+	 * metadata edge (Swapped -> Mapped, the paper's legal fault
+	 * transition) inside the same transaction.  The entry's
+	 * exclusive bit steers both the rmap flags and the shared
+	 * re-arm below (the swap-in's own fork-COW contract).
+	 */
+	exclusive = pte_swp_exclusive(cur);
+	if (exclusive)
+		rmap_flags |= RMAP_EXCLUSIVE;
+
+	add_mm_counter(mm, MM_ANONPAGES, 1);
+	add_mm_counter(mm, MM_SWAPENTS, -1);
+	folio_get(folio);
+
+	/* Arch metadata before swap_free() (upstream ordering); the PTE
+	 * reference is kept until the metadata commit below.
+	 */
+	arch_swap_restore(entry, folio);
+
+	newpte = mk_pte(page, vma ? corten_arena_perm_pgprot(vma, m.perm) :
+				    corten_arena_perm_pgprot_pure(m.perm));
+	if (pte_swp_soft_dirty(cur))
+		newpte = pte_mksoft_dirty(newpte);
+	/* The OQ-M6-8 refault grace, the swap-in's own answer: one aging
+	 * epoch before the shrinker may pick the page again.
+	 */
+	newpte = pte_mkyoung(newpte);
+	/* unuse_pte()'s rmap fork: a real-device keep's folio is the
+	 * original window page (still anon, mapcount returned by the
+	 * swap-out transaction), while a readahead-created cache member
+	 * was never faulted and carries no anon mapping yet.  A VMA-less
+	 * arena skips the rmap (the swap-in's own precedent); the
+	 * driver never swaps out an anchorless window, so that shape is
+	 * defensive only.
+	 */
+	if (vma) {
+		if (!folio_test_anon(folio)) {
+			VM_WARN_ON_ONCE(folio_test_large(folio));
+			folio_add_new_anon_rmap(folio, vma, addr, rmap_flags);
+		} else {
+			folio_add_anon_rmap_pte(folio, page, vma, addr,
+						rmap_flags);
+		}
+	}
+	/* No TLB invalidate: the slot held a swap entry (non-present),
+	 * so no CPU can hold a translation for it.
+	 */
+	set_ptes(mm, addr, ptep, newpte, 1);
+	if (vma)
+		update_mmu_cache_range(NULL, vma, addr, ptep, 1);
+	pte_unmap_unlock(ptep, ptl);
+
+	nm = m;
+	nm.state = CORTEN_MAPPED;
+	nm.flags = 0;
+	if (!exclusive) {
+		/* The fork-shared shape: corten_map() scrubs the flags,
+		 * so the SHARED (+ WRITABLE) re-arm rides corten_mark()
+		 * -- the swap-in commit's own answer.
+		 */
+		nm.flags = CORTEN_PF_SHARED;
+		if (nm.perm & CORTEN_PERM_WRITE)
+			nm.flags |= CORTEN_PF_WRITABLE;
+	}
+	ret = corten_map(&txn, addr, page, m.perm, 0);
+	if (!ret && nm.flags)
+		ret = corten_mark(&txn, addr, PAGE_SIZE, &nm);
+	if (WARN_ON_ONCE(ret)) {
+		/* Unreachable (the array was ensured by the producer);
+		 * the PTE and the counters are committed and the
+		 * metadata still says Swapped -- the swap-in heal branch
+		 * repairs the pair and unuse still converges (the entry
+		 * lost its PTE reference below either way).
+		 */
+		corten_unlock(&txn);
+		swap_free(entry);
+		return 0;
+	}
+	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
+				CORTEN_ARENA_STAT_MAPPED);
+	corten_unlock(&txn);
+	atomic_long_inc(&corten_nr_swapins);
+
+	/* The PTE's reference on the entry, held past the metadata
+	 * commit -- the strictly-stronger shape swap_in() uses.  The
+	 * cache reference rides until folio_free_swap().
+	 */
+	swap_free(entry);
+	return 0;
+}
+
+/*
+ * W1.f (W1_NATIVE_RMAP_SPEC.md sec 3.2 swapoff row / sec 5 W1.f): the
+ * unuse enumeration arm.  swapoff's unuse_mm() used to be VMA-bounded
+ * (the V-D S-3 blind spot): a carrier window owns no tree VMA, so its
+ * swap PTEs were invisible to the early swap-in and rode until a fault
+ * or the exit walk released them (bounded try_to_unuse() spin, the
+ * registered S-3 verdict).  This arm closes the spot: it enumerates the
+ * mm's windows through the registry xarray (never the VMA tree), scans
+ * the PT-page metadata arrays for CORTEN_SWAPPED slots whose entry
+ * belongs to the swapoff'ing type, and pulls each one back through the
+ * M6 swap-in transaction (corten_arena_swap_in) -- the exact shapes the
+ * fault path uses, so INV6 (PTE+meta writes inside the transaction),
+ * the swapin_retries/heals race ledger and the R-W1-7 reentry answer
+ * (re-validate after re-lock) all come for free.  That is the
+ * unuse_pte() semantic parity the spec asks for: entry reference moved
+ * off the swap device, MM_SWAPENTS -1 / MM_ANONPAGES +1, content
+ * resident behind a present PTE.
+ *
+ * W1.f2: two entry shapes ride the CORTEN_SWAPPED meta (both commit
+ * through corten_rmap_swap_out(), so the meta alone cannot tell them
+ * apart).  A cache-LESS entry -- the synchronous-device writeout
+ * (zram) freed the folio -- pulls through the direct swapin above.  A
+ * swapcache-BACKED entry -- a real device's asynchronous writeout keep
+ * -- is corten_arena_unuse_cache_pull()'s shape: the direct path's
+ * swapcache_prepare() would only spin on SWAP_HAS_CACHE (the S-3
+ * branch-B finding).  The meta layer needed no alignment; the pulls
+ * did.
+ *
+ * Locking: the caller (unuse_mm) holds this mm's mmap lock for reading
+ * -- DECLARE/RELEASE/reactivation are excluded, so the registry entries
+ * are stable for the walk; the swap-in I/O runs transaction-free (the
+ * arm holds no desc lock across it, INV3) and re-validates the slot
+ * under its own re-lock.  Transient shapes (-EAGAIN races, a window in
+ * descriptor transition, a concurrent shrinker re-swap-out) are NOT
+ * errors: the sweep reports success and try_to_unuse()'s outer loop
+ * re-runs the mmlist pass while si->inuse_pages != 0 -- the same
+ * bounded-spin contract the S-3 disclosure registered.  Hard failures
+ * (-ENOMEM alloc leg, -EFAULT broken pair/poisoned read) propagate and
+ * fail the swapoff loudly, and are what the residual blind ledger
+ * counts now that the spot itself is closed.
+ *
+ * Return: 0 when every matching slot found is back resident (or left
+ * for the outer retry), the negative errno otherwise.
+ */
+static int corten_arena_unuse_window(struct mm_struct *mm,
+				     struct corten_arena *ar,
+				     unsigned long wstart, unsigned long wend,
+				     unsigned int type)
+{
+	unsigned long addrs[CORTEN_UNUSE_BATCH];
+	int pass;
+
+	for (pass = 0; pass < CORTEN_UNUSE_PASSES; pass++) {
+		struct corten_txn txn;
+		unsigned long a;
+		int nr = 0, i;
+
+		if (signal_pending(current))
+			return -EINTR;
+
+		/* One covering read transaction per scan pass, released
+		 * before the swap-ins (I/O sleeps under it, INV3) -- the
+		 * corten_arena_shrink_walk() shape.
+		 */
+		if (corten_lock_range(mm, wstart, wend - wstart, &txn))
+			return 0;	/* untracked/transitioning: outer retry */
+		for (a = wstart; a < wend && nr < CORTEN_UNUSE_BATCH;
+		     a += PAGE_SIZE) {
+			struct corten_pte_meta m;
+
+			if (corten_query(&txn, a, &m) ||
+			    m.state != CORTEN_SWAPPED)
+				continue;
+			if (swp_type(corten_swap_decode(&m)) != type)
+				continue;
+			addrs[nr++] = a;
+		}
+		corten_unlock(&txn);
+
+		if (!nr)
+			return 0;
+
+		for (i = 0; i < nr; i++) {
+			struct corten_fault_ctx ctx = {
+				.mm = mm,
+				.ar = ar,
+				.addr = addrs[i],
+				.write = false,
+			};
+			struct corten_pte_meta m;
+			swp_entry_t entry;
+			struct folio *folio;
+			int ret, cache;
+
+			/* The scanned meta is only the entry source; the
+			 * swap-in re-queries and re-validates under its
+			 * own transaction (R-W1-7).
+			 */
+			if (corten_lock_range(mm, addrs[i], PAGE_SIZE, &txn))
+				continue;
+			ret = corten_query(&txn, addrs[i], &m);
+			corten_unlock(&txn);
+			if (ret || m.state != CORTEN_SWAPPED)
+				continue;
+			entry = corten_swap_decode(&m);
+
+			/* The shape dispatch (W1.f2): the cache lookup
+			 * is the only meta-external difference between
+			 * the two entry shapes.
+			 */
+			cache = 0;
+			folio = swap_cache_get_folio(entry);
+			if (folio) {
+				folio_lock(folio);
+				folio_wait_writeback(folio);
+				cache = folio_test_swapcache(folio) &&
+					folio->swap.val == entry.val;
+				if (!cache) {
+					/* Decached under the lookup:
+					 * the entry is cache-less now,
+					 * the direct shape applies.
+					 */
+					folio_unlock(folio);
+					folio_put(folio);
+					folio = NULL;
+				}
+			}
+			if (cache)
+				ret = corten_arena_unuse_cache_pull(mm, ar,
+								    addrs[i],
+								    folio,
+								    entry);
+			else
+				ret = corten_arena_swap_in(&ctx, &m);
+			if (folio) {
+				folio_unlock(folio);
+				folio_put(folio);
+			}
+			if (ret == -ENOMEM || ret == -EFAULT)
+				return ret;
+			/* -EAGAIN: the slot moved under us; the next
+			 * scan pass (or the outer retry) re-examines it.
+			 */
+		}
+		cond_resched();
+	}
+	return 0;
+}
+
+/* The registry-side entry point unuse_mm() calls before its VMA walk
+ * (mm/corten_arena.h for the =n stub).  Mirror of
+ * corten_mm_state_pages()'s enumeration: one short RCU section per
+ * frame, reserve sentinels skipped, the sweep clipped to the frame the
+ * xarray index stands for.
+ */
+int corten_arena_unuse_windows(struct mm_struct *mm, unsigned int type)
+{
+	struct corten_mm_state *state;
+	unsigned long idx = 0;
+
+	if (!corten_enabled_static())
+		return 0;
+
+	/* Pairs with the smp_store_release() publisher in
+	 * corten_arena_state_create() (the same acquire every reader of
+	 * the published registry uses).
+	 */
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state || !refcount_read(&state->nr))
+		return 0;
+
+	for (;;) {
+		struct corten_arena *arena;
+		unsigned long wstart, wend;
+		int ret;
+
+		rcu_read_lock();
+		arena = xa_find(&state->arenas, &idx, ULONG_MAX, XA_PRESENT);
+		if (!arena || arena == &corten_va_reserve_sentinel) {
+			rcu_read_unlock();
+			if (!arena)
+				break;
+			idx++;
+			continue;
+		}
+		rcu_read_unlock();
+
+		wstart = max(idx << PMD_SHIFT, READ_ONCE(arena->start));
+		wend = min((idx + 1) << PMD_SHIFT, READ_ONCE(arena->end));
+		if (wstart < wend) {
+			ret = corten_arena_unuse_window(mm, arena, wstart,
+							wend, type);
+			if (ret)
+				return ret;
+		}
+		idx++;
+		cond_resched();
+	}
+	return 0;
 }
 
 /*

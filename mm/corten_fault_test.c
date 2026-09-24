@@ -3406,6 +3406,306 @@ static void corten_fault_test_swap_mprotect_pending(struct kunit *test)
 	 */
 }
 
+/* ------------------------------------------------------------------ *
+ * W1.f: swapoff's per-mm step -- the registry enumeration arm
+ * (W1_NATIVE_RMAP_SPEC.md sec 3.2 swapoff row / sec 5 W1.f)
+ * ------------------------------------------------------------------
+ */
+
+/* A plain (non-window) tree VMA in the harness address space: the
+ * segment unuse_mm()'s legacy walk continues to own.  Disjoint from
+ * the arena (FT_BASE is 4 PMD in, the arena is 2 PMD wide).
+ */
+#define FT_LEG_BASE		(32UL * PMD_SIZE)
+
+/* The plain-VMA counterpart of ft_swap_out(): populate @addr through
+ * the real fault path on @lvma (the flipped guard never sees it -- the
+ * VM_CORTEN gate skips plain VMAs), write @pattern, then swap it out
+ * through the legacy route: the shrink_folio_list() preamble
+ * (folio_alloc_swap + dirty) and a plain try_to_unmap(), whose
+ * standard arm installs the swap PTE and drops the mm counters.  The
+ * writeout settles (zram is synchronous) before the return; the
+ * swapcache keeps the folio alive until unuse_pte()'s folio_free_swap()
+ * (or its fallback: the readahead re-read from the device).
+ */
+static bool ft_legacy_swap_out(struct kunit *test, struct ft_mm *t,
+			       struct vm_area_struct *lvma,
+			       unsigned long addr, u8 pattern,
+			       swp_entry_t *entry)
+{
+	struct folio *folio;
+	void *kaddr;
+	pte_t *ptep, pte;
+	vm_fault_t fret;
+	bool ok = true;
+
+	mmap_read_lock(t->mm);
+	fret = handle_mm_fault(lvma, addr, FAULT_FLAG_WRITE, NULL);
+	mmap_read_unlock(t->mm);
+	if (fret & VM_FAULT_ERROR)
+		return false;
+
+	ptep = ft_pte(t, addr);
+	if (!ptep)
+		return false;
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	if (!pte_present(pte))
+		return false;
+	folio = page_folio(pte_page(pte));
+
+	kaddr = kmap_local_page(folio_page(folio, 0));
+	memset(kaddr, pattern, PAGE_SIZE);
+	kunmap_local(kaddr);
+
+	/* The preamble -- EXPECT discipline from here on: an ASSERT
+	 * abort with the folio lock held would leak it into the
+	 * teardown (the folio is an LRU page, its reclaim needs the
+	 * lock too, so the hold is also what keeps it alive through
+	 * the unmap).
+	 */
+	KUNIT_ASSERT_EQ(test, folio_lock_killable(folio), 0);
+	if (folio_alloc_swap(folio, GFP_KERNEL)) {
+		ok = false;
+	} else {
+		*entry = folio->swap;	/* capture while alive */
+		folio_mark_dirty(folio);
+	}
+	if (ok) {
+		try_to_unmap(folio, TTU_IGNORE_MLOCK);
+
+		ptep = ft_pte(t, addr);
+		if (!ptep) {
+			ok = false;
+		} else {
+			pte = ptep_get(ptep);
+			pte_unmap(ptep);
+			ok = !pte_present(pte) && !pte_none(pte);
+		}
+		/* shrink_folio_list()'s pageout leg (the driver's shape:
+		 * clear-for-io, then the write; zram settles inline).
+		 */
+		folio_clear_dirty_for_io(folio);
+		swap_writeout(folio, NULL);
+		folio_wait_writeback(folio);
+	}
+	folio_unlock(folio);
+	return ok;
+}
+
+/* The sweep reconciliation: one mm holding a window swap entry (the
+ * V-D blind shape -- no tree VMA, registry-held) and a plain-VMA swap
+ * entry (the legacy walk's shape), both dead on the device after
+ * exactly one unuse_mm() -- swapoff's per-mm step, driven through the
+ * test shim.  Requires a swap area; design-skips on boots without one
+ * and joins the guest suite re-run after swapon.
+ */
+static void corten_fault_test_unuse_windows(struct kunit *test)
+{
+	struct ft_mm *t;
+	struct vm_area_struct *lvma;
+	unsigned long wa = FT_BASE + 6 * PAGE_SIZE;
+	unsigned long la = FT_LEG_BASE + PAGE_SIZE;
+	swp_entry_t wentry, lentry = { };
+	struct corten_pte_meta m;
+	pte_t *ptep, pte;
+	void *kaddr;
+	long blind0, blind1, swapins0, swapins1;
+	bool same_type;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "unuse sweep requires corten=on");
+	if (!ft_swap_up())
+		kunit_skip(test, "unuse sweep requires a swap area");
+
+	t = ft_setup(test);
+
+	lvma = ft_mkvm(t->mm, FT_LEG_BASE, FT_LEG_BASE + PMD_SIZE,
+		       FT_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, lvma);
+
+	/* The window slot: swapped out through the real ttu route, the
+	 * registry sweep's input shape (meta CORTEN_SWAPPED, entry
+	 * encoded, swap PTE behind a tree-free window).
+	 */
+	wentry = ft_swap_out(test, t, wa);
+	KUNIT_ASSERT_TRUE(test, wentry.val != 0);
+
+	/* The legacy slot: the plain-VMA chain the legacy walk owns. */
+	KUNIT_ASSERT_TRUE(test, ft_legacy_swap_out(test, t, lvma, la, 0xa5,
+						   &lentry));
+	KUNIT_ASSERT_TRUE(test, lentry.val != 0);
+	/* Two entries in use before the sweep (one per shape). */
+	KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 2);
+	same_type = swp_type(lentry) == swp_type(wentry);
+
+	blind0 = ft_named_counter(test, "unuse_blind_mms");
+	swapins0 = ft_named_counter(test, "swapins");
+
+	/* swapoff's per-mm step, exactly: the registry arm first, the
+	 * legacy tree walk second, one call.
+	 */
+	ret = corten_arena_test_unuse_mm(t->mm, swp_type(wentry));
+	KUNIT_EXPECT_EQ(test, ret, 0);
+
+	/* The window entry is back: present PTE, content bit-identical,
+	 * metadata MAPPED with the contract perm, the payload scrubbed
+	 * (the swap-in transaction's own shape).
+	 */
+	ptep = ft_pte(t, wa);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	kaddr = kmap_local_page(pte_page(pte));
+	KUNIT_EXPECT_EQ(test, ((u8 *)kaddr)[0], 0x5c);
+	KUNIT_EXPECT_EQ(test, ((u8 *)kaddr)[PAGE_SIZE / 2], 0x5c);
+	kunmap_local(kaddr);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, wa, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+	KUNIT_EXPECT_EQ(test, corten_swap_decode(&m).val, 0);
+
+	if (same_type) {
+		/* The legacy entry rode the legacy walk (unuse_pte),
+		 * not the arm: present PTE, content intact.
+		 */
+		ptep = ft_pte(t, la);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+		pte = ptep_get(ptep);
+		pte_unmap(ptep);
+		KUNIT_EXPECT_TRUE(test, pte_present(pte));
+		kaddr = kmap_local_page(pte_page(pte));
+		KUNIT_EXPECT_EQ(test, ((u8 *)kaddr)[0], 0xa5);
+		kunmap_local(kaddr);
+
+		/* Ledger reconciliation: both entries off the device,
+		 * both pages resident again.
+		 */
+		KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 0);
+		KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_ANONPAGES), 2);
+
+		/* Exactly one native swapin (the legacy unuse_pte()
+		 * swap-in is not a corten counter event).
+		 */
+		swapins1 = ft_named_counter(test, "swapins");
+		KUNIT_EXPECT_EQ(test, swapins1 - swapins0, 1);
+	}
+
+	/* The W1.f flip: a successful sweep leaves the blind ledger
+	 * untouched (its historical shape counted every registry mm;
+	 * the residual only counts hard arm failures).
+	 */
+	blind1 = ft_named_counter(test, "unuse_blind_mms");
+	KUNIT_EXPECT_EQ(test, blind1, blind0);
+
+	/* Both entries dead on the device: duplicate fails. */
+	KUNIT_EXPECT_LT(test, swap_duplicate(wentry), 0);
+	if (same_type)
+		KUNIT_EXPECT_LT(test, swap_duplicate(lentry), 0);
+}
+
+	/* The W1.f2 shape: the same window slot after the entry grew a
+	 * swap cache member -- what a real device's asynchronous
+	 * writeout keep leaves behind (the driver's post-transaction arm
+	 * mirrors upstream's; zram's synchronous write frees the folio,
+	 * which is why the direct-shape anchor above never sees it).
+	 * The entry then reads (PTE + SWAP_HAS_CACHE): the direct
+	 * swapin's swapcache_prepare() would spin it out (the S-3
+	 * branch-B D-state), so the arm must map THE CACHED FOLIO --
+	 * unuse_pte_range()'s answer -- and leave the cache reference
+	 * for try_to_unuse()'s folio_free_swap() loop, driven here in
+	 * its exact shape.  Swap-area gated like its sibling.
+	 */
+static void corten_fault_test_unuse_windows_cache(struct kunit *test)
+{
+	struct ft_mm *t;
+	unsigned long wa = FT_BASE + 6 * PAGE_SIZE;
+	swp_entry_t wentry;
+	struct corten_pte_meta m;
+	struct folio *folio;
+	pte_t *ptep, pte;
+	void *kaddr;
+	long blind0, blind1, swapins0, swapins1;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "unuse sweep requires corten=on");
+	if (!ft_swap_up())
+		kunit_skip(test, "unuse sweep requires a swap area");
+
+	t = ft_setup(test);
+
+	/* Stage 1, the driver route: meta CORTEN_SWAPPED, swap PTE, and
+	 * on this synchronous device a cache-less entry.
+	 */
+	wentry = ft_swap_out(test, t, wa);
+	KUNIT_ASSERT_TRUE(test, wentry.val != 0);
+
+	/* Stage 2: grow the cache member back.  read_swap_cache_async()
+	 * is try_to_unuse()'s own preload (and the readahead's) shape:
+	 * folio + SWAP_HAS_CACHE + the content read back from the
+	 * device -- the entry now reads (PTE + SWAP_HAS_CACHE) exactly
+	 * like a real-device writeout keep.
+	 */
+	folio = read_swap_cache_async(wentry, GFP_KERNEL, NULL, 0, NULL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, folio);
+	KUNIT_ASSERT_TRUE(test, folio_test_swapcache(folio));
+	KUNIT_ASSERT_EQ(test, folio->swap.val, wentry.val);
+	folio_put(folio);	/* the cache reference carries it */
+
+	blind0 = ft_named_counter(test, "unuse_blind_mms");
+	swapins0 = ft_named_counter(test, "swapins");
+
+	/* swapoff's per-mm step, exactly: the arm must take the cache
+	 * shape, not the direct swapin.
+	 */
+	ret = corten_arena_test_unuse_mm(t->mm, swp_type(wentry));
+	KUNIT_EXPECT_EQ(test, ret, 0);
+
+	/* The cached folio is back behind the window PTE: present,
+	 * content bit-identical, metadata MAPPED with the contract perm
+	 * and a scrubbed payload.
+	 */
+	ptep = ft_pte(t, wa);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	pte_unmap(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	kaddr = kmap_local_page(pte_page(pte));
+	KUNIT_EXPECT_EQ(test, ((u8 *)kaddr)[0], 0x5c);
+	KUNIT_EXPECT_EQ(test, ((u8 *)kaddr)[PAGE_SIZE / 2], 0x5c);
+	kunmap_local(kaddr);
+	KUNIT_EXPECT_EQ(test, ft_meta(t, wa, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.perm, FT_PERM_RW);
+	KUNIT_EXPECT_EQ(test, corten_swap_decode(&m).val, 0);
+
+	/* MM_SWAPENTS 1 -> 0 (the PTE reference moved off the device),
+	 * the native swapin ledger +1 (the arm's pull -- the same
+	 * reconciliation the direct shape asserts), the blind ledger
+	 * untouched.
+	 */
+	KUNIT_EXPECT_EQ(test, get_mm_counter(t->mm, MM_SWAPENTS), 0);
+	swapins1 = ft_named_counter(test, "swapins");
+	KUNIT_EXPECT_EQ(test, swapins1 - swapins0, 1);
+	blind1 = ft_named_counter(test, "unuse_blind_mms");
+	KUNIT_EXPECT_EQ(test, blind1, blind0);
+
+	/* try_to_unuse()'s entry loop owns the cache reference once the
+	 * PTE one is off: folio_free_swap() must retire the entry
+	 * (cache-only) -- the convergence the real swapoff leans on.
+	 */
+	folio = swap_cache_get_folio(wentry);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, folio);
+	KUNIT_ASSERT_EQ(test, folio_lock_killable(folio), 0);
+	KUNIT_EXPECT_TRUE(test, folio_free_swap(folio));
+	folio_unlock(folio);
+	folio_put(folio);
+	KUNIT_EXPECT_LT(test, swap_duplicate(wentry), 0);
+}
+
 static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_dispatch),
 	KUNIT_CASE(corten_fault_test_fig8_cow),
@@ -3446,6 +3746,8 @@ static struct kunit_case corten_fault_test_cases[] = {
 	KUNIT_CASE(corten_fault_test_driver_keep_noswap),
 	KUNIT_CASE(corten_fault_test_driver_swap_roundtrip),
 	KUNIT_CASE(corten_fault_test_swap_mprotect_pending),
+	KUNIT_CASE(corten_fault_test_unuse_windows),
+	KUNIT_CASE(corten_fault_test_unuse_windows_cache),
 	{}
 };
 

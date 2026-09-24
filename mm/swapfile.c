@@ -2463,14 +2463,23 @@ static int unuse_mm(struct mm_struct *mm, unsigned int type)
 	mmap_read_lock(mm);
 	if (check_stable_address_space(mm))
 		goto unlock;
-	/* CortenMM (M-V V-D, S-3): this walk is VMA-bounded, so a MODE
-	 * process's tree-free carrier windows and their swap entries are
-	 * invisible to the early swap-in -- counted here as the
-	 * disclosure; the entries ride until a window fault or the exit
-	 * walk releases them (bounded spin in try_to_unuse(), never a
-	 * leak).  The behavior is the guest retest's to characterize.
+	/* CortenMM (W1.f, W1_NATIVE_RMAP_SPEC.md sec 3.2/5): the V-D S-3
+	 * blind spot is closed -- the registry enumeration arm pulls
+	 * every window swap entry of @type back (the M6 swap-in
+	 * transaction, or the unuse_pte-style cached-folio map for a
+	 * swapcache-backed entry -- W1.f2) before this legacy walk, so a
+	 * carrier window needs no tree VMA to be seen.  The note below is
+	 * the residual ledger only: an mm counts iff the arm failed hard
+	 * (ENOMEM / broken pair), the historical shape -- entries riding
+	 * to a fault or the exit walk -- being gone; the KUnit anchor and
+	 * the guest retest assert it stays at zero.
 	 */
-	corten_arena_unuse_blind_note(mm);
+	ret = corten_arena_unuse_windows(mm, type);
+	if (ret) {
+		if (ret != -EINTR)
+			corten_arena_unuse_blind_note(mm);
+		goto unlock;
+	}
 	for_each_vma(vmi, vma) {
 		if (vma->anon_vma && !is_vm_hugetlb_page(vma)) {
 			ret = unuse_vma(vma, type);
@@ -2484,6 +2493,19 @@ unlock:
 	mmap_read_unlock(mm);
 	return ret;
 }
+
+#ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
+/*
+ * W1.f: the per-mm swapoff step for the KUnit anchor -- unuse_mm() is
+ * static here, and the test drives exactly it (arm + legacy walk in
+ * one call) for the entry-sweep reconciliation.  Built only with the
+ * test config; zero references otherwise.
+ */
+int corten_arena_test_unuse_mm(struct mm_struct *mm, unsigned int type)
+{
+	return unuse_mm(mm, type);
+}
+#endif /* CONFIG_CORTEN_MM_ARENA_KUNIT_TEST */
 
 /*
  * Scan swap_map from current position to next entry still in use.
