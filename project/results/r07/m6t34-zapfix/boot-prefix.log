@@ -1,0 +1,2333 @@
+[    0.000000] Linux version 6.18.32-gb51754002f2f-dirty (ppw@vm) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #15 SMP PREEMPT_DYNAMIC Sun Sep 20 23:25:32 CST 2026
+[    0.000000] Command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on mitigations=off kunit.enable=0 log_buf_len=16M fsck.mode=force fsck.repair=yes
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x00000000bffdcfff] usable
+[    0.000000] BIOS-e820: [mem 0x00000000bffdd000-0x00000000bfffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000feffc000-0x00000000feffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000100000000-0x000000013fffffff] usable
+[    0.000000] NX (Execute Disable) protection: active
+[    0.000000] APIC: Static calls initialized
+[    0.000000] SMBIOS 2.8 present.
+[    0.000000] DMI: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[    0.000000] DMI: Memory slots populated: 1/1
+[    0.000000] Hypervisor detected: KVM
+[    0.000000] last_pfn = 0xbffdd max_arch_pfn = 0x400000000
+[    0.000000] kvm-clock: Using msrs 4b564d01 and 4b564d00
+[    0.000008] kvm-clock: using sched offset of 2200433020 cycles
+[    0.000013] clocksource: kvm-clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+[    0.000084] tsc: Detected 2419.196 MHz processor
+[    0.004640] last_pfn = 0x140000 max_arch_pfn = 0x400000000
+[    0.005327] MTRR map: 4 entries (3 fixed + 1 variable; max 19), built from 8 variable MTRRs
+[    0.005354] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+[    0.006434] last_pfn = 0xbffdd max_arch_pfn = 0x400000000
+[    0.022085] found SMP MP-table at [mem 0x000f5b90-0x000f5b9f]
+[    0.022371] Using GB pages for direct mapping
+[    0.447291] printk: log buffer data + meta data: 16777216 + 58720256 = 75497472 bytes
+[    0.447299] printk: early log buf free: 260016(99%)
+[    0.447550] ACPI: Early table checksum verification disabled
+[    0.447690] ACPI: RSDP 0x00000000000F59B0 000014 (v00 BOCHS )
+[    0.447866] ACPI: RSDT 0x00000000BFFE1BA3 000034 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.447998] ACPI: FACP 0x00000000BFFE1A1F 000074 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.448132] ACPI: DSDT 0x00000000BFFE0040 0019DF (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.448160] ACPI: FACS 0x00000000BFFE0000 000040
+[    0.448166] ACPI: APIC 0x00000000BFFE1A93 0000B0 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.448173] ACPI: HPET 0x00000000BFFE1B43 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.448179] ACPI: WAET 0x00000000BFFE1B7B 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.448184] ACPI: Reserving FACP table memory at [mem 0xbffe1a1f-0xbffe1a92]
+[    0.448189] ACPI: Reserving DSDT table memory at [mem 0xbffe0040-0xbffe1a1e]
+[    0.448191] ACPI: Reserving FACS table memory at [mem 0xbffe0000-0xbffe003f]
+[    0.448193] ACPI: Reserving APIC table memory at [mem 0xbffe1a93-0xbffe1b42]
+[    0.448195] ACPI: Reserving HPET table memory at [mem 0xbffe1b43-0xbffe1b7a]
+[    0.448197] ACPI: Reserving WAET table memory at [mem 0xbffe1b7b-0xbffe1ba2]
+[    0.451896] No NUMA configuration found
+[    0.451904] Faking a node at [mem 0x0000000000000000-0x000000013fffffff]
+[    0.451916] NODE_DATA(0) allocated [mem 0x13b7f9e40-0x13b7fdfff]
+[    0.452323] Zone ranges:
+[    0.452324]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+[    0.452326]   DMA32    [mem 0x0000000001000000-0x00000000ffffffff]
+[    0.452327]   Normal   [mem 0x0000000100000000-0x000000013fffffff]
+[    0.452334] Movable zone start for each node
+[    0.452334] Early memory node ranges
+[    0.452335]   node   0: [mem 0x0000000000001000-0x000000000009efff]
+[    0.452342]   node   0: [mem 0x0000000000100000-0x00000000bffdcfff]
+[    0.452343]   node   0: [mem 0x0000000100000000-0x000000013fffffff]
+[    0.452344] Initmem setup node 0 [mem 0x0000000000001000-0x000000013fffffff]
+[    0.452871] On node 0, zone DMA: 1 pages in unavailable ranges
+[    0.453863] On node 0, zone DMA: 97 pages in unavailable ranges
+[    0.819419] On node 0, zone Normal: 35 pages in unavailable ranges
+[    0.824034] ACPI: PM-Timer IO Port: 0x608
+[    0.824205] ACPI: LAPIC_NMI (acpi_id[0xff] dfl dfl lint[0x1])
+[    0.826028] IOAPIC[0]: apic_id 0, version 17, address 0xfec00000, GSI 0-23
+[    0.826049] ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+[    0.826055] ACPI: INT_SRC_OVR (bus 0 bus_irq 5 global_irq 5 high level)
+[    0.826058] ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+[    0.826088] ACPI: INT_SRC_OVR (bus 0 bus_irq 10 global_irq 10 high level)
+[    0.826092] ACPI: INT_SRC_OVR (bus 0 bus_irq 11 global_irq 11 high level)
+[    0.826102] ACPI: Using ACPI (MADT) for SMP configuration information
+[    0.826105] ACPI: HPET id: 0x8086a201 base: 0xfed00000
+[    0.826116] TSC deadline timer available
+[    0.826127] CPU topo: Max. logical packages:   1
+[    0.826129] CPU topo: Max. logical dies:       1
+[    0.826130] CPU topo: Max. dies per package:   1
+[    0.826139] CPU topo: Max. threads per core:   1
+[    0.826161] CPU topo: Num. cores per package:     8
+[    0.826163] CPU topo: Num. threads per package:   8
+[    0.826164] CPU topo: Allowing 8 present CPUs plus 0 hotplug CPUs
+[    0.826314] kvm-guest: APIC: eoi() replaced with kvm_guest_apic_eoi_write()
+[    0.826437] kvm-guest: KVM setup pv remote TLB flush
+[    0.826493] kvm-guest: setup PV sched yield
+[    0.827319] PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+[    0.827325] PM: hibernation: Registered nosave memory: [mem 0x0009f000-0x000fffff]
+[    0.827329] PM: hibernation: Registered nosave memory: [mem 0xbffdd000-0xffffffff]
+[    0.827335] [mem 0xc0000000-0xfeffbfff] available for PCI devices
+[    0.827338] Booting paravirtualized kernel on KVM
+[    0.827363] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1910969940391419 ns
+[    0.852234] setup_percpu: NR_CPUS:64 nr_cpumask_bits:8 nr_cpu_ids:8 nr_node_ids:1
+[    0.861301] percpu: Embedded 56 pages/cpu s192080 r8192 d29104 u262144
+[    0.861566] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on mitigations=off kunit.enable=0 log_buf_len=16M fsck.mode=force fsck.repair=yes
+[    0.862117] corten: requested on, activating at initcall time
+[    0.862247] random: crng init done
+[    0.882803] Dentry cache hash table entries: 524288 (order: 10, 4194304 bytes, linear)
+[    0.894201] Inode-cache hash table entries: 262144 (order: 9, 2097152 bytes, linear)
+[    0.895801] software IO TLB: area num 8.
+[    1.325375] Fallback order for Node 0: 0 
+[    1.325393] Built 1 zonelists, mobility grouping on.  Total pages: 1048443
+[    1.325397] Policy zone: Normal
+[    1.325407] mem auto-init: stack:off, heap alloc:off, heap free:off
+[    1.350324] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=8, Nodes=1
+[    1.369529] Dynamic Preempt: voluntary
+[    1.372011] Running RCU self tests
+[    1.372015] Running RCU synchronous self tests
+[    1.372019] rcu: Preemptible hierarchical RCU implementation.
+[    1.372020] rcu: 	RCU event tracing is enabled.
+[    1.372021] rcu: 	RCU lockdep checking is enabled.
+[    1.372022] rcu: 	RCU restricting CPUs from NR_CPUS=64 to nr_cpu_ids=8.
+[    1.372027] 	Trampoline variant of Tasks RCU enabled.
+[    1.372028] 	Tracing variant of Tasks RCU enabled.
+[    1.372052] rcu: RCU calculated value of scheduler-enlistment delay is 100 jiffies.
+[    1.372055] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=8
+[    1.372463] Running RCU synchronous self tests
+[    1.372471] RCU Tasks: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+[    1.372476] RCU Tasks Trace: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+[    1.390630] NR_IRQS: 4352, nr_irqs: 488, preallocated irqs: 16
+[    1.392257] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    1.472981] Console: colour VGA+ 80x25
+[    1.473688] printk: legacy console [ttyS0] enabled
+[    2.383121] Lock dependency validator: Copyright (c) 2006 Red Hat, Inc., Ingo Molnar
+[    2.395405] ... MAX_LOCKDEP_SUBCLASSES:  8
+[    2.400122] ... MAX_LOCK_DEPTH:          48
+[    2.404775] ... MAX_LOCKDEP_KEYS:        8192
+[    2.409721] ... CLASSHASH_SIZE:          4096
+[    2.415399] ... MAX_LOCKDEP_ENTRIES:     32768
+[    2.421226] ... MAX_LOCKDEP_CHAINS:      65536
+[    2.427307] ... CHAINHASH_SIZE:          32768
+[    2.435581]  memory used by lock dependency info: 6429 kB
+[    2.440462]  memory used for stack traces: 4224 kB
+[    2.446110]  per task-struct memory footprint: 1920 bytes
+[    2.454507] ACPI: Core revision 20250807
+[    2.462974] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    2.476446] APIC: Switch to symmetric I/O mode setup
+[    2.494135] x2apic enabled
+[    2.503237] APIC: Switched APIC routing to: physical x2apic
+[    2.512345] kvm-guest: APIC: send_IPI_mask() replaced with kvm_send_ipi_mask()
+[    2.527609] kvm-guest: APIC: send_IPI_mask_allbutself() replaced with kvm_send_ipi_mask_allbutself()
+[    2.539170] kvm-guest: setup PV IPIs
+[    2.565014] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    2.576032] clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x22df0d21928, max_idle_ns: 440795225288 ns
+[    2.592205] Calibrating delay loop (skipped) preset value.. 4838.39 BogoMIPS (lpj=2419196)
+[    2.596464] x86/cpu: User Mode Instruction Prevention (UMIP) activated
+[    2.598222] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    2.599190] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    2.600358] mitigations: Enabled attack vectors: SMT mitigations: off
+[    2.601259] Speculative Store Bypass: Vulnerable
+[    2.602202] Spectre V2 : Vulnerable
+[    2.603201] ITS: Vulnerable
+[    2.604200] Spectre V1 : Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers
+[    2.606210] x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'
+[    2.607205] x86/fpu: Supporting XSAVE feature 0x002: 'SSE registers'
+[    2.609195] x86/fpu: Supporting XSAVE feature 0x004: 'AVX registers'
+[    2.610214] x86/fpu: Supporting XSAVE feature 0x200: 'Protection Keys User registers'
+[    2.611201] x86/fpu: xstate_offset[2]:  576, xstate_sizes[2]:  256
+[    2.612202] x86/fpu: xstate_offset[9]:  832, xstate_sizes[9]:    8
+[    2.613189] x86/fpu: Enabled xstate features 0x207, context size is 840 bytes, using 'compacted' format.
+[    2.747595] Freeing SMP alternatives memory: 60K
+[    2.748214] pid_max: default: 32768 minimum: 301
+[    2.750574] LSM: initializing lsm=capability,selinux
+[    2.751340] SELinux:  Initializing.
+[    2.755282] Mount-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    2.756459] Mountpoint-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    2.763927] Running RCU synchronous self tests
+[    2.764194] Running RCU synchronous self tests
+[    2.767739] smpboot: CPU0: 13th Gen Intel(R) Core(TM) i9-13900HX (family: 0x6, model: 0xb7, stepping: 0x1)
+[    2.771185] Performance Events: Alderlake Hybrid events, core PMU driver.
+[    2.776258] core: CPUID marked event: 'cpu cycles' unavailable
+[    2.777382] core: CPUID marked event: 'instructions' unavailable
+[    2.778249] core: CPUID marked event: 'bus cycles' unavailable
+[    2.779248] core: CPUID marked event: 'cache references' unavailable
+[    2.780201] core: CPUID marked event: 'cache misses' unavailable
+[    2.781235] core: CPUID marked event: 'branch instructions' unavailable
+[    2.782241] core: CPUID marked event: 'branch misses' unavailable
+[    2.784386] core: The event 0x100 is not supported as a normal event.
+[    2.785237] core: The event 0x300 is not supported as a normal event.
+[    2.786274] core: The event 0x400 is not supported as a normal event.
+[    2.787232] core: The event 0x8000 is not supported as a normal event.
+[    2.788259] core: The event 0x8100 is not supported as a normal event.
+[    2.789335] core: The event 0x8200 is not supported as a normal event.
+[    2.790240] core: The event 0x8300 is not supported as a normal event.
+[    2.791247] core: The event 0x8400 is not supported as a normal event.
+[    2.792259] core: The event 0x8500 is not supported as a normal event.
+[    2.793242] core: The event 0x8600 is not supported as a normal event.
+[    2.794249] core: The event 0x8700 is not supported as a normal event.
+[    2.795728] core: cpu_core PMU driver: 
+[    2.796285] ... version:                   1
+[    2.797241] ... bit width:                 48
+[    2.798251] ... generic counters:          6
+[    2.799242] ... generic bitmap:            000000000000003f
+[    2.800327] ... fixed-purpose counters:    0
+[    2.801257] ... fixed-purpose bitmap:      0000000000000000
+[    2.802204] ... value mask:                0000ffffffffffff
+[    2.803252] ... max period:                000000007fffffff
+[    2.804203] ... global_ctrl mask:          000100000000003f
+[    2.806336] signal: max sigframe size: 3632
+[    2.808132] rcu: Hierarchical SRCU implementation.
+[    2.808247] rcu: 	Max phase no-delay instances is 400.
+[    2.811056] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+[    2.813455] corten: page descriptors enabled
+[    2.815503] smp: Bringing up secondary CPUs ...
+[    2.818336] smpboot: x86: Booting SMP configuration:
+[    2.819282] .... node  #0, CPUs:      #1 #2 #3 #4 #5 #6 #7
+[    2.870615] smp: Brought up 1 node, 8 CPUs
+[    2.872204] smpboot: Total of 8 processors activated (38707.13 BogoMIPS)
+[    2.877792] Memory: 3912016K/4193772K available (23144K kernel code, 3528K rwdata, 9188K rodata, 3560K init, 12528K bss, 275716K reserved, 0K cma-reserved)
+[    2.881219] devtmpfs: initialized
+[    2.890069] Running RCU synchronous self tests
+[    2.890337] Running RCU synchronous self tests
+[    2.894300] Running RCU Tasks wait API self tests
+[    2.896244] Running RCU Tasks Trace wait API self tests
+[    2.912269] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+[    2.913231] posixtimers hash table entries: 4096 (order: 7, 294912 bytes, linear)
+[    2.918965] futex hash table entries: 2048 (262144 bytes on 1 NUMA nodes, total 256 KiB, linear).
+[    2.921182] PM: RTC time: 17:47:00, date: 2026-09-20
+[    2.933298] Callback from call_rcu_tasks_trace() invoked.
+[    2.941429] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    2.943326] audit: initializing netlink subsys (disabled)
+[    2.945254] audit: type=2000 audit(1789926419.193:1): state=initialized audit_enabled=0 res=1
+[    2.948028] thermal_sys: Registered thermal governor 'step_wise'
+[    2.948758] cpuidle: using governor menu
+[    2.954185] PCI: Using configuration type 1 for base access
+[    2.955287] kprobes: kprobe jump-optimization is enabled. All kprobes are optimized if possible.
+[    2.960984] HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+[    2.961209] HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+[    3.012453] ACPI: Added _OSI(Module Device)
+[    3.013206] ACPI: Added _OSI(Processor Device)
+[    3.014206] ACPI: Added _OSI(Processor Aggregator Device)
+[    3.019433] ACPI: 1 ACPI AML tables successfully acquired and loaded
+[    3.030185] ACPI: Interpreter enabled
+[    3.031694] ACPI: PM: (supports S0 S3 S4 S5)
+[    3.032221] ACPI: Using IOAPIC for interrupt routing
+[    3.033533] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[    3.034245] PCI: Using E820 reservations for host bridge windows
+[    3.035886] ACPI: Enabled 2 GPEs in block 00 to 0F
+[    3.062148] ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-ff])
+[    3.062269] acpi PNP0A03:00: _OSC: OS supports [ASPM ClockPM Segments MSI HPX-Type3]
+[    3.063244] acpi PNP0A03:00: _OSC: not requesting OS control; OS requires [ExtendedConfig ASPM ClockPM MSI]
+[    3.064590] acpi PNP0A03:00: fail to add MMCONFIG information, can't access extended configuration space under this bridge
+[    3.067164] PCI host bridge to bus 0000:00
+[    3.067288] pci_bus 0000:00: root bus resource [io  0x0000-0x0cf7 window]
+[    3.068272] pci_bus 0000:00: root bus resource [io  0x0d00-0xffff window]
+[    3.069248] pci_bus 0000:00: root bus resource [mem 0x000a0000-0x000bffff window]
+[    3.070206] pci_bus 0000:00: root bus resource [mem 0xc0000000-0xfebfffff window]
+[    3.071207] pci_bus 0000:00: root bus resource [mem 0x140000000-0x1bfffffff window]
+[    3.072210] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    3.073670] pci 0000:00:00.0: [8086:1237] type 00 class 0x060000 conventional PCI endpoint
+[    3.080939] pci 0000:00:01.0: [8086:7000] type 00 class 0x060100 conventional PCI endpoint
+[    3.085731] pci 0000:00:01.1: [8086:7010] type 00 class 0x010180 conventional PCI endpoint
+[    3.088185] pci 0000:00:01.1: BAR 4 [io  0xc0e0-0xc0ef]
+[    3.088836] pci 0000:00:01.1: BAR 0 [io  0x01f0-0x01f7]: legacy IDE quirk
+[    3.089254] pci 0000:00:01.1: BAR 1 [io  0x03f6]: legacy IDE quirk
+[    3.090207] pci 0000:00:01.1: BAR 2 [io  0x0170-0x0177]: legacy IDE quirk
+[    3.091252] pci 0000:00:01.1: BAR 3 [io  0x0376]: legacy IDE quirk
+[    3.094144] pci 0000:00:01.3: [8086:7113] type 00 class 0x068000 conventional PCI endpoint
+[    3.096185] pci 0000:00:01.3: quirk: [io  0x0600-0x063f] claimed by PIIX4 ACPI
+[    3.096241] pci 0000:00:01.3: quirk: [io  0x0700-0x070f] claimed by PIIX4 SMB
+[    3.098185] pci 0000:00:02.0: [1234:1111] type 00 class 0x030000 conventional PCI endpoint
+[    3.105810] pci 0000:00:02.0: BAR 0 [mem 0xfd000000-0xfdffffff pref]
+[    3.105568] Callback from call_rcu_tasks() invoked.
+[    3.108280] pci 0000:00:02.0: BAR 2 [mem 0xfeb90000-0xfeb90fff]
+[    3.109576] pci 0000:00:02.0: ROM [mem 0xfeb80000-0xfeb8ffff pref]
+[    3.115883] pci 0000:00:02.0: Video device with shadowed ROM at [mem 0x000c0000-0x000dffff]
+[    3.134127] pci 0000:00:03.0: [1af4:1000] type 00 class 0x020000 conventional PCI endpoint
+[    3.137237] pci 0000:00:03.0: BAR 0 [io  0xc0c0-0xc0df]
+[    3.138350] pci 0000:00:03.0: BAR 1 [mem 0xfeb91000-0xfeb91fff]
+[    3.139981] pci 0000:00:03.0: BAR 4 [mem 0xfe000000-0xfe003fff 64bit pref]
+[    3.140348] pci 0000:00:03.0: ROM [mem 0xfeb00000-0xfeb7ffff pref]
+[    3.148586] pci 0000:00:04.0: [1af4:1009] type 00 class 0x000200 conventional PCI endpoint
+[    3.153185] pci 0000:00:04.0: BAR 0 [io  0xc080-0xc0bf]
+[    3.153290] pci 0000:00:04.0: BAR 1 [mem 0xfeb92000-0xfeb92fff]
+[    3.154567] pci 0000:00:04.0: BAR 4 [mem 0xfe004000-0xfe007fff 64bit pref]
+[    3.161249] pci 0000:00:05.0: [1af4:1001] type 00 class 0x010000 conventional PCI endpoint
+[    3.165090] pci 0000:00:05.0: BAR 0 [io  0xc000-0xc07f]
+[    3.165360] pci 0000:00:05.0: BAR 1 [mem 0xfeb93000-0xfeb93fff]
+[    3.166379] pci 0000:00:05.0: BAR 4 [mem 0xfe008000-0xfe00bfff 64bit pref]
+[    3.190548] ACPI: PCI: Interrupt link LNKA configured for IRQ 10
+[    3.192443] ACPI: PCI: Interrupt link LNKB configured for IRQ 10
+[    3.194185] ACPI: PCI: Interrupt link LNKC configured for IRQ 11
+[    3.195390] ACPI: PCI: Interrupt link LNKD configured for IRQ 11
+[    3.197090] ACPI: PCI: Interrupt link LNKS configured for IRQ 9
+[    3.208104] iommu: Default domain type: Translated
+[    3.208243] iommu: DMA domain TLB invalidation policy: lazy mode
+[    3.230129] SCSI subsystem initialized
+[    3.239337] ACPI: bus type USB registered
+[    3.240774] usbcore: registered new interface driver usbfs
+[    3.241603] usbcore: registered new interface driver hub
+[    3.242550] usbcore: registered new device driver usb
+[    3.244511] pps_core: LinuxPPS API ver. 1 registered
+[    3.245242] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    3.246231] PTP clock support registered
+[    3.251535] Advanced Linux Sound Architecture Driver Initialized.
+[    3.266370] NetLabel: Initializing
+[    3.267246] NetLabel:  domain hash size = 128
+[    3.268203] NetLabel:  protocols = UNLABELED CIPSOv4 CALIPSO
+[    3.270039] NetLabel:  unlabeled traffic allowed by default
+[    3.274558] PCI: Using ACPI for IRQ routing
+[    3.278522] pci 0000:00:02.0: vgaarb: setting as boot VGA device
+[    3.279185] pci 0000:00:02.0: vgaarb: bridge control possible
+[    3.279185] pci 0000:00:02.0: vgaarb: VGA device added: decodes=io+mem,owns=io+mem,locks=none
+[    3.279254] vgaarb: loaded
+[    3.283503] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+[    3.284204] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+[    3.295508] clocksource: Switched to clocksource kvm-clock
+[    3.309143] VFS: Disk quotas dquot_6.6.0
+[    3.313847] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    3.322505] pnp: PnP ACPI init
+[    3.334773] pnp: PnP ACPI: found 6 devices
+[    3.430328] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+[    3.442382] NET: Registered PF_INET protocol family
+[    3.455208] IP idents hash table entries: 65536 (order: 7, 524288 bytes, linear)
+[    3.483235] tcp_listen_portaddr_hash hash table entries: 2048 (order: 6, 147456 bytes, linear)
+[    3.498827] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    3.509032] TCP established hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[    3.525374] TCP bind hash table entries: 32768 (order: 11, 4718592 bytes, vmalloc hugepage)
+[    3.573472] TCP: Hash tables configured (established 32768 bind 32768)
+[    3.584867] UDP hash table entries: 2048 (order: 7, 524288 bytes, linear)
+[    3.597769] UDP-Lite hash table entries: 2048 (order: 7, 524288 bytes, linear)
+[    3.616027] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    3.631866] RPC: Registered named UNIX socket transport module.
+[    3.639666] RPC: Registered udp transport module.
+[    3.646773] RPC: Registered tcp transport module.
+[    3.654509] RPC: Registered tcp-with-tls transport module.
+[    3.663799] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    3.684377] pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+[    3.693610] pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+[    3.703347] pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000bffff window]
+[    3.713493] pci_bus 0000:00: resource 7 [mem 0xc0000000-0xfebfffff window]
+[    3.722014] pci_bus 0000:00: resource 8 [mem 0x140000000-0x1bfffffff window]
+[    3.731415] pci 0000:00:01.0: PIIX3: Enabling Passive Release
+[    3.741590] pci 0000:00:00.0: Limiting direct PCI/PCI transfers
+[    3.751900] pci 0000:00:00.0: quirk_natoma+0x0/0x40 took 10206 usecs
+[    3.763346] PCI: CLS 0 bytes, default 64
+[    3.768153] PCI-DMA: Using software bounce buffering for IO (SWIOTLB)
+[    3.786099] software IO TLB: mapped [mem 0x00000000bbfdd000-0x00000000bffdd000] (64MB)
+[    3.801461] RAPL PMU: API unit is 2^-32 Joules, 0 fixed counters, 10737418240 ms ovfl timer
+[    3.815260] clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x22df0d21928, max_idle_ns: 440795225288 ns
+[    3.876742] Initialise system trusted keyrings
+[    3.885168] workingset: timestamp_bits=40 max_order=20 bucket_order=0
+[    3.903028] NFS: Registering the id_resolver key type
+[    3.910587] Key type id_resolver registered
+[    3.916732] Key type id_legacy registered
+[    3.922466] 9p: Installing v9fs 9p2000 file system support
+[    3.982697] Key type asymmetric registered
+[    3.990310] Asymmetric key parser 'x509' registered
+[    3.996634] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 251)
+[    4.009107] io scheduler mq-deadline registered
+[    4.015550] io scheduler kyber registered
+[    4.030171] input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input0
+[    4.047617] ACPI: button: Power Button [PWRF]
+[    4.284420] ACPI: \_SB_.LNKC: Enabled at IRQ 11
+[    4.519540] ACPI: \_SB_.LNKD: Enabled at IRQ 10
+[    4.767972] ACPI: \_SB_.LNKA: Enabled at IRQ 10
+[    4.786122] Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled
+[    4.798727] 00:04: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+[    4.819400] Non-volatile memory driver v1.3
+[    4.820387] Linux agpgart interface v0.103
+[    4.902521] ACPI: bus type drm_connector registered
+[    4.962590] loop: module loaded
+[    4.968539] virtio_blk virtio2: 8/0/0 default/read/poll queues
+[    5.021564] virtio_blk virtio2: [vda] 20971520 512-byte logical blocks (10.7 GB/10.0 GiB)
+[    5.064591] zram: Added device: zram0
+[    5.084697] scsi host0: ata_piix
+[    5.095485] scsi host1: ata_piix
+[    5.100860] ata1: PATA max MWDMA2 cmd 0x1f0 ctl 0x3f6 bmdma 0xc0e0 irq 14 lpm-pol 0
+[    5.113881] ata2: PATA max MWDMA2 cmd 0x170 ctl 0x376 bmdma 0xc0e8 irq 15 lpm-pol 0
+[    5.133461] tun: Universal TUN/TAP device driver, 1.6
+[    5.167715] e100: Intel(R) PRO/100 Network Driver
+[    5.171835] e100: Copyright(c) 1999-2006 Intel Corporation
+[    5.175712] e1000: Intel(R) PRO/1000 Network Driver
+[    5.184224] e1000: Copyright (c) 1999-2006 Intel Corporation.
+[    5.192691] e1000e: Intel(R) PRO/1000 Network Driver
+[    5.200520] e1000e: Copyright(c) 1999 - 2015 Intel Corporation.
+[    5.206472] sky2: driver version 1.30
+[    5.216508] usbcore: registered new interface driver usblp
+[    5.224777] usbcore: registered new interface driver usb-storage
+[    5.233430] i8042: PNP: PS/2 Controller [PNP0303:KBD,PNP0f13:MOU] at 0x60,0x64 irq 1,12
+[    5.256633] serio: i8042 KBD port at 0x60,0x64 irq 1
+[    5.263779] serio: i8042 AUX port at 0x60,0x64 irq 12
+[    5.278102] rtc_cmos 00:05: RTC can wake from S4
+[    5.285737] input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input1
+[    5.293409] ata2: found unknown device (class 0)
+[    5.311287] rtc_cmos 00:05: registered as rtc0
+[    5.319607] ata2.00: ATAPI: QEMU DVD-ROM, 2.5+, max UDMA/100
+[    5.320277] rtc_cmos 00:05: alarms up to one day, y3k, 242 bytes nvram, hpet irqs
+[    5.335461] scsi 1:0:0:0: CD-ROM            QEMU     QEMU DVD-ROM     2.5+ PQ: 0 ANSI: 5
+[    5.340403] device-mapper: ioctl: 4.50.0-ioctl (2025-04-28) initialised: dm-devel@lists.linux.dev
+[    5.369591] intel_pstate: CPU model not supported
+[    5.375711] hid: raw HID events driver (C) Jiri Kosina
+[    5.385500] usbcore: registered new interface driver usbhid
+[    5.395387] usbhid: USB HID core driver
+[    5.424271] sr 1:0:0:0: [sr0] scsi3-mmc drive: 4x/4x cd/rw xa/form2 tray
+[    5.429608] xt_time: kernel timezone is -0000
+[    5.435174] cdrom: Uniform CD-ROM driver Revision: 3.20
+[    5.442671] Initializing XFRM netlink socket
+[    5.459219] NET: Registered PF_INET6 protocol family
+[    5.478380] Segment Routing with IPv6
+[    5.481809] sr 1:0:0:0: Attached scsi generic sg0 type 5
+[    5.485530] In-situ OAM (IOAM) with IPv6
+[    5.499360] sit: IPv6, IPv4 and MPLS over IPv4 tunneling driver
+[    5.512109] NET: Registered PF_PACKET protocol family
+[    5.517186] NET: Registered PF_KEY protocol family
+[    5.523547] 9pnet: Installing 9P2000 support
+[    5.538245] Key type dns_resolver registered
+[    5.544417] NET: Registered PF_VSOCK protocol family
+[    5.559559] IPI shorthand broadcast: enabled
+[    5.640602] sched_clock: Marking stable (4458558072, 1181886263)->(7236407213, -1595962878)
+[    5.660812] registered taskstats version 1
+[    5.668280] Loading compiled-in X.509 certificates
+[    5.766392] Demotion targets for Node 0: null
+[    5.773179] Key type .fscrypt registered
+[    5.779456] Key type fscrypt-provisioning registered
+[    5.791805] PM:   Magic number: 10:561:795
+[    5.798647] netconsole: network logging started
+[    5.807719] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    5.824558] kworker/u32:1 (98) used greatest stack depth: 14072 bytes left
+[    5.833620] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    5.843828] kworker/u32:1 (99) used greatest stack depth: 12952 bytes left
+[    5.850950] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    5.871525] ALSA device list:
+[    5.871881] faux_driver regulatory: Direct firmware load for regulatory.db failed with error -2
+[    5.875540]   No soundcards found.
+[    5.875624] kunit: disabled
+[    5.904173] cfg80211: failed to load regulatory.db
+[    5.914870] check access for rdinit=/init failed: -2, ignoring
+[    5.931448] input: ImExPS/2 Generic Explorer Mouse as /devices/platform/i8042/serio1/input/input3
+[    5.943015] md: Waiting for all devices to be available before autodetect
+[    5.949603] md: If you don't use raid, use raid=noautodetect
+[    5.953861] md: Autodetecting RAID arrays.
+[    5.958136] md: autorun ...
+[    5.960790] md: ... autorun DONE.
+[    6.029790] EXT4-fs (vda): recovery complete
+[    6.039433] EXT4-fs (vda): mounted filesystem 56b1695a-8891-40bd-bc42-c7c8a70fe76d r/w with ordered data mode. Quota mode: none.
+[    6.051155] VFS: Mounted root (ext4 filesystem) on device 253:0.
+[    6.061199] devtmpfs: mounted
+[    6.088230] Freeing unused kernel image (initmem) memory: 3560K
+[    6.095310] Write protecting the kernel read-only data: 34816k
+[    6.139113] Freeing unused kernel image (text/rodata gap) memory: 1428K
+[    6.158105] Freeing unused kernel image (rodata/data gap) memory: 1052K
+[    6.191199] x86/mm: Checked W+X mappings: passed, no W+X pages found.
+[    6.192765] Run /sbin/init as init process
+[    6.690711] SELinux:  Permission firmware_load in class system not defined in policy.
+[    6.700984] SELinux:  Permission kexec_image_load in class system not defined in policy.
+[    6.712918] SELinux:  Permission kexec_initramfs_load in class system not defined in policy.
+[    6.720110] SELinux:  Permission policy_load in class system not defined in policy.
+[    6.726633] SELinux:  Permission x509_certificate_load in class system not defined in policy.
+[    6.733775] SELinux:  Permission watch_mountns in class file not defined in policy.
+[    6.740559] SELinux:  Permission watch_mountns in class dir not defined in policy.
+[    6.747106] SELinux:  Permission watch_mountns in class lnk_file not defined in policy.
+[    6.754582] SELinux:  Permission watch_mountns in class chr_file not defined in policy.
+[    6.762357] SELinux:  Permission watch_mountns in class blk_file not defined in policy.
+[    6.769715] SELinux:  Permission watch_mountns in class sock_file not defined in policy.
+[    6.776998] SELinux:  Permission watch_mountns in class fifo_file not defined in policy.
+[    6.783097] SELinux:  Permission watch_mountns in class anon_inode not defined in policy.
+[    6.791710] SELinux:  Permission allowed in class io_uring not defined in policy.
+[    6.799512] SELinux:  Class memfd_file not defined in policy.
+[    6.805600] SELinux: the above unknown classes and permissions will be allowed
+[    6.880236] SELinux:  policy capability network_peer_controls=1
+[    6.885042] SELinux:  policy capability open_perms=1
+[    6.890555] SELinux:  policy capability extended_socket_class=1
+[    6.894908] SELinux:  policy capability always_check_network=0
+[    6.899100] SELinux:  policy capability cgroup_seclabel=1
+[    6.903797] SELinux:  policy capability nnp_nosuid_transition=1
+[    6.909105] SELinux:  policy capability genfs_seclabel_symlinks=0
+[    6.915691] SELinux:  policy capability ioctl_skip_cloexec=0
+[    6.920724] SELinux:  policy capability userspace_initial_context=0
+[    6.927126] SELinux:  policy capability netlink_xperm=0
+[    6.932516] SELinux:  policy capability netif_wildcard=0
+[    6.937681] SELinux:  policy capability genfs_seclabel_wildcard=0
+[    6.943716] SELinux:  policy capability functionfs_seclabel=0
+[    6.949720] SELinux:  policy capability memfd_class=0
+[    6.990340] audit: type=1403 audit(1789926423.228:2): auid=4294967295 ses=4294967295 lsm=selinux res=1
+[    6.997386] systemd[1]: Successfully loaded SELinux policy in 519.160ms.
+[    7.260182] modprobe (106) used greatest stack depth: 12104 bytes left
+[    7.285692] systemd[1]: Relabeled /dev/, /dev/shm/, /run/ in 23.358ms.
+[!p]104[?7h[    7.344344] systemd[1]: systemd 257.13-1~deb13u1 running in system mode (+PAM +AUDIT +SELINUX +APPARMOR +IMA +IPE +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBCRYPTSETUP_PLUGINS +LIBFDISK +PCRE2 +PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD +BPF_FRAMEWORK +BTF -XKBCOMMON -UTMP +SYSVINIT +LIBARCHIVE)
+[    7.366536] systemd[1]: Detected virtualization kvm.
+[    7.374825] systemd[1]: Detected architecture x86-64.
+
+[0;1;39mWelcome to [0m[1mDebian GNU/Linux 13 (trixie)[0m[0;1;39m![0m
+
+[    7.398577] systemd[1]: Hostname set to <syzkaller>.
+[    7.718281] systemd[1]: bpf-restrict-fs: BPF LSM hook not enabled in the kernel, BPF LSM not supported.
+[    7.846134] systemd-ssh-generator[121]: Failed to query local AF_VSOCK CID: Cannot assign requested address
+[    7.865439] selinux-autorel (110) used greatest stack depth: 12008 bytes left
+[    7.883346] (sd-exec-[109]: /usr/lib/systemd/system-generators/systemd-ssh-generator failed with exit status 1.
+[    8.402165] systemd[1]: Queued start job for default target graphical.target.
+[    8.456694] systemd[1]: Created slice system-getty.slice - Slice /system/getty.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-getty.slice[0m - Slice /system/getty.
+[    8.477655] systemd[1]: Created slice system-modprobe.slice - Slice /system/modprobe.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-modprobe.slice[0m - Slice /system/modprobe.
+[    8.496297] systemd[1]: Created slice system-serial\x2dgetty.slice - Slice /system/serial-getty.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-serial\x2dget…slice[0m - Slice /system/serial-getty.
+[    8.514626] systemd[1]: Created slice user.slice - User and Session Slice.
+[[0;32m  OK  [0m] Created slice [0;1;39muser.slice[0m - User and Session Slice.
+[    8.531138] systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-ask-password-conso…[0mequests to Console Directory Watch.
+[    8.553131] systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-ask-password-wall.…[0md Requests to Wall Directory Watch.
+[    8.584140] systemd[1]: Set up automount proc-sys-fs-binfmt_misc.automount - Arbitrary Executable File Formats File System Automount Point.
+[[0;32m  OK  [0m] Set up automount [0;1;39mproc-sys-fs-binfm…[0mormats File System Automount Point.
+[    8.605762] systemd[1]: Expecting device dev-ttyS0.device - /dev/ttyS0...
+         Expecting device [0;1;39mdev-ttyS0.device[0m - /dev/ttyS0...
+[    8.619622] systemd[1]: Reached target paths.target - Path Units.
+[[0;32m  OK  [0m] Reached target [0;1;39mpaths.target[0m - Path Units.
+[    8.631834] systemd[1]: Reached target remote-fs.target - Remote File Systems.
+[[0;32m  OK  [0m] Reached target [0;1;39mremote-fs.target[0m - Remote File Systems.
+[    8.648982] systemd[1]: Reached target slices.target - Slice Units.
+[[0;32m  OK  [0m] Reached target [0;1;39mslices.target[0m - Slice Units.
+[    8.664183] systemd[1]: Reached target swap.target - Swaps.
+[[0;32m  OK  [0m] Reached target [0;1;39mswap.target[0m - Swaps.
+[    8.683823] systemd[1]: Listening on systemd-creds.socket - Credential Encryption/Decryption.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-creds.socket[0m - Credential Encryption/Decryption.
+[    8.705283] systemd[1]: Listening on systemd-initctl.socket - initctl Compatibility Named Pipe.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-initctl.socke…[0m- initctl Compatibility Named Pipe.
+[    8.728356] systemd[1]: Listening on systemd-journald-dev-log.socket - Journal Socket (/dev/log).
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-journald-dev-…socket[0m - Journal Socket (/dev/log).
+[    8.752231] systemd[1]: Listening on systemd-journald.socket - Journal Sockets.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-journald.socket[0m - Journal Sockets.
+[    8.770852] systemd[1]: systemd-pcrextend.socket - TPM PCR Measurements skipped, unmet condition check ConditionSecurity=measured-uki
+[    8.782355] systemd[1]: systemd-pcrlock.socket - Make TPM PCR Policy skipped, unmet condition check ConditionSecurity=measured-uki
+[    8.799561] systemd[1]: Listening on systemd-sysext.socket - System Extension Image Management.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-sysext.socket[0m… System Extension Image Management.
+[    8.822919] systemd[1]: Listening on systemd-udevd-control.socket - udev Control Socket.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-udevd-control.socket[0m - udev Control Socket.
+[    8.842413] systemd[1]: Listening on systemd-udevd-kernel.socket - udev Kernel Socket.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-udevd-kernel.socket[0m - udev Kernel Socket.
+[    8.873487] systemd[1]: Mounting dev-hugepages.mount - Huge Pages File System...
+         Mounting [0;1;39mdev-hugepages.mount[0m - Huge Pages File System...
+[    8.896370] systemd[1]: Mounting dev-mqueue.mount - POSIX Message Queue File System...
+         Mounting [0;1;39mdev-mqueue.mount[0m - POSIX Message Queue File System...
+[    8.924560] systemd[1]: Mounting proc-sys-fs-binfmt_misc.mount - /proc/sys/fs/binfmt_misc...
+         Mounting [0;1;39mproc-sys-fs-binfmt_misc.mount[0m - /proc/sys/fs/binfmt_misc...
+[    8.950586] systemd[1]: Mounting sys-kernel-debug.mount - /sys/kernel/debug...
+         Mounting [0;1;39msys-kernel-debug.mount[0m - /sys/kernel/debug...
+[    8.975675] systemd[1]: Mounting sys-kernel-tracing.mount - Kernel Trace File System...
+         Mounting [0;1;39msys-kernel-tracing.mount[0m - Kernel Trace File System...
+[    9.001865] systemd[1]: Mounting tmp.mount - Temporary Directory /tmp...
+         Mounting [0;1;39mtmp.mount[0m - Temporary Directory /tmp...
+[    9.016962] systemd[1]: kmod-static-nodes.service - Create List of Static Device Nodes skipped, unmet condition check ConditionFileNotEmpty=/lib/modules/6.18.32-gb51754002f2f-dirty/modules.devname
+[    9.037335] systemd[1]: Starting modprobe@drm.service - Load Kernel Module drm...
+         Starting [0;1;39mmodprobe@drm.service[0m - Load Kernel Module drm...
+[    9.062812] systemd[1]: Starting modprobe@efi_pstore.service - Load Kernel Module efi_pstore...
+         Starting [0;1;39mmodprobe@efi_pstore.servi…[0m - Load Kernel Module efi_pstore...
+[    9.083207] systemd[1]: Starting modprobe@fuse.service - Load Kernel Module fuse...
+         Starting [0;1;39mmodprobe@fuse.service[0m - Load Kernel Module fuse...
+[    9.099502] systemd[1]: systemd-hibernate-clear.service - Clear Stale Hibernate Storage Info skipped, unmet condition check ConditionPathExists=/sys/firmware/efi/efivars/HibernateLocation-8cf2644b-4b0b-428f-9387-6d876050dc67
+[    9.121659] systemd[1]: systemd-hwdb-update.service - Rebuild Hardware Database skipped, unmet condition check ConditionNeedsUpdate=/etc
+[    9.156683] systemd[1]: Starting systemd-journald.service - Journal Service...
+         Starting [0;1;39msystemd-journald.service[0m - Journal Service...
+[    9.184394] systemd[1]: Starting systemd-modules-load.service - Load Kernel Modules...
+         Starting [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules...
+[    9.196422] systemd[1]: systemd-pcrmachine.service - TPM PCR Machine ID Measurement skipped, unmet condition check ConditionSecurity=measured-uki
+[    9.216379] systemd[1]: Starting systemd-random-seed.service - Load/Save OS Random Seed...
+         Starting [0;1;39msystemd-random-seed.service[0m - Load/Save OS Random Seed...
+[    9.240360] systemd[1]: Starting systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully...
+         Starting [0;1;39msystemd-tmpfiles-setup-de…[0m Device Nodes in /dev gracefully...
+[    9.264103] systemd[1]: systemd-tpm2-setup-early.service - Early TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+[    9.278210] systemd[1]: systemd-tpm2-setup.service - TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+[    9.299264] systemd[1]: Starting systemd-udev-load-credentials.service - Load udev Rules from Credentials...
+         Starting [0;1;39msystemd-udev-load-credent…[0mLoad udev Rules from Credentials...
+[    9.324724] systemd[1]: Starting systemd-udev-trigger.service - Coldplug All udev Devices...
+         Starting [0;1;39msystemd-udev-trigger.service[0m - Coldplug All udev Devices...
+[    9.351620] systemd[1]: Mounted dev-hugepages.mount - Huge Pages File System.
+[[0;32m  OK  [0m] Mounted [0;1;39mdev-hugepag[    9.364479] systemd[1]: Mounted dev-mqueue.mount - POSIX Message Queue File System.
+es.mount[0m - Huge Pages File S[    9.373934] systemd[1]: Mounted proc-sys-fs-binfmt_misc.mount - /proc/sys/fs/binfmt_misc.
+ystem.
+[[0;32[    9.374798] systemd-journald[137]: Collecting audit messages is disabled.
+m  OK  [0m] Mounted [0;1;39mdev-mqueue.mount[0m - POSIX Messa[    9.390997] systemd[1]: Mounted sys-kernel-debug.mount - /sys/kernel/debug.
+ge Queue File System.
+[[0;32m[    9.397082] systemd[1]: Mounted sys-kernel-tracing.mount - Kernel Trace File System.
+  OK  [0m] Mounted [0;1;39mproc-sys-fs-binfmt_misc.mount[0m - /proc/sys/fs/bi[    9.408089] systemd[1]: Mounted tmp.mount - Temporary Directory /tmp.
+nfmt_misc.
+[[0;32m  OK  [0m] Mounted [0;1;39msys-kernel-debug.mount[0m - /sys/kernel/debug.
+[[0;32m  OK  [0m] Mounted [0;1;39msys-ker[    9.426057] systemd[1]: modprobe@drm.service: Deactivated successfully.
+nel-tracing.mount[0m - Kernel Trace File System.
+[[0;32m  OK[    9.438757] systemd[1]: Finished modprobe@drm.service - Load Kernel Module drm.
+  [0m] Mounted [0;1;39mtmp.mount[0m - Tempora[    9.452571] systemd[1]: modprobe@efi_pstore.service: Deactivated successfully.
+ry Directory /tmp.
+[[0;32m  O[    9.461432] systemd[1]: Finished modprobe@efi_pstore.service - Load Kernel Module efi_pstore.
+K  [0m] Finished [0;1;39mmodprobe@drm.service[0m - Load Kerne[    9.474105] systemd[1]: modprobe@fuse.service: Deactivated successfully.
+l Module drm.
+[[0;32m  OK  [0m] Finished [0[    9.484540] systemd[1]: Finished modprobe@fuse.service - Load Kernel Module fuse.
+;1;39mmodprobe@efi_pstore.service[0m - Load Ker[    9.498735] systemd[1]: Finished systemd-modules-load.service - Load Kernel Modules.
+nel Module efi_pstore.
+[[0;32m  OK  [0m] Finished [0;1;39mmodprobe@fuse.service[0m - Load Kernel Module fu[    9.513469] systemd[1]: Started systemd-journald.service - Journal Service.
+se.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-journald.service[0m - Journal Service.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-random-seed.service[0m - Load/Save OS Random Seed.
+         Starting [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats...
+         Starting [0;1;39msystemd-journal-flush.ser…[0msh Journal to Persistent Storage...
+         Starting [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables...
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-udev-load-credent…[0m- Load ude[    9.687701] systemd-journald[137]: Received client request to flush runtime journal.
+v Rules from Credentials.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup-de…[0mic Device Nodes in /dev gr[    9.724154] systemd-journald[137]: File /var/log/journal/1c821f12757d4c338ffdb020ee1ae6e0/system.journal corrupted or uncleanly shut down, renaming and replacing.
+acefully.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats.
+         Starting [0;1;39msystemd-tmpfiles-setup-de…[0meate Static Device Nodes in /dev...
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup-de…[0mCreate Static Device Nodes in /dev.
+[[0;32m  OK  [0m] Reached target [0;1;39mlocal-fs-pre.target[0m…Preparation for Local File Systems.
+         Starting [0;1;39msystemd-udevd.service[0m - R…ager for Device Events and Files...
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-journal-flush.ser…[0mlush Journal to Persistent Storage.
+         Starting [0;1;39msystemd-tmpfiles-setup.se…[0mate System Files and Directories...
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-udev-trigger.service[0m - Coldplug All udev Devices.
+         Starting [0;1;39mifupdown-pre.service[0m - He…synchronize boot up for ifupdown...
+[[0;32m  OK  [0m] Started [0;1;39msystemd-udevd.service[0m - Ru…anager for Device Events and Files.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup.se…[0mreate System Files and Directories.
+[[0;32m  OK  [0m] Found device [0;1;39mdev-ttyS0.device[0m - /dev/ttyS0.
+[[0;32m  OK  [0m] Reached target [0;1;39msysinit.target[0m - System Initialization.
+[[0;32m  OK  [0m] Started [0;1;39mapt-daily.timer[0m - Daily apt download activities.
+[[0;32m  OK  [0m] Started [0;1;39mapt-daily-upgrade.timer[0m - …y apt upgrade and clean activities.
+[[0;32m  OK  [0m] Started [0;1;39mdpkg-db-backup.timer[0m - Daily dpkg database backup timer.
+[[0;32m  OK  [0m] Started [0;1;39me2scrub_all.timer[0m - Period…Metadata Check for All Filesystems.
+[[0;32m  OK  [0m] Started [0;1;39mfstrim.timer[0m - Discard unused filesystem blocks once a week.
+[[0;32m  OK  [0m] Started [0;1;39mlogrotate.timer[0m - Daily rotation of log files.
+[[0;32m  OK  [0m] Started [0;1;39mphpsessionclean.timer[0m - Clean PHP session files every 30 mins.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-tmpfiles-clean.tim…[0my Cleanup of Temporary Directories.
+[[0;32m  OK  [0m] Reached target [0;1;39mtimers.target[0m - Timer Units.
+[[0;32m  OK  [0m] Listening on [0;1;39mdbus.socket[0m - D-Bus System Message Bus Socket.
+[[0;32m  OK  [0m] Listening on [0;1;39msshd-unix-local.socke…[0mtemd-ssh-generator, AF_UNIX Local).
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-hostnamed.socket[0m - Hostname Service Socket.
+[[0;32m  OK  [0m] Reached target [0;1;39msockets.target[0m - Socket Units.
+[[0;32m  OK  [0m] Reached target [0;1;39mbasic.target[0m - Basic System.
+[[0;32m  OK  [0m] Started [0;1;39mcron.service[0m - Regular background program processing daemon.
+         Starting [0;1;39mdbus.service[0m - D-Bus System Message Bus...
+         Starting [0;1;39me2scrub_reap.service[0m - Re…ne ext4 Metadata Check Snapshots...
+         Starting [0;1;39msystemd-logind.service[0m - User Login Management...
+[[0;32m  OK  [0m] Started [0;1;39mdbus.service[0m - D-Bus System Message Bus.
+[[0;32m  OK  [0m] Finished [0;1;39mifupdown-pre.service[0m - He…o synchronize boot up for ifupdown.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-rfkill.socket[0m…ll Switch Status /dev/rfkill Watch.
+         Starting [0;1;39mnetworking.service[0m - Raise network interfaces...
+[[0;32m  OK  [0m] Finished [0;1;39me2scrub_reap.service[0m - Re…line ext4 Metadata Check Snapshots.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-logind.service[0m - User Login Management.
+[[0m[0;31m*     [0m] Job networking.service/start running (5s / 5min 2s)
+M[K[[0;1;31m*[0m[0;31m*    [0m] Job networking.service/start running (5s / 5min 2s)
+M[K[[0;31m*[0;1;31m*[0m[0;31m*   [0m] Job networking.service/start running (6s / 5min 2s)
+M[K[ [0;31m*[0;1;31m*[0m[0;31m*  [0m] Job networking.service/start running (6s / 5min 2s)
+M[K[  [0;31m*[0;1;31m*[0m[0;31m* [0m] Job networking.service/start running (7s / 5min 2s)
+M[K[   [0;31m*[0;1;31m*[0m[0;31m*[0m] Job networking.service/start running (7s / 5min 2s)
+M[K[    [0;31m*[0;1;31m*[0m] Job networking.service/start running (8s / 5min 2s)
+M[K[     [0;31m*[0m] Job networking.service/start running (9s / 5min 2s)
+M[K[[0;32m  OK  [0m] Finished [0;1;39mnetworking.service[0m - Raise network interfaces.
+[K[[0;32m  OK  [0m] Reached target [0;1;39mnetwork.target[0m - Network.
+[[0;32m  OK  [0m] Reached target [0;1;39mnetwork-online.target[0m - Network is Online.
+         Starting [0;1;39mnginx.service[0m - A high pe…erver and a reverse proxy server...
+         Starting [0;1;39mredis-server.service[0m - Advanced key-value store...
+         Starting [0;1;39mssh.service[0m - OpenBSD Secure Shell server...
+         Starting [0;1;39msystemd-user-sessions.service[0m - Permit User Sessions...
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-user-sessions.service[0m - Permit User Sessions.
+[[0;32m  OK  [0m] Started [0;1;39mgetty@tty1.service[0m - Getty on tty1.
+[[0;32m  OK  [0m] Started [0;1;39mserial-getty@ttyS0.service[0m - Serial Getty on ttyS0.
+[[0;32m  OK  [0m] Reached target [0;1;39mgetty.target[0m - Login Prompts.
+[[0;32m  OK  [0m] Started [0;1;39mnginx.service[0m - A high per… server and a reverse proxy server.
+[[0;1;31mFAILED[0m] Failed to start [0;1;39mredis-server.service[0m - Advanced key-value store.
+See 'systemctl status redis-server.service' for details.
+[[0;32m  OK  [0m] Started [0;1;39mssh.service[0m - OpenBSD Secure Shell server.
+[[0;32m  OK  [0m] Reached target [0;1;39mmulti-user.target[0m - Multi-User System.
+[[0;32m  OK  [0m] Reached target [0;1;39mgraphical.target[0m - Graphical Interface.
+[!p]104[?7h[6n[32766;32766H[6n[24;1H[!p]104[?7h[6n[32766;32766H[6n[24;1H
+Debian GNU/Linux 13 syzkaller ttyS0
+
+syzkaller login: [   21.433873] audit: type=1107 audit(1789926437.680:3): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { start } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user-runtime-dir@.service" cmdline="/usr/lib/systemd/systemd-logind" function="bus_unit_method_start_generic" scontext=system_u:system_r:kernel_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+[   23.532772] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   23.535790] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 413, name: arena_stress
+[   23.541444] preempt_count: 201, expected: 0
+[   23.545884] RCU nest depth: 0, expected: 0
+[   23.550385] 1 lock held by arena_stress/413:
+[   23.554307]  #0: ffff8e2843207918 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   23.556749] CPU: 3 UID: 0 PID: 413 Comm: arena_stress Not tainted 6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   23.556761] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   23.556762] Call Trace:
+[   23.556765]  <TASK>
+[   23.556768]  dump_stack_lvl+0x83/0xa0
+[   23.556841]  __might_resched+0x152/0x260
+[   23.556883]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   23.556935]  tlb_finish_mmu+0x73/0x180
+[   23.556938]  corten_arena_zap_window+0x5f8/0x650
+[   23.556956]  ? corten_txn_begin+0x32d/0x4b0
+[   23.556959]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   23.556977]  ? lock_release+0xc6/0x290
+[   23.557001]  ? lock_is_held_type+0x9e/0x120
+[   23.557029]  corten_arena_munmap_route+0x129/0x230
+[   23.557034]  __do_sys_munmap+0x53/0x130
+[   23.557036]  do_syscall_64+0xbd/0x3f0
+[   23.557039]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   23.557059] RIP: 0033:0x7fec68160717
+[   23.557087] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   23.557088] RSP: 002b:00007fec6684be18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   23.557097] RAX: ffffffffffffffda RBX: 0000000000000000 RCX: 00007fec68160717
+[   23.557098] RDX: b4e25b90df6d8020 RSI: 0000000000040000 RDI: 000000001e090000
+[   23.557099] RBP: 000056525ec12708 R08: 0000000000000000 R09: 000000001e0d0000
+[   23.557100] R10: 000056525ec12708 R11: 0000000000000246 R12: 000056525ec12708
+[   23.557100] R13: 0000000000040000 R14: 75044cc8aabc123c R15: 000056525ec12780
+[   23.557108]  </TASK>
+[   24.532313] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   24.539501] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 413, name: arena_stress
+[   24.547073] preempt_count: 201, expected: 0
+[   24.550972] RCU nest depth: 0, expected: 0
+[   24.555075] 1 lock held by arena_stress/413:
+[   24.559231]  #0: ffff8e284ecc8918 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   24.565542] CPU: 3 UID: 0 PID: 413 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   24.565551] Tainted: [W]=WARN
+[   24.565552] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   24.565555] Call Trace:
+[   24.565560]  <TASK>
+[   24.565566]  dump_stack_lvl+0x83/0xa0
+[   24.565579]  __might_resched+0x152/0x260
+[   24.565594]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   24.565606]  tlb_finish_mmu+0x73/0x180
+[   24.565617]  corten_arena_zap_window+0x5f8/0x650
+[   24.565804]  ? corten_txn_begin+0x32d/0x4b0
+[   24.565816]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   24.565831]  ? lock_release+0xc6/0x290
+[   24.565839]  ? lock_is_held_type+0x9e/0x120
+[   24.565856]  corten_arena_munmap_route+0x129/0x230
+[   24.565868]  __do_sys_munmap+0x53/0x130
+[   24.565877]  do_syscall_64+0xbd/0x3f0
+[   24.565886]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   24.565892] RIP: 0033:0x7fec68160717
+[   24.565900] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   24.565903] RSP: 002b:00007fec6684be18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   24.565909] RAX: ffffffffffffffda RBX: 0000000000000000 RCX: 00007fec68160717
+[   24.565912] RDX: 0e209013d76dff3a RSI: 0000000000200000 RDI: 000000001e0a8000
+[   24.565914] RBP: 000056525ec12708 R08: 0000000000000000 R09: 000000001e2a8000
+[   24.565917] R10: 000056525ec12708 R11: 0000000000000246 R12: 000056525ec12708
+[   24.565919] R13: 0000000000200000 R14: a5cc6df364260477 R15: 000056525ec12780
+[   24.565943]  </TASK>
+[   25.532328] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   25.541011] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 411, name: arena_stress
+[   25.548611] preempt_count: 201, expected: 0
+[   25.551937] RCU nest depth: 0, expected: 0
+[   25.553561] 1 lock held by arena_stress/411:
+[   25.559195]  #0: ffff8e2841457258 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   25.567766] CPU: 4 UID: 0 PID: 411 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   25.567769] Tainted: [W]=WARN
+[   25.567770] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   25.567771] Call Trace:
+[   25.567774]  <TASK>
+[   25.567780]  dump_stack_lvl+0x83/0xa0
+[   25.567787]  __might_resched+0x152/0x260
+[   25.567792]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   25.567797]  tlb_finish_mmu+0x73/0x180
+[   25.567800]  corten_arena_zap_window+0x5f8/0x650
+[   25.567811]  ? corten_txn_begin+0x32d/0x4b0
+[   25.567850]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   25.567894]  ? lock_release+0xc6/0x290
+[   25.567896]  ? lock_is_held_type+0x9e/0x120
+[   25.567902]  corten_arena_munmap_route+0x129/0x230
+[   25.567906]  __do_sys_munmap+0x53/0x130
+[   25.567909]  do_syscall_64+0xbd/0x3f0
+[   25.567912]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   25.567914] RIP: 0033:0x7fec68160717
+[   25.567917] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   25.567918] RSP: 002b:00007fec6784de18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   25.567920] RAX: ffffffffffffffda RBX: 0000000000000001 RCX: 00007fec68160717
+[   25.567921] RDX: 5f86aa5644dec3d2 RSI: 0000000000100000 RDI: 0000000016550000
+[   25.567956] RBP: 000056525ec12418 R08: 0000000000000000 R09: 0000000016650000
+[   25.567957] R10: 000056525ec12418 R11: 0000000000000246 R12: 000056525ec12438
+[   25.567957] R13: 0000000000010000 R14: deb1e5a14549fc82 R15: 000056525ec124b0
+[   25.567965]  </TASK>
+[   26.533521] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   26.540724] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 410, name: arena_stress
+[   26.548283] preempt_count: 201, expected: 0
+[   26.551997] RCU nest depth: 0, expected: 0
+[   26.555647] 1 lock held by arena_stress/410:
+[   26.560457]  #0: ffff8e2843dcb3d8 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   26.567743] CPU: 0 UID: 0 PID: 410 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   26.567752] Tainted: [W]=WARN
+[   26.567754] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   26.567757] Call Trace:
+[   26.567764]  <TASK>
+[   26.567772]  dump_stack_lvl+0x83/0xa0
+[   26.567788]  __might_resched+0x152/0x260
+[   26.567804]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   26.567817]  tlb_finish_mmu+0x73/0x180
+[   26.567828]  corten_arena_zap_window+0x5f8/0x650
+[   26.567957]  ? corten_txn_begin+0x32d/0x4b0
+[   26.567970]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   26.567986]  ? lock_release+0xc6/0x290
+[   26.567994]  ? lock_is_held_type+0x9e/0x120
+[   26.568012]  corten_arena_munmap_route+0x129/0x230
+[   26.568025]  __do_sys_munmap+0x53/0x130
+[   26.568035]  do_syscall_64+0xbd/0x3f0
+[   26.568045]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   26.568055] RIP: 0033:0x7fec68160717
+[   26.568063] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   26.568067] RSP: 002b:00007fec6804ee18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   26.568151] RAX: ffffffffffffffda RBX: 0000000000000000 RCX: 00007fec68160717
+[   26.568154] RDX: c6fc9eb23ce90e9d RSI: 0000000000200000 RDI: 0000000012144000
+[   26.568157] RBP: 000056525ec122a0 R08: 0000000000000000 R09: 0000000012344000
+[   26.568159] R10: 000056525ec122a0 R11: 0000000000000246 R12: 000056525ec122a0
+[   26.568161] R13: 0000000000004000 R14: fcef5894598ba750 R15: 000056525ec12318
+[   26.568187]  </TASK>
+[   27.533439] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   27.538079] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 410, name: arena_stress
+[   27.545752] preempt_count: 201, expected: 0
+[   27.549506] RCU nest depth: 0, expected: 0
+[   27.555067] 1 lock held by arena_stress/410:
+[   27.559440]  #0: ffff8e2843dcb618 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   27.567615] CPU: 0 UID: 0 PID: 410 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   27.567624] Tainted: [W]=WARN
+[   27.567626] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   27.567641] Call Trace:
+[   27.567707]  <TASK>
+[   27.567713]  dump_stack_lvl+0x83/0xa0
+[   27.567727]  __might_resched+0x152/0x260
+[   27.567741]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   27.567758]  tlb_finish_mmu+0x73/0x180
+[   27.567815]  corten_arena_zap_window+0x5f8/0x650
+[   27.567854]  ? corten_txn_begin+0x32d/0x4b0
+[   27.567865]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   27.567880]  ? lock_release+0xc6/0x290
+[   27.567900]  ? lock_is_held_type+0x9e/0x120
+[   27.567918]  corten_arena_munmap_route+0x129/0x230
+[   27.567931]  __do_sys_munmap+0x53/0x130
+[   27.567941]  do_syscall_64+0xbd/0x3f0
+[   27.567951]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   27.567957] RIP: 0033:0x7fec68160717
+[   27.567964] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   27.567968] RSP: 002b:00007fec6804ee18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   27.567973] RAX: ffffffffffffffda RBX: 0000000000000002 RCX: 00007fec68160717
+[   27.567977] RDX: 5fbc8e25b0da9255 RSI: 0000000000080000 RDI: 0000000012984000
+[   27.567979] RBP: 000056525ec122a0 R08: 0000000000000000 R09: 0000000012a04000
+[   27.567982] R10: 000056525ec122a0 R11: 0000000000000246 R12: 000056525ec122e0
+[   27.567984] R13: 0000000000020000 R14: eed9a9f162a298eb R15: 000056525ec12358
+[   27.568008]  </TASK>
+[   28.535645] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   28.542465] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 412, name: arena_stress
+[   28.550087] preempt_count: 201, expected: 0
+[   28.554215] RCU nest depth: 0, expected: 0
+[   28.558241] 1 lock held by arena_stress/412:
+[   28.562665]  #0: ffff8e2846bb0a98 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   28.571590] CPU: 2 UID: 0 PID: 412 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   28.571601] Tainted: [W]=WARN
+[   28.571603] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   28.571606] Call Trace:
+[   28.571613]  <TASK>
+[   28.571621]  dump_stack_lvl+0x83/0xa0
+[   28.571637]  __might_resched+0x152/0x260
+[   28.571732]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   28.571747]  tlb_finish_mmu+0x73/0x180
+[   28.571758]  corten_arena_zap_window+0x5f8/0x650
+[   28.571791]  ? _raw_write_lock_bh+0x33/0x40
+[   28.572105]  ? corten_txn_begin+0x32d/0x4b0
+[   28.572117]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   28.572133]  ? lock_release+0xc6/0x290
+[   28.572140]  ? lock_is_held_type+0x9e/0x120
+[   28.572158]  corten_arena_munmap_route+0x129/0x230
+[   28.572170]  __do_sys_munmap+0x53/0x130
+[   28.572318]  do_syscall_64+0xbd/0x3f0
+[   28.572344]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   28.572347] RIP: 0033:0x7fec68160717
+[   28.572349] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   28.572350] RSP: 002b:00007fec6704ce18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   28.572352] RAX: ffffffffffffffda RBX: 0000000000000001 RCX: 00007fec68160717
+[   28.572353] RDX: 95c31cc422eaa6a1 RSI: 0000000000200000 RDI: 000000001a5fc000
+[   28.572354] RBP: 000056525ec12590 R08: 0000000000000000 R09: 000000001a7fc000
+[   28.572354] R10: 000056525ec12590 R11: 0000000000000246 R12: 000056525ec125b0
+[   28.572355] R13: 0000000000010000 R14: 6ed5b49d611c8cfa R15: 000056525ec12628
+[   28.572362]  </TASK>
+[   29.537459] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   29.544289] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 412, name: arena_stress
+[   29.551253] preempt_count: 201, expected: 0
+[   29.555411] RCU nest depth: 0, expected: 0
+[   29.557881] 1 lock held by arena_stress/412:
+[   29.562131]  #0: ffff8e2841030c18 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   29.571302] CPU: 2 UID: 0 PID: 412 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   29.571313] Tainted: [W]=WARN
+[   29.571315] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   29.571318] Call Trace:
+[   29.571377]  <TASK>
+[   29.571384]  dump_stack_lvl+0x83/0xa0
+[   29.571401]  __might_resched+0x152/0x260
+[   29.571494]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   29.571511]  tlb_finish_mmu+0x73/0x180
+[   29.571522]  corten_arena_zap_window+0x5f8/0x650
+[   29.571558]  ? corten_txn_begin+0x32d/0x4b0
+[   29.571570]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   29.571585]  ? lock_release+0xc6/0x290
+[   29.571594]  ? lock_is_held_type+0x9e/0x120
+[   29.571612]  corten_arena_munmap_route+0x129/0x230
+[   29.571626]  __do_sys_munmap+0x53/0x130
+[   29.571634]  do_syscall_64+0xbd/0x3f0
+[   29.571645]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   29.571652] RIP: 0033:0x7fec68160717
+[   29.571660] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   29.571664] RSP: 002b:00007fec6704ce18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   29.571670] RAX: ffffffffffffffda RBX: 0000000000000000 RCX: 00007fec68160717
+[   29.571674] RDX: 8700ec99a9040a13 RSI: 0000000000100000 RDI: 000000001a2a0000
+[   29.571677] RBP: 000056525ec12590 R08: 0000000000000000 R09: 000000001a3a0000
+[   29.571679] R10: 000056525ec12590 R11: 0000000000000246 R12: 000056525ec12590
+[   29.571682] R13: 0000000000100000 R14: 80cd39947427bc66 R15: 000056525ec12608
+[   29.571705]  </TASK>
+[   30.537715] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   30.544695] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 413, name: arena_stress
+[   30.552619] preempt_count: 201, expected: 0
+[   30.556751] RCU nest depth: 0, expected: 0
+[   30.560508] 1 lock held by arena_stress/413:
+[   30.564565]  #0: ffff8e2843207d98 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   30.573856] CPU: 5 UID: 0 PID: 413 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   30.573865] Tainted: [W]=WARN
+[   30.573867] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   30.573870] Call Trace:
+[   30.573875]  <TASK>
+[   30.573881]  dump_stack_lvl+0x83/0xa0
+[   30.573894]  __might_resched+0x152/0x260
+[   30.573909]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   30.573931]  tlb_finish_mmu+0x73/0x180
+[   30.573942]  corten_arena_zap_window+0x5f8/0x650
+[   30.573979]  ? corten_txn_begin+0x32d/0x4b0
+[   30.574078]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   30.574094]  ? lock_release+0xc6/0x290
+[   30.574101]  ? lock_is_held_type+0x9e/0x120
+[   30.574118]  corten_arena_munmap_route+0x129/0x230
+[   30.574219]  __do_sys_munmap+0x53/0x130
+[   30.574234]  do_syscall_64+0xbd/0x3f0
+[   30.574244]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   30.574251] RIP: 0033:0x7fec68160717
+[   30.574258] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   30.574262] RSP: 002b:00007fec6684be18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   30.574267] RAX: ffffffffffffffda RBX: 0000000000000002 RCX: 00007fec68160717
+[   30.574271] RDX: 9d3451ceb22db622 RSI: 0000000000008000 RDI: 000000001e840000
+[   30.574273] RBP: 000056525ec12708 R08: 0000000000000000 R09: 000000001e848000
+[   30.574276] R10: 000056525ec12708 R11: 0000000000000246 R12: 000056525ec12748
+[   30.574279] R13: 0000000000008000 R14: 73cc25dade1eeef1 R15: 000056525ec127c0
+[   30.574303]  </TASK>
+[   31.538284] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   31.546216] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 413, name: arena_stress
+[   31.554611] preempt_count: 201, expected: 0
+[   31.558851] RCU nest depth: 0, expected: 0
+[   31.562903] 1 lock held by arena_stress/413:
+[   31.566231]  #0: ffff8e284ecc86d8 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   31.574657] CPU: 5 UID: 0 PID: 413 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   31.574669] Tainted: [W]=WARN
+[   31.574766] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   31.574769] Call Trace:
+[   31.574775]  <TASK>
+[   31.574781]  dump_stack_lvl+0x83/0xa0
+[   31.574795]  __might_resched+0x152/0x260
+[   31.574889]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   31.574902]  tlb_finish_mmu+0x73/0x180
+[   31.574912]  corten_arena_zap_window+0x5f8/0x650
+[   31.575028]  ? corten_txn_begin+0x32d/0x4b0
+[   31.575040]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   31.575056]  ? lock_release+0xc6/0x290
+[   31.575065]  ? lock_is_held_type+0x9e/0x120
+[   31.575082]  corten_arena_munmap_route+0x129/0x230
+[   31.575095]  __do_sys_munmap+0x53/0x130
+[   31.575104]  do_syscall_64+0xbd/0x3f0
+[   31.575114]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   31.575121] RIP: 0033:0x7fec68160717
+[   31.575129] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   31.575133] RSP: 002b:00007fec6684be18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   31.575139] RAX: ffffffffffffffda RBX: 0000000000000007 RCX: 00007fec68160717
+[   31.575142] RDX: 72526bbca18e603c RSI: 0000000000100000 RDI: 000000001fecc000
+[   31.575145] RBP: 000056525ec12708 R08: 0000000000000000 R09: 000000001ffcc000
+[   31.575147] R10: 000056525ec12708 R11: 0000000000000246 R12: 000056525ec127e8
+[   31.575150] R13: 0000000000200000 R14: 74dd340d9339ab3f R15: 000056525ec12860
+[   31.575205]  </TASK>
+[   32.536950] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   32.542497] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 411, name: arena_stress
+[   32.550058] preempt_count: 201, expected: 0
+[   32.554187] RCU nest depth: 0, expected: 0
+[   32.559060] 1 lock held by arena_stress/411:
+[   32.564803]  #0: ffff8e2841457e58 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   32.573499] CPU: 4 UID: 0 PID: 411 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   32.573507] Tainted: [W]=WARN
+[   32.573509] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   32.573512] Call Trace:
+[   32.573517]  <TASK>
+[   32.573523]  dump_stack_lvl+0x83/0xa0
+[   32.573537]  __might_resched+0x152/0x260
+[   32.573551]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   32.573564]  tlb_finish_mmu+0x73/0x180
+[   32.573574]  corten_arena_zap_window+0x5f8/0x650
+[   32.573609]  ? corten_txn_begin+0x32d/0x4b0
+[   32.573620]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   32.573635]  ? lock_release+0xc6/0x290
+[   32.573642]  ? lock_is_held_type+0x9e/0x120
+[   32.573753]  corten_arena_munmap_route+0x129/0x230
+[   32.573773]  __do_sys_munmap+0x53/0x130
+[   32.573782]  do_syscall_64+0xbd/0x3f0
+[   32.573792]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   32.573799] RIP: 0033:0x7fec68160717
+[   32.573808] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   32.573812] RSP: 002b:00007fec6784de18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   32.573818] RAX: ffffffffffffffda RBX: 0000000000000003 RCX: 00007fec68160717
+[   32.573821] RDX: 1685f8da7380277a RSI: 0000000000080000 RDI: 0000000016f68000
+[   32.573824] RBP: 000056525ec12418 R08: 0000000000000000 R09: 0000000016fe8000
+[   32.573952] R10: 000056525ec12418 R11: 0000000000000246 R12: 000056525ec12478
+[   32.573955] R13: 0000000000200000 R14: 2f9e0e8ff496dd3f R15: 000056525ec124f0
+[   32.573980]  </TASK>
+[   33.537176] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   33.543692] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 413, name: arena_stress
+[   33.551262] preempt_count: 201, expected: 0
+[   33.555214] RCU nest depth: 0, expected: 0
+[   33.559173] 1 lock held by arena_stress/413:
+[   33.563916]  #0: ffff8e2843207a98 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   33.572094] CPU: 5 UID: 0 PID: 413 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   33.572163] Tainted: [W]=WARN
+[   33.572164] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   33.572171] Call Trace:
+[   33.572176]  <TASK>
+[   33.572182]  dump_stack_lvl+0x83/0xa0
+[   33.572196]  __might_resched+0x152/0x260
+[   33.572210]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   33.572223]  tlb_finish_mmu+0x73/0x180
+[   33.572234]  corten_arena_zap_window+0x5f8/0x650
+[   33.572269]  ? corten_txn_begin+0x32d/0x4b0
+[   33.572280]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   33.572295]  ? lock_release+0xc6/0x290
+[   33.572302]  ? lock_is_held_type+0x9e/0x120
+[   33.572319]  corten_arena_munmap_route+0x129/0x230
+[   33.572332]  __do_sys_munmap+0x53/0x130
+[   33.572340]  do_syscall_64+0xbd/0x3f0
+[   33.572350]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   33.572356] RIP: 0033:0x7fec68160717
+[   33.572363] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   33.572367] RSP: 002b:00007fec6684be18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   33.572372] RAX: ffffffffffffffda RBX: 0000000000000005 RCX: 00007fec68160717
+[   33.572375] RDX: 4085876fe166b01f RSI: 0000000000100000 RDI: 000000001f594000
+[   33.572378] RBP: 000056525ec12708 R08: 0000000000000000 R09: 000000001f694000
+[   33.572380] R10: 000056525ec12708 R11: 0000000000000246 R12: 000056525ec127a8
+[   33.572382] R13: 0000000000010000 R14: 5398330752feadc2 R15: 000056525ec12820
+[   33.572406]  </TASK>
+[   34.537218] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   34.543477] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 413, name: arena_stress
+[   34.550819] preempt_count: 201, expected: 0
+[   34.555008] RCU nest depth: 0, expected: 0
+[   34.558720] 1 lock held by arena_stress/413:
+[   34.563492]  #0: ffff8e2843207918 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   34.571541] CPU: 5 UID: 0 PID: 413 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   34.571552] Tainted: [W]=WARN
+[   34.571555] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   34.571558] Call Trace:
+[   34.571634]  <TASK>
+[   34.571642]  dump_stack_lvl+0x83/0xa0
+[   34.571660]  __might_resched+0x152/0x260
+[   34.571677]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   34.571691]  tlb_finish_mmu+0x73/0x180
+[   34.571702]  corten_arena_zap_window+0x5f8/0x650
+[   34.571737]  ? corten_txn_begin+0x32d/0x4b0
+[   34.571750]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   34.571765]  ? lock_release+0xc6/0x290
+[   34.571774]  ? lock_is_held_type+0x9e/0x120
+[   34.571792]  corten_arena_munmap_route+0x129/0x230
+[   34.571805]  __do_sys_munmap+0x53/0x130
+[   34.571813]  do_syscall_64+0xbd/0x3f0
+[   34.571823]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   34.571830] RIP: 0033:0x7fec68160717
+[   34.571839] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   34.571843] RSP: 002b:00007fec6684be18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   34.571849] RAX: ffffffffffffffda RBX: 0000000000000000 RCX: 00007fec68160717
+[   34.571852] RDX: 0b84773702376528 RSI: 0000000000010000 RDI: 000000001e1c0000
+[   34.571855] RBP: 000056525ec12708 R08: 0000000000000000 R09: 000000001e1d0000
+[   34.571857] R10: 000056525ec12708 R11: 0000000000000246 R12: 000056525ec12708
+[   34.571860] R13: 0000000000100000 R14: c88209f11a1068ae R15: 000056525ec12780
+[   34.571884]  </TASK>
+[   35.537348] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   35.544300] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 410, name: arena_stress
+[   35.552559] preempt_count: 201, expected: 0
+[   35.556474] RCU nest depth: 0, expected: 0
+[   35.559844] 1 lock held by arena_stress/410:
+[   35.564868]  #0: ffff8e2843dcb6d8 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   35.574115] CPU: 0 UID: 0 PID: 410 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   35.574125] Tainted: [W]=WARN
+[   35.574127] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   35.574130] Call Trace:
+[   35.574135]  <TASK>
+[   35.574141]  dump_stack_lvl+0x83/0xa0
+[   35.574155]  __might_resched+0x152/0x260
+[   35.574170]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   35.574182]  tlb_finish_mmu+0x73/0x180
+[   35.574193]  corten_arena_zap_window+0x5f8/0x650
+[   35.574227]  ? corten_txn_begin+0x32d/0x4b0
+[   35.574239]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   35.574254]  ? lock_release+0xc6/0x290
+[   35.574261]  ? lock_is_held_type+0x9e/0x120
+[   35.574411]  corten_arena_munmap_route+0x129/0x230
+[   35.574430]  __do_sys_munmap+0x53/0x130
+[   35.574439]  do_syscall_64+0xbd/0x3f0
+[   35.574450]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   35.574535] RIP: 0033:0x7fec68160717
+[   35.574544] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   35.574548] RSP: 002b:00007fec6804ee18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   35.574554] RAX: ffffffffffffffda RBX: 0000000000000003 RCX: 00007fec68160717
+[   35.574557] RDX: fdf66a069bba1a4e RSI: 0000000000008000 RDI: 0000000012efc000
+[   35.574560] RBP: 000056525ec122a0 R08: 0000000000000000 R09: 0000000012f04000
+[   35.574562] R10: 000056525ec122a0 R11: 0000000000000246 R12: 000056525ec12300
+[   35.574564] R13: 0000000000010000 R14: 58f836f60c176042 R15: 000056525ec12378
+[   35.574589]  </TASK>
+[   36.537036] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   36.544898] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 413, name: arena_stress
+[   36.552994] preempt_count: 201, expected: 0
+[   36.556555] RCU nest depth: 0, expected: 0
+[   36.559606] 1 lock held by arena_stress/413:
+[   36.564151]  #0: ffff8e284ecc89d8 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   36.572793] CPU: 5 UID: 0 PID: 413 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   36.572802] Tainted: [W]=WARN
+[   36.572804] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   36.572806] Call Trace:
+[   36.572811]  <TASK>
+[   36.572817]  dump_stack_lvl+0x83/0xa0
+[   36.572830]  __might_resched+0x152/0x260
+[   36.572845]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   36.572858]  tlb_finish_mmu+0x73/0x180
+[   36.572869]  corten_arena_zap_window+0x5f8/0x650
+[   36.572903]  ? corten_txn_begin+0x32d/0x4b0
+[   36.573000]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   36.573019]  ? lock_release+0xc6/0x290
+[   36.573027]  ? lock_is_held_type+0x9e/0x120
+[   36.573045]  corten_arena_munmap_route+0x129/0x230
+[   36.573058]  __do_sys_munmap+0x53/0x130
+[   36.573067]  do_syscall_64+0xbd/0x3f0
+[   36.573077]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   36.573084] RIP: 0033:0x7fec68160717
+[   36.573091] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   36.573095] RSP: 002b:00007fec6684be18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   36.573101] RAX: ffffffffffffffda RBX: 0000000000000007 RCX: 00007fec68160717
+[   36.573104] RDX: dc3aac2b918e0980 RSI: 0000000000200000 RDI: 000000001fd48000
+[   36.573136] RBP: 000056525ec12708 R08: 0000000000000000 R09: 000000001ff48000
+[   36.573139] R10: 000056525ec12708 R11: 0000000000000246 R12: 000056525ec127e8
+[   36.573141] R13: 0000000000200000 R14: 27df045d20db4847 R15: 000056525ec12860
+[   36.573166]  </TASK>
+[   37.537726] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   37.545663] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 410, name: arena_stress
+[   37.552138] preempt_count: 201, expected: 0
+[   37.556049] RCU nest depth: 0, expected: 0
+[   37.558502] 1 lock held by arena_stress/410:
+[   37.563116]  #0: ffff8e2849827a98 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   37.573896] CPU: 3 UID: 0 PID: 410 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   37.574008] Tainted: [W]=WARN
+[   37.574061] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   37.574126] Call Trace:
+[   37.574386]  <TASK>
+[   37.574594]  dump_stack_lvl+0x83/0xa0
+[   37.574676]  __might_resched+0x152/0x260
+[   37.574734]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   37.574787]  tlb_finish_mmu+0x73/0x180
+[   37.574791]  corten_arena_zap_window+0x5f8/0x650
+[   37.574823]  ? corten_txn_begin+0x32d/0x4b0
+[   37.574827]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   37.574846]  ? lock_release+0xc6/0x290
+[   37.574869]  ? lock_is_held_type+0x9e/0x120
+[   37.574886]  corten_arena_munmap_route+0x129/0x230
+[   37.574900]  ? hrtimer_interrupt+0x146/0x280
+[   37.574930]  __do_sys_munmap+0x53/0x130
+[   37.574943]  do_syscall_64+0xbd/0x3f0
+[   37.574964]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   37.574999] RIP: 0033:0x7fec68160717
+[   37.575021] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   37.575025] RSP: 002b:00007fec6804ee18 EFLAGS: 00000246 ORIG_RAX: 000000000000000b
+[   37.575052] RAX: ffffffffffffffda RBX: 0000000000000007 RCX: 00007fec68160717
+[   37.575055] RDX: 92fe14a0b1d6492f RSI: 0000000000010000 RDI: 0000000013ce8000
+[   37.575058] RBP: 000056525ec122a0 R08: 0000000000000000 R09: 0000000013cf8000
+[   37.575060] R10: 000056525ec122a0 R11: 0000000000000246 R12: 000056525ec12380
+[   37.575062] R13: 0000000000010000 R14: 2e02ecf28529f5ca R15: 000056525ec123f8
+[   37.575128]  </TASK>
+[   38.863554] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   38.864853] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 419, name: arena_stress
+[   38.873571] preempt_count: 201, expected: 0
+[   38.880469] RCU nest depth: 0, expected: 0
+[   38.884357] 1 lock held by arena_stress/419:
+[   38.888744]  #0: ffff8e284143c918 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   38.898238] CPU: 0 UID: 0 PID: 419 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   38.898248] Tainted: [W]=WARN
+[   38.898250] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   38.898253] Call Trace:
+[   38.898267]  <TASK>
+[   38.898273]  dump_stack_lvl+0x83/0xa0
+[   38.898287]  __might_resched+0x152/0x260
+[   38.898301]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   38.898313]  tlb_finish_mmu+0x73/0x180
+[   38.898323]  corten_arena_zap_window+0x5f8/0x650
+[   38.898358]  ? corten_txn_begin+0x32d/0x4b0
+[   38.898509]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   38.898530]  ? lock_release+0xc6/0x290
+[   38.898538]  ? lock_is_held_type+0x9e/0x120
+[   38.898556]  corten_arena_munmap_route+0x129/0x230
+[   38.898568]  __do_sys_munmap+0x53/0x130
+[   38.898577]  do_syscall_64+0xbd/0x3f0
+[   38.898587]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   38.898593] RIP: 0033:0x7f96e6220717
+[   38.898601] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   38.898605] RSP: 002b:00007f96e610ee18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   38.898611] RAX: ffffffffffffffda RBX: 000000003467b7a2 RCX: 00007f96e6220717
+[   38.898614] RDX: 0000000000000001 RSI: 0000000000020000 RDI: 0000000011fe8000
+[   38.898616] RBP: 0000560a856b92a0 R08: 0000000000000000 R09: 0000000012008000
+[   38.898619] R10: 0000560a856b92a0 R11: 0000000000000206 R12: 0000000000001fe8
+[   38.898621] R13: 0000000000020000 R14: 0000000001fe8000 R15: 0000000011fe8000
+[   38.898645]  </TASK>
+[   39.865293] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   39.871864] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 421, name: arena_stress
+[   39.879382] preempt_count: 201, expected: 0
+[   39.881978] RCU nest depth: 0, expected: 0
+[   39.884915] 1 lock held by arena_stress/421:
+[   39.886871]  #0: ffff8e2847c42018 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   39.896392] CPU: 4 UID: 0 PID: 421 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   39.896402] Tainted: [W]=WARN
+[   39.896404] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   39.896406] Call Trace:
+[   39.896412]  <TASK>
+[   39.896418]  dump_stack_lvl+0x83/0xa0
+[   39.896437]  __might_resched+0x152/0x260
+[   39.896453]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   39.896467]  tlb_finish_mmu+0x73/0x180
+[   39.896478]  corten_arena_zap_window+0x5f8/0x650
+[   39.896516]  ? corten_txn_begin+0x32d/0x4b0
+[   39.896528]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   39.896544]  ? lock_release+0xc6/0x290
+[   39.896552]  ? lock_is_held_type+0x9e/0x120
+[   39.896570]  corten_arena_munmap_route+0x129/0x230
+[   39.896637]  __do_sys_munmap+0x53/0x130
+[   39.896646]  do_syscall_64+0xbd/0x3f0
+[   39.896656]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   39.896664] RIP: 0033:0x7f96e6220717
+[   39.896673] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   39.896677] RSP: 002b:00007f96e510ce18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   39.896683] RAX: ffffffffffffffda RBX: 00000000a83d8673 RCX: 00007f96e6220717
+[   39.896686] RDX: 0000000000000001 RSI: 0000000000200000 RDI: 0000000018470000
+[   39.896689] RBP: 0000560a856b9590 R08: 0000000000000000 R09: 0000000018670000
+[   39.896691] R10: 0000560a856b9590 R11: 0000000000000206 R12: 0000000000000470
+[   39.896767] R13: 0000000000200000 R14: 0000000000470000 R15: 0000000018470000
+[   39.896875]  </TASK>
+[   40.863660] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   40.871122] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 420, name: arena_stress
+[   40.879853] preempt_count: 201, expected: 0
+[   40.886049] RCU nest depth: 0, expected: 0
+[   40.890780] 1 lock held by arena_stress/420:
+[   40.894936]  #0: ffff8e2845fd2618 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   40.903495] CPU: 2 UID: 0 PID: 420 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   40.903498] Tainted: [W]=WARN
+[   40.903499] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   40.903500] Call Trace:
+[   40.903502]  <TASK>
+[   40.903505]  dump_stack_lvl+0x83/0xa0
+[   40.903511]  __might_resched+0x152/0x260
+[   40.903517]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   40.903574]  tlb_finish_mmu+0x73/0x180
+[   40.903579]  corten_arena_zap_window+0x5f8/0x650
+[   40.903616]  ? corten_txn_begin+0x32d/0x4b0
+[   40.903620]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   40.903745]  ? lock_release+0xc6/0x290
+[   40.903750]  ? lock_is_held_type+0x9e/0x120
+[   40.903799]  corten_arena_munmap_route+0x129/0x230
+[   40.903804]  __do_sys_munmap+0x53/0x130
+[   40.903806]  do_syscall_64+0xbd/0x3f0
+[   40.903810]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   40.903812] RIP: 0033:0x7f96e6220717
+[   40.903815] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   40.903816] RSP: 002b:00007f96e590de18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   40.903818] RAX: ffffffffffffffda RBX: 000000015633df62 RCX: 00007f96e6220717
+[   40.903819] RDX: 0000000000000001 RSI: 0000000000100000 RDI: 00000000149c4000
+[   40.903820] RBP: 0000560a856b9418 R08: 0000000000000000 R09: 0000000014ac4000
+[   40.903821] R10: 0000560a856b9418 R11: 0000000000000206 R12: 00000000000009c4
+[   40.903849] R13: 0000000000100000 R14: 00000000009c4000 R15: 00000000149c4000
+[   40.903876]  </TASK>
+[   41.864497] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   41.869458] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 422, name: arena_stress
+[   41.878611] preempt_count: 201, expected: 0
+[   41.884407] RCU nest depth: 0, expected: 0
+[   41.888087] 1 lock held by arena_stress/422:
+[   41.890263]  #0: ffff8e2846a17318 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   41.899024] CPU: 6 UID: 0 PID: 422 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   41.899027] Tainted: [W]=WARN
+[   41.899028] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   41.899029] Call Trace:
+[   41.899032]  <TASK>
+[   41.899066]  dump_stack_lvl+0x83/0xa0
+[   41.899074]  __might_resched+0x152/0x260
+[   41.899080]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   41.899109]  tlb_finish_mmu+0x73/0x180
+[   41.899113]  corten_arena_zap_window+0x5f8/0x650
+[   41.899129]  ? corten_txn_begin+0x32d/0x4b0
+[   41.899141]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   41.899156]  ? lock_release+0xc6/0x290
+[   41.899164]  ? lock_is_held_type+0x9e/0x120
+[   41.899181]  corten_arena_munmap_route+0x129/0x230
+[   41.899194]  __do_sys_munmap+0x53/0x130
+[   41.899202]  do_syscall_64+0xbd/0x3f0
+[   41.899212]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   41.899218] RIP: 0033:0x7f96e6220717
+[   41.899225] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   41.899229] RSP: 002b:00007f96e490be18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   41.899235] RAX: ffffffffffffffda RBX: 000000000cab6fab RCX: 00007f96e6220717
+[   41.899238] RDX: 0000000000000001 RSI: 0000000000080000 RDI: 000000001def0000
+[   41.899240] RBP: 0000560a856b9708 R08: 0000000000000000 R09: 000000001df70000
+[   41.899243] R10: 0000560a856b9708 R11: 0000000000000206 R12: 0000000000001ef0
+[   41.899245] R13: 0000000000080000 R14: 0000000001ef0000 R15: 000000001def0000
+[   41.899269]  </TASK>
+[   42.865026] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   42.871873] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 422, name: arena_stress
+[   42.880511] preempt_count: 201, expected: 0
+[   42.884586] RCU nest depth: 0, expected: 0
+[   42.889854] 1 lock held by arena_stress/422:
+[   42.894244]  #0: ffff8e2846a17018 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   42.903663] CPU: 6 UID: 0 PID: 422 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   42.903674] Tainted: [W]=WARN
+[   42.903675] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   42.903830] Call Trace:
+[   42.903838]  <TASK>
+[   42.903846]  dump_stack_lvl+0x83/0xa0
+[   42.903864]  __might_resched+0x152/0x260
+[   42.903881]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   42.903895]  tlb_finish_mmu+0x73/0x180
+[   42.903906]  corten_arena_zap_window+0x5f8/0x650
+[   42.903939]  ? _raw_write_lock_bh+0x33/0x40
+[   42.904114]  ? corten_txn_begin+0x32d/0x4b0
+[   42.904126]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   42.904149]  ? lock_release+0xc6/0x290
+[   42.904156]  ? lock_is_held_type+0x9e/0x120
+[   42.904174]  corten_arena_munmap_route+0x129/0x230
+[   42.904186]  __do_sys_munmap+0x53/0x130
+[   42.904195]  do_syscall_64+0xbd/0x3f0
+[   42.904205]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   42.904241] RIP: 0033:0x7f96e6220717
+[   42.904249] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   42.904253] RSP: 002b:00007f96e490be18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   42.904258] RAX: ffffffffffffffda RBX: 00000000a544a1d5 RCX: 00007f96e6220717
+[   42.904261] RDX: 0000000000000001 RSI: 0000000000080000 RDI: 000000001e5fc000
+[   42.904287] RBP: 0000560a856b9708 R08: 0000000000000000 R09: 000000001e67c000
+[   42.904290] R10: 0000560a856b9708 R11: 0000000000000206 R12: 00000000000025fc
+[   42.904292] R13: 0000000000080000 R14: 00000000025fc000 R15: 000000001e5fc000
+[   42.904318]  </TASK>
+[   43.865431] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   43.874890] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 419, name: arena_stress
+[   43.879812] preempt_count: 201, expected: 0
+[   43.882290] RCU nest depth: 0, expected: 0
+[   43.886622] 1 lock held by arena_stress/419:
+[   43.892333]  #0: ffff8e284699d918 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   43.901601] CPU: 3 UID: 0 PID: 419 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   43.901611] Tainted: [W]=WARN
+[   43.901613] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   43.901616] Call Trace:
+[   43.901623]  <TASK>
+[   43.901630]  dump_stack_lvl+0x83/0xa0
+[   43.901647]  __might_resched+0x152/0x260
+[   43.901662]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   43.901677]  tlb_finish_mmu+0x73/0x180
+[   43.901688]  corten_arena_zap_window+0x5f8/0x650
+[   43.901724]  ? corten_txn_begin+0x32d/0x4b0
+[   43.901736]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   43.901751]  ? lock_release+0xc6/0x290
+[   43.901761]  ? lock_is_held_type+0x9e/0x120
+[   43.901778]  corten_arena_munmap_route+0x129/0x230
+[   43.901792]  __do_sys_munmap+0x53/0x130
+[   43.901802]  do_syscall_64+0xbd/0x3f0
+[   43.901812]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   43.901819] RIP: 0033:0x7f96e6220717
+[   43.901828] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   43.901831] RSP: 002b:00007f96e610ee18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   43.901847] RAX: ffffffffffffffda RBX: 000000004e01ad40 RCX: 00007f96e6220717
+[   43.901850] RDX: 0000000000000001 RSI: 0000000000100000 RDI: 000000001094c000
+[   43.901852] RBP: 0000560a856b92a0 R08: 0000000000000000 R09: 0000000010a4c000
+[   43.901855] R10: 0000560a856b92a0 R11: 0000000000000206 R12: 000000000000094c
+[   43.901857] R13: 0000000000100000 R14: 000000000094c000 R15: 000000001094c000
+[   43.901880]  </TASK>
+[   44.865218] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   44.873316] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 420, name: arena_stress
+[   44.878921] preempt_count: 201, expected: 0
+[   44.882627] RCU nest depth: 0, expected: 0
+[   44.886146] 1 lock held by arena_stress/420:
+[   44.890056]  #0: ffff8e2849b2d498 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   44.898146] CPU: 2 UID: 0 PID: 420 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   44.898157] Tainted: [W]=WARN
+[   44.898159] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   44.898162] Call Trace:
+[   44.898168]  <TASK>
+[   44.898176]  dump_stack_lvl+0x83/0xa0
+[   44.898193]  __might_resched+0x152/0x260
+[   44.898209]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   44.898222]  tlb_finish_mmu+0x73/0x180
+[   44.898234]  corten_arena_zap_window+0x5f8/0x650
+[   44.898270]  ? corten_txn_begin+0x32d/0x4b0
+[   44.898283]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   44.898298]  ? lock_release+0xc6/0x290
+[   44.898306]  ? lock_is_held_type+0x9e/0x120
+[   44.898324]  corten_arena_munmap_route+0x129/0x230
+[   44.898337]  __do_sys_munmap+0x53/0x130
+[   44.898345]  do_syscall_64+0xbd/0x3f0
+[   44.898355]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   44.898362] RIP: 0033:0x7f96e6220717
+[   44.898370] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   44.898373] RSP: 002b:00007f96e590de18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   44.898380] RAX: ffffffffffffffda RBX: 000000017a30a464 RCX: 00007f96e6220717
+[   44.898571] RDX: 0000000000000001 RSI: 0000000000100000 RDI: 0000000016100000
+[   44.898574] RBP: 0000560a856b9418 R08: 0000000000000000 R09: 0000000016200000
+[   44.898576] R10: 0000560a856b9418 R11: 0000000000000206 R12: 0000000000002100
+[   44.898579] R13: 0000000000100000 R14: 0000000002100000 R15: 0000000016100000
+[   44.898604]  </TASK>
+[   45.865156] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   45.867799] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 422, name: arena_stress
+[   45.872146] preempt_count: 201, expected: 0
+[   45.875670] RCU nest depth: 0, expected: 0
+[   45.879001] 1 lock held by arena_stress/422:
+[   45.881945]  #0: ffff8e2846aad258 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   45.888825] CPU: 6 UID: 0 PID: 422 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   45.888836] Tainted: [W]=WARN
+[   45.888838] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   45.888841] Call Trace:
+[   45.888847]  <TASK>
+[   45.888855]  dump_stack_lvl+0x83/0xa0
+[   45.888873]  __might_resched+0x152/0x260
+[   45.888889]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   45.888903]  tlb_finish_mmu+0x73/0x180
+[   45.888913]  corten_arena_zap_window+0x5f8/0x650
+[   45.888949]  ? corten_txn_begin+0x32d/0x4b0
+[   45.888961]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   45.889126]  ? lock_release+0xc6/0x290
+[   45.889133]  ? lock_is_held_type+0x9e/0x120
+[   45.889151]  corten_arena_munmap_route+0x129/0x230
+[   45.889163]  __do_sys_munmap+0x53/0x130
+[   45.889171]  do_syscall_64+0xbd/0x3f0
+[   45.889181]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   45.889187] RIP: 0033:0x7f96e6220717
+[   45.889195] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   45.889198] RSP: 002b:00007f96e490be18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   45.889204] RAX: ffffffffffffffda RBX: 0000000090bf3c19 RCX: 00007f96e6220717
+[   45.889207] RDX: 0000000000000001 RSI: 0000000000040000 RDI: 000000001cc7c000
+[   45.889210] RBP: 0000560a856b9708 R08: 0000000000000000 R09: 000000001ccbc000
+[   45.889212] R10: 0000560a856b9708 R11: 0000000000000206 R12: 0000000000000c7c
+[   45.889214] R13: 0000000000040000 R14: 0000000000c7c000 R15: 000000001cc7c000
+[   45.889238]  </TASK>
+[   46.865538] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   46.872546] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 421, name: arena_stress
+[   46.879521] preempt_count: 201, expected: 0
+[   46.884188] RCU nest depth: 0, expected: 0
+[   46.888789] 1 lock held by arena_stress/421:
+[   46.893800]  #0: ffff8e2847c42318 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   46.904057] CPU: 4 UID: 0 PID: 421 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   46.904068] Tainted: [W]=WARN
+[   46.904070] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   46.904073] Call Trace:
+[   46.904080]  <TASK>
+[   46.904088]  dump_stack_lvl+0x83/0xa0
+[   46.904108]  __might_resched+0x152/0x260
+[   46.904126]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   46.904140]  tlb_finish_mmu+0x73/0x180
+[   46.904152]  corten_arena_zap_window+0x5f8/0x650
+[   46.904189]  ? corten_txn_begin+0x32d/0x4b0
+[   46.904202]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   46.904218]  ? lock_release+0xc6/0x290
+[   46.904228]  ? lock_is_held_type+0x9e/0x120
+[   46.904324]  corten_arena_munmap_route+0x129/0x230
+[   46.904341]  __do_sys_munmap+0x53/0x130
+[   46.904350]  do_syscall_64+0xbd/0x3f0
+[   46.904361]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   46.904368] RIP: 0033:0x7f96e6220717
+[   46.904376] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   46.904468] RSP: 002b:00007f96e510ce18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   46.904475] RAX: ffffffffffffffda RBX: 00000000b763b07a RCX: 00007f96e6220717
+[   46.904478] RDX: 0000000000000001 RSI: 0000000000010000 RDI: 0000000018eb4000
+[   46.904481] RBP: 0000560a856b9590 R08: 0000000000000000 R09: 0000000018ec4000
+[   46.904484] R10: 0000560a856b9590 R11: 0000000000000206 R12: 0000000000000eb4
+[   46.904520] R13: 0000000000010000 R14: 0000000000eb4000 R15: 0000000018eb4000
+[   46.904546]  </TASK>
+[   47.867042] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   47.875127] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 422, name: arena_stress
+[   47.881383] preempt_count: 201, expected: 0
+[   47.886231] RCU nest depth: 0, expected: 0
+[   47.888098] 1 lock held by arena_stress/422:
+[   47.894911]  #0: ffff8e2846aad198 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   47.902794] CPU: 6 UID: 0 PID: 422 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   47.902797] Tainted: [W]=WARN
+[   47.902797] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   47.902799] Call Trace:
+[   47.902801]  <TASK>
+[   47.902804]  dump_stack_lvl+0x83/0xa0
+[   47.902810]  __might_resched+0x152/0x260
+[   47.902815]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   47.902844]  tlb_finish_mmu+0x73/0x180
+[   47.902854]  corten_arena_zap_window+0x5f8/0x650
+[   47.902889]  ? corten_txn_begin+0x32d/0x4b0
+[   47.902900]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   47.902915]  ? lock_release+0xc6/0x290
+[   47.902922]  ? lock_is_held_type+0x9e/0x120
+[   47.902939]  corten_arena_munmap_route+0x129/0x230
+[   47.902953]  __do_sys_munmap+0x53/0x130
+[   47.902961]  do_syscall_64+0xbd/0x3f0
+[   47.902971]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   47.902978] RIP: 0033:0x7f96e6220717
+[   47.902986] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   47.902991] RSP: 002b:00007f96e490be18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   47.902996] RAX: ffffffffffffffda RBX: 00000001d4ca15c3 RCX: 00007f96e6220717
+[   47.903000] RDX: 0000000000000001 RSI: 0000000000080000 RDI: 000000001ce0c000
+[   47.903002] RBP: 0000560a856b9708 R08: 0000000000000000 R09: 000000001ce8c000
+[   47.903005] R10: 0000560a856b9708 R11: 0000000000000206 R12: 0000000000000e0c
+[   47.903007] R13: 0000000000080000 R14: 0000000000e0c000 R15: 000000001ce0c000
+[   47.903030]  </TASK>
+[   48.867960] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   48.875110] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 420, name: arena_stress
+[   48.883228] preempt_count: 201, expected: 0
+[   48.887708] RCU nest depth: 0, expected: 0
+[   48.893230] 1 lock held by arena_stress/420:
+[   48.896636]  #0: ffff8e2845fd2618 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   48.906853] CPU: 2 UID: 0 PID: 420 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   48.906863] Tainted: [W]=WARN
+[   48.906865] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   48.906868] Call Trace:
+[   48.906874]  <TASK>
+[   48.906881]  dump_stack_lvl+0x83/0xa0
+[   48.907012]  __might_resched+0x152/0x260
+[   48.907027]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   48.907040]  tlb_finish_mmu+0x73/0x180
+[   48.907051]  corten_arena_zap_window+0x5f8/0x650
+[   48.907086]  ? corten_txn_begin+0x32d/0x4b0
+[   48.907098]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   48.907113]  ? lock_release+0xc6/0x290
+[   48.907121]  ? lock_is_held_type+0x9e/0x120
+[   48.907138]  corten_arena_munmap_route+0x129/0x230
+[   48.907151]  __do_sys_munmap+0x53/0x130
+[   48.907159]  do_syscall_64+0xbd/0x3f0
+[   48.907173]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   48.907180] RIP: 0033:0x7f96e6220717
+[   48.907188] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   48.907298] RSP: 002b:00007f96e590de18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   48.907304] RAX: ffffffffffffffda RBX: 0000000183dd6eae RCX: 00007f96e6220717
+[   48.907308] RDX: 0000000000000001 RSI: 0000000000010000 RDI: 0000000014888000
+[   48.907310] RBP: 0000560a856b9418 R08: 0000000000000000 R09: 0000000014898000
+[   48.907313] R10: 0000560a856b9418 R11: 0000000000000206 R12: 0000000000000888
+[   48.907315] R13: 0000000000010000 R14: 0000000000888000 R15: 0000000014888000
+[   48.907341]  </TASK>
+[   49.868718] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   49.877360] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 421, name: arena_stress
+[   49.883722] preempt_count: 201, expected: 0
+[   49.888005] RCU nest depth: 0, expected: 0
+[   49.891120] 1 lock held by arena_stress/421:
+[   49.893968]  #0: ffff8e2847c42258 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   49.903556] CPU: 4 UID: 0 PID: 421 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   49.903566] Tainted: [W]=WARN
+[   49.903568] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   49.903576] Call Trace:
+[   49.903583]  <TASK>
+[   49.903590]  dump_stack_lvl+0x83/0xa0
+[   49.903608]  __might_resched+0x152/0x260
+[   49.903704]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   49.903721]  tlb_finish_mmu+0x73/0x180
+[   49.903732]  corten_arena_zap_window+0x5f8/0x650
+[   49.903769]  ? corten_txn_begin+0x32d/0x4b0
+[   49.903781]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   49.903796]  ? lock_release+0xc6/0x290
+[   49.903804]  ? lock_is_held_type+0x9e/0x120
+[   49.903823]  corten_arena_munmap_route+0x129/0x230
+[   49.903837]  __do_sys_munmap+0x53/0x130
+[   49.903845]  do_syscall_64+0xbd/0x3f0
+[   49.903856]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   49.903863] RIP: 0033:0x7f96e6220717
+[   49.903988] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   49.903992] RSP: 002b:00007f96e510ce18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   49.903998] RAX: ffffffffffffffda RBX: 00000001b04abef3 RCX: 00007f96e6220717
+[   49.904001] RDX: 0000000000000001 RSI: 0000000000200000 RDI: 000000001bd64000
+[   49.904004] RBP: 0000560a856b9590 R08: 0000000000000000 R09: 000000001bf64000
+[   49.904006] R10: 0000560a856b9590 R11: 0000000000000206 R12: 0000000000003d64
+[   49.904009] R13: 0000000000200000 R14: 0000000003d64000 R15: 000000001bd64000
+[   49.904034]  </TASK>
+[   50.868060] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   50.873069] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 421, name: arena_stress
+[   50.881284] preempt_count: 201, expected: 0
+[   50.884624] RCU nest depth: 0, expected: 0
+[   50.888811] 1 lock held by arena_stress/421:
+[   50.894086]  #0: ffff8e2847c429d8 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   50.900757] CPU: 4 UID: 0 PID: 421 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   50.900762] Tainted: [W]=WARN
+[   50.900762] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   50.900763] Call Trace:
+[   50.900766]  <TASK>
+[   50.900769]  dump_stack_lvl+0x83/0xa0
+[   50.900789]  __might_resched+0x152/0x260
+[   50.900795]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   50.900800]  tlb_finish_mmu+0x73/0x180
+[   50.900803]  corten_arena_zap_window+0x5f8/0x650
+[   50.900815]  ? corten_txn_begin+0x32d/0x4b0
+[   50.900819]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   50.900823]  ? lock_release+0xc6/0x290
+[   50.900827]  ? lock_is_held_type+0x9e/0x120
+[   50.900832]  corten_arena_munmap_route+0x129/0x230
+[   50.900836]  __do_sys_munmap+0x53/0x130
+[   50.900839]  do_syscall_64+0xbd/0x3f0
+[   50.900842]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   50.900907] RIP: 0033:0x7f96e6220717
+[   50.900910] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   50.900911] RSP: 002b:00007f96e510ce18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   50.900914] RAX: ffffffffffffffda RBX: 00000001e04d06b3 RCX: 00007f96e6220717
+[   50.900915] RDX: 0000000000000001 RSI: 0000000000008000 RDI: 0000000018bd4000
+[   50.900915] RBP: 0000560a856b9590 R08: 0000000000000000 R09: 0000000018bdc000
+[   50.900916] R10: 0000560a856b9590 R11: 0000000000000206 R12: 0000000000000bd4
+[   50.900917] R13: 0000000000008000 R14: 0000000000bd4000 R15: 0000000018bd4000
+[   50.900924]  </TASK>
+[   51.870103] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   51.876205] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 419, name: arena_stress
+[   51.882443] preempt_count: 201, expected: 0
+[   51.886442] RCU nest depth: 0, expected: 0
+[   51.890677] 1 lock held by arena_stress/419:
+[   51.896004]  #0: ffff8e284143cf18 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   51.907452] CPU: 3 UID: 0 PID: 419 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   51.907464] Tainted: [W]=WARN
+[   51.907466] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   51.907469] Call Trace:
+[   51.907476]  <TASK>
+[   51.907484]  dump_stack_lvl+0x83/0xa0
+[   51.907502]  __might_resched+0x152/0x260
+[   51.907518]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   51.907533]  tlb_finish_mmu+0x73/0x180
+[   51.907543]  corten_arena_zap_window+0x5f8/0x650
+[   51.907579]  ? corten_txn_begin+0x32d/0x4b0
+[   51.907592]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   51.907608]  ? lock_release+0xc6/0x290
+[   51.907616]  ? lock_is_held_type+0x9e/0x120
+[   51.907718]  corten_arena_munmap_route+0x129/0x230
+[   51.907732]  __do_sys_munmap+0x53/0x130
+[   51.907740]  do_syscall_64+0xbd/0x3f0
+[   51.907750]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   51.907757] RIP: 0033:0x7f96e6220717
+[   51.907766] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   51.907770] RSP: 002b:00007f96e610ee18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   51.907776] RAX: ffffffffffffffda RBX: 00000000bf123341 RCX: 00007f96e6220717
+[   51.907779] RDX: 0000000000000001 RSI: 0000000000200000 RDI: 0000000012a18000
+[   51.907782] RBP: 0000560a856b92a0 R08: 0000000000000000 R09: 0000000012c18000
+[   51.907785] R10: 0000560a856b92a0 R11: 0000000000000206 R12: 0000000000002a18
+[   51.907787] R13: 0000000000200000 R14: 0000000002a18000 R15: 0000000012a18000
+[   51.907812]  </TASK>
+[   52.870658] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   52.878138] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 420, name: arena_stress
+[   52.886100] preempt_count: 201, expected: 0
+[   52.891860] RCU nest depth: 0, expected: 0
+[   52.896425] 1 lock held by arena_stress/420:
+[   52.903263]  #0: ffff8e28413e10d8 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   52.910835] CPU: 2 UID: 0 PID: 420 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   52.910849] Tainted: [W]=WARN
+[   52.910850] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   52.910851] Call Trace:
+[   52.910854]  <TASK>
+[   52.910857]  dump_stack_lvl+0x83/0xa0
+[   52.910863]  __might_resched+0x152/0x260
+[   52.910879]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   52.910893]  tlb_finish_mmu+0x73/0x180
+[   52.910904]  corten_arena_zap_window+0x5f8/0x650
+[   52.910939]  ? corten_txn_begin+0x32d/0x4b0
+[   52.910951]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   52.910966]  ? lock_release+0xc6/0x290
+[   52.911087]  ? lock_is_held_type+0x9e/0x120
+[   52.911198]  corten_arena_munmap_route+0x129/0x230
+[   52.911263]  __do_sys_munmap+0x53/0x130
+[   52.911273]  do_syscall_64+0xbd/0x3f0
+[   52.911284]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   52.911291] RIP: 0033:0x7f96e6220717
+[   52.911299] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   52.911304] RSP: 002b:00007f96e590de18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   52.911310] RAX: ffffffffffffffda RBX: 00000000c956fb13 RCX: 00007f96e6220717
+[   52.911314] RDX: 0000000000000001 RSI: 0000000000200000 RDI: 00000000177e0000
+[   52.911316] RBP: 0000560a856b9418 R08: 0000000000000000 R09: 00000000179e0000
+[   52.911319] R10: 0000560a856b9418 R11: 0000000000000206 R12: 00000000000037e0
+[   52.911321] R13: 0000000000200000 R14: 00000000037e0000 R15: 00000000177e0000
+[   52.911345]  </TASK>
+[   53.870904] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   53.878737] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 420, name: arena_stress
+[   53.883551] preempt_count: 201, expected: 0
+[   53.888613] RCU nest depth: 0, expected: 0
+[   53.892618] 1 lock held by arena_stress/420:
+[   53.897113]  #0: ffff8e2847e529d8 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   53.909451] CPU: 2 UID: 0 PID: 420 Comm: arena_stress Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   53.909462] Tainted: [W]=WARN
+[   53.909463] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   53.909466] Call Trace:
+[   53.909473]  <TASK>
+[   53.909480]  dump_stack_lvl+0x83/0xa0
+[   53.909496]  __might_resched+0x152/0x260
+[   53.909512]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   53.909526]  tlb_finish_mmu+0x73/0x180
+[   53.909536]  corten_arena_zap_window+0x5f8/0x650
+[   53.909571]  ? corten_txn_begin+0x32d/0x4b0
+[   53.909583]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   53.909598]  ? lock_release+0xc6/0x290
+[   53.909607]  ? lock_is_held_type+0x9e/0x120
+[   53.909624]  corten_arena_munmap_route+0x129/0x230
+[   53.909637]  __do_sys_munmap+0x53/0x130
+[   53.909645]  do_syscall_64+0xbd/0x3f0
+[   53.909655]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   53.909662] RIP: 0033:0x7f96e6220717
+[   53.909671] Code: 73 01 c3 48 8b 0d f9 76 0d 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 b8 0b 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d c9 76 0d 00 f7 d8 64 89 01 48
+[   53.909675] RSP: 002b:00007f96e590de18 EFLAGS: 00000206 ORIG_RAX: 000000000000000b
+[   53.909681] RAX: ffffffffffffffda RBX: 00000000048653c1 RCX: 00007f96e6220717
+[   53.909684] RDX: 0000000000000001 RSI: 0000000000100000 RDI: 000000001530c000
+[   53.909686] RBP: 0000560a856b9418 R08: 0000000000000000 R09: 000000001540c000
+[   53.909689] R10: 0000560a856b9418 R11: 0000000000000206 R12: 000000000000130c
+[   53.909691] R13: 0000000000100000 R14: 000000000130c000 R15: 000000001530c000
+[   53.909715]  </TASK>
+[   56.627568] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   56.637379] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 424, name: ds_dontneed
+[   56.645861] preempt_count: 201, expected: 0
+[   56.651379] RCU nest depth: 0, expected: 0
+[   56.656029] 1 lock held by ds_dontneed/424:
+[   56.659646]  #0: ffff8e2847d62f18 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   56.668474] CPU: 4 UID: 0 PID: 424 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   56.668487] Tainted: [W]=WARN
+[   56.668489] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   56.668493] Call Trace:
+[   56.668499]  <TASK>
+[   56.668507]  dump_stack_lvl+0x83/0xa0
+[   56.668523]  __might_resched+0x152/0x260
+[   56.668538]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   56.668552]  tlb_finish_mmu+0x73/0x180
+[   56.668563]  corten_arena_zap_window+0x5f8/0x650
+[   56.668600]  ? corten_txn_begin+0x32d/0x4b0
+[   56.668611]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   56.668699]  ? corten_arena_lookup_get+0x1b1/0x340
+[   56.668714]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   56.668725]  corten_arena_dontneed_route+0x98/0x1c0
+[   56.668735]  madvise_do_behavior+0x5c/0x290
+[   56.668812]  ? __lock_acquire+0xb96/0x18d0
+[   56.668839]  do_madvise+0xa4/0x120
+[   56.668863]  ? _raw_spin_unlock_irq+0x23/0x40
+[   56.668880]  ? sigprocmask+0xa2/0xd0
+[   56.668968]  ? __x64_sys_rt_sigprocmask+0x73/0xd0
+[   56.668982]  __x64_sys_madvise+0x26/0x30
+[   56.668989]  do_syscall_64+0xbd/0x3f0
+[   56.669006]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   56.669013] RIP: 0033:0x44ccab
+[   56.669021] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   56.669032] RSP: 002b:00007f753a973198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   56.669034] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   56.669035] RDX: 0000000000000004 RSI: 000000000006f000 RDI: 000000001ec00000
+[   56.669036] RBP: 0000000000000000 R08: 0000000000000000 R09: 00007ffe3852426f
+[   56.669037] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f753a9731a4
+[   56.669037] R13: 0000000010000000 R14: 000000000ec00000 R15: 00007f753a173000
+[   56.669044]  </TASK>
+[   57.627703] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   57.636257] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 425, name: ds_dontneed
+[   57.643060] preempt_count: 201, expected: 0
+[   57.645528] RCU nest depth: 0, expected: 0
+[   57.649549] 1 lock held by ds_dontneed/425:
+[   57.653188]  #0: ffff8e28468b6558 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   57.661053] CPU: 5 UID: 0 PID: 425 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   57.661063] Tainted: [W]=WARN
+[   57.661174] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   57.661178] Call Trace:
+[   57.661186]  <TASK>
+[   57.661193]  dump_stack_lvl+0x83/0xa0
+[   57.661326]  __might_resched+0x152/0x260
+[   57.661351]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   57.661363]  tlb_finish_mmu+0x73/0x180
+[   57.661373]  corten_arena_zap_window+0x5f8/0x650
+[   57.661406]  ? _raw_write_lock_bh+0x33/0x40
+[   57.661416]  ? corten_txn_begin+0x32d/0x4b0
+[   57.661427]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   57.661444]  ? corten_arena_lookup_get+0x1b1/0x340
+[   57.661457]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   57.661468]  corten_arena_dontneed_route+0x98/0x1c0
+[   57.661478]  madvise_do_behavior+0x5c/0x290
+[   57.661489]  ? corten_arena_account_fault+0xa2/0x1d0
+[   57.661537]  ? lock_release+0xc6/0x290
+[   57.661559]  do_madvise+0xa4/0x120
+[   57.661583]  ? do_user_addr_fault+0x26e/0x830
+[   57.661641]  ? __pfx_flush_tlb_func+0x10/0x10
+[   57.661679]  __x64_sys_madvise+0x26/0x30
+[   57.661686]  do_syscall_64+0xbd/0x3f0
+[   57.661698]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   57.661705] RIP: 0033:0x44ccab
+[   57.661713] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   57.661717] RSP: 002b:00007f753a172198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   57.661723] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   57.661727] RDX: 0000000000000004 RSI: 000000000009e000 RDI: 0000000018600000
+[   57.661729] RBP: 0000000000000828 R08: 0000000000000000 R09: 00007ffe3852426f
+[   57.661732] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f753a1721a4
+[   57.661734] R13: 0000000010000000 R14: 0000000008600000 R15: 00007f7539972000
+[   57.661757]  </TASK>
+[   58.627354] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   58.635628] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 426, name: ds_dontneed
+[   58.646105] preempt_count: 201, expected: 0
+[   58.650487] RCU nest depth: 0, expected: 0
+[   58.654713] 1 lock held by ds_dontneed/426:
+[   58.659508]  #0: ffff8e2849ac6798 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   58.669539] CPU: 0 UID: 0 PID: 426 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   58.669549] Tainted: [W]=WARN
+[   58.669551] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   58.669554] Call Trace:
+[   58.669560]  <TASK>
+[   58.669566]  dump_stack_lvl+0x83/0xa0
+[   58.669661]  __might_resched+0x152/0x260
+[   58.669678]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   58.669809]  tlb_finish_mmu+0x73/0x180
+[   58.669820]  corten_arena_zap_window+0x5f8/0x650
+[   58.669854]  ? _raw_write_lock_bh+0x33/0x40
+[   58.669865]  ? corten_txn_begin+0x32d/0x4b0
+[   58.669877]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   58.669894]  ? corten_arena_lookup_get+0x1b1/0x340
+[   58.669907]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   58.669918]  corten_arena_dontneed_route+0x98/0x1c0
+[   58.669929]  madvise_do_behavior+0x5c/0x290
+[   58.669939]  ? corten_arena_account_fault+0xa2/0x1d0
+[   58.669946]  ? lock_release+0xc6/0x290
+[   58.669966]  do_madvise+0xa4/0x120
+[   58.669990]  ? do_user_addr_fault+0x26e/0x830
+[   58.670001]  ? do_madvise+0xe/0x120
+[   58.670013]  __x64_sys_madvise+0x26/0x30
+[   58.670019]  do_syscall_64+0xbd/0x3f0
+[   58.670030]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   58.670037] RIP: 0033:0x44ccab
+[   58.670045] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   58.670049] RSP: 002b:00007f7539971198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   58.670054] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   58.670057] RDX: 0000000000000004 RSI: 0000000000194000 RDI: 000000001f200000
+[   58.670060] RBP: 0000000000000f67 R08: 0000000000000000 R09: 00007ffe3852426f
+[   58.670062] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f75399711a4
+[   58.670064] R13: 0000000010000000 R14: 000000000f200000 R15: 00007f7539171000
+[   58.670088]  </TASK>
+[   59.627719] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   59.636604] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 424, name: ds_dontneed
+[   59.643113] preempt_count: 201, expected: 0
+[   59.648149] RCU nest depth: 0, expected: 0
+[   59.651857] 1 lock held by ds_dontneed/424:
+[   59.657150]  #0: ffff8e2843dc23d8 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   59.665235] CPU: 4 UID: 0 PID: 424 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   59.665238] Tainted: [W]=WARN
+[   59.665239] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   59.665240] Call Trace:
+[   59.665243]  <TASK>
+[   59.665245]  dump_stack_lvl+0x83/0xa0
+[   59.665252]  __might_resched+0x152/0x260
+[   59.665258]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   59.665263]  tlb_finish_mmu+0x73/0x180
+[   59.665266]  corten_arena_zap_window+0x5f8/0x650
+[   59.665276]  ? _raw_write_lock_bh+0x33/0x40
+[   59.665280]  ? corten_txn_begin+0x32d/0x4b0
+[   59.665283]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   59.665288]  ? corten_arena_lookup_get+0x1b1/0x340
+[   59.665292]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   59.665320]  corten_arena_dontneed_route+0x98/0x1c0
+[   59.665323]  madvise_do_behavior+0x5c/0x290
+[   59.665327]  ? corten_arena_account_fault+0xa2/0x1d0
+[   59.665329]  ? lock_release+0xc6/0x290
+[   59.665335]  do_madvise+0xa4/0x120
+[   59.665342]  ? do_user_addr_fault+0x26e/0x830
+[   59.665346]  ? __pfx_flush_tlb_func+0x10/0x10
+[   59.665350]  __x64_sys_madvise+0x26/0x30
+[   59.665352]  do_syscall_64+0xbd/0x3f0
+[   59.665356]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   59.665358] RIP: 0033:0x44ccab
+[   59.665360] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   59.665362] RSP: 002b:00007f753a973198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   59.665374] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   59.665375] RDX: 0000000000000004 RSI: 000000000010a000 RDI: 0000000015800000
+[   59.665376] RBP: 0000000000001866 R08: 0000000000000000 R09: 00007ffe3852426f
+[   59.665377] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f753a9731a4
+[   59.665377] R13: 0000000010000000 R14: 0000000005800000 R15: 00007f753a173000
+[   59.665384]  </TASK>
+[   60.627430] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   60.634534] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 427, name: ds_dontneed
+[   60.641226] preempt_count: 201, expected: 0
+[   60.644973] RCU nest depth: 0, expected: 0
+[   60.649510] 1 lock held by ds_dontneed/427:
+[   60.653314]  #0: ffff8e2846ae6618 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   60.661835] CPU: 2 UID: 0 PID: 427 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   60.661847] Tainted: [W]=WARN
+[   60.661849] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   60.661852] Call Trace:
+[   60.661859]  <TASK>
+[   60.661866]  dump_stack_lvl+0x83/0xa0
+[   60.661883]  __might_resched+0x152/0x260
+[   60.661900]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   60.661914]  tlb_finish_mmu+0x73/0x180
+[   60.661925]  corten_arena_zap_window+0x5f8/0x650
+[   60.661959]  ? _raw_write_lock_bh+0x33/0x40
+[   60.661969]  ? corten_txn_begin+0x32d/0x4b0
+[   60.661980]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   60.661998]  ? corten_arena_lookup_get+0x1b1/0x340
+[   60.662011]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   60.662022]  corten_arena_dontneed_route+0x98/0x1c0
+[   60.662032]  madvise_do_behavior+0x5c/0x290
+[   60.662041]  ? on_each_cpu_cond_mask+0x1f/0x40
+[   60.662220]  ? flush_tlb_mm_range+0x1d8/0x6b0
+[   60.662230]  ? lock_release+0xc6/0x290
+[   60.662249]  do_madvise+0xa4/0x120
+[   60.662310]  ? do_user_addr_fault+0x26e/0x830
+[   60.662327]  __x64_sys_madvise+0x26/0x30
+[   60.662333]  do_syscall_64+0xbd/0x3f0
+[   60.662344]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   60.662350] RIP: 0033:0x44ccab
+[   60.662358] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   60.662361] RSP: 002b:00007f7539170198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   60.662367] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   60.662371] RDX: 0000000000000004 RSI: 00000000000e4000 RDI: 0000000012e00000
+[   60.662373] RBP: 0000000000002068 R08: 0000000000000000 R09: 00007ffe3852426f
+[   60.662376] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f75391701a4
+[   60.662378] R13: 0000000010000000 R14: 0000000002e00000 R15: 00007f7538970000
+[   60.662438]  </TASK>
+[   61.627375] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   61.633720] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 426, name: ds_dontneed
+[   61.639134] preempt_count: 201, expected: 0
+[   61.643893] RCU nest depth: 0, expected: 0
+[   61.649008] 1 lock held by ds_dontneed/426:
+[   61.653204]  #0: ffff8e2843dc2798 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   61.663627] CPU: 1 UID: 0 PID: 426 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   61.663639] Tainted: [W]=WARN
+[   61.663641] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   61.663644] Call Trace:
+[   61.663651]  <TASK>
+[   61.663692]  dump_stack_lvl+0x83/0xa0
+[   61.663708]  __might_resched+0x152/0x260
+[   61.663724]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   61.663738]  tlb_finish_mmu+0x73/0x180
+[   61.663748]  corten_arena_zap_window+0x5f8/0x650
+[   61.663782]  ? _raw_write_lock_bh+0x33/0x40
+[   61.663792]  ? corten_txn_begin+0x32d/0x4b0
+[   61.663804]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   61.663821]  ? corten_arena_lookup_get+0x1b1/0x340
+[   61.663835]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   61.664012]  corten_arena_dontneed_route+0x98/0x1c0
+[   61.664025]  madvise_do_behavior+0x5c/0x290
+[   61.664035]  ? corten_arena_account_fault+0xa2/0x1d0
+[   61.664043]  ? lock_release+0xc6/0x290
+[   61.664063]  do_madvise+0xa4/0x120
+[   61.664126]  ? do_user_addr_fault+0x26e/0x830
+[   61.664139]  ? __pfx_flush_tlb_func+0x10/0x10
+[   61.664150]  __x64_sys_madvise+0x26/0x30
+[   61.664157]  do_syscall_64+0xbd/0x3f0
+[   61.664168]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   61.664174] RIP: 0033:0x44ccab
+[   61.664183] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   61.664187] RSP: 002b:00007f7539971198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   61.664231] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   61.664234] RDX: 0000000000000004 RSI: 000000000017a000 RDI: 0000000016a00000
+[   61.664236] RBP: 00000000000027b1 R08: 0000000000000000 R09: 00007ffe3852426f
+[   61.664239] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f75399711a4
+[   61.664241] R13: 0000000010000000 R14: 0000000006a00000 R15: 00007f7539171000
+[   61.664266]  </TASK>
+[   62.627719] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   62.634454] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 427, name: ds_dontneed
+[   62.640926] preempt_count: 201, expected: 0
+[   62.643806] RCU nest depth: 0, expected: 0
+[   62.645565] 1 lock held by ds_dontneed/427:
+[   62.650431]  #0: ffff8e284ecc8858 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   62.660191] CPU: 2 UID: 0 PID: 427 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   62.660200] Tainted: [W]=WARN
+[   62.660202] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   62.660205] Call Trace:
+[   62.660210]  <TASK>
+[   62.660215]  dump_stack_lvl+0x83/0xa0
+[   62.660228]  __might_resched+0x152/0x260
+[   62.660243]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   62.660255]  tlb_finish_mmu+0x73/0x180
+[   62.660265]  corten_arena_zap_window+0x5f8/0x650
+[   62.660296]  ? _raw_write_lock_bh+0x33/0x40
+[   62.660305]  ? corten_txn_begin+0x32d/0x4b0
+[   62.660316]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   62.660333]  ? corten_arena_lookup_get+0x1b1/0x340
+[   62.660421]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   62.660434]  corten_arena_dontneed_route+0x98/0x1c0
+[   62.660444]  madvise_do_behavior+0x5c/0x290
+[   62.660452]  ? on_each_cpu_cond_mask+0x1f/0x40
+[   62.660460]  ? flush_tlb_mm_range+0x1d8/0x6b0
+[   62.660468]  ? lock_release+0xc6/0x290
+[   62.660486]  do_madvise+0xa4/0x120
+[   62.660510]  ? do_user_addr_fault+0x26e/0x830
+[   62.660519]  ? __pfx_flush_tlb_func+0x10/0x10
+[   62.660530]  __x64_sys_madvise+0x26/0x30
+[   62.660535]  do_syscall_64+0xbd/0x3f0
+[   62.660546]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   62.660551] RIP: 0033:0x44ccab
+[   62.660558] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   62.660562] RSP: 002b:00007f7539170198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   62.660567] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   62.660570] RDX: 0000000000000004 RSI: 0000000000019000 RDI: 0000000010e00000
+[   62.660573] RBP: 0000000000003119 R08: 0000000000000000 R09: 00007ffe3852426f
+[   62.660575] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f75391701a4
+[   62.660577] R13: 0000000010000000 R14: 0000000000e00000 R15: 00007f7538970000
+[   62.660653]  </TASK>
+[   63.627229] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   63.635485] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 425, name: ds_dontneed
+[   63.644233] preempt_count: 201, expected: 0
+[   63.648767] RCU nest depth: 0, expected: 0
+[   63.653322] 1 lock held by ds_dontneed/425:
+[   63.661331]  #0: ffff8e2843dc2918 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   63.671824] CPU: 5 UID: 0 PID: 425 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   63.671827] Tainted: [W]=WARN
+[   63.671828] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   63.671830] Call Trace:
+[   63.671839]  <TASK>
+[   63.671846]  dump_stack_lvl+0x83/0xa0
+[   63.671861]  __might_resched+0x152/0x260
+[   63.671876]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   63.671891]  tlb_finish_mmu+0x73/0x180
+[   63.672016]  corten_arena_zap_window+0x5f8/0x650
+[   63.672050]  ? _raw_write_lock_bh+0x33/0x40
+[   63.672061]  ? corten_txn_begin+0x32d/0x4b0
+[   63.672150]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   63.672167]  ? corten_arena_lookup_get+0x1b1/0x340
+[   63.672181]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   63.672192]  corten_arena_dontneed_route+0x98/0x1c0
+[   63.672202]  madvise_do_behavior+0x5c/0x290
+[   63.672212]  ? corten_arena_account_fault+0xa2/0x1d0
+[   63.672220]  ? lock_release+0xc6/0x290
+[   63.672240]  do_madvise+0xa4/0x120
+[   63.672264]  ? do_user_addr_fault+0x26e/0x830
+[   63.672283]  __x64_sys_madvise+0x26/0x30
+[   63.672288]  do_syscall_64+0xbd/0x3f0
+[   63.672300]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   63.672311] RIP: 0033:0x44ccab
+[   63.672319] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   63.672323] RSP: 002b:00007f753a172198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   63.672328] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   63.672332] RDX: 0000000000000004 RSI: 00000000001c0000 RDI: 0000000016600000
+[   63.672334] RBP: 0000000000003c0f R08: 0000000000000000 R09: 00007ffe3852426f
+[   63.672337] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f753a1721a4
+[   63.672339] R13: 0000000010000000 R14: 0000000006600000 R15: 00007f7539972000
+[   63.672363]  </TASK>
+[   64.627370] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   64.633955] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 425, name: ds_dontneed
+[   64.642433] preempt_count: 201, expected: 0
+[   64.646217] RCU nest depth: 0, expected: 0
+[   64.650395] 1 lock held by ds_dontneed/425:
+[   64.654845]  #0: ffff8e284edb6318 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   64.666195] CPU: 5 UID: 0 PID: 425 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   64.666374] Tainted: [W]=WARN
+[   64.666376] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   64.666379] Call Trace:
+[   64.666385]  <TASK>
+[   64.666391]  dump_stack_lvl+0x83/0xa0
+[   64.666405]  __might_resched+0x152/0x260
+[   64.666420]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   64.666433]  tlb_finish_mmu+0x73/0x180
+[   64.666443]  corten_arena_zap_window+0x5f8/0x650
+[   64.666476]  ? _raw_write_lock_bh+0x33/0x40
+[   64.666485]  ? corten_txn_begin+0x32d/0x4b0
+[   64.666491]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   64.666496]  ? corten_arena_lookup_get+0x1b1/0x340
+[   64.666500]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   64.666503]  corten_arena_dontneed_route+0x98/0x1c0
+[   64.666507]  madvise_do_behavior+0x5c/0x290
+[   64.666510]  ? on_each_cpu_cond_mask+0x1f/0x40
+[   64.666513]  ? flush_tlb_mm_range+0x1d8/0x6b0
+[   64.666516]  ? lock_release+0xc6/0x290
+[   64.666522]  do_madvise+0xa4/0x120
+[   64.666529]  ? do_user_addr_fault+0x26e/0x830
+[   64.666533]  ? __pfx_flush_tlb_func+0x10/0x10
+[   64.666536]  __x64_sys_madvise+0x26/0x30
+[   64.666537]  do_syscall_64+0xbd/0x3f0
+[   64.666541]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   64.666544] RIP: 0033:0x44ccab
+[   64.666547] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   64.666548] RSP: 002b:00007f753a172198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   64.666610] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   64.666614] RDX: 0000000000000004 RSI: 0000000000134000 RDI: 0000000011a00000
+[   64.666616] RBP: 0000000000004482 R08: 0000000000000000 R09: 00007ffe3852426f
+[   64.666619] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f753a1721a4
+[   64.666621] R13: 0000000010000000 R14: 0000000001a00000 R15: 00007f7539972000
+[   64.666647]  </TASK>
+[   65.627417] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   65.635778] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 425, name: ds_dontneed
+[   65.643233] preempt_count: 201, expected: 0
+[   65.647566] RCU nest depth: 0, expected: 0
+[   65.652506] 1 lock held by ds_dontneed/425:
+[   65.657194]  #0: ffff8e284ecc8618 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   65.668051] CPU: 5 UID: 0 PID: 425 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   65.668061] Tainted: [W]=WARN
+[   65.668063] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   65.668066] Call Trace:
+[   65.668073]  <TASK>
+[   65.668079]  dump_stack_lvl+0x83/0xa0
+[   65.668289]  __might_resched+0x152/0x260
+[   65.668305]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   65.668320]  tlb_finish_mmu+0x73/0x180
+[   65.668331]  corten_arena_zap_window+0x5f8/0x650
+[   65.668364]  ? _raw_write_lock_bh+0x33/0x40
+[   65.668374]  ? corten_txn_begin+0x32d/0x4b0
+[   65.668386]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   65.668403]  ? corten_arena_lookup_get+0x1b1/0x340
+[   65.668416]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   65.668427]  corten_arena_dontneed_route+0x98/0x1c0
+[   65.668437]  madvise_do_behavior+0x5c/0x290
+[   65.668446]  ? on_each_cpu_cond_mask+0x1f/0x40
+[   65.668454]  ? flush_tlb_mm_range+0x1d8/0x6b0
+[   65.668464]  ? lock_release+0xc6/0x290
+[   65.668484]  do_madvise+0xa4/0x120
+[   65.668507]  ? do_user_addr_fault+0x26e/0x830
+[   65.668517]  ? __pfx_flush_tlb_func+0x10/0x10
+[   65.668527]  __x64_sys_madvise+0x26/0x30
+[   65.668533]  do_syscall_64+0xbd/0x3f0
+[   65.668544]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   65.668551] RIP: 0033:0x44ccab
+[   65.668559] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   65.668563] RSP: 002b:00007f753a172198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   65.668569] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   65.668572] RDX: 0000000000000004 RSI: 0000000000049000 RDI: 0000000010c00000
+[   65.668575] RBP: 0000000000004d0a R08: 0000000000000000 R09: 00007ffe3852426f
+[   65.668577] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f753a1721a4
+[   65.668579] R13: 0000000010000000 R14: 0000000000c00000 R15: 00007f7539972000
+[   65.668602]  </TASK>
+[   66.627215] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   66.634126] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 424, name: ds_dontneed
+[   66.641807] preempt_count: 201, expected: 0
+[   66.646031] RCU nest depth: 0, expected: 0
+[   66.650313] 1 lock held by ds_dontneed/424:
+[   66.656983]  #0: ffff8e2843184b58 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   66.667768] CPU: 4 UID: 0 PID: 424 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   66.667779] Tainted: [W]=WARN
+[   66.667781] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   66.667784] Call Trace:
+[   66.667790]  <TASK>
+[   66.667798]  dump_stack_lvl+0x83/0xa0
+[   66.667817]  __might_resched+0x152/0x260
+[   66.667835]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   66.667939]  tlb_finish_mmu+0x73/0x180
+[   66.667950]  corten_arena_zap_window+0x5f8/0x650
+[   66.667983]  ? _raw_write_lock_bh+0x33/0x40
+[   66.667993]  ? corten_txn_begin+0x32d/0x4b0
+[   66.668126]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   66.668144]  ? corten_arena_lookup_get+0x1b1/0x340
+[   66.668206]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   66.668218]  corten_arena_dontneed_route+0x98/0x1c0
+[   66.668229]  madvise_do_behavior+0x5c/0x290
+[   66.668238]  ? corten_arena_account_fault+0xa2/0x1d0
+[   66.668246]  ? lock_release+0xc6/0x290
+[   66.668265]  do_madvise+0xa4/0x120
+[   66.668288]  ? do_user_addr_fault+0x26e/0x830
+[   66.668299]  ? __pfx_flush_tlb_func+0x10/0x10
+[   66.668310]  __x64_sys_madvise+0x26/0x30
+[   66.668316]  do_syscall_64+0xbd/0x3f0
+[   66.668326]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   66.668332] RIP: 0033:0x44ccab
+[   66.668339] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   66.668342] RSP: 002b:00007f753a973198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   66.668348] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   66.668351] RDX: 0000000000000004 RSI: 0000000000079000 RDI: 000000001fe00000
+[   66.668354] RBP: 0000000000005374 R08: 0000000000000000 R09: 00007ffe3852426f
+[   66.668356] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f753a9731a4
+[   66.668359] R13: 0000000010000000 R14: 000000000fe00000 R15: 00007f753a173000
+[   66.668382]  </TASK>
+[   67.627172] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   67.634214] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 424, name: ds_dontneed
+[   67.644469] preempt_count: 201, expected: 0
+[   67.650037] RCU nest depth: 0, expected: 0
+[   67.655836] 1 lock held by ds_dontneed/424:
+[   67.659837]  #0: ffff8e28413a5858 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   67.666758] CPU: 4 UID: 0 PID: 424 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   67.666768] Tainted: [W]=WARN
+[   67.666770] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   67.666773] Call Trace:
+[   67.666778]  <TASK>
+[   67.666784]  dump_stack_lvl+0x83/0xa0
+[   67.666799]  __might_resched+0x152/0x260
+[   67.666813]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   67.666826]  tlb_finish_mmu+0x73/0x180
+[   67.666836]  corten_arena_zap_window+0x5f8/0x650
+[   67.667003]  ? _raw_write_lock_bh+0x33/0x40
+[   67.667015]  ? corten_txn_begin+0x32d/0x4b0
+[   67.667027]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   67.667045]  ? corten_arena_lookup_get+0x1b1/0x340
+[   67.667058]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   67.667069]  corten_arena_dontneed_route+0x98/0x1c0
+[   67.667079]  madvise_do_behavior+0x5c/0x290
+[   67.667087]  ? on_each_cpu_cond_mask+0x1f/0x40
+[   67.667165]  ? flush_tlb_mm_range+0x1d8/0x6b0
+[   67.667210]  ? lock_release+0xc6/0x290
+[   67.667229]  do_madvise+0xa4/0x120
+[   67.667253]  ? do_user_addr_fault+0x26e/0x830
+[   67.667263]  ? __pfx_flush_tlb_func+0x10/0x10
+[   67.667274]  __x64_sys_madvise+0x26/0x30
+[   67.667280]  do_syscall_64+0xbd/0x3f0
+[   67.667291]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   67.667298] RIP: 0033:0x44ccab
+[   67.667305] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   67.667310] RSP: 002b:00007f753a973198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   67.667316] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   67.667319] RDX: 0000000000000004 RSI: 00000000000f8000 RDI: 000000001b400000
+[   67.667322] RBP: 0000000000005baf R08: 0000000000000000 R09: 00007ffe3852426f
+[   67.667324] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f753a9731a4
+[   67.667327] R13: 0000000010000000 R14: 000000000b400000 R15: 00007f753a173000
+[   67.667350]  </TASK>
+[   68.627197] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   68.634193] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 425, name: ds_dontneed
+[   68.642230] preempt_count: 201, expected: 0
+[   68.645733] RCU nest depth: 0, expected: 0
+[   68.649979] 1 lock held by ds_dontneed/425:
+[   68.655020]  #0: ffff8e2843dc2a98 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   68.664730] CPU: 5 UID: 0 PID: 425 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   68.664742] Tainted: [W]=WARN
+[   68.664747] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   68.664750] Call Trace:
+[   68.664756]  <TASK>
+[   68.664763]  dump_stack_lvl+0x83/0xa0
+[   68.664779]  __might_resched+0x152/0x260
+[   68.664795]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   68.664808]  tlb_finish_mmu+0x73/0x180
+[   68.664828]  corten_arena_zap_window+0x5f8/0x650
+[   68.664959]  ? _raw_write_lock_bh+0x33/0x40
+[   68.664970]  ? corten_txn_begin+0x32d/0x4b0
+[   68.664982]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   68.665000]  ? corten_arena_lookup_get+0x1b1/0x340
+[   68.665013]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   68.665025]  corten_arena_dontneed_route+0x98/0x1c0
+[   68.665035]  madvise_do_behavior+0x5c/0x290
+[   68.665046]  ? on_each_cpu_cond_mask+0x1f/0x40
+[   68.665055]  ? flush_tlb_mm_range+0x1d8/0x6b0
+[   68.665065]  ? lock_release+0xc6/0x290
+[   68.665087]  do_madvise+0xa4/0x120
+[   68.665112]  ? do_user_addr_fault+0x26e/0x830
+[   68.665122]  ? __pfx_flush_tlb_func+0x10/0x10
+[   68.665132]  __x64_sys_madvise+0x26/0x30
+[   68.665208]  do_syscall_64+0xbd/0x3f0
+[   68.665221]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   68.665227] RIP: 0033:0x44ccab
+[   68.665235] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   68.665239] RSP: 002b:00007f753a172198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   68.665245] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   68.665248] RDX: 0000000000000004 RSI: 00000000000b7000 RDI: 0000000016400000
+[   68.665250] RBP: 000000000000672b R08: 0000000000000000 R09: 00007ffe3852426f
+[   68.665253] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f753a1721a4
+[   68.665255] R13: 0000000010000000 R14: 0000000006400000 R15: 00007f7539972000
+[   68.665279]  </TASK>
+[   69.627609] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   69.636148] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 427, name: ds_dontneed
+[   69.644755] preempt_count: 201, expected: 0
+[   69.649806] RCU nest depth: 0, expected: 0
+[   69.654516] 1 lock held by ds_dontneed/427:
+[   69.659018]  #0: ffff8e2846ae6558 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   69.668832] CPU: 2 UID: 0 PID: 427 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   69.668841] Tainted: [W]=WARN
+[   69.668843] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   69.668846] Call Trace:
+[   69.668851]  <TASK>
+[   69.668856]  dump_stack_lvl+0x83/0xa0
+[   69.668954]  __might_resched+0x152/0x260
+[   69.668969]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   69.668982]  tlb_finish_mmu+0x73/0x180
+[   69.668992]  corten_arena_zap_window+0x5f8/0x650
+[   69.669024]  ? _raw_write_lock_bh+0x33/0x40
+[   69.669033]  ? corten_txn_begin+0x32d/0x4b0
+[   69.669044]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   69.669061]  ? corten_arena_lookup_get+0x1b1/0x340
+[   69.669075]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   69.669085]  corten_arena_dontneed_route+0x98/0x1c0
+[   69.669095]  madvise_do_behavior+0x5c/0x290
+[   69.669103]  ? on_each_cpu_cond_mask+0x1f/0x40
+[   69.669111]  ? flush_tlb_mm_range+0x1d8/0x6b0
+[   69.669119]  ? lock_release+0xc6/0x290
+[   69.669138]  do_madvise+0xa4/0x120
+[   69.669162]  ? do_user_addr_fault+0x26e/0x830
+[   69.669172]  ? __pfx_flush_tlb_func+0x10/0x10
+[   69.669182]  __x64_sys_madvise+0x26/0x30
+[   69.669188]  do_syscall_64+0xbd/0x3f0
+[   69.669199]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   69.669205] RIP: 0033:0x44ccab
+[   69.669212] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   69.669283] RSP: 002b:00007f7539170198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   69.669289] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   69.669321] RDX: 0000000000000004 RSI: 00000000001e4000 RDI: 0000000013000000
+[   69.669324] RBP: 0000000000006ac4 R08: 0000000000000000 R09: 00007ffe3852426f
+[   69.669327] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f75391701a4
+[   69.669329] R13: 0000000010000000 R14: 0000000003000000 R15: 00007f7538970000
+[   69.669355]  </TASK>
+[   70.627340] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   70.634961] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 425, name: ds_dontneed
+[   70.643075] preempt_count: 201, expected: 0
+[   70.647877] RCU nest depth: 0, expected: 0
+[   70.652160] 1 lock held by ds_dontneed/425:
+[   70.656070]  #0: ffff8e284edb63d8 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   70.665271] CPU: 5 UID: 0 PID: 425 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   70.665280] Tainted: [W]=WARN
+[   70.665283] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   70.665286] Call Trace:
+[   70.665293]  <TASK>
+[   70.665301]  dump_stack_lvl+0x83/0xa0
+[   70.665317]  __might_resched+0x152/0x260
+[   70.665333]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   70.665347]  tlb_finish_mmu+0x73/0x180
+[   70.665358]  corten_arena_zap_window+0x5f8/0x650
+[   70.665392]  ? _raw_write_lock_bh+0x33/0x40
+[   70.665402]  ? corten_txn_begin+0x32d/0x4b0
+[   70.665413]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   70.665430]  ? corten_arena_lookup_get+0x1b1/0x340
+[   70.665444]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   70.665455]  corten_arena_dontneed_route+0x98/0x1c0
+[   70.665465]  madvise_do_behavior+0x5c/0x290
+[   70.665474]  ? on_each_cpu_cond_mask+0x1f/0x40
+[   70.665483]  ? flush_tlb_mm_range+0x1d8/0x6b0
+[   70.665492]  ? lock_release+0xc6/0x290
+[   70.665512]  do_madvise+0xa4/0x120
+[   70.665536]  ? do_user_addr_fault+0x26e/0x830
+[   70.665547]  ? __pfx_flush_tlb_func+0x10/0x10
+[   70.665558]  __x64_sys_madvise+0x26/0x30
+[   70.665564]  do_syscall_64+0xbd/0x3f0
+[   70.665576]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   70.665583] RIP: 0033:0x44ccab
+[   70.665591] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   70.665595] RSP: 002b:00007f753a172198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   70.665600] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   70.665604] RDX: 0000000000000004 RSI: 00000000000a0000 RDI: 0000000011c00000
+[   70.665606] RBP: 0000000000007744 R08: 0000000000000000 R09: 00007ffe3852426f
+[   70.665609] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f753a1721a4
+[   70.665611] R13: 0000000010000000 R14: 0000000001c00000 R15: 00007f7539972000
+[   70.665635]  </TASK>
+[   71.627613] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   71.634081] in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 424, name: ds_dontneed
+[   71.642244] preempt_count: 201, expected: 0
+[   71.644984] RCU nest depth: 0, expected: 0
+[   71.650255] 1 lock held by ds_dontneed/424:
+[   71.654929]  #0: ffff8e28468b6c18 (&corten_lock_keys[lvl]){++..}-{3:3}, at: corten_txn_begin+0x32d/0x4b0
+[   71.665124] CPU: 4 UID: 0 PID: 424 Comm: ds_dontneed Tainted: G        W           6.18.32-gb51754002f2f-dirty #15 PREEMPT(voluntary) 
+[   71.665134] Tainted: [W]=WARN
+[   71.665136] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   71.665143] Call Trace:
+[   71.665149]  <TASK>
+[   71.665157]  dump_stack_lvl+0x83/0xa0
+[   71.665175]  __might_resched+0x152/0x260
+[   71.665192]  __tlb_batch_free_encoded_pages+0x5d/0xc0
+[   71.665206]  tlb_finish_mmu+0x73/0x180
+[   71.665217]  corten_arena_zap_window+0x5f8/0x650
+[   71.665252]  ? _raw_write_lock_bh+0x33/0x40
+[   71.665262]  ? corten_txn_begin+0x32d/0x4b0
+[   71.665393]  corten_arena_unmap_chunk_flags+0xec/0x160
+[   71.665452]  ? corten_arena_lookup_get+0x1b1/0x340
+[   71.665466]  corten_arena_unmap_chunk_retry+0x21/0x70
+[   71.665477]  corten_arena_dontneed_route+0x98/0x1c0
+[   71.665487]  madvise_do_behavior+0x5c/0x290
+[   71.665497]  ? corten_arena_account_fault+0xa2/0x1d0
+[   71.665505]  ? lock_release+0xc6/0x290
+[   71.665525]  do_madvise+0xa4/0x120
+[   71.665549]  ? do_user_addr_fault+0x26e/0x830
+[   71.665561]  ? __pfx_flush_tlb_func+0x10/0x10
+[   71.665572]  __x64_sys_madvise+0x26/0x30
+[   71.665578]  do_syscall_64+0xbd/0x3f0
+[   71.665590]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   71.665641] RIP: 0033:0x44ccab
+[   71.665650] Code: 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 1c 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+[   71.665653] RSP: 002b:00007f753a973198 EFLAGS: 00000206 ORIG_RAX: 000000000000001c
+[   71.665660] RAX: ffffffffffffffda RBX: 0000000000000080 RCX: 000000000044ccab
+[   71.665663] RDX: 0000000000000004 RSI: 000000000012a000 RDI: 0000000017c00000
+[   71.665666] RBP: 0000000000007bd1 R08: 0000000000000000 R09: 00007ffe3852426f
+[   71.665668] R10: 0000000000000008 R11: 0000000000000206 R12: 00007f753a9731a4
+[   71.665671] R13: 0000000010000000 R14: 0000000007c00000 R15: 00007f753a173000
+[   71.665695]  </TASK>

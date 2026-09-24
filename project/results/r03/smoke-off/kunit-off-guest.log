@@ -1,0 +1,279 @@
+[    8.024813]     # Subtest: corten
+[    8.049680]     # module: corten_test
+[    8.049688]     1..25
+[    8.056823]     ok 1 corten_test_layout
+[    8.059380]     ok 2 corten_test_ptdesc_get_put
+[    8.110410]     ok 3 corten_test_meta_roundtrip
+[    8.122120]     ok 4 corten_test_meta_reinit_cleared
+[    8.132900]     ok 5 corten_test_covering_level
+[    8.144455]     ok 6 corten_test_covering_base_index
+[    8.155393]     ok 7 corten_test_txn_covering
+[    8.170720]     ok 8 corten_test_txn_hole
+[    8.182673]     ok 9 corten_test_txn_stale_eagain
+[    8.193929]     ok 10 corten_test_lock_range_args
+[    8.207947]     ok 11 corten_test_txn_state_machine
+[    8.216959]     ok 12 corten_test_txn_atomic_validate
+[    8.230448]     ok 13 corten_test_txn_real_glue
+[    8.327359]     ok 14 corten_test_txn_mutex_overlap
+[    8.372794]     ok 15 corten_test_txn_mutex_disjoint
+[    8.391524]     ok 16 corten_test_fail_alloc
+[    8.426205]     ok 17 corten_test_txn_hole_fill
+[    8.471303]     ok 18 corten_test_txn_hole_race
+[   28.702380]     # corten_test_txn_uninstall_interlock: EXPECTATION FAILED at mm/corten_test.c:1718
+                   Expected atomic_read(&c->a_locked) == 1, but
+                       atomic_read(&c->a_locked) == 0 (0x0)
+[   28.768397]     # corten_test_txn_uninstall_interlock: EXPECTATION FAILED at mm/corten_test.c:1719
+                   Expected atomic_read(&c->violations) == 0, but
+                       atomic_read(&c->violations) == 1 (0x1)
+[   28.830073]     # corten_test_txn_uninstall_interlock: EXPECTATION FAILED at mm/corten_test.c:1728
+                   Expected atomic_read(&c->a_err) == 0, but
+                       atomic_read(&c->a_err) == 1 (0x1)
+[   28.873261]     # corten_test_txn_uninstall_interlock: EXPECTATION FAILED at mm/corten_test.c:1729
+                   Expected atomic_read(&c->violations) == 0, but
+                       atomic_read(&c->violations) == 1 (0x1)
+[   28.912423]     # corten_test_txn_uninstall_interlock: Test should be marked slow (runtime: 20.431601974s)
+[   28.917475]     not ok 19 corten_test_txn_uninstall_interlock
+[   28.936212]     ok 20 corten_test_uninstall_bh_ctx
+[   28.955225] ------------[ cut here ]------------
+[   28.967499] WARNING: CPU: 1 PID: 151 at mm/corten.c:829 corten_txn_begin+0x191/0x4b0
+[   28.998584] Modules linked in:
+[   29.024367] CPU: 1 UID: 0 PID: 151 Comm: kunit_try_catch Tainted: G                 N  6.18.32-g7bba3b9f7390 #21 PREEMPT(voluntary) 
+[   29.051348] Tainted: [N]=TEST
+[   29.059760] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   29.074566] RIP: 0010:corten_txn_begin+0x191/0x4b0
+[   29.082081] Code: 02 00 00 4c 89 ff 48 89 04 24 e8 2a b0 d8 00 4c 89 ff e8 32 b2 d8 00 48 8b 04 24 41 0f b6 4f 25 38 48 25 0f 87 65 ff ff ff 90 <0f> 0b 90 41 80 7e 48 04 0f 86 61 ff ff ff 90 0f 0b 90 48 89 c7 e8
+[   29.125701] RSP: 0000:ffffb276c05afda0 EFLAGS: 00010246
+[   29.136924] RAX: ffff93f0c25c4cc0 RBX: 0000000000000fff RCX: 0000000000000002
+[   29.146402] RDX: 0000000000000003 RSI: 0000000000000014 RDI: ffff93f0c2c72300
+[   29.165281] RBP: 0000000000000000 R08: ffff93f0c13c7400 R09: ffffb276c05afe00
+[   29.179723] R10: ffffb276c05afd58 R11: ffffddc7c40c4100 R12: ffffffff96632010
+[   29.196563] R13: ffff93f0c13c7400 R14: ffffb276c05afe00 R15: ffff93f0c25c4c80
+[   29.216702] FS:  0000000000000000(0000) GS:ffff93f1642b3000(0000) knlGS:0000000000000000
+[   29.233848] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   29.248446] CR2: 0000000000000000 CR3: 0000000111a30001 CR4: 0000000000770ef0
+[   29.282110] PKRU: 55555554
+[   29.293697] Call Trace:
+[   29.301881]  <TASK>
+[   29.307504]  ? __pfx_kunit_generic_run_threadfn_adapter+0x10/0x10
+[   29.322512]  corten_test_txn_path_overflow+0xb5/0x2a0
+[   29.336668]  ? psi_task_switch+0x107/0x290
+[   29.346951]  kunit_try_run_case+0x6f/0x150
+[   29.356944]  ? __pfx_kunit_generic_run_threadfn_adapter+0x10/0x10
+[   29.374020]  kunit_generic_run_threadfn_adapter+0x1c/0x40
+[   29.384568]  kthread+0xff/0x1f0
+[   29.393600]  ? __pfx_kthread+0x10/0x10
+[   29.404046]  ? __pfx_kthread+0x10/0x10
+[   29.413066]  ret_from_fork+0x144/0x160
+[   29.418641]  ? __pfx_kthread+0x10/0x10
+[   29.440212]  ret_from_fork_asm+0x1a/0x30
+[   29.456850]  </TASK>
+[   29.471399] ---[ end trace 0000000000000000 ]---
+[   29.498034] ------------[ cut here ]------------
+[   29.508464] WARNING: CPU: 1 PID: 151 at mm/corten.c:776 corten_txn_begin+0x1a0/0x4b0
+[   29.525765] Modules linked in:
+[   29.534119] CPU: 1 UID: 0 PID: 151 Comm: kunit_try_catch Tainted: G        W        N  6.18.32-g7bba3b9f7390 #21 PREEMPT(voluntary) 
+[   29.595332] Tainted: [W]=WARN, [N]=TEST
+[   29.610998] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   29.631175] RIP: 0010:corten_txn_begin+0x1a0/0x4b0
+[   29.653493] Code: 4c 89 ff e8 32 b2 d8 00 48 8b 04 24 41 0f b6 4f 25 38 48 25 0f 87 65 ff ff ff 90 0f 0b 90 41 80 7e 48 04 0f 86 61 ff ff ff 90 <0f> 0b 90 48 89 c7 e8 a5 f6 ff ff 41 0f b6 46 48 84 c0 74 28 83 e8
+[   29.704393] RSP: 0000:ffffb276c05afda0 EFLAGS: 00010202
+[   29.718698] RAX: ffff93f0c25c4dc0 RBX: 0000000000000fff RCX: 0000000000000002
+[   29.738330] RDX: 0000000000000003 RSI: 0000000000000004 RDI: ffff93f0c2c72300
+[   29.753780] RBP: 0000000000000000 R08: ffff93f0c13c7400 R09: ffffb276c05afe00
+[   29.767659] R10: ffffb276c05afd58 R11: ffffddc7c40c4100 R12: ffffffff96632010
+[   29.783379] R13: ffff93f0c13c7400 R14: ffffb276c05afe00 R15: ffff93f0c25c4d80
+[   29.795348] FS:  0000000000000000(0000) GS:ffff93f1642b3000(0000) knlGS:0000000000000000
+[   29.813038] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   29.828624] CR2: 0000000000000000 CR3: 0000000111a30001 CR4: 0000000000770ef0
+[   29.847828] PKRU: 55555554
+[   29.860009] Call Trace:
+[   29.866561]  <TASK>
+[   29.872826]  ? __pfx_kunit_generic_run_threadfn_adapter+0x10/0x10
+[   29.886252]  corten_test_txn_path_overflow+0xb5/0x2a0
+[   29.891962]  ? psi_task_switch+0x107/0x290
+[   29.897226]  kunit_try_run_case+0x6f/0x150
+[   29.904313]  ? __pfx_kunit_generic_run_threadfn_adapter+0x10/0x10
+[   29.921361]  kunit_generic_run_threadfn_adapter+0x1c/0x40
+[   29.935123]  kthread+0xff/0x1f0
+[   29.940705]  ? __pfx_kthread+0x10/0x10
+[   29.953172]  ? __pfx_kthread+0x10/0x10
+[   29.969513]  ret_from_fork+0x144/0x160
+[   29.980941]  ? __pfx_kthread+0x10/0x10
+[   29.992171]  ret_from_fork_asm+0x1a/0x30
+[   30.012617]  </TASK>
+[   30.020993] ---[ end trace 0000000000000000 ]---
+[   30.046203] kunit_try_catch (151) used greatest stack depth: 13520 bytes left
+[   30.056814]     ok 21 corten_test_txn_path_overflow
+[   30.065672]     ok 22 corten_test_txn_child_err
+[   30.079342]     ok 23 corten_test_real_huge_leaf
+[   30.091242]     ok 24 corten_test_full_window_atomic
+[   30.103006]     ok 25 corten_test_debugfs_content
+[   30.111388] # corten: pass:24 fail:1 skip:0 total:25
+[   30.124233] # Totals: pass:24 fail:1 skip:0 total:25
+[   30.136772] not ok 1 corten
+[   30.150288]     KTAP version 1
+[   30.155053]     # Subtest: corten_arena
+[   30.162349]     # module: corten_arena_test
+[   30.162351]     1..9
+[   30.181462]     ok 1 corten_arena_test_declare_reject
+[   30.203229]     ok 2 corten_arena_test_declare_reject_flags
+[   30.236657]     ok 3 corten_arena_test_declare_query
+[   30.250800]     ok 4 corten_arena_test_range_overlaps # SKIP overlap gate requires corten=on
+[   30.297508]     ok 5 corten_arena_test_release
+[   30.334124]     ok 6 corten_arena_test_shadow_vma
+[   30.365748]     ok 7 corten_arena_test_exit
+[   30.385438]     ok 8 corten_arena_test_prctl
+[   30.563261]     ok 9 corten_arena_test_concurrent
+[   30.576325] # corten_arena: pass:8 fail:0 skip:1 total:9
+[   30.591088] # Totals: pass:8 fail:0 skip:1 total:9
+[   30.601873] ok 2 corten_arena
+[   30.618114]     KTAP version 1
+[   30.620512]     # Subtest: corten_fault
+[   30.629267]     # module: corten_fault_test
+[   30.629275]     1..10
+[   30.645996]     ok 1 corten_fault_test_dispatch
+[   30.650894]     ok 2 corten_fault_test_unmap_classify
+[   30.666318]     ok 3 corten_fault_test_mmap_classify
+[   30.682312]     ok 4 corten_fault_test_map_anon # SKIP real fault chain requires corten=on
+[   30.699224]     ok 5 corten_fault_test_zero_page # SKIP real fault chain requires corten=on
+[   30.726111]     ok 6 corten_fault_test_sigsegv # SKIP real fault chain requires corten=on
+[   30.744105]     ok 7 corten_fault_test_restore # SKIP real fault chain requires corten=on
+[   30.765052]     ok 8 corten_fault_test_fill_upper_race # SKIP real fault chain requires corten=on
+[   30.782142]     ok 9 corten_fault_test_map_race # SKIP real fault chain requires corten=on
+[   30.801243]     ok 10 corten_fault_test_chunk_unmap # SKIP real fault chain requires corten=on
+[   30.814680] # corten_fault: pass:3 fail:0 skip:7 total:10
+[   30.828386] # Totals: pass:3 fail:0 skip:7 total:10
+[   30.834591] ok 3 corten_fault
+[   30.859366] check access for rdinit=/init failed: -2, ignoring
+[   30.863987] md: Waiting for all devices to be available before autodetect
+[   30.874178] md: If you don't use raid, use raid=noautodetect
+[   30.884626] md: Autodetecting RAID arrays.
+[   30.889943] md: autorun ...
+[   30.894630] md: ... autorun DONE.
+[   30.976132] EXT4-fs (vda): mounted filesystem 56b1695a-8891-40bd-bc42-c7c8a70fe76d r/w with ordered data mode. Quota mode: none.
+[   30.986184] VFS: Mounted root (ext4 filesystem) on device 253:0.
+[   31.005631] devtmpfs: mounted
+[   31.064050] Freeing unused kernel image (initmem) memory: 3044K
+[   31.078040] Write protecting the kernel read-only data: 28672k
+[   31.131979] Freeing unused kernel image (text/rodata gap) memory: 1520K
+[   31.147156] Freeing unused kernel image (rodata/data gap) memory: 180K
+[   31.205959] x86/mm: Checked W+X mappings: passed, no W+X pages found.
+[   31.213672] Run /sbin/init as init process
+[   31.217921]   with arguments:
+[   31.217924]     /sbin/init
+[   31.217927]   with environment:
+[   31.217928]     HOME=/
+[   31.217930]     TERM=linux
+[   32.173045] SELinux:  Permission firmware_load in class system not defined in policy.
+[   32.180098] SELinux:  Permission kexec_image_load in class system not defined in policy.
+[   32.187880] SELinux:  Permission kexec_initramfs_load in class system not defined in policy.
+[   32.196331] SELinux:  Permission policy_load in class system not defined in policy.
+[   32.202216] SELinux:  Permission x509_certificate_load in class system not defined in policy.
+[   32.215940] SELinux:  Permission watch_mountns in class file not defined in policy.
+[   32.223712] SELinux:  Permission watch_mountns in class dir not defined in policy.
+[   32.231293] SELinux:  Permission watch_mountns in class lnk_file not defined in policy.
+[   32.247750] SELinux:  Permission watch_mountns in class chr_file not defined in policy.
+[   32.258628] SELinux:  Permission watch_mountns in class blk_file not defined in policy.
+[   32.271812] SELinux:  Permission watch_mountns in class sock_file not defined in policy.
+[   32.279603] SELinux:  Permission watch_mountns in class fifo_file not defined in policy.
+[   32.289275] SELinux:  Permission watch_mountns in class anon_inode not defined in policy.
+[   32.296689] SELinux:  Permission allowed in class io_uring not defined in policy.
+[   32.304180] SELinux:  Class memfd_file not defined in policy.
+[   32.309609] SELinux: the above unknown classes and permissions will be allowed
+[   32.382138] SELinux:  policy capability network_peer_controls=1
+[   32.388523] SELinux:  policy capability open_perms=1
+[   32.395564] SELinux:  policy capability extended_socket_class=1
+[   32.401754] SELinux:  policy capability always_check_network=0
+[   32.409655] SELinux:  policy capability cgroup_seclabel=1
+[   32.419300] SELinux:  policy capability nnp_nosuid_transition=1
+[   32.427107] SELinux:  policy capability genfs_seclabel_symlinks=0
+[   32.433299] SELinux:  policy capability ioctl_skip_cloexec=0
+[   32.439906] SELinux:  policy capability userspace_initial_context=0
+[   32.446792] SELinux:  policy capability netlink_xperm=0
+[   32.452041] SELinux:  policy capability netif_wildcard=0
+[   32.462332] SELinux:  policy capability genfs_seclabel_wildcard=0
+[   32.470736] SELinux:  policy capability functionfs_seclabel=0
+[   32.478206] SELinux:  policy capability memfd_class=0
+[   32.513392] audit: type=1403 audit(1789490472.813:2): auid=4294967295 ses=4294967295 lsm=selinux res=1
+[   32.517558] systemd[1]: Successfully loaded SELinux policy in 601.907ms.
+[   33.051921] systemd[1]: Relabeled /dev/, /dev/shm/, /run/ in 14.132ms.
+[   33.130800] systemd[1]: systemd 257.13-1~deb13u1 running in system mode (+PAM +AUDIT +SELINUX +APPARMOR +IMA +IPE +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBCRYPTSETUP_PLUGINS +LIBFDISK +PCRE2 +PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD +BPF_FRAMEWORK +BTF -XKBCOMMON -UTMP +SYSVINIT +LIBARCHIVE)
+[   33.164292] systemd[1]: Detected virtualization kvm.
+[   33.171761] systemd[1]: Detected architecture x86-64.
+[   33.225602] systemd[1]: Hostname set to <syzkaller>.
+[   33.280966] systemd[1]: bpf-restrict-fs: BPF LSM hook not enabled in the kernel, BPF LSM not supported.
+[   33.597053] systemd-fstab-g (215) used greatest stack depth: 12576 bytes left
+[   34.415225] systemd[1]: Queued start job for default target graphical.target.
+[   34.449763] systemd[1]: Created slice system-getty.slice - Slice /system/getty.
+[   34.486203] systemd[1]: Created slice system-modprobe.slice - Slice /system/modprobe.
+[   34.538975] systemd[1]: Created slice system-serial\x2dgetty.slice - Slice /system/serial-getty.
+[   34.568882] systemd[1]: Created slice user.slice - User and Session Slice.
+[   34.594142] systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+[   34.622823] systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+[   34.657266] systemd[1]: Set up automount proc-sys-fs-binfmt_misc.automount - Arbitrary Executable File Formats File System Automount Point.
+[   34.690396] systemd[1]: Expecting device dev-ttyS0.device - /dev/ttyS0...
+[   34.709433] systemd[1]: Reached target paths.target - Path Units.
+[   34.732433] systemd[1]: Reached target remote-fs.target - Remote File Systems.
+[   34.765407] systemd[1]: Reached target slices.target - Slice Units.
+[   34.780155] systemd[1]: Reached target swap.target - Swaps.
+[   34.804472] systemd[1]: Listening on systemd-creds.socket - Credential Encryption/Decryption.
+[   34.831422] systemd[1]: Listening on systemd-initctl.socket - initctl Compatibility Named Pipe.
+[   34.860647] systemd[1]: Listening on systemd-journald-dev-log.socket - Journal Socket (/dev/log).
+[   34.887892] systemd[1]: Listening on systemd-journald.socket - Journal Sockets.
+[   34.913137] systemd[1]: systemd-pcrextend.socket - TPM PCR Measurements skipped, unmet condition check ConditionSecurity=measured-uki
+[   34.930552] systemd[1]: systemd-pcrlock.socket - Make TPM PCR Policy skipped, unmet condition check ConditionSecurity=measured-uki
+[   34.964405] systemd[1]: Listening on systemd-sysext.socket - System Extension Image Management.
+[   35.013065] systemd[1]: Listening on systemd-udevd-control.socket - udev Control Socket.
+[   35.035497] systemd[1]: Listening on systemd-udevd-kernel.socket - udev Kernel Socket.
+[   35.073885] systemd[1]: Mounting dev-hugepages.mount - Huge Pages File System...
+[   35.100726] systemd[1]: Mounting dev-mqueue.mount - POSIX Message Queue File System...
+[   35.124186] systemd[1]: Mounting proc-sys-fs-binfmt_misc.mount - /proc/sys/fs/binfmt_misc...
+[   35.128409] mount (230) used greatest stack depth: 12520 bytes left
+[   35.165388] systemd[1]: Mounting sys-kernel-debug.mount - /sys/kernel/debug...
+[   35.199784] systemd[1]: Mounting sys-kernel-tracing.mount - Kernel Trace File System...
+[   35.228958] systemd[1]: Mounting tmp.mount - Temporary Directory /tmp...
+[   35.249133] systemd[1]: kmod-static-nodes.service - Create List of Static Device Nodes skipped, unmet condition check ConditionFileNotEmpty=/lib/modules/6.18.32-g7bba3b9f7390/modules.devname
+[   35.281143] systemd[1]: Starting modprobe@drm.service - Load Kernel Module drm...
+[   35.307811] systemd[1]: Starting modprobe@efi_pstore.service - Load Kernel Module efi_pstore...
+[   35.334101] systemd[1]: Starting modprobe@fuse.service - Load Kernel Module fuse...
+[   35.360224] systemd[1]: systemd-hibernate-clear.service - Clear Stale Hibernate Storage Info skipped, unmet condition check ConditionPathExists=/sys/firmware/efi/efivars/HibernateLocation-8cf2644b-4b0b-428f-9387-6d876050dc67
+[   35.390027] systemd[1]: systemd-hwdb-update.service - Rebuild Hardware Database skipped, unmet condition check ConditionNeedsUpdate=/etc
+[   35.407119] systemd[1]: systemd-journald.service: unit configures an IP firewall, but the local system does not support BPF/cgroup firewalling.
+[   35.419588] systemd[1]: systemd-journald.service: (This warning is only shown for the first unit using IP firewalling.)
+[   35.437373] systemd[1]: Starting systemd-journald.service - Journal Service...
+[   35.497891] systemd[1]: Starting systemd-modules-load.service - Load Kernel Modules...
+[   35.519314] systemd[1]: systemd-pcrmachine.service - TPM PCR Machine ID Measurement skipped, unmet condition check ConditionSecurity=measured-uki
+[   35.543586] systemd[1]: Starting systemd-random-seed.service - Load/Save OS Random Seed...
+[   35.573278] systemd[1]: Starting systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully...
+[   35.604391] systemd[1]: systemd-tpm2-setup-early.service - Early TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+[   35.623490] systemd[1]: systemd-tpm2-setup.service - TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+[   35.628077] systemd[1]: Starting systemd-udev-load-credentials.service - Load udev Rules from Credentials...
+[   35.740504] systemd[1]: Starting systemd-udev-trigger.service - Coldplug All udev Devices...
+[   35.766927] systemd[1]: Mounted dev-hugepages.mount - Huge Pages File System.
+[   35.785519] systemd[1]: Mounted dev-mqueue.mount - POSIX Message Queue File System.
+[   35.809997] systemd[1]: Mounted proc-sys-fs-binfmt_misc.mount - /proc/sys/fs/binfmt_misc.
+[   35.833423] systemd[1]: Mounted sys-kernel-debug.mount - /sys/kernel/debug.
+[   35.857448] systemd[1]: Mounted sys-kernel-tracing.mount - Kernel Trace File System.
+[   35.880815] systemd[1]: Mounted tmp.mount - Temporary Directory /tmp.
+[   35.900735] systemd[1]: modprobe@drm.service: Deactivated successfully.
+[   35.910408] systemd[1]: Finished modprobe@drm.service - Load Kernel Module drm.
+[   35.938745] systemd[1]: modprobe@efi_pstore.service: Deactivated successfully.
+[   35.951894] systemd[1]: Finished modprobe@efi_pstore.service - Load Kernel Module efi_pstore.
+[   35.965676] systemd[1]: modprobe@fuse.service: Deactivated successfully.
+[   35.975476] systemd[1]: Finished modprobe@fuse.service - Load Kernel Module fuse.
+[   36.001143] systemd[1]: Finished systemd-modules-load.service - Load Kernel Modules.
+[   36.030409] systemd[1]: Finished systemd-random-seed.service - Load/Save OS Random Seed.
+[   36.056211] systemd[1]: sys-fs-fuse-connections.mount - FUSE Control File System skipped, unmet condition check ConditionPathExists=/sys/fs/fuse/connections
+[   36.090663] systemd[1]: Starting systemd-binfmt.service - Set Up Additional Binary Formats...
+[   36.127529] systemd[1]: systemd-pstore.service - Platform Persistent Storage Archival skipped, unmet condition check ConditionDirectoryNotEmpty=/sys/fs/pstore
+[   36.137135] systemd-journald[239]: Collecting audit messages is disabled.
+[   36.157878] systemd-tmpfile (242) used greatest stack depth: 12424 bytes left
+[   36.160585] systemd[1]: Starting systemd-sysctl.service - Apply Kernel Variables...
+[   36.197832] systemd[1]: Finished systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully.
+[   36.242339] systemd[1]: Finished systemd-udev-load-credentials.service - Load udev Rules from Credentials.
+[   36.275039] systemd[1]: Started systemd-journald.service - Journal Service.
+[   36.458208] systemd-journald[239]: Received client request to flush runtime journal.
+[   43.975908] (udev-worker) (315) used greatest stack depth: 12384 bytes left
+[   52.125556] audit: type=1107 audit(1789490492.427:3): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { start } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user-runtime-dir@.service" cmdline="/usr/lib/systemd/systemd-logind" function="bus_unit_method_start_generic" scontext=system_u:system_r:kernel_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+[   63.502653] audit: type=1107 audit(1789490503.802:4): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { stop } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user-runtime-dir@.service" cmdline="/usr/lib/systemd/systemd-logind" function="bus_unit_method_start_generic" scontext=system_u:system_r:kernel_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+[   63.558094] audit: type=1107 audit(1789490503.821:5): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { status } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user-runtime-dir@.service" cmdline="/usr/lib/systemd/systemd-logind" function="mac_selinux_filter" scontext=system_u:system_r:kernel_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'

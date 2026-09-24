@@ -1,0 +1,45 @@
+=== CORTEN =n eight-object verification (isolated worktree @ HEAD 34f1ae661be3, includes merge 4ca6ef1048f0 + mva0) ===
+2026-09-22 07:33:05 CST
+--- config: 1 x 'CONFIG_CORTEN_MM is not set'
+=== make -j12 (A5 scope 8 + m5t3 recheck 5 objects) ===
+  CHKSHA1 include/linux/atomic/atomic-instrumented.h
+  CHKSHA1 include/linux/atomic/atomic-long.h
+  UPD     include/generated/timeconst.h
+  UPD     include/generated/bounds.h
+  CC      arch/x86/kernel/asm-offsets.s
+  LD      /tmp/corten-nobj/tools/objtool/arch/x86/objtool-in.o
+  UPD     include/generated/asm-offsets.h
+  CC      kernel/sched/rq-offsets.s
+  UPD     include/generated/rq-offsets.h
+  CALL    scripts/checksyscalls.sh
+  LD      /tmp/corten-nobj/tools/objtool/objtool-in.o
+  LINK    /tmp/corten-nobj/tools/objtool/objtool
+  CC      mm/memory.o
+  CC      mm/mmap.o
+  CC      mm/migrate.o
+  CC      arch/x86/mm/fault.o
+  CC      mm/rmap.o
+  CC      mm/swapfile.o
+  CC      mm/gup.o
+  CC      mm/oom_kill.o
+  CC      mm/mempolicy.o
+  CC      mm/mremap.o
+  CC      mm/madvise.o
+  CC      kernel/sys.o
+  CC      mm/mprotect.o
+make-exit=0
+=== nm corten-symbol check (expect: zero matches per object) ===
+mm/memory.o: corten-symbols=0 rc=0
+mm/mmap.o: corten-symbols=0 rc=0
+mm/migrate.o: corten-symbols=0 rc=0
+mm/rmap.o: corten-symbols=0 rc=0
+mm/swapfile.o: corten-symbols=0 rc=0
+mm/gup.o: corten-symbols=0 rc=0
+mm/oom_kill.o: corten-symbols=0 rc=0
+arch/x86/mm/fault.o: corten-symbols=0 rc=0
+kernel/sys.o: corten-symbols=0 rc=0
+mm/mempolicy.o: corten-symbols=0 rc=0
+mm/mremap.o: corten-symbols=0 rc=0
+mm/madvise.o: corten-symbols=0 rc=0
+mm/mprotect.o: corten-symbols=0 rc=0
+=== overall: 0 total corten matches across objects ===

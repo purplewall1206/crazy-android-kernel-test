@@ -1,0 +1,89 @@
+5162  execve("/mnt/cortenmm/bench/mmbench/mmbench", ["/mnt/cortenmm/bench/mmbench/mmbench", "pf", "high", "2", "1", "20263043"], 0x7ffff4ee24c8 /* 30 vars */) = 0
+5162  arch_prctl(0x3001 /* ARCH_??? */, 0x7ffd2df4d1f0) = -1 EINVAL (Invalid argument)
+5162  brk(NULL)                         = 0x7c93000
+5162  brk(0x7c93dc0)                    = 0x7c93dc0
+5162  arch_prctl(ARCH_SET_FS, 0x7c933c0) = 0
+5162  set_tid_address(0x7c93690)        = 5162
+5162  set_robust_list(0x7c936a0, 24)    = 0
+5162  rseq(0x7c93d60, 0x20, 0, 0x53053053) = 0
+5162  uname({sysname="Linux", nodename="syzkaller", ...}) = 0
+5162  prlimit64(0, RLIMIT_STACK, NULL, {rlim_cur=8192*1024, rlim_max=RLIM64_INFINITY}) = 0
+5162  readlink("/proc/self/exe", "/mnt/share/cortenmm/bench/mmbench/mmbench", 4096) = 41
+5162  getrandom("\x4f\xaf\x87\x13\xcf\x43\xec\x7c", 8, GRND_NONBLOCK) = 8
+5162  brk(0x7cb4dc0)                    = 0x7cb4dc0
+5162  brk(0x7cb5000)                    = 0x7cb5000
+5162  mprotect(0x4f6000, 16384, PROT_READ) = 0
+5162  write(2, "mmbench: arena clamped to 718 MB/thread (requested 1024 MB) to keep VA+RSS <= 1500 MB\n", 86) = 86
+5162  write(2, "mmbench: bench=pf contention=high threads=2 arena=718 MB (shared)\n", 66) = 66
+5162  prlimit64(0, RLIMIT_AS, NULL, {rlim_cur=RLIM64_INFINITY, rlim_max=RLIM64_INFINITY}) = 0
+5162  mmap(NULL, 752877568, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0) = 0x7fcf0c528000
+5162  write(2, "mmbench: shared arena 718 MB, 45952 chunks, bitmap 45952 B\n", 59) = 59
+5162  rt_sigaction(SIGRT_1, {sa_handler=0x497070, sa_mask=[], sa_flags=SA_RESTORER|SA_ONSTACK|SA_RESTART|SA_SIGINFO, sa_restorer=0x47db20}, NULL, 8) = 0
+5162  rt_sigprocmask(SIG_UNBLOCK, [RTMIN RT_1], NULL, 8) = 0
+5162  mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7fcf0bd27000
+5162  mprotect(0x7fcf0bd28000, 8388608, PROT_READ|PROT_WRITE) = 0
+5162  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5162  clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7fcf0c527910, parent_tid=0x7fcf0c527910, exit_signal=0, stack=0x7fcf0bd27000, stack_size=0x800280, tls=0x7fcf0c527640} => {parent_tid=[5165]}, 88) = 5165
+5165  rseq(0x7fcf0c527fe0, 0x20, 0, 0x53053053 <unfinished ...>
+5162  rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+5165  <... rseq resumed>)               = 0
+5162  <... rt_sigprocmask resumed>NULL, 8) = 0
+5165  set_robust_list(0x7fcf0c527920, 24 <unfinished ...>
+5162  mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+5165  <... set_robust_list resumed>)    = 0
+5162  <... mmap resumed>)               = 0x7fcf0b526000
+5165  rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+5162  mprotect(0x7fcf0b527000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+5165  <... rt_sigprocmask resumed>NULL, 8) = 0
+5162  <... mprotect resumed>)           = 0
+5165  futex(0x7ffd2df4c994, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+5162  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5162  clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7fcf0bd26910, parent_tid=0x7fcf0bd26910, exit_signal=0, stack=0x7fcf0b526000, stack_size=0x800280, tls=0x7fcf0bd26640} => {parent_tid=[5166]}, 88) = 5166
+5162  rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+5166  rseq(0x7fcf0bd26fe0, 0x20, 0, 0x53053053 <unfinished ...>
+5162  <... rt_sigprocmask resumed>NULL, 8) = 0
+5166  <... rseq resumed>)               = 0
+5162  futex(0x7ffd2df4c994, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+5166  set_robust_list(0x7fcf0bd26920, 24) = 0
+5166  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5166  futex(0x7ffd2df4c994, FUTEX_WAKE_PRIVATE, 2147483647) = 2
+5162  <... futex resumed>)              = 0
+5165  <... futex resumed>)              = 0
+5162  futex(0x7ffd2df4c9b4, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+5166  futex(0x7ffd2df4ca00, FUTEX_WAIT_PRIVATE, 2, NULL <unfinished ...>
+5165  munmap(0x7fcf0c528000, 752877568) = 0
+5165  mmap(NULL, 752877568, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0) = 0x7fcf0c528000
+5165  futex(0x7ffd2df4ca00, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+5166  <... futex resumed>)              = 0
+5165  <... futex resumed>)              = 1
+5166  futex(0x7ffd2df4ca00, FUTEX_WAKE_PRIVATE, 1) = 0
+5166  futex(0x7ffd2df4c9b4, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+5165  futex(0x7ffd2df4c9b4, FUTEX_WAKE_PRIVATE, 2147483647 <unfinished ...>
+5162  <... futex resumed>)              = 0
+5166  <... futex resumed>)              = 0
+5165  <... futex resumed>)              = 2
+5162  futex(0x7fcf0c527910, FUTEX_WAIT_BITSET|FUTEX_CLOCK_REALTIME, 5165, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+5166  rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+5165  rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+5166  <... rt_sigprocmask resumed>NULL, 8) = 0
+5166  madvise(0x7fcf0b526000, 8372224, MADV_DONTNEED <unfinished ...>
+5165  <... rt_sigprocmask resumed>NULL, 8) = 0
+5166  <... madvise resumed>)            = 0
+5166  exit(0 <unfinished ...>
+5165  madvise(0x7fcf0bd27000, 8372224, MADV_DONTNEED <unfinished ...>
+5166  <... exit resumed>)               = ?
+5165  <... madvise resumed>)            = 0
+5165  exit(0)                           = ?
+5162  <... futex resumed>)              = 0
+5162  openat(AT_FDCWD, "/proc/self/statm", O_RDONLY) = 3
+5162  newfstatat(3, "", {st_mode=S_IFREG|0444, st_size=0, ...}, AT_EMPTY_PATH) = 0
+5162  read(3, "188258 64558 87 199 0 187979 0\n", 1024) = 31
+5162  write(2, "mmbench: peak RSS ~252 MB\n", 26) = 26
+5162  close(3)                          = 0
+5162  uname({sysname="Linux", nodename="syzkaller", ...}) = 0
+5162  uname({sysname="Linux", nodename="syzkaller", ...}) = 0
+5162  newfstatat(1, "", {st_mode=S_IFCHR|0666, st_rdev=makedev(0x1, 0x3), ...}, AT_EMPTY_PATH) = 0
+5162  ioctl(1, TCGETS, 0x7ffd2df4c0b0)  = -1 ENOTTY (Inappropriate ioctl for device)
+5162  write(1, "{\"bench\":\"pf\",\"contention\":\"high\",\"threads\":2,\"ops\":62063,\"elapsed_s\":1.007,\"ops_per_us\":0.04000"..., 193) = 193
+5162  munmap(0x7fcf0c528000, 752877568) = 0
+5162  exit_group(0)                     = ?

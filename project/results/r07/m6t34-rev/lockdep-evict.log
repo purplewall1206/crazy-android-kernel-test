@@ -1,0 +1,21 @@
+Warning: Permanently added '[127.0.0.1]:10030' (ED25519) to the list of known hosts.
+NAME
+/dev/zram0
+[rev] populate arena (threads=4 arena=512M mixed seed42)
+[rev] pid=423 RSS=287376kB after populate; STOP
+[rev] evict 200000000 pages (multi-round: age-under-lock / reclaim-unlocked / trylock-next)
+[rev] evict rc=0 took 29s swapped=69408 pages (evict_busy 0)
+[rev] zero D-state tasks across 3 post-evict samples
+[rev] evict 窗口 dmesg audit clean (本片 shrink/evict 路径零签名; 既有 zap 路径暴露 60 处, 已登记类别)
+[rev] arena_stress rc=0 (data still intact after full evict + swap-in)
+{"bench":"arena_stress","threads":4,"seconds":300,"arena_mb":512,"mode":"mixed","variant":"fixed","seed":42,"ops":1073906,"minflt":34303975,"majflt":1,"checksum":"7d00f4e80f565f25","errors":0,"op_errors":0,"arena_ok":true,"declare_errno":0,"mem_ok":true,"wall_s":300.167}
+[rev] verdict: PASS (touched=None ops=1073906)
+[rev] teardown 窗口 dmesg (登记用, 非 B1 范围):
+[   24.661930] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   25.661677] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   26.661321] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   27.661715] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   28.661368] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[   29.661948] BUG: sleeping function called from invalid context at mm/mmu_gather.c:141
+[rev] teardown sleeping-in-atomic 总数: 268 (预期: 既有 zap 路径暴露)
+[rev] ===== FINAL: fails=0 =====

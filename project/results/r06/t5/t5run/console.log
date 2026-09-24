@@ -1,0 +1,435 @@
+[t5    0s] built hook: /mnt/t5run/corten_mode_hook.so
+[t5    0s] tcmalloc gear: /lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4
+utc: 2026-09-17T22:35:37Z
+kernel: 6.18.32-g452ad7b9d91e
+version: Linux version 6.18.32-g452ad7b9d91e (ppw@vm) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #27 SMP PREEMPT_DYNAMIC Fri Sep 18 05:33:22 CST 2026
+cmdline: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on mitigations=off kunit.enable=0
+mitigations_off: 1
+hostname: syzkaller
+nproc: 8
+cpu_model: 13th Gen Intel(R) Core(TM) i9-13900HX
+meminfo_MemTotal_kb: 4014976
+mmbench_sha256: 2a9c066c6e5fe6970f31c40aa1a1df75a61314313c6fba35ee0e10610797bf6f
+metis_eq_sha256: b983e245f4c31aee866f60e00f8e7c2f80fd52508ae5c693283aa2e368fd0908
+psearchy_eq_sha256: edeb2424a4aef0ad4578753f51d754a829156c35f8fd15d16bd01afbfc32a4dc
+dedup_eq_sha256: bfe84fc3f36c981baed20ff4334c81dc4a7822f7088c2eac5005cca6524d1acb
+hook_src: /mnt/cortenmm/bench/mode-hook/corten_mode_hook.c
+hook_sha256: 4846da7157536b60192dc5bf8190ff20fa44bbd554f283e11d775647fe8c98d6
+tcmalloc: /lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4
+params: T5_THREADS='1 2 4 8 16' T5_REPS=3 QUICK=0 MIN_SECONDS=1 SEED_BASE=20260913 APP_THREADS=8 DEDUP_SECONDS=20 APP_SEED=42 JT_THREADS=2000 JT_REPS=3 T5_LEG_TIMEOUT=480
+text1600: 1677721600 /root/data/text1600.txt
+text368: 385875968 /root/data/text368.txt
+[t5    1s] boot: mitigations=off present (EVAL sec 1 OK)
+[t5    1s] === T5 compare start (deadline 5400s, threads '1 2 4 8 16', reps 3, QUICK=0) ===
+[t5    3s] ok: mmbench [mmap/low/t1] arm=base run=1 -> mmbench_mmap_low_t1_run1.base.json
+[t5    4s] ok: mmbench [mmap/low/t1] arm=t0 run=1 -> mmbench_mmap_low_t1_run1.t0.json
+[t5    6s] ok: mmbench [mmap/low/t1] arm=base run=2 -> mmbench_mmap_low_t1_run2.base.json
+[t5    7s] ok: mmbench [mmap/low/t1] arm=t0 run=2 -> mmbench_mmap_low_t1_run2.t0.json
+[t5    9s] ok: mmbench [mmap/low/t1] arm=base run=3 -> mmbench_mmap_low_t1_run3.base.json
+[t5   10s] ok: mmbench [mmap/low/t1] arm=t0 run=3 -> mmbench_mmap_low_t1_run3.t0.json
+[t5   16s] strace mmbench_mmap_low_t1: error-multiset equal (base == t0)
+[t5   17s] ok: mmbench [mmap/low/t2] arm=base run=1 -> mmbench_mmap_low_t2_run1.base.json
+[t5   19s] ok: mmbench [mmap/low/t2] arm=t0 run=1 -> mmbench_mmap_low_t2_run1.t0.json
+[t5   20s] ok: mmbench [mmap/low/t2] arm=base run=2 -> mmbench_mmap_low_t2_run2.base.json
+[t5   22s] ok: mmbench [mmap/low/t2] arm=t0 run=2 -> mmbench_mmap_low_t2_run2.t0.json
+[t5   23s] ok: mmbench [mmap/low/t2] arm=base run=3 -> mmbench_mmap_low_t2_run3.base.json
+[t5   25s] ok: mmbench [mmap/low/t2] arm=t0 run=3 -> mmbench_mmap_low_t2_run3.t0.json
+[t5   31s] WARN: strace mmbench_mmap_low_t2: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_mmap_low_t2.err.diff)
+[t5   32s] ok: mmbench [mmap/low/t4] arm=base run=1 -> mmbench_mmap_low_t4_run1.base.json
+[t5   34s] ok: mmbench [mmap/low/t4] arm=t0 run=1 -> mmbench_mmap_low_t4_run1.t0.json
+[t5   35s] ok: mmbench [mmap/low/t4] arm=base run=2 -> mmbench_mmap_low_t4_run2.base.json
+[t5   37s] ok: mmbench [mmap/low/t4] arm=t0 run=2 -> mmbench_mmap_low_t4_run2.t0.json
+[t5   38s] ok: mmbench [mmap/low/t4] arm=base run=3 -> mmbench_mmap_low_t4_run3.base.json
+[t5   40s] ok: mmbench [mmap/low/t4] arm=t0 run=3 -> mmbench_mmap_low_t4_run3.t0.json
+[t5   46s] WARN: strace mmbench_mmap_low_t4: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_mmap_low_t4.err.diff)
+[t5   47s] ok: mmbench [mmap/low/t8] arm=base run=1 -> mmbench_mmap_low_t8_run1.base.json
+[t5   49s] ok: mmbench [mmap/low/t8] arm=t0 run=1 -> mmbench_mmap_low_t8_run1.t0.json
+[t5   50s] ok: mmbench [mmap/low/t8] arm=base run=2 -> mmbench_mmap_low_t8_run2.base.json
+[t5   52s] ok: mmbench [mmap/low/t8] arm=t0 run=2 -> mmbench_mmap_low_t8_run2.t0.json
+[t5   53s] ok: mmbench [mmap/low/t8] arm=base run=3 -> mmbench_mmap_low_t8_run3.base.json
+[t5   55s] ok: mmbench [mmap/low/t8] arm=t0 run=3 -> mmbench_mmap_low_t8_run3.t0.json
+[t5   61s] WARN: strace mmbench_mmap_low_t8: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_mmap_low_t8.err.diff)
+[t5   63s] ok: mmbench [mmap/low/t16] arm=base run=1 -> mmbench_mmap_low_t16_run1.base.json
+[t5   64s] ok: mmbench [mmap/low/t16] arm=t0 run=1 -> mmbench_mmap_low_t16_run1.t0.json
+[t5   66s] ok: mmbench [mmap/low/t16] arm=base run=2 -> mmbench_mmap_low_t16_run2.base.json
+[t5   67s] ok: mmbench [mmap/low/t16] arm=t0 run=2 -> mmbench_mmap_low_t16_run2.t0.json
+[t5   69s] ok: mmbench [mmap/low/t16] arm=base run=3 -> mmbench_mmap_low_t16_run3.base.json
+[t5   70s] ok: mmbench [mmap/low/t16] arm=t0 run=3 -> mmbench_mmap_low_t16_run3.t0.json
+[t5   77s] WARN: strace mmbench_mmap_low_t16: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_mmap_low_t16.err.diff)
+[t5   79s] ok: mmbench [mmap/high/t1] arm=base run=1 -> mmbench_mmap_high_t1_run1.base.json
+[t5   80s] ok: mmbench [mmap/high/t1] arm=t0 run=1 -> mmbench_mmap_high_t1_run1.t0.json
+[t5   82s] ok: mmbench [mmap/high/t1] arm=base run=2 -> mmbench_mmap_high_t1_run2.base.json
+[t5   83s] ok: mmbench [mmap/high/t1] arm=t0 run=2 -> mmbench_mmap_high_t1_run2.t0.json
+[t5   85s] ok: mmbench [mmap/high/t1] arm=base run=3 -> mmbench_mmap_high_t1_run3.base.json
+[t5   86s] ok: mmbench [mmap/high/t1] arm=t0 run=3 -> mmbench_mmap_high_t1_run3.t0.json
+[t5   92s] strace mmbench_mmap_high_t1: error-multiset equal (base == t0)
+[t5   93s] ok: mmbench [mmap/high/t2] arm=base run=1 -> mmbench_mmap_high_t2_run1.base.json
+[t5   95s] ok: mmbench [mmap/high/t2] arm=t0 run=1 -> mmbench_mmap_high_t2_run1.t0.json
+[t5   96s] ok: mmbench [mmap/high/t2] arm=base run=2 -> mmbench_mmap_high_t2_run2.base.json
+[t5   98s] ok: mmbench [mmap/high/t2] arm=t0 run=2 -> mmbench_mmap_high_t2_run2.t0.json
+[t5   99s] ok: mmbench [mmap/high/t2] arm=base run=3 -> mmbench_mmap_high_t2_run3.base.json
+[t5  101s] ok: mmbench [mmap/high/t2] arm=t0 run=3 -> mmbench_mmap_high_t2_run3.t0.json
+[t5  107s] strace mmbench_mmap_high_t2: error-multiset equal (base == t0)
+[t5  108s] ok: mmbench [mmap/high/t4] arm=base run=1 -> mmbench_mmap_high_t4_run1.base.json
+[t5  110s] ok: mmbench [mmap/high/t4] arm=t0 run=1 -> mmbench_mmap_high_t4_run1.t0.json
+[t5  111s] ok: mmbench [mmap/high/t4] arm=base run=2 -> mmbench_mmap_high_t4_run2.base.json
+[t5  113s] ok: mmbench [mmap/high/t4] arm=t0 run=2 -> mmbench_mmap_high_t4_run2.t0.json
+[t5  114s] ok: mmbench [mmap/high/t4] arm=base run=3 -> mmbench_mmap_high_t4_run3.base.json
+[t5  116s] ok: mmbench [mmap/high/t4] arm=t0 run=3 -> mmbench_mmap_high_t4_run3.t0.json
+[t5  122s] WARN: strace mmbench_mmap_high_t4: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_mmap_high_t4.err.diff)
+[t5  123s] ok: mmbench [mmap/high/t8] arm=base run=1 -> mmbench_mmap_high_t8_run1.base.json
+[t5  125s] ok: mmbench [mmap/high/t8] arm=t0 run=1 -> mmbench_mmap_high_t8_run1.t0.json
+[t5  126s] ok: mmbench [mmap/high/t8] arm=base run=2 -> mmbench_mmap_high_t8_run2.base.json
+[t5  127s] ok: mmbench [mmap/high/t8] arm=t0 run=2 -> mmbench_mmap_high_t8_run2.t0.json
+[t5  129s] ok: mmbench [mmap/high/t8] arm=base run=3 -> mmbench_mmap_high_t8_run3.base.json
+[t5  130s] ok: mmbench [mmap/high/t8] arm=t0 run=3 -> mmbench_mmap_high_t8_run3.t0.json
+[t5  137s] strace mmbench_mmap_high_t8: error-multiset equal (base == t0)
+[t5  138s] ok: mmbench [mmap/high/t16] arm=base run=1 -> mmbench_mmap_high_t16_run1.base.json
+[t5  140s] ok: mmbench [mmap/high/t16] arm=t0 run=1 -> mmbench_mmap_high_t16_run1.t0.json
+[t5  141s] ok: mmbench [mmap/high/t16] arm=base run=2 -> mmbench_mmap_high_t16_run2.base.json
+[t5  143s] ok: mmbench [mmap/high/t16] arm=t0 run=2 -> mmbench_mmap_high_t16_run2.t0.json
+[t5  144s] ok: mmbench [mmap/high/t16] arm=base run=3 -> mmbench_mmap_high_t16_run3.base.json
+[t5  146s] ok: mmbench [mmap/high/t16] arm=t0 run=3 -> mmbench_mmap_high_t16_run3.t0.json
+[t5  153s] strace mmbench_mmap_high_t16: error-multiset equal (base == t0)
+[t5  154s] ok: mmbench [mmap-pf/low/t1] arm=base run=1 -> mmbench_mmap-pf_low_t1_run1.base.json
+[t5  156s] ok: mmbench [mmap-pf/low/t1] arm=t0 run=1 -> mmbench_mmap-pf_low_t1_run1.t0.json
+[t5  157s] ok: mmbench [mmap-pf/low/t1] arm=base run=2 -> mmbench_mmap-pf_low_t1_run2.base.json
+[t5  159s] ok: mmbench [mmap-pf/low/t1] arm=t0 run=2 -> mmbench_mmap-pf_low_t1_run2.t0.json
+[t5  161s] ok: mmbench [mmap-pf/low/t1] arm=base run=3 -> mmbench_mmap-pf_low_t1_run3.base.json
+[t5  162s] ok: mmbench [mmap-pf/low/t1] arm=t0 run=3 -> mmbench_mmap-pf_low_t1_run3.t0.json
+[t5  168s] strace mmbench_mmap-pf_low_t1: error-multiset equal (base == t0)
+[t5  169s] ok: mmbench [mmap-pf/low/t2] arm=base run=1 -> mmbench_mmap-pf_low_t2_run1.base.json
+[t5  171s] ok: mmbench [mmap-pf/low/t2] arm=t0 run=1 -> mmbench_mmap-pf_low_t2_run1.t0.json
+[t5  172s] ok: mmbench [mmap-pf/low/t2] arm=base run=2 -> mmbench_mmap-pf_low_t2_run2.base.json
+[t5  174s] ok: mmbench [mmap-pf/low/t2] arm=t0 run=2 -> mmbench_mmap-pf_low_t2_run2.t0.json
+[t5  175s] ok: mmbench [mmap-pf/low/t2] arm=base run=3 -> mmbench_mmap-pf_low_t2_run3.base.json
+[t5  177s] ok: mmbench [mmap-pf/low/t2] arm=t0 run=3 -> mmbench_mmap-pf_low_t2_run3.t0.json
+[t5  182s] strace mmbench_mmap-pf_low_t2: error-multiset equal (base == t0)
+[t5  184s] ok: mmbench [mmap-pf/low/t4] arm=base run=1 -> mmbench_mmap-pf_low_t4_run1.base.json
+[t5  185s] ok: mmbench [mmap-pf/low/t4] arm=t0 run=1 -> mmbench_mmap-pf_low_t4_run1.t0.json
+[t5  187s] ok: mmbench [mmap-pf/low/t4] arm=base run=2 -> mmbench_mmap-pf_low_t4_run2.base.json
+[t5  188s] ok: mmbench [mmap-pf/low/t4] arm=t0 run=2 -> mmbench_mmap-pf_low_t4_run2.t0.json
+[t5  190s] ok: mmbench [mmap-pf/low/t4] arm=base run=3 -> mmbench_mmap-pf_low_t4_run3.base.json
+[t5  191s] ok: mmbench [mmap-pf/low/t4] arm=t0 run=3 -> mmbench_mmap-pf_low_t4_run3.t0.json
+[t5  197s] strace mmbench_mmap-pf_low_t4: error-multiset equal (base == t0)
+[t5  199s] ok: mmbench [mmap-pf/low/t8] arm=base run=1 -> mmbench_mmap-pf_low_t8_run1.base.json
+[t5  200s] ok: mmbench [mmap-pf/low/t8] arm=t0 run=1 -> mmbench_mmap-pf_low_t8_run1.t0.json
+[t5  202s] ok: mmbench [mmap-pf/low/t8] arm=base run=2 -> mmbench_mmap-pf_low_t8_run2.base.json
+[t5  203s] ok: mmbench [mmap-pf/low/t8] arm=t0 run=2 -> mmbench_mmap-pf_low_t8_run2.t0.json
+[t5  205s] ok: mmbench [mmap-pf/low/t8] arm=base run=3 -> mmbench_mmap-pf_low_t8_run3.base.json
+[t5  206s] ok: mmbench [mmap-pf/low/t8] arm=t0 run=3 -> mmbench_mmap-pf_low_t8_run3.t0.json
+[t5  212s] WARN: strace mmbench_mmap-pf_low_t8: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_mmap-pf_low_t8.err.diff)
+[t5  214s] ok: mmbench [mmap-pf/low/t16] arm=base run=1 -> mmbench_mmap-pf_low_t16_run1.base.json
+[t5  215s] ok: mmbench [mmap-pf/low/t16] arm=t0 run=1 -> mmbench_mmap-pf_low_t16_run1.t0.json
+[t5  217s] ok: mmbench [mmap-pf/low/t16] arm=base run=2 -> mmbench_mmap-pf_low_t16_run2.base.json
+[t5  218s] ok: mmbench [mmap-pf/low/t16] arm=t0 run=2 -> mmbench_mmap-pf_low_t16_run2.t0.json
+[t5  220s] ok: mmbench [mmap-pf/low/t16] arm=base run=3 -> mmbench_mmap-pf_low_t16_run3.base.json
+[t5  221s] ok: mmbench [mmap-pf/low/t16] arm=t0 run=3 -> mmbench_mmap-pf_low_t16_run3.t0.json
+[t5  229s] WARN: strace mmbench_mmap-pf_low_t16: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_mmap-pf_low_t16.err.diff)
+[t5  230s] ok: mmbench [mmap-pf/high/t1] arm=base run=1 -> mmbench_mmap-pf_high_t1_run1.base.json
+[t5  232s] ok: mmbench [mmap-pf/high/t1] arm=t0 run=1 -> mmbench_mmap-pf_high_t1_run1.t0.json
+[t5  233s] ok: mmbench [mmap-pf/high/t1] arm=base run=2 -> mmbench_mmap-pf_high_t1_run2.base.json
+[t5  234s] ok: mmbench [mmap-pf/high/t1] arm=t0 run=2 -> mmbench_mmap-pf_high_t1_run2.t0.json
+[t5  236s] ok: mmbench [mmap-pf/high/t1] arm=base run=3 -> mmbench_mmap-pf_high_t1_run3.base.json
+[t5  237s] ok: mmbench [mmap-pf/high/t1] arm=t0 run=3 -> mmbench_mmap-pf_high_t1_run3.t0.json
+[t5  243s] strace mmbench_mmap-pf_high_t1: error-multiset equal (base == t0)
+[t5  244s] ok: mmbench [mmap-pf/high/t2] arm=base run=1 -> mmbench_mmap-pf_high_t2_run1.base.json
+[t5  246s] ok: mmbench [mmap-pf/high/t2] arm=t0 run=1 -> mmbench_mmap-pf_high_t2_run1.t0.json
+[t5  247s] ok: mmbench [mmap-pf/high/t2] arm=base run=2 -> mmbench_mmap-pf_high_t2_run2.base.json
+[t5  249s] ok: mmbench [mmap-pf/high/t2] arm=t0 run=2 -> mmbench_mmap-pf_high_t2_run2.t0.json
+[t5  250s] ok: mmbench [mmap-pf/high/t2] arm=base run=3 -> mmbench_mmap-pf_high_t2_run3.base.json
+[t5  251s] ok: mmbench [mmap-pf/high/t2] arm=t0 run=3 -> mmbench_mmap-pf_high_t2_run3.t0.json
+[t5  257s] WARN: strace mmbench_mmap-pf_high_t2: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_mmap-pf_high_t2.err.diff)
+[t5  258s] ok: mmbench [mmap-pf/high/t4] arm=base run=1 -> mmbench_mmap-pf_high_t4_run1.base.json
+[t5  260s] ok: mmbench [mmap-pf/high/t4] arm=t0 run=1 -> mmbench_mmap-pf_high_t4_run1.t0.json
+[t5  261s] ok: mmbench [mmap-pf/high/t4] arm=base run=2 -> mmbench_mmap-pf_high_t4_run2.base.json
+[t5  263s] ok: mmbench [mmap-pf/high/t4] arm=t0 run=2 -> mmbench_mmap-pf_high_t4_run2.t0.json
+[t5  264s] ok: mmbench [mmap-pf/high/t4] arm=base run=3 -> mmbench_mmap-pf_high_t4_run3.base.json
+[t5  266s] ok: mmbench [mmap-pf/high/t4] arm=t0 run=3 -> mmbench_mmap-pf_high_t4_run3.t0.json
+[t5  272s] strace mmbench_mmap-pf_high_t4: error-multiset equal (base == t0)
+[t5  273s] ok: mmbench [mmap-pf/high/t8] arm=base run=1 -> mmbench_mmap-pf_high_t8_run1.base.json
+[t5  275s] ok: mmbench [mmap-pf/high/t8] arm=t0 run=1 -> mmbench_mmap-pf_high_t8_run1.t0.json
+[t5  276s] ok: mmbench [mmap-pf/high/t8] arm=base run=2 -> mmbench_mmap-pf_high_t8_run2.base.json
+[t5  278s] ok: mmbench [mmap-pf/high/t8] arm=t0 run=2 -> mmbench_mmap-pf_high_t8_run2.t0.json
+[t5  279s] ok: mmbench [mmap-pf/high/t8] arm=base run=3 -> mmbench_mmap-pf_high_t8_run3.base.json
+[t5  280s] ok: mmbench [mmap-pf/high/t8] arm=t0 run=3 -> mmbench_mmap-pf_high_t8_run3.t0.json
+[t5  287s] WARN: strace mmbench_mmap-pf_high_t8: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_mmap-pf_high_t8.err.diff)
+[t5  288s] ok: mmbench [mmap-pf/high/t16] arm=base run=1 -> mmbench_mmap-pf_high_t16_run1.base.json
+[t5  290s] ok: mmbench [mmap-pf/high/t16] arm=t0 run=1 -> mmbench_mmap-pf_high_t16_run1.t0.json
+[t5  291s] ok: mmbench [mmap-pf/high/t16] arm=base run=2 -> mmbench_mmap-pf_high_t16_run2.base.json
+[t5  293s] ok: mmbench [mmap-pf/high/t16] arm=t0 run=2 -> mmbench_mmap-pf_high_t16_run2.t0.json
+[t5  294s] ok: mmbench [mmap-pf/high/t16] arm=base run=3 -> mmbench_mmap-pf_high_t16_run3.base.json
+[t5  296s] ok: mmbench [mmap-pf/high/t16] arm=t0 run=3 -> mmbench_mmap-pf_high_t16_run3.t0.json
+[t5  303s] WARN: strace mmbench_mmap-pf_high_t16: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_mmap-pf_high_t16.err.diff)
+[t5  305s] ok: mmbench [pf/low/t1] arm=base run=1 -> mmbench_pf_low_t1_run1.base.json
+[t5  306s] ok: mmbench [pf/low/t1] arm=t0 run=1 -> mmbench_pf_low_t1_run1.t0.json
+[t5  308s] ok: mmbench [pf/low/t1] arm=base run=2 -> mmbench_pf_low_t1_run2.base.json
+[t5  309s] ok: mmbench [pf/low/t1] arm=t0 run=2 -> mmbench_pf_low_t1_run2.t0.json
+[t5  311s] ok: mmbench [pf/low/t1] arm=base run=3 -> mmbench_pf_low_t1_run3.base.json
+[t5  312s] ok: mmbench [pf/low/t1] arm=t0 run=3 -> mmbench_pf_low_t1_run3.t0.json
+[t5  318s] strace mmbench_pf_low_t1: error-multiset equal (base == t0)
+[t5  320s] ok: mmbench [pf/low/t2] arm=base run=1 -> mmbench_pf_low_t2_run1.base.json
+[t5  321s] ok: mmbench [pf/low/t2] arm=t0 run=1 -> mmbench_pf_low_t2_run1.t0.json
+[t5  323s] ok: mmbench [pf/low/t2] arm=base run=2 -> mmbench_pf_low_t2_run2.base.json
+[t5  324s] ok: mmbench [pf/low/t2] arm=t0 run=2 -> mmbench_pf_low_t2_run2.t0.json
+[t5  326s] ok: mmbench [pf/low/t2] arm=base run=3 -> mmbench_pf_low_t2_run3.base.json
+[t5  327s] ok: mmbench [pf/low/t2] arm=t0 run=3 -> mmbench_pf_low_t2_run3.t0.json
+[t5  333s] WARN: strace mmbench_pf_low_t2: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_pf_low_t2.err.diff)
+[t5  335s] ok: mmbench [pf/low/t4] arm=base run=1 -> mmbench_pf_low_t4_run1.base.json
+[t5  336s] ok: mmbench [pf/low/t4] arm=t0 run=1 -> mmbench_pf_low_t4_run1.t0.json
+[t5  338s] ok: mmbench [pf/low/t4] arm=base run=2 -> mmbench_pf_low_t4_run2.base.json
+[t5  339s] ok: mmbench [pf/low/t4] arm=t0 run=2 -> mmbench_pf_low_t4_run2.t0.json
+[t5  341s] ok: mmbench [pf/low/t4] arm=base run=3 -> mmbench_pf_low_t4_run3.base.json
+[t5  342s] ok: mmbench [pf/low/t4] arm=t0 run=3 -> mmbench_pf_low_t4_run3.t0.json
+[t5  348s] strace mmbench_pf_low_t4: error-multiset equal (base == t0)
+[t5  350s] ok: mmbench [pf/low/t8] arm=base run=1 -> mmbench_pf_low_t8_run1.base.json
+[t5  351s] ok: mmbench [pf/low/t8] arm=t0 run=1 -> mmbench_pf_low_t8_run1.t0.json
+[t5  353s] ok: mmbench [pf/low/t8] arm=base run=2 -> mmbench_pf_low_t8_run2.base.json
+[t5  355s] ok: mmbench [pf/low/t8] arm=t0 run=2 -> mmbench_pf_low_t8_run2.t0.json
+[t5  356s] ok: mmbench [pf/low/t8] arm=base run=3 -> mmbench_pf_low_t8_run3.base.json
+[t5  358s] ok: mmbench [pf/low/t8] arm=t0 run=3 -> mmbench_pf_low_t8_run3.t0.json
+[t5  364s] WARN: strace mmbench_pf_low_t8: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_pf_low_t8.err.diff)
+[t5  366s] ok: mmbench [pf/low/t16] arm=base run=1 -> mmbench_pf_low_t16_run1.base.json
+[t5  368s] ok: mmbench [pf/low/t16] arm=t0 run=1 -> mmbench_pf_low_t16_run1.t0.json
+[t5  369s] ok: mmbench [pf/low/t16] arm=base run=2 -> mmbench_pf_low_t16_run2.base.json
+[t5  371s] ok: mmbench [pf/low/t16] arm=t0 run=2 -> mmbench_pf_low_t16_run2.t0.json
+[t5  372s] ok: mmbench [pf/low/t16] arm=base run=3 -> mmbench_pf_low_t16_run3.base.json
+[t5  374s] ok: mmbench [pf/low/t16] arm=t0 run=3 -> mmbench_pf_low_t16_run3.t0.json
+[t5  382s] WARN: strace mmbench_pf_low_t16: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_pf_low_t16.err.diff)
+[t5  383s] ok: mmbench [pf/high/t1] arm=base run=1 -> mmbench_pf_high_t1_run1.base.json
+[t5  385s] ok: mmbench [pf/high/t1] arm=t0 run=1 -> mmbench_pf_high_t1_run1.t0.json
+[t5  387s] ok: mmbench [pf/high/t1] arm=base run=2 -> mmbench_pf_high_t1_run2.base.json
+[t5  388s] ok: mmbench [pf/high/t1] arm=t0 run=2 -> mmbench_pf_high_t1_run2.t0.json
+[t5  390s] ok: mmbench [pf/high/t1] arm=base run=3 -> mmbench_pf_high_t1_run3.base.json
+[t5  391s] ok: mmbench [pf/high/t1] arm=t0 run=3 -> mmbench_pf_high_t1_run3.t0.json
+[t5  397s] strace mmbench_pf_high_t1: error-multiset equal (base == t0)
+[t5  399s] ok: mmbench [pf/high/t2] arm=base run=1 -> mmbench_pf_high_t2_run1.base.json
+[t5  400s] ok: mmbench [pf/high/t2] arm=t0 run=1 -> mmbench_pf_high_t2_run1.t0.json
+[t5  402s] ok: mmbench [pf/high/t2] arm=base run=2 -> mmbench_pf_high_t2_run2.base.json
+[t5  403s] ok: mmbench [pf/high/t2] arm=t0 run=2 -> mmbench_pf_high_t2_run2.t0.json
+[t5  405s] ok: mmbench [pf/high/t2] arm=base run=3 -> mmbench_pf_high_t2_run3.base.json
+[t5  406s] ok: mmbench [pf/high/t2] arm=t0 run=3 -> mmbench_pf_high_t2_run3.t0.json
+[t5  412s] WARN: strace mmbench_pf_high_t2: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_pf_high_t2.err.diff)
+[t5  414s] ok: mmbench [pf/high/t4] arm=base run=1 -> mmbench_pf_high_t4_run1.base.json
+[t5  415s] ok: mmbench [pf/high/t4] arm=t0 run=1 -> mmbench_pf_high_t4_run1.t0.json
+[t5  417s] ok: mmbench [pf/high/t4] arm=base run=2 -> mmbench_pf_high_t4_run2.base.json
+[t5  418s] ok: mmbench [pf/high/t4] arm=t0 run=2 -> mmbench_pf_high_t4_run2.t0.json
+[t5  420s] ok: mmbench [pf/high/t4] arm=base run=3 -> mmbench_pf_high_t4_run3.base.json
+[t5  421s] ok: mmbench [pf/high/t4] arm=t0 run=3 -> mmbench_pf_high_t4_run3.t0.json
+[t5  427s] strace mmbench_pf_high_t4: error-multiset equal (base == t0)
+[t5  429s] ok: mmbench [pf/high/t8] arm=base run=1 -> mmbench_pf_high_t8_run1.base.json
+[t5  430s] ok: mmbench [pf/high/t8] arm=t0 run=1 -> mmbench_pf_high_t8_run1.t0.json
+[t5  432s] ok: mmbench [pf/high/t8] arm=base run=2 -> mmbench_pf_high_t8_run2.base.json
+[t5  433s] ok: mmbench [pf/high/t8] arm=t0 run=2 -> mmbench_pf_high_t8_run2.t0.json
+[t5  435s] ok: mmbench [pf/high/t8] arm=base run=3 -> mmbench_pf_high_t8_run3.base.json
+[t5  436s] ok: mmbench [pf/high/t8] arm=t0 run=3 -> mmbench_pf_high_t8_run3.t0.json
+[t5  443s] WARN: strace mmbench_pf_high_t8: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_pf_high_t8.err.diff)
+[t5  444s] ok: mmbench [pf/high/t16] arm=base run=1 -> mmbench_pf_high_t16_run1.base.json
+[t5  446s] ok: mmbench [pf/high/t16] arm=t0 run=1 -> mmbench_pf_high_t16_run1.t0.json
+[t5  448s] ok: mmbench [pf/high/t16] arm=base run=2 -> mmbench_pf_high_t16_run2.base.json
+[t5  449s] ok: mmbench [pf/high/t16] arm=t0 run=2 -> mmbench_pf_high_t16_run2.t0.json
+[t5  451s] ok: mmbench [pf/high/t16] arm=base run=3 -> mmbench_pf_high_t16_run3.base.json
+[t5  452s] ok: mmbench [pf/high/t16] arm=t0 run=3 -> mmbench_pf_high_t16_run3.t0.json
+[t5  460s] strace mmbench_pf_high_t16: error-multiset equal (base == t0)
+[t5  461s] ok: mmbench [unmap-virt/low/t1] arm=base run=1 -> mmbench_unmap-virt_low_t1_run1.base.json
+[t5  463s] ok: mmbench [unmap-virt/low/t1] arm=t0 run=1 -> mmbench_unmap-virt_low_t1_run1.t0.json
+[t5  464s] ok: mmbench [unmap-virt/low/t1] arm=base run=2 -> mmbench_unmap-virt_low_t1_run2.base.json
+[t5  466s] ok: mmbench [unmap-virt/low/t1] arm=t0 run=2 -> mmbench_unmap-virt_low_t1_run2.t0.json
+[t5  467s] ok: mmbench [unmap-virt/low/t1] arm=base run=3 -> mmbench_unmap-virt_low_t1_run3.base.json
+[t5  469s] ok: mmbench [unmap-virt/low/t1] arm=t0 run=3 -> mmbench_unmap-virt_low_t1_run3.t0.json
+[t5  474s] strace mmbench_unmap-virt_low_t1: error-multiset equal (base == t0)
+[t5  476s] ok: mmbench [unmap-virt/low/t2] arm=base run=1 -> mmbench_unmap-virt_low_t2_run1.base.json
+[t5  477s] ok: mmbench [unmap-virt/low/t2] arm=t0 run=1 -> mmbench_unmap-virt_low_t2_run1.t0.json
+[t5  479s] ok: mmbench [unmap-virt/low/t2] arm=base run=2 -> mmbench_unmap-virt_low_t2_run2.base.json
+[t5  480s] ok: mmbench [unmap-virt/low/t2] arm=t0 run=2 -> mmbench_unmap-virt_low_t2_run2.t0.json
+[t5  482s] ok: mmbench [unmap-virt/low/t2] arm=base run=3 -> mmbench_unmap-virt_low_t2_run3.base.json
+[t5  483s] ok: mmbench [unmap-virt/low/t2] arm=t0 run=3 -> mmbench_unmap-virt_low_t2_run3.t0.json
+[t5  489s] strace mmbench_unmap-virt_low_t2: error-multiset equal (base == t0)
+[t5  490s] ok: mmbench [unmap-virt/low/t4] arm=base run=1 -> mmbench_unmap-virt_low_t4_run1.base.json
+[t5  492s] ok: mmbench [unmap-virt/low/t4] arm=t0 run=1 -> mmbench_unmap-virt_low_t4_run1.t0.json
+[t5  493s] ok: mmbench [unmap-virt/low/t4] arm=base run=2 -> mmbench_unmap-virt_low_t4_run2.base.json
+[t5  495s] ok: mmbench [unmap-virt/low/t4] arm=t0 run=2 -> mmbench_unmap-virt_low_t4_run2.t0.json
+[t5  496s] ok: mmbench [unmap-virt/low/t4] arm=base run=3 -> mmbench_unmap-virt_low_t4_run3.base.json
+[t5  498s] ok: mmbench [unmap-virt/low/t4] arm=t0 run=3 -> mmbench_unmap-virt_low_t4_run3.t0.json
+[t5  504s] strace mmbench_unmap-virt_low_t4: error-multiset equal (base == t0)
+[t5  506s] ok: mmbench [unmap-virt/low/t8] arm=base run=1 -> mmbench_unmap-virt_low_t8_run1.base.json
+[t5  507s] ok: mmbench [unmap-virt/low/t8] arm=t0 run=1 -> mmbench_unmap-virt_low_t8_run1.t0.json
+[t5  509s] ok: mmbench [unmap-virt/low/t8] arm=base run=2 -> mmbench_unmap-virt_low_t8_run2.base.json
+[t5  510s] ok: mmbench [unmap-virt/low/t8] arm=t0 run=2 -> mmbench_unmap-virt_low_t8_run2.t0.json
+[t5  511s] ok: mmbench [unmap-virt/low/t8] arm=base run=3 -> mmbench_unmap-virt_low_t8_run3.base.json
+[t5  513s] ok: mmbench [unmap-virt/low/t8] arm=t0 run=3 -> mmbench_unmap-virt_low_t8_run3.t0.json
+[t5  520s] WARN: strace mmbench_unmap-virt_low_t8: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_unmap-virt_low_t8.err.diff)
+[t5  521s] ok: mmbench [unmap-virt/low/t16] arm=base run=1 -> mmbench_unmap-virt_low_t16_run1.base.json
+[t5  523s] ok: mmbench [unmap-virt/low/t16] arm=t0 run=1 -> mmbench_unmap-virt_low_t16_run1.t0.json
+[t5  524s] ok: mmbench [unmap-virt/low/t16] arm=base run=2 -> mmbench_unmap-virt_low_t16_run2.base.json
+[t5  526s] ok: mmbench [unmap-virt/low/t16] arm=t0 run=2 -> mmbench_unmap-virt_low_t16_run2.t0.json
+[t5  527s] ok: mmbench [unmap-virt/low/t16] arm=base run=3 -> mmbench_unmap-virt_low_t16_run3.base.json
+[t5  529s] ok: mmbench [unmap-virt/low/t16] arm=t0 run=3 -> mmbench_unmap-virt_low_t16_run3.t0.json
+[t5  537s] strace mmbench_unmap-virt_low_t16: error-multiset equal (base == t0)
+[t5  538s] ok: mmbench [unmap-virt/high/t1] arm=base run=1 -> mmbench_unmap-virt_high_t1_run1.base.json
+[t5  540s] ok: mmbench [unmap-virt/high/t1] arm=t0 run=1 -> mmbench_unmap-virt_high_t1_run1.t0.json
+[t5  541s] ok: mmbench [unmap-virt/high/t1] arm=base run=2 -> mmbench_unmap-virt_high_t1_run2.base.json
+[t5  542s] ok: mmbench [unmap-virt/high/t1] arm=t0 run=2 -> mmbench_unmap-virt_high_t1_run2.t0.json
+[t5  544s] ok: mmbench [unmap-virt/high/t1] arm=base run=3 -> mmbench_unmap-virt_high_t1_run3.base.json
+[t5  545s] ok: mmbench [unmap-virt/high/t1] arm=t0 run=3 -> mmbench_unmap-virt_high_t1_run3.t0.json
+[t5  551s] strace mmbench_unmap-virt_high_t1: error-multiset equal (base == t0)
+[t5  552s] ok: mmbench [unmap-virt/high/t2] arm=base run=1 -> mmbench_unmap-virt_high_t2_run1.base.json
+[t5  554s] ok: mmbench [unmap-virt/high/t2] arm=t0 run=1 -> mmbench_unmap-virt_high_t2_run1.t0.json
+[t5  555s] ok: mmbench [unmap-virt/high/t2] arm=base run=2 -> mmbench_unmap-virt_high_t2_run2.base.json
+[t5  557s] ok: mmbench [unmap-virt/high/t2] arm=t0 run=2 -> mmbench_unmap-virt_high_t2_run2.t0.json
+[t5  558s] ok: mmbench [unmap-virt/high/t2] arm=base run=3 -> mmbench_unmap-virt_high_t2_run3.base.json
+[t5  560s] ok: mmbench [unmap-virt/high/t2] arm=t0 run=3 -> mmbench_unmap-virt_high_t2_run3.t0.json
+[t5  565s] WARN: strace mmbench_unmap-virt_high_t2: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_unmap-virt_high_t2.err.diff)
+[t5  567s] ok: mmbench [unmap-virt/high/t4] arm=base run=1 -> mmbench_unmap-virt_high_t4_run1.base.json
+[t5  568s] ok: mmbench [unmap-virt/high/t4] arm=t0 run=1 -> mmbench_unmap-virt_high_t4_run1.t0.json
+[t5  570s] ok: mmbench [unmap-virt/high/t4] arm=base run=2 -> mmbench_unmap-virt_high_t4_run2.base.json
+[t5  571s] ok: mmbench [unmap-virt/high/t4] arm=t0 run=2 -> mmbench_unmap-virt_high_t4_run2.t0.json
+[t5  573s] ok: mmbench [unmap-virt/high/t4] arm=base run=3 -> mmbench_unmap-virt_high_t4_run3.base.json
+[t5  574s] ok: mmbench [unmap-virt/high/t4] arm=t0 run=3 -> mmbench_unmap-virt_high_t4_run3.t0.json
+[t5  580s] strace mmbench_unmap-virt_high_t4: error-multiset equal (base == t0)
+[t5  582s] ok: mmbench [unmap-virt/high/t8] arm=base run=1 -> mmbench_unmap-virt_high_t8_run1.base.json
+[t5  583s] ok: mmbench [unmap-virt/high/t8] arm=t0 run=1 -> mmbench_unmap-virt_high_t8_run1.t0.json
+[t5  585s] ok: mmbench [unmap-virt/high/t8] arm=base run=2 -> mmbench_unmap-virt_high_t8_run2.base.json
+[t5  586s] ok: mmbench [unmap-virt/high/t8] arm=t0 run=2 -> mmbench_unmap-virt_high_t8_run2.t0.json
+[t5  588s] ok: mmbench [unmap-virt/high/t8] arm=base run=3 -> mmbench_unmap-virt_high_t8_run3.base.json
+[t5  589s] ok: mmbench [unmap-virt/high/t8] arm=t0 run=3 -> mmbench_unmap-virt_high_t8_run3.t0.json
+[t5  596s] WARN: strace mmbench_unmap-virt_high_t8: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_unmap-virt_high_t8.err.diff)
+[t5  597s] ok: mmbench [unmap-virt/high/t16] arm=base run=1 -> mmbench_unmap-virt_high_t16_run1.base.json
+[t5  599s] ok: mmbench [unmap-virt/high/t16] arm=t0 run=1 -> mmbench_unmap-virt_high_t16_run1.t0.json
+[t5  600s] ok: mmbench [unmap-virt/high/t16] arm=base run=2 -> mmbench_unmap-virt_high_t16_run2.base.json
+[t5  602s] ok: mmbench [unmap-virt/high/t16] arm=t0 run=2 -> mmbench_unmap-virt_high_t16_run2.t0.json
+[t5  603s] ok: mmbench [unmap-virt/high/t16] arm=base run=3 -> mmbench_unmap-virt_high_t16_run3.base.json
+[t5  605s] ok: mmbench [unmap-virt/high/t16] arm=t0 run=3 -> mmbench_unmap-virt_high_t16_run3.t0.json
+[t5  612s] WARN: strace mmbench_unmap-virt_high_t16: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_unmap-virt_high_t16.err.diff)
+[t5  614s] ok: mmbench [unmap/low/t1] arm=base run=1 -> mmbench_unmap_low_t1_run1.base.json
+[t5  616s] ok: mmbench [unmap/low/t1] arm=t0 run=1 -> mmbench_unmap_low_t1_run1.t0.json
+[t5  618s] ok: mmbench [unmap/low/t1] arm=base run=2 -> mmbench_unmap_low_t1_run2.base.json
+[t5  619s] ok: mmbench [unmap/low/t1] arm=t0 run=2 -> mmbench_unmap_low_t1_run2.t0.json
+[t5  621s] ok: mmbench [unmap/low/t1] arm=base run=3 -> mmbench_unmap_low_t1_run3.base.json
+[t5  623s] ok: mmbench [unmap/low/t1] arm=t0 run=3 -> mmbench_unmap_low_t1_run3.t0.json
+[t5  629s] strace mmbench_unmap_low_t1: error-multiset equal (base == t0)
+[t5  631s] ok: mmbench [unmap/low/t2] arm=base run=1 -> mmbench_unmap_low_t2_run1.base.json
+[t5  633s] ok: mmbench [unmap/low/t2] arm=t0 run=1 -> mmbench_unmap_low_t2_run1.t0.json
+[t5  634s] ok: mmbench [unmap/low/t2] arm=base run=2 -> mmbench_unmap_low_t2_run2.base.json
+[t5  636s] ok: mmbench [unmap/low/t2] arm=t0 run=2 -> mmbench_unmap_low_t2_run2.t0.json
+[t5  638s] ok: mmbench [unmap/low/t2] arm=base run=3 -> mmbench_unmap_low_t2_run3.base.json
+[t5  640s] ok: mmbench [unmap/low/t2] arm=t0 run=3 -> mmbench_unmap_low_t2_run3.t0.json
+[t5  646s] WARN: strace mmbench_unmap_low_t2: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_unmap_low_t2.err.diff)
+[t5  648s] ok: mmbench [unmap/low/t4] arm=base run=1 -> mmbench_unmap_low_t4_run1.base.json
+[t5  650s] ok: mmbench [unmap/low/t4] arm=t0 run=1 -> mmbench_unmap_low_t4_run1.t0.json
+[t5  651s] ok: mmbench [unmap/low/t4] arm=base run=2 -> mmbench_unmap_low_t4_run2.base.json
+[t5  653s] ok: mmbench [unmap/low/t4] arm=t0 run=2 -> mmbench_unmap_low_t4_run2.t0.json
+[t5  655s] ok: mmbench [unmap/low/t4] arm=base run=3 -> mmbench_unmap_low_t4_run3.base.json
+[t5  657s] ok: mmbench [unmap/low/t4] arm=t0 run=3 -> mmbench_unmap_low_t4_run3.t0.json
+[t5  664s] WARN: strace mmbench_unmap_low_t4: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_unmap_low_t4.err.diff)
+[t5  665s] ok: mmbench [unmap/low/t8] arm=base run=1 -> mmbench_unmap_low_t8_run1.base.json
+[t5  667s] ok: mmbench [unmap/low/t8] arm=t0 run=1 -> mmbench_unmap_low_t8_run1.t0.json
+[t5  669s] ok: mmbench [unmap/low/t8] arm=base run=2 -> mmbench_unmap_low_t8_run2.base.json
+[t5  671s] ok: mmbench [unmap/low/t8] arm=t0 run=2 -> mmbench_unmap_low_t8_run2.t0.json
+[t5  672s] ok: mmbench [unmap/low/t8] arm=base run=3 -> mmbench_unmap_low_t8_run3.base.json
+[t5  674s] ok: mmbench [unmap/low/t8] arm=t0 run=3 -> mmbench_unmap_low_t8_run3.t0.json
+[t5  681s] strace mmbench_unmap_low_t8: error-multiset equal (base == t0)
+[t5  683s] ok: mmbench [unmap/low/t16] arm=base run=1 -> mmbench_unmap_low_t16_run1.base.json
+[t5  685s] ok: mmbench [unmap/low/t16] arm=t0 run=1 -> mmbench_unmap_low_t16_run1.t0.json
+[t5  687s] ok: mmbench [unmap/low/t16] arm=base run=2 -> mmbench_unmap_low_t16_run2.base.json
+[t5  689s] ok: mmbench [unmap/low/t16] arm=t0 run=2 -> mmbench_unmap_low_t16_run2.t0.json
+[t5  690s] ok: mmbench [unmap/low/t16] arm=base run=3 -> mmbench_unmap_low_t16_run3.base.json
+[t5  692s] ok: mmbench [unmap/low/t16] arm=t0 run=3 -> mmbench_unmap_low_t16_run3.t0.json
+[t5  700s] strace mmbench_unmap_low_t16: error-multiset equal (base == t0)
+[t5  703s] ok: mmbench [unmap/high/t1] arm=base run=1 -> mmbench_unmap_high_t1_run1.base.json
+[t5  705s] ok: mmbench [unmap/high/t1] arm=t0 run=1 -> mmbench_unmap_high_t1_run1.t0.json
+[t5  708s] ok: mmbench [unmap/high/t1] arm=base run=2 -> mmbench_unmap_high_t1_run2.base.json
+[t5  710s] ok: mmbench [unmap/high/t1] arm=t0 run=2 -> mmbench_unmap_high_t1_run2.t0.json
+[t5  713s] ok: mmbench [unmap/high/t1] arm=base run=3 -> mmbench_unmap_high_t1_run3.base.json
+[t5  716s] ok: mmbench [unmap/high/t1] arm=t0 run=3 -> mmbench_unmap_high_t1_run3.t0.json
+[t5  724s] strace mmbench_unmap_high_t1: error-multiset equal (base == t0)
+[t5  726s] ok: mmbench [unmap/high/t2] arm=base run=1 -> mmbench_unmap_high_t2_run1.base.json
+[t5  729s] ok: mmbench [unmap/high/t2] arm=t0 run=1 -> mmbench_unmap_high_t2_run1.t0.json
+[t5  732s] ok: mmbench [unmap/high/t2] arm=base run=2 -> mmbench_unmap_high_t2_run2.base.json
+[t5  734s] ok: mmbench [unmap/high/t2] arm=t0 run=2 -> mmbench_unmap_high_t2_run2.t0.json
+[t5  737s] ok: mmbench [unmap/high/t2] arm=base run=3 -> mmbench_unmap_high_t2_run3.base.json
+[t5  740s] ok: mmbench [unmap/high/t2] arm=t0 run=3 -> mmbench_unmap_high_t2_run3.t0.json
+[t5  748s] WARN: strace mmbench_unmap_high_t2: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_unmap_high_t2.err.diff)
+[t5  751s] ok: mmbench [unmap/high/t4] arm=base run=1 -> mmbench_unmap_high_t4_run1.base.json
+[t5  753s] ok: mmbench [unmap/high/t4] arm=t0 run=1 -> mmbench_unmap_high_t4_run1.t0.json
+[t5  756s] ok: mmbench [unmap/high/t4] arm=base run=2 -> mmbench_unmap_high_t4_run2.base.json
+[t5  758s] ok: mmbench [unmap/high/t4] arm=t0 run=2 -> mmbench_unmap_high_t4_run2.t0.json
+[t5  761s] ok: mmbench [unmap/high/t4] arm=base run=3 -> mmbench_unmap_high_t4_run3.base.json
+[t5  764s] ok: mmbench [unmap/high/t4] arm=t0 run=3 -> mmbench_unmap_high_t4_run3.t0.json
+[t5  772s] WARN: strace mmbench_unmap_high_t4: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_unmap_high_t4.err.diff)
+[t5  775s] ok: mmbench [unmap/high/t8] arm=base run=1 -> mmbench_unmap_high_t8_run1.base.json
+[t5  777s] ok: mmbench [unmap/high/t8] arm=t0 run=1 -> mmbench_unmap_high_t8_run1.t0.json
+[t5  780s] ok: mmbench [unmap/high/t8] arm=base run=2 -> mmbench_unmap_high_t8_run2.base.json
+[t5  783s] ok: mmbench [unmap/high/t8] arm=t0 run=2 -> mmbench_unmap_high_t8_run2.t0.json
+[t5  785s] ok: mmbench [unmap/high/t8] arm=base run=3 -> mmbench_unmap_high_t8_run3.base.json
+[t5  788s] ok: mmbench [unmap/high/t8] arm=t0 run=3 -> mmbench_unmap_high_t8_run3.t0.json
+[t5  797s] WARN: strace mmbench_unmap_high_t8: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_unmap_high_t8.err.diff)
+[t5  800s] ok: mmbench [unmap/high/t16] arm=base run=1 -> mmbench_unmap_high_t16_run1.base.json
+[t5  802s] ok: mmbench [unmap/high/t16] arm=t0 run=1 -> mmbench_unmap_high_t16_run1.t0.json
+[t5  805s] ok: mmbench [unmap/high/t16] arm=base run=2 -> mmbench_unmap_high_t16_run2.base.json
+[t5  807s] ok: mmbench [unmap/high/t16] arm=t0 run=2 -> mmbench_unmap_high_t16_run2.t0.json
+[t5  810s] ok: mmbench [unmap/high/t16] arm=base run=3 -> mmbench_unmap_high_t16_run3.base.json
+[t5  812s] ok: mmbench [unmap/high/t16] arm=t0 run=3 -> mmbench_unmap_high_t16_run3.t0.json
+[t5  822s] WARN: strace mmbench_unmap_high_t16: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/mmbench_unmap_high_t16.err.diff)
+[t5  847s] ok: metis_eq [t8] arm=base run=1 -> metis_eq_run1.base.json
+run_t5_compare.sh: line 264: 31535 Segmentation fault      "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" > "$dst.native" 2> "$dst.err"
+[t5  865s] FAIL: metis_eq [t8] arm=t0 run=1 rc=139 (stderr: metis_eq_run1.t0.json.err)
+[t5  882s] ok: metis_eq [t8] arm=base run=2 -> metis_eq_run2.base.json
+run_t5_compare.sh: line 264: 31568 Segmentation fault      "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" > "$dst.native" 2> "$dst.err"
+[t5  900s] FAIL: metis_eq [t8] arm=t0 run=2 rc=139 (stderr: metis_eq_run2.t0.json.err)
+[t5  916s] ok: metis_eq [t8] arm=base run=3 -> metis_eq_run3.base.json
+run_t5_compare.sh: line 264: 31602 Segmentation fault      "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" > "$dst.native" 2> "$dst.err"
+[t5  934s] FAIL: metis_eq [t8] arm=t0 run=3 rc=139 (stderr: metis_eq_run3.t0.json.err)
+[t5  946s] strace metis_eq: error-multiset equal (base == t0)
+[t5  953s] ok: psearchy_eq [t8] arm=base run=1 -> psearchy_eq_run1.base.json
+run_t5_compare.sh: line 264: 31795 Segmentation fault      "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" > "$dst.native" 2> "$dst.err"
+[t5  958s] FAIL: psearchy_eq [t8] arm=t0 run=1 rc=139 (stderr: psearchy_eq_run1.t0.json.err)
+[t5  962s] ok: psearchy_eq [t8] arm=base run=2 -> psearchy_eq_run2.base.json
+run_t5_compare.sh: line 264: 31828 Segmentation fault      "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" > "$dst.native" 2> "$dst.err"
+[t5  966s] FAIL: psearchy_eq [t8] arm=t0 run=2 rc=139 (stderr: psearchy_eq_run2.t0.json.err)
+[t5  970s] ok: psearchy_eq [t8] arm=base run=3 -> psearchy_eq_run3.base.json
+run_t5_compare.sh: line 264: 31861 Segmentation fault      "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" > "$dst.native" 2> "$dst.err"
+[t5  975s] FAIL: psearchy_eq [t8] arm=t0 run=3 rc=139 (stderr: psearchy_eq_run3.t0.json.err)
+[t5  987s] strace psearchy_eq: error-multiset equal (base == t0)
+[t5 1013s] ok: dedup_eq [t8/glibc] arm=base run=1 -> dedup_eq_run1.base.json
+run_t5_compare.sh: line 264: 32038 Segmentation fault      "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" > "$dst.native" 2> "$dst.err"
+[t5 1013s] FAIL: dedup_eq [t8/glibc] arm=t0 run=1 rc=139 (stderr: dedup_eq_run1.t0.json.err)
+[t5 1039s] ok: dedup_eq [t8/glibc] arm=base run=2 -> dedup_eq_run2.base.json
+run_t5_compare.sh: line 264: 32070 Segmentation fault      "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" > "$dst.native" 2> "$dst.err"
+[t5 1039s] FAIL: dedup_eq [t8/glibc] arm=t0 run=2 rc=139 (stderr: dedup_eq_run2.t0.json.err)
+[t5 1065s] ok: dedup_eq [t8/glibc] arm=base run=3 -> dedup_eq_run3.base.json
+run_t5_compare.sh: line 264: 32103 Segmentation fault      "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" > "$dst.native" 2> "$dst.err"
+[t5 1065s] FAIL: dedup_eq [t8/glibc] arm=t0 run=3 rc=139 (stderr: dedup_eq_run3.t0.json.err)
+[t5 1077s] strace dedup_eq: error-multiset equal (base == t0)
+[t5 1100s] ok: dedup_eq_tcmalloc [t8/tcmalloc] arm=base run=1 -> dedup_eq_tcmalloc_run1.base.json
+[t5 1380s] ok: dedup_eq_tcmalloc [t8/tcmalloc] arm=t0 run=1 -> dedup_eq_tcmalloc_run1.t0.json
+[t5 1403s] ok: dedup_eq_tcmalloc [t8/tcmalloc] arm=base run=2 -> dedup_eq_tcmalloc_run2.base.json
+[t5 1685s] ok: dedup_eq_tcmalloc [t8/tcmalloc] arm=t0 run=2 -> dedup_eq_tcmalloc_run2.t0.json
+[t5 1708s] ok: dedup_eq_tcmalloc [t8/tcmalloc] arm=base run=3 -> dedup_eq_tcmalloc_run3.base.json
+[t5 1994s] ok: dedup_eq_tcmalloc [t8/tcmalloc] arm=t0 run=3 -> dedup_eq_tcmalloc_run3.t0.json
+[t5 2006s] WARN: strace dedup_eq_tcmalloc: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/dedup_eq_tcmalloc.err.diff)
+[t5 2006s] jvm class dir: /root/t5-jvm (local copy; APPS_DIR=/mnt/cortenmm/bench/apps is 9p-backed)
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run1.base.json.native': Operation not permitted
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run1.base.json.err': Operation not permitted
+[t5 2016s] ok: jvm [t2000x3] arm=base run=1 -> jvm_run1.base.json
+run_t5_compare.sh: line 264: 38655 Killed                  ( cd "${JVM_DIR:-$APPS_DIR}" && "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" ) > "$d_out" 2> "$d_err"
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run1.t0.json.native': Operation not permitted
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run1.t0.json.err': Operation not permitted
+[t5 2507s] FAIL: jvm [t2000x3] arm=t0 run=1 rc=137 (stderr: jvm_run1.t0.json.err)
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run2.base.json.native': Operation not permitted
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run2.base.json.err': Operation not permitted
+[t5 2516s] ok: jvm [t2000x3] arm=base run=2 -> jvm_run2.base.json
+run_t5_compare.sh: line 264: 46757 Killed                  ( cd "${JVM_DIR:-$APPS_DIR}" && "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" ) > "$d_out" 2> "$d_err"
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run2.t0.json.native': Operation not permitted
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run2.t0.json.err': Operation not permitted
+[t5 3007s] FAIL: jvm [t2000x3] arm=t0 run=2 rc=137 (stderr: jvm_run2.t0.json.err)
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run3.base.json.native': Operation not permitted
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run3.base.json.err': Operation not permitted
+[t5 3015s] ok: jvm [t2000x3] arm=base run=3 -> jvm_run3.base.json
+run_t5_compare.sh: line 264: 54867 Killed                  ( cd "${JVM_DIR:-$APPS_DIR}" && "${pre[@]}" timeout -k 10 "$T5_LEG_TIMEOUT" "$@" ) > "$d_out" 2> "$d_err"
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run3.t0.json.native': Operation not permitted
+mv: failed to preserve ownership for '/mnt/t5run/raw/jvm_run3.t0.json.err': Operation not permitted
+[t5 3506s] FAIL: jvm [t2000x3] arm=t0 run=3 rc=137 (stderr: jvm_run3.t0.json.err)
+[t5 3518s] WARN: strace jvm: error-multiset DIFFERS under MODE (see /mnt/t5run/raw/trace/jvm.err.diff)
+t5_summary.json: 55 configs, 55 strace pairs, g1_met=False, truncated=False
+[t5 3527s] === done: FAIL=1 SKIPPED_GROUPS=0 summary=/mnt/t5run/t5_summary.json ===

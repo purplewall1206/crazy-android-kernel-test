@@ -1,0 +1,21 @@
+# CortenMM arena/MODE entry points (CortenMM project local patch, not upstream).
+# The arena layer is inert unless the kernel is booted with corten=on AND the
+# process opts in via prctl(PR_CORTEN_ARENA) / prctl(PR_CORTEN_MODE).
+# See include/uapi/linux/prctl.h and include/linux/corten_arena.h in the
+# CortenMM kernel tree.  Both prctl variants need CAP_SYS_ADMIN (sandbox=none
+# runs the executor as root).
+#
+# prctl(PR_CORTEN_ARENA, op, addr, len, 0):
+#   DECLARE turns an existing MAP_NORESERVE private anonymous VMA that exactly
+#   matches [addr, addr+len) (2M aligned) into a transaction-managed arena;
+#   RELEASE tears it down; QUERY reports membership.
+# prctl(PR_CORTEN_MODE, op, 0, 0, 0):
+#   ENTER switches the whole address space to auto-arena mode: anonymous
+#   MAP_PRIVATE mmap(NULL, ...) is transparently served from the kernel
+#   arena window; EXIT releases every arena and clears the mode; GET reports 0/1.
+
+prctl$PR_CORTEN_ARENA(option const[PR_CORTEN_ARENA], op flags[corten_arena_op], addr intptr, len intptr, arg5 const[0]) (breaks_returns, ignore_return)
+corten_arena_op = CORTEN_ARENA_DECLARE, CORTEN_ARENA_RELEASE, CORTEN_ARENA_QUERY
+
+prctl$PR_CORTEN_MODE(option const[PR_CORTEN_MODE], op flags[corten_mode_op], arg3 const[0], arg4 const[0], arg5 const[0]) (breaks_returns, ignore_return)
+corten_mode_op = CORTEN_MODE_ENTER, CORTEN_MODE_EXIT, CORTEN_MODE_GET

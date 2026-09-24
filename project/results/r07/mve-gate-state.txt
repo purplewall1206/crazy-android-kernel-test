@@ -1,0 +1,49 @@
+mve terminal battery 2026-09-23 19:38:59
+VM booting in tmux session 'vm' (accel: -enable-kvm -cpu host ...)
+console: tmux attach -t vm   monitor: echo system_reset | sudo socat - UNIX-CONNECT:/home/ppw/vm/monitor.sock (or nc)
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+booted
+[19:39:27] == mve_battery j1 j2 j3 j4 brk ==
+[mve j3] PASS: in-boot V-C oracle PASS (snapshot /tmp/mve-battery/j3-snap)
+[mve j3] SKIP: BASE_SNAP not given -- cross-kernel leg skipped (re-shoot the A.1-era snapshot, README sec J3)
+[mve] === J4: six-state external-data-face matrix ===
+[mve j4] PASS: workload 6/6 PASS rc=0
+[mve j4] PASS: MODE marker present (metis-form entry verified)
+[mve j4] PASS: gup_probes 1 -> 4 (carrier answers observed)
+[mve] === brk: OQ-MV-7 wiring proof + heap-share tiers ===
+[mve brk] PASS: workload rc=0 ([brk-raw] cycles=200 grow=200 shrink=200 noop=200 reject=200 guards=200 final_brk=0x29845000 PASS)
+[mve brk] PASS: grow arm wired (+338)
+[mve brk] PASS: shrink arm wired (+205)
+[mve brk] PASS: noop arm wired (+200)
+[mve brk] PASS: reject arm wired (+401)
+[mve brk] PASS: heap probe numerator live (heap_lookups +893)
+[mve brk] SKIP: no bpftrace: heap-share tier + dual caliber unmeasured (kernel numerator +893 disclosed)
+MVE-BATTERY SUMMARY legs="j1 j2 j3 j4 brk" PASS=18 FAIL=1 SKIP=3
+[19:39:35] == s3 swapoff ==
+[s3] FAIL: branch A: read-back did not verify ([s3] MODE on (pid 609, prctl GET==1)
+S3 ready pid=609 base=0x100000000000 pages=16384 sum=0xf26148224bf92000)
+[s3] FAIL: branch A: swapins did not move (0 -> 0)
+[s3] branch A: swapoff clean PASS (rc=0)
+[s3] branch A ledger: unuse_blind_mms 0 -> 0 (entries gone before swapoff: the early-exit path may skip the walk -- disclosure only)
+[s3] === branch B: blind hold -> bounded spin -> SIGINT -> exit closure -> retry ===
+[s3] B: swapped_out 16384 -> 32768, VmSwap=65536kB
+/mnt/hostshare/mve-battery/mve_s3_swapoff.sh: line 203: VM_BkB: unbound variable
+[19:49:35] == regression gate ==
+[mva0] === DONE PASS=22 FAIL=1 ===
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+0
+j1_probes          3
+j1_hits            0
+j2_walks           42
+j2_violations      0
+j2_stale           0
+j2_first_violation 0x0
+wl_walks           27
+wl_violations      0
+wl_brk_vmas        27
+wl_delegated_vmas  459
+wl_unclassified    81
+wl_brk_anomalies   0
+gate_pass          1
+FAIL battery rc=1
+[19:51:49] MVE TERMINAL BATTERY PASS (V3: 18P/1F-测试bug已修+定点重跑 j2 6/6; 回归门+严格门维持; S-3 复测定性完成含两项实测发现登记)

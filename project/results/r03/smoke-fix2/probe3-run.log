@@ -1,0 +1,17 @@
+# probe3 (results/r03/smoke-fix2/probe3.c) — guest run 2026-09-16 ~03:0x
+# arena 64MB DECLARE, 300 cycles random 16K-2M chunks: mmap MAP_FIXED -> touch magic
+# -> in-place verify -> munmap -> remap zerocheck (expect 0) -> munmap
+ZFAIL c=0 off=320000 i=0 got=5a5a000100000320
+ZFAIL c=2 off=e9c000 i=0 got=5a5a000100000e9c
+ZFAIL c=3 off=f78000 i=0 got=5a5a000100000f78
+ZFAIL c=4 off=2b1c000 i=0 got=5a5a000100002b1c
+ZFAIL c=5 off=3cc000 i=0 got=5a5a0001000003cc
+INPLACE c=10 off=998000 i=0 got=0000000000000000
+INPLACE c=10 off=998000 i=1 got=0000000000000000
+INPLACE c=10 off=998000 i=2 got=0000000000000000
+INPLACE c=10 off=998000 i=3 got=0000000000000000
+INPLACE c=10 off=998000 i=4 got=0000000000000000
+done fails=96 zfails=31625
+RELEASE ok
+# 解读: ZFAIL got=上一 cycle 同页 magic -> 内容穿越 munmap (stale PTE);
+# INPLACE got=0 -> 写后读得零页。根因链见 results/r03/s46-fix2.md 缺陷 C。

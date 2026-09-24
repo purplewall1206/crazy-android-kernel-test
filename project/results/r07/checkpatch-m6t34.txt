@@ -1,0 +1,45 @@
+CHECK: spinlock_t definition without comment
+#215: FILE: include/linux/corten_arena.h:327:
++	spinlock_t		shrink_lock;
+
+CHECK: Lines should not end with a '['
+#1081: FILE: mm/corten_arena.c:6763:
++					this_cpu_inc(READ_ONCE(mm->corten_state)->stats[
+
+CHECK: spinlock_t definition without comment
+#1368: FILE: mm/corten_arena.c:8216:
++			spinlock_t *ptl;
+
+CHECK: multiple assignments should be avoided
+#1614: FILE: mm/corten_arena.c:8442:
++		w.nr_scanned = w.nr_young = w.nr_picked = 0;
+
+CHECK: multiple assignments should be avoided
+#1899: FILE: mm/corten_arena.c:8703:
++		w.nr_scanned = w.nr_young = w.nr_picked = 0;
+
+CHECK: Comparison to NULL could be written "xa_load"
+#2004: FILE: mm/corten_arena.c:8830:
++	return xa_load(&state->shrink_aged, addr >> PMD_SHIFT) != NULL;
+
+CHECK: spinlock_t definition without comment
+#2104: FILE: mm/corten_arena_test.c:4817:
++	spinlock_t *ptl;
+
+CHECK: spinlock_t definition without comment
+#2215: FILE: mm/corten_arena_test.c:4928:
++	spinlock_t *ptl;
+
+CHECK: spinlock_t definition without comment
+#2415: FILE: mm/corten_arena_test.c:5128:
++	spinlock_t *ptl;
+
+total: 0 errors, 0 warnings, 9 checks, 2379 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/ppw/cortenmm/patches/0001-mm-CortenMM-arena-reclaim-shrinker-observability-and.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.

@@ -1,0 +1,33 @@
+mvc gate (dual-source + J3 oracle in-boot) 2026-09-23 09:42:15
+VM booting in tmux session 'vm' (accel: -enable-kvm -cpu host ...)
+console: tmux attach -t vm   monitor: echo system_reset | sudo socat - UNIX-CONNECT:/home/ppw/vm/monitor.sock (or nc)
+[mva0] === DONE PASS=22 FAIL=1 ===
+-- T0:
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+j1_probes          0
+j1_hits            0
+j2_walks           0
+j2_violations      0
+j2_stale           0
+j2_first_violation 0x0
+gate_pass          1
+-- T1:
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+j1_probes          0
+j1_hits            0
+j2_walks           27
+j2_violations      0
+j2_stale           0
+j2_first_violation 0x0
+gate_pass          1
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+[j3] checkpoint pid=18679 win_rw=0x100000000000 magic=0x100000e00000
+[j3] maps window rows: 4
+[j3] audit_gate j1_probes=2 j1_hits=0 j2_violations=0
+[j3] maps_window_rows= gup_probes=
+[j3] snapshot: /tmp/j3-snap-1790127796
+[j3] PASS (in-boot assertions; run cmp_j3.sh for the cross-boot diff)
+[FAIL] CHUNK: maps shows 1 segment(s):
+[FAIL] mva1_probe rc=1
+FAIL guest gate rc=1
+[09:43:55] VERDICT: probe CHUNK 唯一 FAIL = 登记的 A.1 过时预期(V-C 渲染存活块=设计行为, oracle 行断言接防); oracle PASS + 严格门维持 + 22/1 => V-C GATE PASS (registered-tolerance)

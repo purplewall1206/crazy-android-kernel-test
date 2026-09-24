@@ -1,0 +1,37 @@
+[    0.000000] Command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 corten=on systemd.mask=sys-kernel-config.mount
+[    1.368346] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 corten=on systemd.mask=sys-kernel-config.mount
+[    1.368505] corten: requested on, activating at initcall time
+[    3.683138] corten: page descriptors enabled
+[    6.122397]     # Subtest: corten
+[    6.129948]     # module: corten_test
+[    6.152723]     ok 1 corten_test_layout # SKIP corten=on boot
+[    6.171958]     ok 2 corten_test_ptdesc_get_put
+[    6.189418]     ok 3 corten_test_meta_roundtrip
+[    6.206398]     ok 4 corten_test_meta_reinit_cleared
+[    6.218196]     ok 5 corten_test_covering_level
+[    6.227968]     ok 6 corten_test_covering_base_index
+===KUNIT===
+[    6.762038] kunit_try_catch (118) used greatest stack depth: 14176 bytes left
+[    6.819559] CPU: 1 UID: 0 PID: 124 Comm: kunit_try_catch Tainted: G                 N  6.18.32-g5aef23c4aee9 #25 PREEMPT(voluntary) 
+[    6.997666]  ? __pfx_kunit_generic_run_threadfn_adapter+0x10/0x10
+[    7.022307]  kunit_try_run_case+0x6f/0x150
+[    7.031419]  ? __pfx_kunit_generic_run_threadfn_adapter+0x10/0x10
+[    7.041680]  kunit_generic_run_threadfn_adapter+0x1c/0x40
+[    7.133239] CPU: 1 UID: 0 PID: 124 Comm: kunit_try_catch Tainted: G        W        N  6.18.32-g5aef23c4aee9 #25 PREEMPT(voluntary) 
+[    7.321426]  ? __pfx_kunit_generic_run_threadfn_adapter+0x10/0x10
+[    7.348782]  kunit_try_run_case+0x6f/0x150
+[    7.356468]  ? __pfx_kunit_generic_run_threadfn_adapter+0x10/0x10
+[    7.365572]  kunit_generic_run_threadfn_adapter+0x1c/0x40
+[    7.422795] kunit_try_catch (124) used greatest stack depth: 13520 bytes left
+===PANIC===
+0
+[    7.507681] # Totals: pass:24 fail:0 skip:1 total:25
+[    9.434423] # Totals: pass:19 fail:0 skip:0 total:19
+[    9.970374] # Totals: pass:13 fail:0 skip:0 total:13
+===NOT-OK===
+0
+===WARNINGS===
+[    6.795484] WARNING: CPU: 1 PID: 124 at mm/corten.c:864 corten_txn_begin+0x191/0x4b0
+[    7.114449] WARNING: CPU: 1 PID: 124 at mm/corten.c:811 corten_txn_begin+0x1a0/0x4b0
+[    8.000112] WARNING: CPU: 1 PID: 173 at ./include/linux/rwsem.h:88 corten_arena_fork_demote+0x2e7/0x300
+[    8.435026] WARNING: CPU: 0 PID: 173 at ./include/linux/rwsem.h:88 corten_arena_fork_demote+0x2e7/0x300

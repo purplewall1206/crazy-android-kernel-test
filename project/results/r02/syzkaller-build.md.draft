@@ -1,0 +1,32 @@
+### syzkaller build (2026-09-14 01:59:22)
+源码: /home/ppw/tools/syzkaller @ 70a60e12a1aa155e837bf0ad723487d72b1d2916 (70a60e1 docs/linux/syzlang: forbid sysfs driver binding in usb skill)
+go:   go version go1.23.4 linux/amd64
+make -j4 rc=0
+
+### bin/ 产物
+total 268672
+drwxrwxr-x  3 ppw ppw     4096  9月 14 01:57 .
+drwxrwxr-x 20 ppw ppw     4096  9月 14 01:54 ..
+drwxrwxr-x  2 ppw ppw     4096  9月 14 01:59 linux_amd64
+-rwxrwxr-x  1 ppw ppw 20254882  9月 14 01:58 syz-db
+-rwxrwxr-x  1 ppw ppw 70979746  9月 14 01:58 syz-manager
+-rwxrwxr-x  1 ppw ppw 44527778  9月 14 01:58 syz-mutate
+-rwxrwxr-x  1 ppw ppw 46067874  9月 14 01:58 syz-prog2c
+-rwxrwxr-x  1 ppw ppw 60608674  9月 14 01:58 syz-repro
+-rwxrwxr-x  1 ppw ppw 12435618  9月 14 01:54 syz-sysgen
+-rwxrwxr-x  1 ppw ppw 20205730  9月 14 01:58 syz-upgrade
+
+### 关键二进制核验
+syz-manager    OK  (bin/syz-manager) ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statica
+syz-prog2c     OK  (bin/syz-prog2c) ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statica
+syz-execprog   OK  (bin/linux_amd64/syz-execprog) ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statica
+syz-executor   OK  (bin/linux_amd64/syz-executor) ELF 64-bit LSB pie executable, x86-64, version 1 (GNU/Linux)
+syz-mutate     OK  (bin/syz-mutate) ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statica
+syz-db         OK  (bin/syz-db) ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statica
+syz-repro      OK  (bin/syz-repro) ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statica
+syz-upgrade    OK  (bin/syz-upgrade) ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statica
+
+### cfg 初稿
+-rw-rw-r-- 1 ppw ppw 644  9月 13 15:32 /home/ppw/cortenmm/bin/syz-cfg.json
+### workdir
+drwxrwxr-x 2 ppw ppw 4096  9月 14 01:53 /home/ppw/syzwork

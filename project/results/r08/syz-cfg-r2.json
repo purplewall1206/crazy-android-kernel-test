@@ -1,0 +1,37 @@
+{
+  "name": "cortenmm-x86_64-trixie",
+  "tag": "m7-round2-r08-kcov",
+  "target": "linux/amd64",
+  "type": "qemu",
+  "http": "127.0.0.1:56741",
+  "workdir": "/home/ppw/syzwork",
+  "kernel_obj": "/home/ppw/linux-6.18-kcov",
+  "syzkaller": "/home/ppw/tools/syzkaller",
+  "image": "/home/ppw/vm/trixie-syz.img",
+  "sshkey": "/home/ppw/vm/trixie.id_rsa",
+  "ssh_user": "root",
+  "sandbox": "none",
+  "reproduce": true,
+  "procs": 4,
+  "vm": {
+    "count": 2,
+    "cpu": 4,
+    "mem": 4096,
+    "kernel": "/home/ppw/linux-6.18-kcov/arch/x86/boot/bzImage",
+    "image_device": "-drive if=virtio,format=raw,file=",
+    "cmdline": "root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount kunit.enable=0 corten=on"
+  },
+  "enable_syscalls": [
+    "mmap",
+    "munmap",
+    "mprotect",
+    "madvise",
+    "mbind",
+    "openat",
+    "clone",
+    "ptrace",
+    "userfaultfd",
+    "prctl$PR_CORTEN_ARENA",
+    "prctl$PR_CORTEN_MODE"
+  ]
+}

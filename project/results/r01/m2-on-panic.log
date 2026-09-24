@@ -1,0 +1,23 @@
+=== corten=on boot hang evidence (bzImage r01-m2-corten-skeleton, append: systemd.mask=sys-kernel-config.mount corten=on) ===
+date: 2026-09-13 07:43:08
+qemu pid: 219746 at 100% CPU (KVM), no serial output at all (console log empty; printk buffer never flushed => hang before console_init)
+off boot with SAME bzImage minutes earlier: full boot to login in ~25s
+
+qemu monitor info status: VM status: running
+RIP samples (KASLR on): ffffffffab25d322 -> ffffffffab25d33a, CPL=0
+x/8i at RIP:
+  0xffffffffab25d33a: nop
+  0xffffffffab25d33b: nop
+  0xffffffffab25d33c: nop
+  0xffffffffab25d33d: shl    $0x20,%rdx
+  0xffffffffab25d341: or     %rdx,%rax
+  0xffffffffab25d344: mov    %rax,%rdx
+  0xffffffffab25d347: sub    %rdi,%rdx
+  0xffffffffab25d34a: cmp    %r8,%rdx
+
+=== RETRY (determinism check), 2026-09-13 07:4x ===
+Second boot with identical bzImage + append (corten=on): ZERO serial characters
+after 100s+ (console-chars=0 at t=50s/t=80s/t=100s). Control: off path boots to
+login in ~25s on the same image checked out twice. Verdict: deterministic early
+boot hang, only differing variable = corten=on. No oops text available (hang
+occurs before console init flushes the printk buffer).

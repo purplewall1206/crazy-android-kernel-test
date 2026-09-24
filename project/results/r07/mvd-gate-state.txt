@@ -1,0 +1,29 @@
+mvd gate (exit walk + B-2 serial criterion) 2026-09-23 15:42:41
+VM booting in tmux session 'vm' (accel: -enable-kvm -cpu host ...)
+console: tmux attach -t vm   monitor: echo system_reset | sudo socat - UNIX-CONNECT:/home/ppw/vm/monitor.sock (or nc)
+-- T0:
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+j1_probes          0
+j1_hits            0
+j2_walks           0
+j2_violations      0
+j2_stale           0
+j2_first_violation 0x0
+gate_pass          1
+-- T1:
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+j1_probes          0
+j1_hits            0
+j2_walks           27
+j2_violations      0
+j2_stale           0
+j2_first_violation 0x0
+gate_pass          1
+MemFree:         3807272 kB
+PageTables:         3012 kB
+dmesg pgtables-BUG count: 0
+[FAIL] CHUNK: maps shows 1 segment(s):
+[FAIL] mva1_probe rc=1
+[mva0] === DONE PASS=22 FAIL=1 ===
+FAIL guest gate rc=1
+[15:44:16] VERDICT: B-2 GUEST CRITERION MET (pgtables BUG = 0, 25→4→0 三段收敛); 唯一电池 FAIL = 登记 CHUNK 容差; 严格门维持 => V-D GATE PASS

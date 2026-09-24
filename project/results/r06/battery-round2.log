@@ -1,0 +1,27 @@
+[e] arena 10000000-10800000 declared
+[e] file MAP_FIXED at q=10200000 (p+PMD) ok
+[e1b] mapped==pread over 4 probe points -> PASS (legacy filemap serves)
+[e1b] head window-0 magic intact
+--- maps sandwich [101fc000,10208000) ---
+10000000-10200000 rw-p 00000000 00:00 0                                  [anon:corten_arena]
+10200000-10201000 rw-p 00000000 fd:00 131190                             /usr/bin/true
+10201000-10800000 rw-p 00000000 00:00 0                                  [anon:corten_arena]
+--- end sandwich ---
+E1B-RC 0
+e1b RC=137
+[e2] anon MAP_FIXED write+read roundtrip PASS
+[e2] mmap_punches delta over E2 = 1 (mark route must not punch)
+E2-RC 0
+e2 RC=0
+[e] arena 10000000-10800000 declared
+mprotect arena: Operation not supported
+e4 RC=3
+[e5] r1 NOREPLACE -> MAP_FAILED EEXIST PASS
+[e5] r2 MAP_FIXED -> 30200000 ok
+[e5] mapped==pread over 4 probe points -> PASS (legacy filemap serves)
+E5-RC 0
+e5 RC=137
+[fork-child] head=c0ffee file=1 tailrw=1
+[fork-parent] head+file+tail PASS
+FORK-RC 0
+fork RC=0

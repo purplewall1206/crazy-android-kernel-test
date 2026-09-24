@@ -1,0 +1,340 @@
+  SYNC    include/config/auto.conf.cmd
+  HOSTCC  scripts/basic/fixdep
+  DESCEND objtool
+  INSTALL libsubcmd_headers
+  CC      arch/x86/kernel/asm-offsets.s
+  CC      kernel/sched/rq-offsets.s
+  CALL    scripts/checksyscalls.sh
+  CC      kernel/sys.o
+  CC      mm/mmap.o
+  CC      mm/memory.o
+  CC      mm/userfaultfd.o
+mm/userfaultfd.c: In function ‘validate_dst_vma’:
+mm/userfaultfd.c:35:41: error: ‘struct vm_userfaultfd_ctx’ has no member named ‘ctx’
+   35 |         if (!dst_vma->vm_userfaultfd_ctx.ctx)
+      |                                         ^
+mm/userfaultfd.c: At top level:
+mm/userfaultfd.c:171:52: error: unknown type name ‘uffd_flags_t’; did you mean ‘fop_flags_t’?
+  171 |                              bool newly_allocated, uffd_flags_t flags)
+      |                                                    ^~~~~~~~~~~~
+      |                                                    fop_flags_t
+mm/userfaultfd.c:241:34: error: unknown type name ‘uffd_flags_t’; did you mean ‘fop_flags_t’?
+  241 |                                  uffd_flags_t flags,
+      |                                  ^~~~~~~~~~~~
+      |                                  fop_flags_t
+mm/userfaultfd.c: In function ‘mfill_atomic_pte_zeroed_folio’:
+mm/userfaultfd.c:334:15: error: implicit declaration of function ‘mfill_atomic_install_pte’ [-Werror=implicit-function-declaration]
+  334 |         ret = mfill_atomic_install_pte(dst_pmd, dst_vma, dst_addr,
+      |               ^~~~~~~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c: At top level:
+mm/userfaultfd.c:383:38: error: unknown type name ‘uffd_flags_t’; did you mean ‘fop_flags_t’?
+  383 |                                      uffd_flags_t flags)
+      |                                      ^~~~~~~~~~~~
+      |                                      fop_flags_t
+mm/userfaultfd.c:427:36: error: unknown type name ‘uffd_flags_t’; did you mean ‘fop_flags_t’?
+  427 |                                    uffd_flags_t flags)
+      |                                    ^~~~~~~~~~~~
+      |                                    fop_flags_t
+mm/userfaultfd.c:494:47: error: unknown type name ‘uffd_flags_t’; did you mean ‘fop_flags_t’?
+  494 |                                               uffd_flags_t flags)
+      |                                               ^~~~~~~~~~~~
+      |                                               fop_flags_t
+mm/userfaultfd.c:657:49: error: unknown type name ‘uffd_flags_t’; did you mean ‘fop_flags_t’?
+  657 |                                                 uffd_flags_t flags,
+      |                                                 ^~~~~~~~~~~~
+      |                                                 fop_flags_t
+mm/userfaultfd.c:701:45: error: unknown type name ‘uffd_flags_t’; did you mean ‘fop_flags_t’?
+  701 |                                             uffd_flags_t flags)
+      |                                             ^~~~~~~~~~~~
+      |                                             fop_flags_t
+mm/userfaultfd.c:863:27: error: unknown type name ‘uffd_flags_t’; did you mean ‘fop_flags_t’?
+  863 |                           uffd_flags_t flags)
+      |                           ^~~~~~~~~~~~
+      |                           fop_flags_t
+mm/userfaultfd.c:869:38: error: ‘struct userfaultfd_ctx’ declared inside parameter list will not be visible outside of this definition or declaration [-Werror]
+  869 | ssize_t mfill_atomic_zeropage(struct userfaultfd_ctx *ctx,
+      |                                      ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:869:9: error: no previous prototype for ‘mfill_atomic_zeropage’ [-Werror=missing-prototypes]
+  869 | ssize_t mfill_atomic_zeropage(struct userfaultfd_ctx *ctx,
+      |         ^~~~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c: In function ‘mfill_atomic_zeropage’:
+mm/userfaultfd.c:873:16: error: implicit declaration of function ‘mfill_atomic’; did you mean ‘in_atomic’? [-Werror=implicit-function-declaration]
+  873 |         return mfill_atomic(ctx, start, 0, len,
+      |                ^~~~~~~~~~~~
+      |                in_atomic
+mm/userfaultfd.c:874:29: error: implicit declaration of function ‘uffd_flags_set_mode’ [-Werror=implicit-function-declaration]
+  874 |                             uffd_flags_set_mode(0, MFILL_ATOMIC_ZEROPAGE));
+      |                             ^~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c:874:52: error: ‘MFILL_ATOMIC_ZEROPAGE’ undeclared (first use in this function)
+  874 |                             uffd_flags_set_mode(0, MFILL_ATOMIC_ZEROPAGE));
+      |                                                    ^~~~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c:874:52: note: each undeclared identifier is reported only once for each function it appears in
+mm/userfaultfd.c: At top level:
+mm/userfaultfd.c:878:50: error: unknown type name ‘uffd_flags_t’; did you mean ‘fop_flags_t’?
+  878 |                               unsigned long len, uffd_flags_t flags)
+      |                                                  ^~~~~~~~~~~~
+      |                                                  fop_flags_t
+mm/userfaultfd.c:894:48: error: unknown type name ‘uffd_flags_t’; did you mean ‘fop_flags_t’?
+  894 |                             unsigned long len, uffd_flags_t flags)
+      |                                                ^~~~~~~~~~~~
+      |                                                fop_flags_t
+mm/userfaultfd.c:900:6: error: redefinition of ‘uffd_wp_range’
+  900 | long uffd_wp_range(struct vm_area_struct *dst_vma,
+      |      ^~~~~~~~~~~~~
+In file included from mm/userfaultfd.c:14:
+./include/linux/userfaultfd_k.h:303:20: note: previous definition of ‘uffd_wp_range’ with type ‘long int(struct vm_area_struct *, long unsigned int,  long unsigned int,  bool)’ {aka ‘long int(struct vm_area_struct *, long unsigned int,  long unsigned int,  _Bool)’}
+  303 | static inline long uffd_wp_range(struct vm_area_struct *vma,
+      |                    ^~~~~~~~~~~~~
+mm/userfaultfd.c:929:32: error: ‘struct userfaultfd_ctx’ declared inside parameter list will not be visible outside of this definition or declaration [-Werror]
+  929 | int mwriteprotect_range(struct userfaultfd_ctx *ctx, unsigned long start,
+      |                                ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:929:5: error: no previous prototype for ‘mwriteprotect_range’ [-Werror=missing-prototypes]
+  929 | int mwriteprotect_range(struct userfaultfd_ctx *ctx, unsigned long start,
+      |     ^~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c: In function ‘mwriteprotect_range’:
+mm/userfaultfd.c:932:39: error: invalid use of undefined type ‘struct userfaultfd_ctx’
+  932 |         struct mm_struct *dst_mm = ctx->mm;
+      |                                       ^~
+mm/userfaultfd.c:956:23: error: invalid use of undefined type ‘struct userfaultfd_ctx’
+  956 |         down_read(&ctx->map_changing_lock);
+      |                       ^~
+mm/userfaultfd.c:958:29: error: invalid use of undefined type ‘struct userfaultfd_ctx’
+  958 |         if (atomic_read(&ctx->mmap_changing))
+      |                             ^~
+mm/userfaultfd.c:987:21: error: invalid use of undefined type ‘struct userfaultfd_ctx’
+  987 |         up_read(&ctx->map_changing_lock);
+      |                     ^~
+mm/userfaultfd.c: At top level:
+mm/userfaultfd.c:993:6: error: no previous prototype for ‘double_pt_lock’ [-Werror=missing-prototypes]
+  993 | void double_pt_lock(spinlock_t *ptl1,
+      |      ^~~~~~~~~~~~~~
+mm/userfaultfd.c:1008:6: error: no previous prototype for ‘double_pt_unlock’ [-Werror=missing-prototypes]
+ 1008 | void double_pt_unlock(spinlock_t *ptl1,
+      |      ^~~~~~~~~~~~~~~~
+mm/userfaultfd.c: In function ‘move_pages_ptes’:
+mm/userfaultfd.c:1322:30: error: ‘UFFDIO_MOVE_MODE_ALLOW_SRC_HOLES’ undeclared (first use in this function)
+ 1322 |                 if (!(mode & UFFDIO_MOVE_MODE_ALLOW_SRC_HOLES))
+      |                              ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c: At top level:
+mm/userfaultfd.c:1535:39: error: ‘struct userfaultfd_ctx’ declared inside parameter list will not be visible outside of this definition or declaration [-Werror]
+ 1535 | static int validate_move_areas(struct userfaultfd_ctx *ctx,
+      |                                       ^~~~~~~~~~~~~~~
+mm/userfaultfd.c: In function ‘validate_move_areas’:
+mm/userfaultfd.c:1560:41: error: ‘struct vm_userfaultfd_ctx’ has no member named ‘ctx’
+ 1560 |         if (!dst_vma->vm_userfaultfd_ctx.ctx ||
+      |                                         ^
+mm/userfaultfd.c:1561:40: error: ‘struct vm_userfaultfd_ctx’ has no member named ‘ctx’
+ 1561 |             dst_vma->vm_userfaultfd_ctx.ctx != ctx)
+      |                                        ^
+mm/userfaultfd.c: At top level:
+mm/userfaultfd.c:1765:27: error: ‘struct userfaultfd_ctx’ declared inside parameter list will not be visible outside of this definition or declaration [-Werror]
+ 1765 | ssize_t move_pages(struct userfaultfd_ctx *ctx, unsigned long dst_start,
+      |                           ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:1765:9: error: no previous prototype for ‘move_pages’ [-Werror=missing-prototypes]
+ 1765 | ssize_t move_pages(struct userfaultfd_ctx *ctx, unsigned long dst_start,
+      |         ^~~~~~~~~~
+mm/userfaultfd.c: In function ‘move_pages’:
+mm/userfaultfd.c:1768:35: error: invalid use of undefined type ‘struct userfaultfd_ctx’
+ 1768 |         struct mm_struct *mm = ctx->mm;
+      |                                   ^~
+mm/userfaultfd.c:1790:23: error: invalid use of undefined type ‘struct userfaultfd_ctx’
+ 1790 |         down_read(&ctx->map_changing_lock);
+      |                       ^~
+In file included from ./include/asm-generic/bug.h:5,
+                 from ./arch/x86/include/asm/bug.h:108,
+                 from ./include/linux/bug.h:5,
+                 from ./include/linux/mmdebug.h:5,
+                 from ./include/linux/mm.h:6,
+                 from mm/userfaultfd.c:8:
+mm/userfaultfd.c:1791:36: error: invalid use of undefined type ‘struct userfaultfd_ctx’
+ 1791 |         if (likely(atomic_read(&ctx->mmap_changing)))
+      |                                    ^~
+./include/linux/compiler.h:76:45: note: in definition of macro ‘likely’
+   76 | # define likely(x)      __builtin_expect(!!(x), 1)
+      |                                             ^
+mm/userfaultfd.c:1809:35: error: passing argument 1 of ‘validate_move_areas’ from incompatible pointer type [-Werror=incompatible-pointer-types]
+ 1809 |         err = validate_move_areas(ctx, src_vma, dst_vma);
+      |                                   ^~~
+      |                                   |
+      |                                   struct userfaultfd_ctx *
+mm/userfaultfd.c:1535:56: note: expected ‘struct userfaultfd_ctx *’ but argument is of type ‘struct userfaultfd_ctx *’
+ 1535 | static int validate_move_areas(struct userfaultfd_ctx *ctx,
+      |                                ~~~~~~~~~~~~~~~~~~~~~~~~^~~
+mm/userfaultfd.c:1826:38: error: ‘UFFDIO_MOVE_MODE_ALLOW_SRC_HOLES’ undeclared (first use in this function)
+ 1826 |                         if (!(mode & UFFDIO_MOVE_MODE_ALLOW_SRC_HOLES)) {
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c:1877:31: error: implicit declaration of function ‘move_pages_huge_pmd’; did you mean ‘move_splits_huge_pmd’? [-Werror=implicit-function-declaration]
+ 1877 |                         err = move_pages_huge_pmd(mm, dst_pmd, src_pmd,
+      |                               ^~~~~~~~~~~~~~~~~~~
+      |                               move_splits_huge_pmd
+mm/userfaultfd.c:1931:21: error: invalid use of undefined type ‘struct userfaultfd_ctx’
+ 1931 |         up_read(&ctx->map_changing_lock);
+      |                     ^~
+mm/userfaultfd.c: At top level:
+mm/userfaultfd.c:1956:40: error: ‘struct userfaultfd_ctx’ declared inside parameter list will not be visible outside of this definition or declaration [-Werror]
+ 1956 |                                 struct userfaultfd_ctx *ctx,
+      |                                        ^~~~~~~~~~~~~~~
+mm/userfaultfd.c: In function ‘userfaultfd_set_ctx’:
+mm/userfaultfd.c:1960:63: error: excess elements in struct initializer [-Werror]
+ 1960 |         vma->vm_userfaultfd_ctx = (struct vm_userfaultfd_ctx){ctx};
+      |                                                               ^~~
+mm/userfaultfd.c:1960:63: note: (near initialization for ‘(anonymous)’)
+mm/userfaultfd.c:1962:52: error: ‘__VM_UFFD_FLAGS’ undeclared (first use in this function)
+ 1962 |                                  (vma->vm_flags & ~__VM_UFFD_FLAGS) | vm_flags);
+      |                                                    ^~~~~~~~~~~~~~~
+mm/userfaultfd.c: At top level:
+mm/userfaultfd.c:1965:6: error: no previous prototype for ‘userfaultfd_reset_ctx’ [-Werror=missing-prototypes]
+ 1965 | void userfaultfd_reset_ctx(struct vm_area_struct *vma)
+      |      ^~~~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c:1970:24: error: no previous prototype for ‘userfaultfd_clear_vma’ [-Werror=missing-prototypes]
+ 1970 | struct vm_area_struct *userfaultfd_clear_vma(struct vma_iterator *vmi,
+      |                        ^~~~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c: In function ‘userfaultfd_clear_vma’:
+mm/userfaultfd.c:1991:54: error: ‘__VM_UFFD_FLAGS’ undeclared (first use in this function)
+ 1991 |                                     vma->vm_flags & ~__VM_UFFD_FLAGS,
+      |                                                      ^~~~~~~~~~~~~~~
+mm/userfaultfd.c: At top level:
+mm/userfaultfd.c:2006:39: error: ‘struct userfaultfd_ctx’ declared inside parameter list will not be visible outside of this definition or declaration [-Werror]
+ 2006 | int userfaultfd_register_range(struct userfaultfd_ctx *ctx,
+      |                                       ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:2006:5: error: no previous prototype for ‘userfaultfd_register_range’ [-Werror=missing-prototypes]
+ 2006 | int userfaultfd_register_range(struct userfaultfd_ctx *ctx,
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from ./include/linux/mmzone.h:22,
+                 from ./include/linux/gfp.h:7,
+                 from ./include/linux/mm.h:7,
+                 from mm/userfaultfd.c:8:
+mm/userfaultfd.c: In function ‘userfaultfd_register_range’:
+mm/userfaultfd.c:2012:30: error: invalid use of undefined type ‘struct userfaultfd_ctx’
+ 2012 |         VMA_ITERATOR(vmi, ctx->mm, start);
+      |                              ^~
+./include/linux/mm_types.h:1388:35: note: in definition of macro ‘VMA_ITERATOR’
+ 1388 |                         .tree = &(__mm)->mm_mt,                         \
+      |                                   ^~~~
+In file included from ./include/linux/init.h:5,
+                 from ./include/linux/printk.h:6,
+                 from ./include/asm-generic/bug.h:22,
+                 from ./arch/x86/include/asm/bug.h:108,
+                 from ./include/linux/bug.h:5,
+                 from ./include/linux/mmdebug.h:5,
+                 from ./include/linux/mm.h:6,
+                 from mm/userfaultfd.c:8:
+mm/userfaultfd.c:2023:34: error: implicit declaration of function ‘vma_can_userfault’ [-Werror=implicit-function-declaration]
+ 2023 |                 VM_WARN_ON_ONCE(!vma_can_userfault(vma, vm_flags, wp_async));
+      |                                  ^~~~~~~~~~~~~~~~~
+./include/linux/build_bug.h:30:63: note: in definition of macro ‘BUILD_BUG_ON_INVALID’
+   30 | #define BUILD_BUG_ON_INVALID(e) ((void)(sizeof((__force long)(e))))
+      |                                                               ^
+mm/userfaultfd.c:2023:17: note: in expansion of macro ‘VM_WARN_ON_ONCE’
+ 2023 |                 VM_WARN_ON_ONCE(!vma_can_userfault(vma, vm_flags, wp_async));
+      |                 ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:2024:56: error: ‘struct vm_userfaultfd_ctx’ has no member named ‘ctx’
+ 2024 |                 VM_WARN_ON_ONCE(vma->vm_userfaultfd_ctx.ctx &&
+      |                                                        ^
+./include/linux/build_bug.h:30:63: note: in definition of macro ‘BUILD_BUG_ON_INVALID’
+   30 | #define BUILD_BUG_ON_INVALID(e) ((void)(sizeof((__force long)(e))))
+      |                                                               ^
+mm/userfaultfd.c:2024:17: note: in expansion of macro ‘VM_WARN_ON_ONCE’
+ 2024 |                 VM_WARN_ON_ONCE(vma->vm_userfaultfd_ctx.ctx &&
+      |                 ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:2025:56: error: ‘struct vm_userfaultfd_ctx’ has no member named ‘ctx’
+ 2025 |                                 vma->vm_userfaultfd_ctx.ctx != ctx);
+      |                                                        ^
+./include/linux/build_bug.h:30:63: note: in definition of macro ‘BUILD_BUG_ON_INVALID’
+   30 | #define BUILD_BUG_ON_INVALID(e) ((void)(sizeof((__force long)(e))))
+      |                                                               ^
+mm/userfaultfd.c:2024:17: note: in expansion of macro ‘VM_WARN_ON_ONCE’
+ 2024 |                 VM_WARN_ON_ONCE(vma->vm_userfaultfd_ctx.ctx &&
+      |                 ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:2032:44: error: ‘struct vm_userfaultfd_ctx’ has no member named ‘ctx’
+ 2032 |                 if (vma->vm_userfaultfd_ctx.ctx == ctx &&
+      |                                            ^
+mm/userfaultfd.c:2040:47: error: ‘__VM_UFFD_FLAGS’ undeclared (first use in this function)
+ 2040 |                 new_flags = (vma->vm_flags & ~__VM_UFFD_FLAGS) | vm_flags;
+      |                                               ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:2043:73: error: excess elements in struct initializer [-Werror]
+ 2043 |                                             (struct vm_userfaultfd_ctx){ctx},
+      |                                                                         ^~~
+mm/userfaultfd.c:2043:73: note: (near initialization for ‘(anonymous)’)
+mm/userfaultfd.c:2053:42: error: passing argument 2 of ‘userfaultfd_set_ctx’ from incompatible pointer type [-Werror=incompatible-pointer-types]
+ 2053 |                 userfaultfd_set_ctx(vma, ctx, vm_flags);
+      |                                          ^~~
+      |                                          |
+      |                                          struct userfaultfd_ctx *
+mm/userfaultfd.c:1956:57: note: expected ‘struct userfaultfd_ctx *’ but argument is of type ‘struct userfaultfd_ctx *’
+ 1956 |                                 struct userfaultfd_ctx *ctx,
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~^~~
+mm/userfaultfd.c:2055:48: error: implicit declaration of function ‘uffd_disable_huge_pmd_share’ [-Werror=implicit-function-declaration]
+ 2055 |                 if (is_vm_hugetlb_page(vma) && uffd_disable_huge_pmd_share(vma))
+      |                                                ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c: At top level:
+mm/userfaultfd.c:2066:37: error: ‘struct userfaultfd_ctx’ declared inside parameter list will not be visible outside of this definition or declaration [-Werror]
+ 2066 | void userfaultfd_release_new(struct userfaultfd_ctx *ctx)
+      |                                     ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:2066:6: error: no previous prototype for ‘userfaultfd_release_new’ [-Werror=missing-prototypes]
+ 2066 | void userfaultfd_release_new(struct userfaultfd_ctx *ctx)
+      |      ^~~~~~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c: In function ‘userfaultfd_release_new’:
+mm/userfaultfd.c:2068:35: error: invalid use of undefined type ‘struct userfaultfd_ctx’
+ 2068 |         struct mm_struct *mm = ctx->mm;
+      |                                   ^~
+mm/userfaultfd.c:2075:44: error: ‘struct vm_userfaultfd_ctx’ has no member named ‘ctx’
+ 2075 |                 if (vma->vm_userfaultfd_ctx.ctx == ctx)
+      |                                            ^
+mm/userfaultfd.c: At top level:
+mm/userfaultfd.c:2082:37: error: ‘struct userfaultfd_ctx’ declared inside parameter list will not be visible outside of this definition or declaration [-Werror]
+ 2082 |                              struct userfaultfd_ctx *ctx)
+      |                                     ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:2081:6: error: no previous prototype for ‘userfaultfd_release_all’ [-Werror=missing-prototypes]
+ 2081 | void userfaultfd_release_all(struct mm_struct *mm,
+      |      ^~~~~~~~~~~~~~~~~~~~~~~
+In file included from ./include/linux/init.h:5,
+                 from ./include/linux/printk.h:6,
+                 from ./include/asm-generic/bug.h:22,
+                 from ./arch/x86/include/asm/bug.h:108,
+                 from ./include/linux/bug.h:5,
+                 from ./include/linux/mmdebug.h:5,
+                 from ./include/linux/mm.h:6,
+                 from mm/userfaultfd.c:8:
+mm/userfaultfd.c: In function ‘userfaultfd_release_all’:
+mm/userfaultfd.c:2102:58: error: ‘struct vm_userfaultfd_ctx’ has no member named ‘ctx’
+ 2102 |                 VM_WARN_ON_ONCE(!!vma->vm_userfaultfd_ctx.ctx ^
+      |                                                          ^
+./include/linux/build_bug.h:30:63: note: in definition of macro ‘BUILD_BUG_ON_INVALID’
+   30 | #define BUILD_BUG_ON_INVALID(e) ((void)(sizeof((__force long)(e))))
+      |                                                               ^
+mm/userfaultfd.c:2102:17: note: in expansion of macro ‘VM_WARN_ON_ONCE’
+ 2102 |                 VM_WARN_ON_ONCE(!!vma->vm_userfaultfd_ctx.ctx ^
+      |                 ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:2103:52: error: ‘__VM_UFFD_FLAGS’ undeclared (first use in this function)
+ 2103 |                                 !!(vma->vm_flags & __VM_UFFD_FLAGS));
+      |                                                    ^~~~~~~~~~~~~~~
+./include/linux/build_bug.h:30:63: note: in definition of macro ‘BUILD_BUG_ON_INVALID’
+   30 | #define BUILD_BUG_ON_INVALID(e) ((void)(sizeof((__force long)(e))))
+      |                                                               ^
+mm/userfaultfd.c:2102:17: note: in expansion of macro ‘VM_WARN_ON_ONCE’
+ 2102 |                 VM_WARN_ON_ONCE(!!vma->vm_userfaultfd_ctx.ctx ^
+      |                 ^~~~~~~~~~~~~~~
+mm/userfaultfd.c:2104:44: error: ‘struct vm_userfaultfd_ctx’ has no member named ‘ctx’
+ 2104 |                 if (vma->vm_userfaultfd_ctx.ctx != ctx) {
+      |                                            ^
+mm/userfaultfd.c: In function ‘mfill_atomic_zeropage’:
+mm/userfaultfd.c:875:1: error: control reaches end of non-void function [-Werror=return-type]
+  875 | }
+      | ^
+At top level:
+mm/userfaultfd.c:345:12: error: ‘mfill_atomic_pte_zeropage’ defined but not used [-Werror=unused-function]
+  345 | static int mfill_atomic_pte_zeropage(pmd_t *dst_pmd,
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~
+mm/userfaultfd.c:113:13: error: ‘uffd_mfill_unlock’ defined but not used [-Werror=unused-function]
+  113 | static void uffd_mfill_unlock(struct vm_area_struct *vma)
+      |             ^~~~~~~~~~~~~~~~~
+mm/userfaultfd.c:99:31: error: ‘uffd_mfill_lock’ defined but not used [-Werror=unused-function]
+   99 | static struct vm_area_struct *uffd_mfill_lock(struct mm_struct *dst_mm,
+      |                               ^~~~~~~~~~~~~~~
+cc1: all warnings being treated as errors
+make[3]: *** [scripts/Makefile.build:291: mm/userfaultfd.o] Error 1
+make[3]: *** Waiting for unfinished jobs....
+make[2]: *** [scripts/Makefile.build:552: mm] Error 2
+make[1]: *** [/home/ppw/linux-6.18-m3b/Makefile:2080: .] Error 2
+make: *** [Makefile:266: __sub-make] Error 2

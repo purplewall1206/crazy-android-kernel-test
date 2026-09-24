@@ -1,0 +1,34 @@
+build ok (io_uring via raw syscalls)
+zap_pinned before: 0
+s1 PASS (write/read pins EFAULT on uncommitted reservation)
+GUPMAT s1 PASS
+s2 PASS (pread verified, peer process_vm_readv verified, vmsplice round-trip verified)
+GUPMAT s2 PASS
+s3 PASS (write pin denied on RO, read pins verified, restore re-pin verified)
+GUPMAT s3 PASS
+s3cow PASS (FOLL_WRITE pin COW'd to private copy, child view intact)
+GUPMAT s3cow PASS
+arena_stress: arena mapped at 0x10000000..0x11000000 (16 MB, NORESERVE, no POPULATE)
+arena_range: 10000000-11000000
+arena_stress: prctl DECLARE ok: arena is live (corten fault path active)
+gupmat[s4pin]: uring pin fd=4
+gupmat[peer]: ok=1430 efault=0
+s4pin PASS (73238 churn rounds, peer clean, io_uring registered pin live)
+GUPMAT s4pin PASS (concurrent arena_stress pid=392)
+gupmat[s4pin]: uring pin fd=4
+gupmat[peer]: ok=864 efault=0
+s4pin PASS (47595 churn rounds, peer clean, io_uring registered pin live)
+GUPMAT s4pin#2 PASS (overlapping churn)
+arena_stress: prctl RELEASE ok (drain + shadow-VMA teardown)
+arena_stress: self-check: VmHWM=5328kB VmPeak=51816kB rss_limit=278528kB wall=27.03s ops=83635
+pages_touched: 10594296
+{"bench":"arena_stress","threads":4,"seconds":27,"arena_mb":16,"mode":"churn","variant":"fixed","seed":7,"ops":83635,"minflt":10594332,"majflt":1,"checksum":"2037e9dee1bcaf80","errors":0,"op_errors":0,"arena_ok":true,"declare_errno":0,"mem_ok":true,"wall_s":27.030}
+arena_stress rc=0
+zap_pinned after: 5289
+zap_pinned delta: 5289
+DMESG AUDIT CLEAN
+s1 PASS (write/read pins EFAULT on uncommitted reservation)
+GUPMAT legacy-s1 PASS
+s2 PASS (pread verified, peer process_vm_readv verified, vmsplice round-trip verified)
+GUPMAT legacy-s2 PASS
+GUPMAT-RUN ALL PASS

@@ -1,0 +1,104 @@
+[  OK  ] Started systemd-tmpfiles-clean.tim…y Cleanup of Temporary Directories.
+[  OK  ] Reached target timers.target - Timer Units.
+[  OK  ] Listening on dbus.socket - D-Bus System Message Bus Socket.
+[  OK  ] Listening on sshd-unix-local.socke…temd-ssh-generator, AF_UNIX Local).
+[  OK  ] Listening on systemd-hostnamed.socket - Hostname Service Socket.
+[  OK  ] Reached target sockets.target - Socket Units.
+[  OK  ] Reached target basic.target - Basic System.
+[  OK  ] Started cron.service - Regular background program processing daemon.
+         Starting dbus.service - D-Bus System Message Bus...
+         Starting e2scrub_reap.service - Re…ne ext4 Metadata Check Snapshots...
+         Starting systemd-logind.service - User Login Management...
+[  OK  ] Found device dev-ttyS0.device - /dev/ttyS0.
+[  OK  ] Started dbus.service - D-Bus System Message Bus.
+[  OK  ] Listening on systemd-rfkill.socket…ll Switch Status /dev/rfkill Watch.
+         Starting phpsessionclean.service - Clean php session files...
+[    7.972559] e2scrub_all (227) used greatest stack depth: 12152 bytes left
+[  OK  ] Finished e2scrub_reap.service - Re…line ext4 Metadata Check Snapshots.
+[  OK  ] Finished ifupdown-pre.service - He…o synchronize boot up for ifupdown.
+         Starting networking.service - Raise network interfaces...
+[  OK  ] Started systemd-logind.service - User Login Management.
+[  OK  ] Finished phpsessionclean.service - Clean php session files.
+[  OK  ] Finished networking.service - Raise network interfaces.
+[  OK  ] Reached target network.target - Network.
+[  OK  ] Reached target network-online.target - Network is Online.
+         Starting nginx.service - A high pe…erver and a reverse proxy server...
+         Starting redis-server.service - Advanced key-value store...
+         Starting ssh.service - OpenBSD Secure Shell server...
+         Starting systemd-user-sessions.service - Permit User Sessions...
+[  OK  ] Started nginx.service - A high per… server and a reverse proxy server.
+[  OK  ] Finished systemd-user-sessions.service - Permit User Sessions.
+[  OK  ] Started getty@tty1.service - Getty on tty1.
+[  OK  ] Started serial-getty@ttyS0.service - Serial Getty on ttyS0.
+[  OK  ] Reached target getty.target - Login Prompts.
+[   13.575916] hrtimer: interrupt took 2247887 ns
+[FAILED] Failed to start redis-server.service - Advanced key-value store.
+See 'systemctl status redis-server.service' for details.
+         Starting redis-server.service - Advanced key-value store...
+[  OK  ] Started ssh.service - OpenBSD Secure Shell server.
+[FAILED] Failed to start redis-server.service - Advanced key-value store.
+See 'systemctl status redis-server.service' for details.
+[  OK  ] Reached target multi-user.target - Multi-User System.
+[  OK  ] Reached target graphical.target - Graphical Interface.
+
+Debian GNU/Linux 13 syzkaller ttyS0
+
+syzkaller login: [   37.044688] audit: type=1107 audit(1789229449.401:3): pid=1
+uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc
+:  denied  { start } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user
+-runtime-dir@.service" cmdline="/usr/lib/systemd/systemd-logind" function="bus_u
+nit_method_start_generic" scontext=system_u:system_r:kernel_t:s0 tcontext=system
+_u:object_r:unlabeled_t:s0 tclass=service permissive=1 exe="/usr/lib/systemd/sys
+temd" sauid=0 hostname=? addr=? terminal=?'
+[   48.007098] audit: type=1107 audit(1789229460.364:4): pid=1 uid=0 auid=429496
+7295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { stop
+ } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user-runtime-dir@.serv
+ice" cmdline="/usr/lib/systemd/systemd-logind" function="bus_unit_method_start_g
+eneric" scontext=system_u:system_r:kernel_t:s0 tcontext=system_u:object_r:unlabe
+led_t:s0 tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 host
+name=? addr=? terminal=?'
+[   48.059278] audit: type=1107 audit(1789229460.370:5): pid=1 uid=0 auid=429496
+7295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { stat
+us } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user-runtime-dir@.se
+rvice" cmdline="/usr/lib/systemd/systemd-logind" function="mac_selinux_filter" s
+context=system_u:system_r:kernel_t:s0 tcontext=system_u:object_r:unlabeled_t:s0
+tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? ad
+dr=? terminal=?'
+[   71.156343] audit: type=1400 audit(1789229483.512:6): avc:  denied  { associa
+te } for  pid=479 comm="bash" name="vm_write_test" scontext=system_u:object_r:un
+labeled_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=filesystem permiss
+ive=1
+[  252.792618] clocksource: Long readout interval, skipping watchdog check: cs_n
+sec: 2105146065 wd_nsec: 2105146311
+[  869.970480] zram0: detected capacity change from 0 to 4194304
+[  870.010161] Adding 2097148k swap on /dev/zram0.  Priority:100 extents:1 acros
+s:2097148k SS
+[  870.040234] Adding 2097148k swap on /root/bench/swapfile.  Priority:-2 extent
+s:6 across:2826236k
+[  958.998484] audit: type=1400 audit(1789230371.354:7): avc:  denied  { transit
+ion } for  pid=943 comm="dpkg" path="/var/lib/dpkg/tmp.ci/preinst" dev="vda" ino
+=395963 scontext=system_u:system_r:kernel_t:s0 tcontext=system_u:system_r:dpkg_s
+cript_t:s0 tclass=process permissive=1
+[  959.029282] audit: type=1400 audit(1789230371.354:8): avc:  denied  { entrypo
+int } for  pid=943 comm="dpkg" path="/var/lib/dpkg/tmp.ci/preinst" dev="vda" ino
+=395963 scontext=system_u:system_r:dpkg_script_t:s0 tcontext=system_u:object_r:u
+nlabeled_t:s0 tclass=file permissive=1
+[  971.263092] audit: type=1400 audit(1789230383.620:9): avc:  denied  { execmem
+ } for  pid=1055 comm="java" scontext=system_u:system_r:dpkg_script_t:s0 tcontex
+t=system_u:system_r:dpkg_script_t:s0 tclass=process permissive=1
+[  974.314671] audit: type=1400 audit(1789230386.671:10): avc:  denied  { execme
+m } for  pid=1277 comm="java" scontext=system_u:system_r:kernel_t:s0 tcontext=sy
+stem_u:system_r:kernel_t:s0 tclass=process permissive=1
+[ 1015.860666] audit: type=1107 audit(1789230428.217:11): pid=1 uid=0 auid=42949
+67295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { sta
+tus } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/systemd-binfmt.serv
+ice" cmdline="" function="mac_selinux_filter" scontext=system_u:system_r:dpkg_sc
+ript_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=service permissive=1
+exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+[ 1015.924034] audit: type=1107 audit(1789230428.279:12): pid=1 uid=0 auid=42949
+67295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { sta
+rt } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/systemd-binfmt.servi
+ce" cmdline="" function="bus_unit_method_start_generic" scontext=system_u:system
+_r:dpkg_script_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=service per
+missive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+

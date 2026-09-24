@@ -1,0 +1,35 @@
+    27.27%  mmbench_dyn  [kernel.kallsyms]     [k] __send_ipi_mask
+            |
+            ---__send_ipi_mask
+               kvm_smp_send_call_func_ipi
+               smp_call_function_many_cond
+               on_each_cpu_cond_mask
+               flush_tlb_mm_range
+               |          
+                --27.27%--tlb_finish_mmu
+                          |          
+                          |--18.32%--corten_arena_mmap_route
+                          |          do_mmap
+                          |          vm_mmap_pgoff
+                          |          do_syscall_64
+                          |          entry_SYSCALL_64_after_hwframe
+                          |          __mmap
+                          |          
+                           --8.95%--corten_arena_unmap_chunk_flags
+                                     corten_arena_munmap_route
+                                     __do_sys_munmap
+                                     do_syscall_64
+                                     entry_SYSCALL_64_after_hwframe
+                                     __munmap
+    22.99%  mmbench_dyn  [kernel.kallsyms]     [k] rwsem_spin_on_owner
+            |
+            ---rwsem_spin_on_owner
+               rwsem_down_write_slowpath
+               down_write_killable
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+    22.27%  mmbench_dyn  [kernel.kallsyms]     [k] osq_lock
+            |
+            ---osq_lock

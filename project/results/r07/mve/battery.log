@@ -1,0 +1,33 @@
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+[mve] share=/mnt/hostshare out=/tmp/mve-battery cycles=200 bt=bpftrace
+[mve] MODE probe: [hold] MODE on (pid 444, prctl GET==1)
+[mve] === J1: strict zero, kernel + bpftrace calibers ===
+[mve j1] PASS: (pre) metis MODE marker present
+[mve j1] PASS: (pre) metis runs produced output
+[mve j1] PASS: (a) kernel caliber: probes 0->0 hits 0->0 (delta 0, strict)
+[mve j1] SKIP: (b) no bpftrace on guest (kernel caliber above is authoritative)
+[mve] === J2: whitelist live assertion (V-E complete form) ===
+[mve] holder wrapper=474 real pid=478 ([hold] ready pid=478 heap_grown=1)
+[mve j2] PASS: live whitelist walk rc=0 (pid 478)
+[mve j2] PASS: wl_walks advanced over the live pass (5 -> 6)
+[mve j2] PASS: wl_violations/wl_brk_anomalies delta 0 (0->0, 0->0)
+[mve j2] FAIL: exit auto-walk missing (wl_walks 5 -> 6 -> 6)
+[mve j2] PASS: wl ledger still zero across holder exit
+[mve j2] PASS: cross-check wl_violations==j2_violations (0)
+[mve] composition (disclosure only): brk_vmas=6 delegated=154 unclassified=18
+[mve] === J3: in-boot oracle + cross-kernel byte diff ===
+[mve j3] PASS: in-boot V-C oracle PASS (snapshot /tmp/mve-battery/j3-snap)
+[mve j3] SKIP: BASE_SNAP not given -- cross-kernel leg skipped (re-shoot the A.1-era snapshot, README sec J3)
+[mve] === J4: six-state external-data-face matrix ===
+[mve j4] PASS: workload 6/6 PASS rc=0
+[mve j4] PASS: MODE marker present (metis-form entry verified)
+[mve j4] PASS: gup_probes 1 -> 4 (carrier answers observed)
+[mve] === brk: OQ-MV-7 wiring proof + heap-share tiers ===
+[mve brk] PASS: workload rc=0 ([brk-raw] cycles=200 grow=200 shrink=200 noop=200 reject=200 guards=200 final_brk=0x29845000 PASS)
+[mve brk] PASS: grow arm wired (+338)
+[mve brk] PASS: shrink arm wired (+205)
+[mve brk] PASS: noop arm wired (+200)
+[mve brk] PASS: reject arm wired (+401)
+[mve brk] PASS: heap probe numerator live (heap_lookups +893)
+[mve brk] SKIP: no bpftrace: heap-share tier + dual caliber unmeasured (kernel numerator +893 disclosed)
+MVE-BATTERY SUMMARY legs="j1 j2 j3 j4 brk" PASS=18 FAIL=1 SKIP=3

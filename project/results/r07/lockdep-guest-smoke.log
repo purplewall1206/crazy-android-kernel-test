@@ -1,0 +1,56 @@
+[smoke] debugfs arenas before: 0
+PASS mode-enter
+PASS mode-get-1
+PASS mmap-anon
+PASS mmap-anon-in-window
+PASS mmap-big
+PASS mmap-big-in-window
+PASS mmap-big-next-arena
+PASS mmap-shared-stays-legacy
+PASS mmap-populate-stays-legacy
+PASS mmap-stack-stays-legacy
+PASS munmap-release
+PASS released-arena-unmapped
+PASS released-arena-gone
+PASS mmap-fixed-at-window-addr
+PASS mmap-fixed-rw
+PASS fork
+PASS waitpid
+PASS fork-child-checks
+PASS parent-content-after-fork
+PASS munmap-big
+PASS munmap-shared
+PASS munmap-pop
+PASS munmap-stack
+PASS munmap-fixed
+PASS mode-exit
+PASS mode-get-0
+SMOKE PASS
+[smoke] smoke binary rc=0
+[smoke] debugfs arenas after: 0
+[smoke] SMOKE-DRIVER PASS
+SMOKE_RC=0
+arena_stress: arena mapped at 0x10000000..0x14000000 (64 MB, NORESERVE, no POPULATE)
+arena_range: 10000000-14000000
+arena_stress: prctl DECLARE ok: arena is live (corten fault path active)
+{"bench":"arena_stress","threads":4,"seconds":15,"arena_mb":64,"mode":"churn","variant":"fixed","seed":42,"ops":9959,"minflt":2528327,"majflt":1,"checksum":"ac76db986d2c8542","errors":0,"op_errors":0,"arena_ok":true,"declare_errno":0,"mem_ok":true,"wall_s":15.034}
+arena_stress: prctl RELEASE ok (drain + shadow-VMA teardown)
+arena_stress: self-check: VmHWM=2524kB VmPeak=100968kB rss_limit=327680kB wall=15.03s ops=9959
+pages_touched: 1264144
+CHURN_RC=0
+
+real	0m15.052s
+user	0m1.940s
+sys	0m58.248s
+== 终检 (host 复核) ==
+0
+---
+enabled             1
+ptdescs             340
+meta_arrays         340
+meta_bytes          1392640
+desc_alloc_fail     0
+meta_alloc_fail     0
+free_untracked      0
+reinstalled         0
+legacy_drift        0

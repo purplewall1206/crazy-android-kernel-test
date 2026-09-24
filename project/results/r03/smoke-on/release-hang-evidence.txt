@@ -1,0 +1,24 @@
+PID_1079_RELEASE_HANG Tue Sep 15 17:03:13 UTC 2026
+== pid 1079 ==
+state: D
+[<0>] corten_arena_release+0xff/0x340
+[<0>] __do_sys_prctl+0xa94/0xc50
+[<0>] do_syscall_64+0xa4/0x2f0
+[<0>] entry_SYSCALL_64_after_hwframe+0x77/0x7f
+corten_arena_release
+---dmesg segv records---
+[    0.000000] Command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on
+[    0.470550] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on
+[    0.470786] corten: requested on, activating at initcall time
+[    2.604825] corten: page descriptors enabled
+[    5.370136]     # module: corten_test
+[    6.187764] WARNING: CPU: 6 PID: 153 at mm/corten.c:829 corten_txn_begin+0x191/0x4b0
+[    6.283607] RIP: 0010:corten_txn_begin+0x191/0x4b0
+[    6.526414]  corten_test_txn_path_overflow+0xb5/0x2a0
+[    6.718999] WARNING: CPU: 6 PID: 153 at mm/corten.c:776 corten_txn_begin+0x1a0/0x4b0
+[    6.836976] RIP: 0010:corten_txn_begin+0x1a0/0x4b0
+[    7.096036]  corten_test_txn_path_overflow+0xb5/0x2a0
+[    7.350830]     # module: corten_arena_test
+[    7.852399]     # module: corten_fault_test
+[  229.065692] arena_stress[783]: segfault at 18000000 ip 000055f439c50c41 sp 00007f180d0fae88 error 6 in arena_stress[2c41,55f439c4f000+3000] likely on CPU 2 (core 2, socket 0)
+[  229.066626] arena_stress[784]: segfault at 1c000000 ip 000055f439c50c41 sp 00007f180c8f9e88 error 6

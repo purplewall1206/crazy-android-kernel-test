@@ -1,0 +1,218 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 33K of event 'task-clock:ppp'
+# Event count (approx.): 16623307500
+#
+# Overhead  Command      Shared Object         Symbol                                       
+# ........  ...........  ....................  .............................................
+#
+    33.34%  mmbench_dyn  [kernel.kallsyms]     [k] x2apic_send_IPI
+            |
+            ---x2apic_send_IPI
+               smp_call_function_many_cond
+               on_each_cpu_cond_mask
+               flush_tlb_mm_range
+               tlb_finish_mmu
+               corten_arena_pool_release
+               corten_arena_munmap_route
+               __do_sys_munmap
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __munmap
+
+    21.03%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_spin_unlock_irqrestore
+            |
+            ---_raw_spin_unlock_irqrestore
+               |          
+                --20.91%--try_to_wake_up
+                          |          
+                           --20.90%--wake_up_q
+                                     |          
+                                      --20.61%--rwsem_wake.isra.0
+                                                |          
+                                                |--16.90%--up_read
+                                                |          corten_arena_pool_release
+                                                |          corten_arena_munmap_route
+                                                |          __do_sys_munmap
+                                                |          do_syscall_64
+                                                |          entry_SYSCALL_64_after_hwframe
+                                                |          __munmap
+                                                |          
+                                                 --3.72%--up_write
+                                                           vm_mmap_pgoff
+                                                           do_syscall_64
+                                                           entry_SYSCALL_64_after_hwframe
+                                                           __mmap
+
+    15.88%  mmbench_dyn  [kernel.kallsyms]     [k] finish_task_switch.isra.0
+            |
+            ---finish_task_switch.isra.0
+               __schedule
+               |          
+                --15.85%--schedule
+                          |          
+                           --15.85%--schedule_preempt_disabled
+                                     rwsem_down_write_slowpath
+                                     |          
+                                     |--10.78%--down_write
+                                     |          corten_arena_pool_release
+                                     |          corten_arena_munmap_route
+                                     |          __do_sys_munmap
+                                     |          do_syscall_64
+                                     |          entry_SYSCALL_64_after_hwframe
+                                     |          __munmap
+                                     |          
+                                      --5.06%--down_write_killable
+                                                vm_mmap_pgoff
+                                                do_syscall_64
+                                                entry_SYSCALL_64_after_hwframe
+                                                __mmap
+
+     8.18%  mmbench_dyn  [kernel.kallsyms]     [k] smp_call_function_many_cond
+            |
+            ---smp_call_function_many_cond
+               on_each_cpu_cond_mask
+               flush_tlb_mm_range
+               tlb_finish_mmu
+               |          
+                --8.16%--corten_arena_pool_release
+                          corten_arena_munmap_route
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     2.56%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_zap_window
+            |
+            ---corten_arena_zap_window
+               corten_arena_unmap_chunk_flags
+               corten_arena_pool_release
+               corten_arena_munmap_route
+               __do_sys_munmap
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __munmap
+
+     2.54%  mmbench_dyn  [kernel.kallsyms]     [k] __send_ipi_mask
+            |
+            ---__send_ipi_mask
+               kvm_smp_send_call_func_ipi
+               smp_call_function_many_cond
+               on_each_cpu_cond_mask
+               flush_tlb_mm_range
+               tlb_finish_mmu
+               |          
+                --2.53%--corten_arena_pool_release
+                          corten_arena_munmap_route
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     1.72%  mmbench_dyn  [kernel.kallsyms]     [k] osq_lock
+            |
+            ---osq_lock
+               rwsem_down_write_slowpath
+               |          
+               |--0.91%--down_write_killable
+               |          vm_mmap_pgoff
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __mmap
+               |          
+                --0.81%--down_write
+                          corten_arena_pool_release
+                          corten_arena_munmap_route
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     1.68%  mmbench_dyn  [kernel.kallsyms]     [k] do_user_addr_fault
+            |
+            ---do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     1.64%  mmbench_dyn  [kernel.kallsyms]     [k] rwsem_down_write_slowpath
+            |
+            ---rwsem_down_write_slowpath
+               |          
+               |--1.06%--down_write
+               |          corten_arena_pool_release
+               |          corten_arena_munmap_route
+               |          __do_sys_munmap
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __munmap
+               |          
+                --0.58%--down_write_killable
+                          vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     1.61%  mmbench_dyn  [kernel.kallsyms]     [k] rwsem_spin_on_owner
+            |
+            ---rwsem_spin_on_owner
+               rwsem_down_write_slowpath
+               |          
+               |--1.07%--down_write
+               |          corten_arena_pool_release
+               |          corten_arena_munmap_route
+               |          __do_sys_munmap
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __munmap
+               |          
+                --0.54%--down_write_killable
+                          vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     0.72%  mmbench_dyn  mmbench_dyn           [.] worker
+            |
+            ---worker
+
+     0.61%  mmbench_dyn  [kernel.kallsyms]     [k] xas_load
+            |
+            ---xas_load
+               xa_load
+
+     0.45%  mmbench_dyn  [kernel.kallsyms]     [k] clear_page_erms
+            |
+            ---clear_page_erms
+               prep_new_page
+               get_page_from_freelist
+               __alloc_frozen_pages_noprof
+               alloc_pages_mpol
+               vma_alloc_folio_noprof
+               corten_arena_folio_prealloc
+               corten_arena_user_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     0.33%  mmbench_dyn  [kernel.kallsyms]     [k] corten_txn_meta_drop
+            |
+            ---corten_txn_meta_drop
+               corten_arena_zap_window
+               corten_arena_unmap_chunk_flags
+               corten_arena_pool_release
+               corten_arena_munmap_route
+               __do_sys_munmap
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __munmap
+
+
+
+#
+# (Tip: To show context switches in perf report sample context add --switch-events to perf record.)
+#

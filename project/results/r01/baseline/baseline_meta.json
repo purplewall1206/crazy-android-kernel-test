@@ -1,0 +1,50 @@
+{
+ "set": "CortenMM M1 baseline (corten=off android17-6.18) — denominator for all M8 comparisons",
+ "date": "2026-09-13",
+ "kernel": {
+  "release": "6.18.32-g68974e235117",
+  "build": "#1 SMP PREEMPT_DYNAMIC Sun Sep 13 00:48:55 CST 2026 x86_64 GNU/Linux",
+  "bzimage": "/home/ppw/cortenmm/bzimg/r01-m0-android17-baseline",
+  "bzimage_sha256": "038ed5b38e76947b768006cb3171c231ea4acd5a3cf3515cd2560273776c2be9",
+  "provenance": "android17-6.18 (HEAD 68974e235117) + zram-lz4 defcomp (D5), built in M0; git tag corten-r01-m0"
+ },
+ "guest": {
+  "hostname": "syzkaller",
+  "vcpu": 8,
+  "mem_gb": 4,
+  "cpu_model": "13th Gen Intel(R) Core(TM) i9-13900HX",
+  "accel": "KVM",
+  "lru_gen_enabled": "0x0007",
+  "zram": "/dev/zram0 lz4 2G priority 100",
+  "swap_extra": "/root/bench/swapfile 2G priority -2 (pre-existing bandit-era swapfile, used only after zram)",
+  "thp": "absent (CONFIG_TRANSPARENT_HUGEPAGE not set) — 4KB pages",
+  "userspace": "Debian trixie, openjdk 21.0.12.1, lmbench 3.0-a9, gcc 14, libtcmalloc-minimal4 (2.16-1, installed before runs)"
+ },
+ "protocol": {
+  "runs_per_config": 3,
+  "aggregation": "median of 3",
+  "runner_scripts": ["run_mmbench.sh", "run_apps.sh", "run_jvm.sh", "run_latproc.sh"],
+  "runner_args": {
+   "mmbench": "threads '1 2 4 8 16', MMBENCH_MIN_SECONDS=1, MMBENCH_SEED_BASE=20260913 (defaults)",
+   "apps": "THREADS=8, DEDUP_SECONDS=20, seed=42 (defaults)",
+   "jvm": "JT_THREADS=2000, JT_REPS=3 (defaults)",
+   "latproc": "ops fork/exec/shell x3, LAT_PROC=/usr/lib/lmbench/bin/x86_64-linux-gnu/lat_proc"
+  },
+  "guest_timegate_stub": "runner scripts call /home/ppw/cortenmm/bin/timegate.sh which does not exist in the guest; a stub 'exit 0' was placed there for the guest (kept identical scripts for M8 reruns)",
+  "order": "gen_text corpus -> mmbench (306s) -> lat_proc -> jvm -> apps -> perfetto trace; strictly sequential, nothing else running in guest",
+  "corpus": {
+   "text1600": "/root/data/text1600.txt 1677721600 bytes (gen_text 1600, 70.6s)",
+   "text368": "/root/data/text368.txt 385875968 bytes (gen_text 368, 18.6s)"
+  },
+  "host_side_repro": "bench-src.tar.gz contains mmbench/ and apps/ sources + all runner scripts exactly as executed"
+ },
+ "total_matrix_wall_clock_s": {
+  "gen_text": 89.2,
+  "mmbench": 306,
+  "latproc": 230,
+  "jvm": 36,
+  "apps": 191,
+  "perfetto_trace": 47,
+  "note": "gen_text/mmbench/trace measured by epoch/mtimes; latproc & jvm approx from artifact spans; apps = sum of per-run measured 'seconds'/'elapsed_s' fields (metis 50.4 + psearchy 13.6 + dedup 66.4 + dedup-tcmalloc 61.2). Grand total ~15 min of guest-busy time."
+ }
+}

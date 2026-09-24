@@ -1,0 +1,26 @@
+[battery] phase 1: fork_arena_test (corten arm)
+isolation: PASS (checksum 076534f9ba241483, 3 shapes, child rewrite invisible)
+roundtrip: round 100 done
+roundtrip: round 200 done
+roundtrip: PASS 200 rounds x 1k pages, checksum 076534f9ba241483
+mtlock: PASS 200 forks x 8 faulting threads, counts reconciled
+counts: PASS park+0 flush, faithful+1, demotes/timeouts flat (ejects 0->0 recorded)
+fork_arena_test: PASS
+[battery] phase 2: fork_arena_test (legacy arm)
+isolation: PASS (checksum 076534f9ba241483, 3 shapes, child rewrite invisible)
+roundtrip: PASS 50 rounds x 1k pages, checksum 076534f9ba241483
+fork_arena_test: PASS
+[battery] phase 3: cow_collision
+cow_collision: round 50 ok (checksum 43a048bac2c2c203)
+cow_collision: round 100 ok (checksum 5583138c351b9703)
+cow_collision: round 150 ok (checksum e22ac2534e8cae83)
+cow_collision: round 200 ok (checksum d20987437c038f03)
+cow_collision: [corten] PASS 200 rounds x 64 pages x 2+2 threads, zero cross-contamination
+cow_collision: round 50 ok (checksum 43a048bac2c2c203)
+cow_collision: round 100 ok (checksum 5583138c351b9703)
+cow_collision: round 150 ok (checksum e22ac2534e8cae83)
+cow_collision: round 200 ok (checksum d20987437c038f03)
+cow_collision: [legacy] PASS 200 rounds x 64 pages x 2+2 threads, zero cross-contamination
+[battery] phase 4: kselftests/mm 8 件套 (map_fixed_noreplace mremap_test mremap_dontunmap madv_populate cow mkdirty protection_keys gup_longterm gup_test)
+ksmoke: PRECHECK FAIL: no selftests mm dir at /home/ppw/linux-6.18/tools/testing/selftests/mm (is KDIR a 6.18 kernel tree?)
+[battery] BATTERY FAIL (logs in /root/fork-battery)

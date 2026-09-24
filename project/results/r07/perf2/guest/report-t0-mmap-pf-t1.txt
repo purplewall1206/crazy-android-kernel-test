@@ -1,0 +1,487 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 13K of event 'task-clock:ppp'
+# Event count (approx.): 6741369000
+#
+# Overhead  Command      Shared Object         Symbol                                       
+# ........  ...........  ....................  .............................................
+#
+    24.13%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_zap_window
+            |
+            ---corten_arena_zap_window
+               corten_arena_unmap_chunk_flags
+               corten_arena_pool_release
+               corten_arena_munmap_route
+               __do_sys_munmap
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __munmap
+
+    11.41%  mmbench_dyn  [kernel.kallsyms]     [k] do_user_addr_fault
+            |
+            ---do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     6.31%  mmbench_dyn  [kernel.kallsyms]     [k] corten_txn_meta
+            |
+            ---corten_txn_meta
+               |          
+                --5.95%--corten_arena_zap_window
+                          corten_arena_unmap_chunk_flags
+                          corten_arena_pool_release
+                          corten_arena_munmap_route
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     5.18%  mmbench_dyn  mmbench_dyn           [.] worker
+            |
+            ---worker
+
+     3.51%  mmbench_dyn  [kernel.kallsyms]     [k] xas_load
+            |
+            ---xas_load
+               xa_load
+               |          
+               |--1.34%--corten_ptdesc_rearm
+               |          corten_arena_fill_upper
+               |          corten_arena_user_fault
+               |          do_user_addr_fault
+               |          exc_page_fault
+               |          asm_exc_page_fault
+               |          worker
+               |          
+                --1.22%--corten_arena_lookup
+                          corten_arena_lookup_get
+                          |          
+                           --1.00%--corten_arena_user_fault
+                                     do_user_addr_fault
+                                     exc_page_fault
+                                     asm_exc_page_fault
+                                     worker
+
+     3.10%  mmbench_dyn  [kernel.kallsyms]     [k] smp_call_function_many_cond
+            |
+            ---smp_call_function_many_cond
+               on_each_cpu_cond_mask
+               flush_tlb_mm_range
+               tlb_finish_mmu
+               |          
+                --3.09%--corten_arena_pool_release
+                          corten_arena_munmap_route
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     2.89%  mmbench_dyn  [kernel.kallsyms]     [k] corten_slot_index
+            |
+            ---corten_slot_index
+               corten_txn_meta
+               |          
+                --2.73%--corten_arena_zap_window
+                          corten_arena_unmap_chunk_flags
+                          corten_arena_pool_release
+                          corten_arena_munmap_route
+                          __do_sys_munmap
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __munmap
+
+     2.23%  mmbench_dyn  [kernel.kallsyms]     [k] clear_page_erms
+            |
+            ---clear_page_erms
+               prep_new_page
+               get_page_from_freelist
+               __alloc_frozen_pages_noprof
+               alloc_pages_mpol
+               vma_alloc_folio_noprof
+               corten_arena_folio_prealloc
+               corten_arena_user_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     2.15%  mmbench_dyn  [kernel.kallsyms]     [k] get_mem_cgroup_from_mm
+            |
+            ---get_mem_cgroup_from_mm
+               __mem_cgroup_charge
+               corten_arena_folio_prealloc
+               corten_arena_user_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     2.14%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_check_empty_locked
+            |
+            ---corten_arena_check_empty_locked
+               corten_arena_auto_mmap_route
+               do_mmap
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     1.62%  mmbench_dyn  [kernel.kallsyms]     [k] __alloc_frozen_pages_noprof
+            |
+            ---__alloc_frozen_pages_noprof
+               alloc_pages_mpol
+               vma_alloc_folio_noprof
+               corten_arena_folio_prealloc
+               corten_arena_user_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     1.41%  mmbench_dyn  [kernel.kallsyms]     [k] ___rmqueue_pcplist
+            |
+            ---___rmqueue_pcplist
+               get_page_from_freelist
+               __alloc_frozen_pages_noprof
+               alloc_pages_mpol
+               vma_alloc_folio_noprof
+               corten_arena_folio_prealloc
+               corten_arena_user_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     1.30%  mmbench_dyn  [kernel.kallsyms]     [k] memcg1_commit_charge
+            |
+            ---memcg1_commit_charge
+               charge_memcg
+               __mem_cgroup_charge
+               corten_arena_folio_prealloc
+               corten_arena_user_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     1.14%  mmbench_dyn  [kernel.kallsyms]     [k] set_shrinker_bit
+            |
+            ---set_shrinker_bit
+               corten_arena_folio_prealloc
+               corten_arena_user_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     1.10%  mmbench_dyn  [kernel.kallsyms]     [k] mtree_load
+            |
+            ---mtree_load
+               |          
+               |--0.56%--corten_arena_pool_release
+               |          corten_arena_munmap_route
+               |          __do_sys_munmap
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __munmap
+               |          
+                --0.53%--corten_arena_auto_mmap_route
+                          do_mmap
+                          vm_mmap_pgoff
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __mmap
+
+     1.08%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_fill_upper
+            |
+            ---corten_arena_fill_upper
+               corten_arena_user_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     1.01%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_user_fault
+            |
+            ---corten_arena_user_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     1.01%  mmbench_dyn  [vdso]                [.] __vdso_clock_gettime
+            |
+            ---__vdso_clock_gettime
+               |          
+                --0.86%--clock_gettime
+
+     0.99%  mmbench_dyn  [kernel.kallsyms]     [k] __lruvec_stat_mod_folio
+            |
+            ---__lruvec_stat_mod_folio
+               |          
+                --0.85%--folio_add_new_anon_rmap
+                          corten_arena_fault_once.part.0
+                          corten_arena_user_fault
+                          do_user_addr_fault
+                          exc_page_fault
+                          asm_exc_page_fault
+                          worker
+
+     0.91%  mmbench_dyn  [kernel.kallsyms]     [k] free_unref_folios
+            |
+            ---free_unref_folios
+               folios_put_refs
+               free_pages_and_swap_cache
+               __tlb_batch_free_encoded_pages
+               tlb_finish_mmu
+               corten_arena_pool_release
+               corten_arena_munmap_route
+               __do_sys_munmap
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __munmap
+
+     0.85%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_lookup_get
+            |
+            ---corten_arena_lookup_get
+               |          
+                --0.82%--corten_arena_user_fault
+                          do_user_addr_fault
+                          exc_page_fault
+                          asm_exc_page_fault
+                          worker
+
+     0.84%  mmbench_dyn  [kernel.kallsyms]     [k] get_vma_policy
+            |
+            ---get_vma_policy
+               vma_alloc_folio_noprof
+               corten_arena_folio_prealloc
+               corten_arena_user_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     0.84%  mmbench_dyn  libc.so.6             [.] __munmap
+            |
+            ---__munmap
+
+     0.83%  mmbench_dyn  [kernel.kallsyms]     [k] do_syscall_64
+            |
+            ---do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               |          
+                --0.56%--__munmap
+
+     0.76%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_lookup
+            |
+            ---corten_arena_lookup
+               corten_arena_lookup_get
+               |          
+                --0.75%--corten_arena_user_fault
+                          do_user_addr_fault
+                          exc_page_fault
+                          asm_exc_page_fault
+                          worker
+
+     0.73%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_fault_once.part.0
+            |
+            ---corten_arena_fault_once.part.0
+               corten_arena_user_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               worker
+
+     0.68%  mmbench_dyn  [kernel.kallsyms]     [k] page_counter_cancel
+            |
+            ---page_counter_cancel
+               page_counter_uncharge
+               memcg_uncharge
+               uncharge_batch
+               __mem_cgroup_uncharge_folios
+               folios_put_refs
+               free_pages_and_swap_cache
+               __tlb_batch_free_encoded_pages
+               tlb_finish_mmu
+               corten_arena_pool_release
+               corten_arena_munmap_route
+               __do_sys_munmap
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __munmap
+
+     0.68%  mmbench_dyn  libc.so.6             [.] clock_gettime
+            |
+            ---clock_gettime
+
+     0.57%  mmbench_dyn  [kernel.kallsyms]     [k] corten_txn_slot
+            |
+            ---corten_txn_slot
+               corten_arena_zap_window
+               corten_arena_unmap_chunk_flags
+               corten_arena_pool_release
+               corten_arena_munmap_route
+               __do_sys_munmap
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __munmap
+
+     0.53%  mmbench_dyn  [kernel.kallsyms]     [k] file_map_prot_check
+            |
+            ---file_map_prot_check
+               selinux_mmap_file
+               security_mmap_file
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     0.52%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_spin_lock
+            |
+            ---_raw_spin_lock
+               __pte_offset_map_lock
+
+     0.51%  mmbench_dyn  [kernel.kallsyms]     [k] __kmalloc_noprof
+            |
+            ---__kmalloc_noprof
+               anon_vma_name_alloc
+               corten_arena_shadowize
+               corten_arena_auto_mmap_route
+               do_mmap
+               vm_mmap_pgoff
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mmap
+
+     0.47%  mmbench_dyn  [kernel.kallsyms]     [k] kfree
+     0.45%  mmbench_dyn  [kernel.kallsyms]     [k] xas_start
+     0.44%  mmbench_dyn  [kernel.kallsyms]     [k] __rcu_read_lock
+     0.44%  mmbench_dyn  mmbench_dyn           [.] munmap@plt
+     0.42%  mmbench_dyn  [kernel.kallsyms]     [k] flush_tlb_mm_range
+     0.42%  mmbench_dyn  [kernel.kallsyms]     [k] uncharge_folio
+     0.41%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_spin_trylock
+     0.40%  mmbench_dyn  [kernel.kallsyms]     [k] __vma_start_write
+     0.40%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_auto_mmap_route
+     0.39%  mmbench_dyn  [kernel.kallsyms]     [k] corten_txn_begin
+     0.39%  mmbench_dyn  [kernel.kallsyms]     [k] xa_load
+     0.38%  mmbench_dyn  libc.so.6             [.] __mmap
+     0.36%  mmbench_dyn  [kernel.kallsyms]     [k] free_pages_and_swap_cache
+     0.36%  mmbench_dyn  [kernel.kallsyms]     [k] memcg1_uncharge_batch
+     0.36%  mmbench_dyn  [kernel.kallsyms]     [k] __rcu_read_unlock
+     0.35%  mmbench_dyn  [kernel.kallsyms]     [k] folio_add_new_anon_rmap
+     0.35%  mmbench_dyn  [kernel.kallsyms]     [k] get_page_from_freelist
+     0.33%  mmbench_dyn  [kernel.kallsyms]     [k] mutex_lock
+     0.30%  mmbench_dyn  [kernel.kallsyms]     [k] corten_real_root
+     0.30%  mmbench_dyn  [kernel.kallsyms]     [k] vm_get_page_prot
+     0.29%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_read_unlock_bh
+     0.26%  mmbench_dyn  [kernel.kallsyms]     [k] corten_ptdesc_get
+     0.24%  mmbench_dyn  [kernel.kallsyms]     [k] corten_ptdesc_put
+     0.24%  mmbench_dyn  [kernel.kallsyms]     [k] corten_txn_finish
+     0.23%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_munmap_route
+     0.23%  mmbench_dyn  [kernel.kallsyms]     [k] try_charge_memcg
+     0.22%  mmbench_dyn  [kernel.kallsyms]     [k] mod_memcg_lruvec_state
+     0.21%  mmbench_dyn  [kernel.kallsyms]     [k] corten_mark
+     0.21%  mmbench_dyn  [kernel.kallsyms]     [k] folio_remove_rmap_ptes
+     0.21%  mmbench_dyn  [kernel.kallsyms]     [k] folios_put_refs
+     0.20%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_read_lock_bh
+     0.20%  mmbench_dyn  [kernel.kallsyms]     [k] prep_new_page
+     0.20%  mmbench_dyn  [kernel.kallsyms]     [k] tlb_finish_mmu
+     0.19%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_pmd
+     0.19%  mmbench_dyn  [kernel.kallsyms]     [k] __pte_offset_map_lock
+     0.19%  mmbench_dyn  [kernel.kallsyms]     [k] mutex_unlock
+     0.18%  mmbench_dyn  [kernel.kallsyms]     [k] security_mmap_file
+     0.18%  mmbench_dyn  [kernel.kallsyms]     [k] strlen
+     0.18%  mmbench_dyn  [kernel.kallsyms]     [k] vm_mmap_pgoff
+     0.16%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_write_lock_bh
+     0.16%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_folio_prealloc
+     0.16%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_unshadow
+     0.16%  mmbench_dyn  [kernel.kallsyms]     [k] down_write
+     0.16%  mmbench_dyn  [kernel.kallsyms]     [k] free_frozen_page_commit
+     0.16%  mmbench_dyn  [kernel.kallsyms]     [k] should_flush_tlb
+     0.15%  mmbench_dyn  [kernel.kallsyms]     [k] css_rstat_updated
+     0.14%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_unmap_chunk_flags
+     0.13%  mmbench_dyn  [kernel.kallsyms]     [k] __x64_sys_mmap
+     0.13%  mmbench_dyn  [kernel.kallsyms]     [k] up_read
+     0.13%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_account_fault
+     0.13%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_dispatch
+     0.13%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_pool_release
+     0.13%  mmbench_dyn  [kernel.kallsyms]     [k] finish_task_switch.isra.0
+     0.13%  mmbench_dyn  [kernel.kallsyms]     [k] x64_sys_call
+     0.12%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_spin_unlock_irqrestore
+     0.12%  mmbench_dyn  [kernel.kallsyms]     [k] corten_map
+     0.12%  mmbench_dyn  [kernel.kallsyms]     [k] corten_query
+     0.12%  mmbench_dyn  [kernel.kallsyms]     [k] corten_unmap
+     0.12%  mmbench_dyn  [kernel.kallsyms]     [k] kvm_flush_tlb_multi
+     0.11%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_shadowize
+     0.11%  mmbench_dyn  [kernel.kallsyms]     [k] vma_alloc_folio_noprof
+     0.10%  mmbench_dyn  [kernel.kallsyms]     [k] down_write_killable
+     0.09%  mmbench_dyn  [kernel.kallsyms]     [k] anon_vma_name_alloc
+     0.09%  mmbench_dyn  [kernel.kallsyms]     [k] count_memcg_events
+     0.09%  mmbench_dyn  [kernel.kallsyms]     [k] percpu_counter_add_batch
+     0.08%  mmbench_dyn  [kernel.kallsyms]     [k] corten_ptdesc_rearm
+     0.07%  mmbench_dyn  [kernel.kallsyms]     [k] __folio_throttle_swaprate
+     0.07%  mmbench_dyn  [kernel.kallsyms]     [k] __local_bh_enable_ip
+     0.07%  mmbench_dyn  [kernel.kallsyms]     [k] __x64_sys_munmap
+     0.07%  mmbench_dyn  [kernel.kallsyms]     [k] charge_memcg
+     0.07%  mmbench_dyn  [kernel.kallsyms]     [k] ___pte_offset_map
+     0.07%  mmbench_dyn  [kernel.kallsyms]     [k] __tlb_remove_folio_pages_size.constprop.0
+     0.07%  mmbench_dyn  [kernel.kallsyms]     [k] finish_rcuwait
+     0.07%  mmbench_dyn  [kernel.kallsyms]     [k] ksys_mmap_pgoff
+     0.07%  mmbench_dyn  [kernel.kallsyms]     [k] policy_nodemask
+     0.06%  mmbench_dyn  [kernel.kallsyms]     [k] __cond_resched
+     0.06%  mmbench_dyn  [kernel.kallsyms]     [k] corten_arena_fault_owned
+     0.05%  mmbench_dyn  [kernel.kallsyms]     [k] __mod_node_page_state
+     0.05%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_spin_unlock
+     0.05%  mmbench_dyn  [kernel.kallsyms]     [k] corten_lock_range
+     0.05%  mmbench_dyn  [kernel.kallsyms]     [k] handle_softirqs
+     0.05%  mmbench_dyn  [kernel.kallsyms]     [k] static_key_count
+     0.04%  mmbench_dyn  [kernel.kallsyms]     [k] __do_sys_munmap
+     0.04%  mmbench_dyn  [kernel.kallsyms]     [k] downgrade_write
+     0.04%  mmbench_dyn  [kernel.kallsyms]     [k] tlb_gather_mmu
+     0.04%  mmbench_dyn  [kernel.kallsyms]     [k] __mem_cgroup_charge
+     0.04%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_spin_unlock_irq
+     0.04%  mmbench_dyn  [kernel.kallsyms]     [k] alloc_pages_mpol
+     0.04%  mmbench_dyn  [kernel.kallsyms]     [k] do_mmap
+     0.04%  mmbench_dyn  [kernel.kallsyms]     [k] free_swap_cache
+     0.04%  mmbench_dyn  [kernel.kallsyms]     [k] uncharge_batch
+     0.04%  mmbench_dyn  [kernel.kallsyms]     [k] up_write
+     0.03%  mmbench_dyn  [kernel.kallsyms]     [k] mm_trace_rss_stat
+     0.03%  mmbench_dyn  [kernel.kallsyms]     [k] page_counter_try_charge
+     0.03%  mmbench_dyn  [kernel.kallsyms]     [k] page_counter_uncharge
+     0.03%  mmbench_dyn  [kernel.kallsyms]     [k] pte_mkwrite
+     0.03%  mmbench_dyn  mmbench_dyn           [.] clock_gettime@plt
+     0.02%  mmbench_dyn  [kernel.kallsyms]     [k] __tlb_batch_free_encoded_pages
+     0.02%  mmbench_dyn  [kernel.kallsyms]     [k] _raw_write_unlock_bh
+     0.02%  mmbench_dyn  [kernel.kallsyms]     [k] corten_meta_ensure_locked
+     0.02%  mmbench_dyn  [kernel.kallsyms]     [k] on_each_cpu_cond_mask
+     0.02%  mmbench_dyn  [kernel.kallsyms]     [k] selinux_mmap_file
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] __mem_cgroup_uncharge_folios
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] __pi_memcpy
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] exc_page_fault
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] gfp_zone
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] kmem_cache_alloc_noprof
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] mem_cgroup_from_task
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] memcg1_oom_recover
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] native_flush_tlb_multi
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] propagate_protected_usage
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] x2apic_send_IPI
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] __tlb_remove_page_size
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] memcg_uncharge
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] refill_stock
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] sched_balance_find_src_group
+     0.01%  mmbench_dyn  [kernel.kallsyms]     [k] task_mm_cid_work
+     0.01%  mmbench_dyn  ld-linux-x86-64.so.2  [.] 0x000000000000a0b2
+     0.01%  mmbench_dyn  ld-linux-x86-64.so.2  [.] 0x000000000000a356
+     0.01%  mmbench_dyn  ld-linux-x86-64.so.2  [.] 0x0000000000015958
+     0.01%  mmbench_dyn  ld-linux-x86-64.so.2  [.] 0x0000000000015c68
+     0.01%  mmbench_dyn  ld-linux-x86-64.so.2  [.] 0x000000000001619f
+
+
+#
+# (Tip: If you prefer Intel style assembly, try: perf annotate -M intel)
+#

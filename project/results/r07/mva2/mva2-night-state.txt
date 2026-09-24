@@ -1,0 +1,162 @@
+night matrix start 2026-09-22 14:36:24
+[14:36:24] == timegate ==
+[timegate] 2026-09-22 14:36:24 D21 持续工作制: 直通放行（原 23:00-09:00 窗口已撤销）
+[14:36:24] == bzimage ==
+d25b76393e83a3752ed71c1bd42cb06e7f261558ada4ea221a87aed017da9ec7  /home/ppw/cortenmm/results/r07/mva2/bzImage-mva2-y
+[mva2-verify] bzimage PASS
+[14:48:38] == kunit-on1 ==
+[    4.856583] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] KUnit 全绿 (/home/ppw/cortenmm/results/r07/mva2/kunit-on1.log)
+[    4.856583] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] kunit-y PASS
+[14:48:55] == kunit-on2 ==
+[    5.113285] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] KUnit 全绿 (/home/ppw/cortenmm/results/r07/mva2/kunit-on2.log)
+[    5.113285] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] kunit-on2 PASS
+[14:49:04] == kunit-off ==
+[    4.678791] # corten: pass:25 fail:0 skip:0 total:25
+[mva2-verify] KUnit 全绿 (/home/ppw/cortenmm/results/r07/mva2/kunit-off1.log)
+[    4.678791] # corten: pass:25 fail:0 skip:0 total:25
+[mva2-verify] kunit-plain PASS
+[14:49:12] == n-objects ==
+  HOSTCC  scripts/basic/fixdep
+#
+# configuration written to .config
+#
+[mva2-verify] =n 十四对象 RC=0 零警告 + nm 零 corten 符号
+[mva2-verify] n-objects PASS
+[mva2-verify] .config 已恢复(=y)
+[14:50:41] == kunit-das ==
+#
+# No change to .config
+#
+[    5.052173] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] KUnit 全绿 (/home/ppw/cortenmm/results/r07/mva2/kunit-das.log)
+[    5.052173] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] kunit-das PASS
+[mva2-verify] .config 已恢复
+[15:02:54] == kunit-lk ==
+#
+# configuration written to .config
+#
+[mva2-verify] FAIL: KUnit 存在失败用例, 见 /home/ppw/cortenmm/results/r07/mva2/kunit-lk.log
+[mva2-verify] .config 已恢复
+FAIL kunit-lk
+[15:21:48] matrix continuation (lk flake re-run PASS 24/0/1)
+[15:21:48] == guest-boot ==
+VM booting in tmux session 'vm' (accel: -enable-kvm -cpu host ...)
+console: tmux attach -t vm   monitor: echo system_reset | sudo socat - UNIX-CONNECT:/home/ppw/vm/monitor.sock (or nc)
+FAIL guest ssh
+[15:29:51] continuation v2 (fix: launch_vm.sh 缺 systemd.mask/corten=on/kunit.enable=0 — 夜脚本原行缺陷, 已修)
+[15:29:51] == guest-boot ==
+VM booting in tmux session 'vm' (accel: -enable-kvm -cpu host ...)
+console: tmux attach -t vm   monitor: echo system_reset | sudo socat - UNIX-CONNECT:/home/ppw/vm/monitor.sock (or nc)
+[15:30:18] == guest-gate ==
+FAIL guest gate rc=127 (见 guest-gate.log)
+[15:32:00] gate-run v3 (fix: 9p 手动挂载 — trixie.img 无自动挂载, STATE 环境坑清单既有条目)
+[15:32:00] == guest-gate ==
+[ok] auto_vgate line present (vgate=0)
+[ok] dmesg corten-quiet
+[ok] mmap1 in window 0x100000000000x
+[ok] touch1 8M verified-write
+[ok] S-4: maps has no reservation segment after munmap
+[ok] FRESH: reactivated window write+readback 8M ok
+[ok] CHUNK: kept half still works after inner munmap
+[ok] CHUNK: dropped half re-materialized, kept half intact
+[ok] CHUNK: maps carries no VMA-split residue
+[ok] S-4b: maps clean after final munmap
+[ok] S-1: fault on munmapped window is SEGV_MAPERR (was ACCERR)
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: MemFree reconciled (3690644 -> 3779036 kB, 8 iters)
+[ok] mva1_probe rc=0
+[ok] S-1 MAPERR observed live
+[ok] S-4 maps-clean observed live
+[ok] FRESH reactivation observed live
+[ok] CHUNK drop-and-revive observed live
+[ok] punch+fork MemFree reconciled
+[ok] pool churn observed (parks=6 hits=3)
+[ok] park_unmap_fails==0
+[ok] no rss-counter regressions during gate
+[mva0] === DONE PASS=23 FAIL=0 ===
+[15:32:32] == guest-halt ==
+[15:32:53] == checkpatch ==
+NOTE: Ignored message types: FILE_PATH_CHANGES
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+night matrix DONE 2026-09-22 15:33:04
+[16:33:07] post-fix verification battery (F1/C1/C2 implemented by fix agent; verifier = main session)
+[16:33:07] == build-y ==
+FAIL build-y
+[16:45:57] post-fix verification battery (F1/C1/C2 implemented by fix agent; verifier = main session)
+[16:45:57] == build-y ==
+[16:47:52] == kunit-y ==
+[    5.209487] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] KUnit 全绿 (/home/ppw/cortenmm/results/r07/mva2/kunit-on1.log)
+[    5.209487] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] kunit-y PASS
+[16:48:09] == kunit-on2 ==
+[    4.658343] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] KUnit 全绿 (/home/ppw/cortenmm/results/r07/mva2/kunit-on2.log)
+[    4.658343] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] kunit-on2 PASS
+[16:48:18] == kunit-plain ==
+[    4.860755] # corten: pass:25 fail:0 skip:0 total:25
+[mva2-verify] KUnit 全绿 (/home/ppw/cortenmm/results/r07/mva2/kunit-off1.log)
+[    4.860755] # corten: pass:25 fail:0 skip:0 total:25
+[mva2-verify] kunit-plain PASS
+[16:48:26] == kunit-das ==
+  HOSTCC  scripts/basic/fixdep
+#
+# No change to .config
+#
+[    5.212751] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] KUnit 全绿 (/home/ppw/cortenmm/results/r07/mva2/kunit-das.log)
+[    5.212751] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] kunit-das PASS
+[mva2-verify] .config 已恢复
+[17:00:34] == kunit-lk ==
+#
+# configuration written to .config
+#
+[    5.743657] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] KUnit 全绿 (/home/ppw/cortenmm/results/r07/mva2/kunit-lk.log)
+[    5.743657] # corten: pass:24 fail:0 skip:1 total:25
+[mva2-verify] kunit-lk PASS
+[mva2-verify] .config 已恢复
+[17:12:58] == n-objects ==
+#
+# configuration written to .config
+#
+[mva2-verify] =n 十四对象 RC=0 零警告 + nm 零 corten 符号
+[mva2-verify] n-objects PASS
+[mva2-verify] .config 已恢复(=y)
+[17:14:35] == kunit-debugvm ==
+FAIL kunit-debugvm (not ok 或 num_active_vmas WARN, 见 kunit-dvm.log)
+[17:29:19] final steps (dvm flake re-run PASS 24/0/1, num_active_vmas=0)
+[17:29:19] == restore-config-y ==
+[17:41:48] == bzimage-archive ==
+VM booting in tmux session 'vm' (accel: -enable-kvm -cpu host ...)
+console: tmux attach -t vm   monitor: echo system_reset | sudo socat - UNIX-CONNECT:/home/ppw/vm/monitor.sock (or nc)
+[17:42:16] == guest-gate ==
+[ok] smoke 26/26 (PASS=26 FAIL=0)
+[mva0] === DONE PASS=23 FAIL=0 ===
+[17:43:22] == checkpatch ==
+total: 0 errors, 0 warnings, 6 checks, 3182 lines checked
+POST-FIX BATTERY DONE 2026-09-22 17:43:37
+[19:15:43] == mva3a guest gate ==
+VM already running (pid 2100339)
+FAIL mva3a launch
+[19:15:59] == mva3a guest gate ==
+VM booting in tmux session 'vm' (accel: -enable-kvm -cpu host ...)
+console: tmux attach -t vm   monitor: echo system_reset | sudo socat - UNIX-CONNECT:/home/ppw/vm/monitor.sock (or nc)
+[mva0] === DONE PASS=23 FAIL=0 ===
+MVA3A GATE DONE 19:17:21

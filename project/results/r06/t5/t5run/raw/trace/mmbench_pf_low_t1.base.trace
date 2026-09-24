@@ -1,0 +1,60 @@
+26208 execve("/mnt/cortenmm/bench/mmbench/mmbench", ["/mnt/cortenmm/bench/mmbench/mmbench", "pf", "low", "1", "1", "20262939"], 0x7fff73e8fae8 /* 28 vars */) = 0
+26208 arch_prctl(0x3001 /* ARCH_??? */, 0x7ffe615e33f0) = -1 EINVAL (Invalid argument)
+26208 brk(NULL)                         = 0x2aaf8000
+26208 brk(0x2aaf8dc0)                   = 0x2aaf8dc0
+26208 arch_prctl(ARCH_SET_FS, 0x2aaf83c0) = 0
+26208 set_tid_address(0x2aaf8690)       = 26208
+26208 set_robust_list(0x2aaf86a0, 24)   = 0
+26208 rseq(0x2aaf8d60, 0x20, 0, 0x53053053) = 0
+26208 uname({sysname="Linux", nodename="syzkaller", ...}) = 0
+26208 prlimit64(0, RLIMIT_STACK, NULL, {rlim_cur=8192*1024, rlim_max=RLIM64_INFINITY}) = 0
+26208 readlink("/proc/self/exe", "/mnt/cortenmm/bench/mmbench/mmbench", 4096) = 35
+26208 getrandom("\x73\xb4\x08\x30\xcc\xb8\x1d\x81", 8, GRND_NONBLOCK) = 8
+26208 brk(0x2ab19dc0)                   = 0x2ab19dc0
+26208 brk(0x2ab1a000)                   = 0x2ab1a000
+26208 mprotect(0x4f6000, 16384, PROT_READ) = 0
+26208 write(2, "mmbench: bench=pf contention=low threads=1 arena=160 MB (per thread)\n", 69) = 69
+26208 prlimit64(0, RLIMIT_AS, NULL, {rlim_cur=RLIM64_INFINITY, rlim_max=RLIM64_INFINITY}) = 0
+26208 rt_sigaction(SIGRT_1, {sa_handler=0x497070, sa_mask=[], sa_flags=SA_RESTORER|SA_ONSTACK|SA_RESTART|SA_SIGINFO, sa_restorer=0x47db20}, NULL, 8) = 0
+26208 rt_sigprocmask(SIG_UNBLOCK, [RTMIN RT_1], NULL, 8) = 0
+26208 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7f726503d000
+26208 mprotect(0x7f726503e000, 8388608, PROT_READ|PROT_WRITE) = 0
+26208 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+26208 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f726583d910, parent_tid=0x7f726583d910, exit_signal=0, stack=0x7f726503d000, stack_size=0x800280, tls=0x7f726583d640} => {parent_tid=[26211]}, 88) = 26211
+26211 rseq(0x7f726583dfe0, 0x20, 0, 0x53053053 <unfinished ...>
+26208 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+26211 <... rseq resumed>)               = 0
+26208 <... rt_sigprocmask resumed>NULL, 8) = 0
+26211 set_robust_list(0x7f726583d920, 24 <unfinished ...>
+26208 futex(0x7ffe615e2b94, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+26211 <... set_robust_list resumed>)    = 0
+26211 rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+26211 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0) = 0x7f725d03d000
+26211 munmap(0x7f725d03d000, 50081792)  = 0
+26211 munmap(0x7f7264000000, 17027072)  = 0
+26211 mprotect(0x7f7260000000, 135168, PROT_READ|PROT_WRITE) = 0
+26211 mmap(NULL, 167772160, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0) = 0x7f7256000000
+26211 futex(0x7ffe615e2b94, FUTEX_WAKE_PRIVATE, 2147483647) = 1
+26208 <... futex resumed>)              = 0
+26208 futex(0x7ffe615e2bb4, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+26211 munmap(0x7f7256000000, 167772160) = 0
+26211 mmap(NULL, 167772160, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0) = 0x7f7256000000
+26211 futex(0x7ffe615e2bb4, FUTEX_WAKE_PRIVATE, 2147483647 <unfinished ...>
+26208 <... futex resumed>)              = 0
+26211 <... futex resumed>)              = 1
+26208 futex(0x7f726583d910, FUTEX_WAIT_BITSET|FUTEX_CLOCK_REALTIME, 26211, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+26211 rt_sigprocmask(SIG_BLOCK, ~[RT_1], NULL, 8) = 0
+26211 madvise(0x7f726503d000, 8372224, MADV_DONTNEED) = 0
+26211 exit(0)                           = ?
+26208 <... futex resumed>)              = 0
+26208 openat(AT_FDCWD, "/proc/self/statm", O_RDONLY) = 3
+26208 newfstatat(3, "", {st_mode=S_IFREG|0444, st_size=0, ...}, AT_EMPTY_PATH) = 0
+26208 read(3, "59745 21651 88 199 0 43116 0\n", 1024) = 29
+26208 write(2, "mmbench: peak RSS ~84 MB\n", 25) = 25
+26208 close(3)                          = 0
+26208 uname({sysname="Linux", nodename="syzkaller", ...}) = 0
+26208 uname({sysname="Linux", nodename="syzkaller", ...}) = 0
+26208 newfstatat(1, "", {st_mode=S_IFCHR|0666, st_rdev=makedev(0x1, 0x3), ...}, AT_EMPTY_PATH) = 0
+26208 ioctl(1, TCGETS, 0x7ffe615e22b0)  = -1 ENOTTY (Inappropriate ioctl for device)
+26208 write(1, "{\"bench\":\"pf\",\"contention\":\"low\",\"threads\":1,\"ops\":15626,\"elapsed_s\":1.004,\"ops_per_us\":0.016519"..., 186) = 186
+26208 exit_group(0)                     = ?

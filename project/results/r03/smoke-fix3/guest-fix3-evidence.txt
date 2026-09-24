@@ -1,0 +1,44 @@
+==TOUCH
+{"bench":"arena_stress","threads":4,"seconds":30,"arena_mb":64,"mode":"touch","variant":"fixed","seed":42,"ops":1274999825,"minflt":16407,"majflt":1,"checksum":"c318fa232be72842","errors":0,"op_errors":0,"arena_ok":true,"declare_errno":0,"mem_ok":true,"wall_s":30.025}
+
+==CHURN
+{"bench":"arena_stress","threads":4,"seconds":30,"arena_mb":64,"mode":"churn","variant":"fixed","seed":42,"ops":69258,"minflt":8874338,"majflt":1,"checksum":"3a5c9226f3b13d3e","errors":0,"op_errors":0,"arena_ok":true,"declare_errno":0,"mem_ok":true,"wall_s":30.033}
+
+==MIXED
+{"bench":"arena_stress","threads":2,"seconds":30,"arena_mb":64,"mode":"mixed","variant":"fixed","seed":42,"ops":184320,"minflt":5883907,"majflt":1,"checksum":"c3b9af8316c81dcd","errors":0,"op_errors":0,"arena_ok":true,"declare_errno":0,"mem_ok":true,"wall_s":30.043}
+
+==PROBE3
+==DMESG
+0
+==STATS
+enabled             1
+ptdescs             323
+meta_arrays         324
+meta_bytes          1327104
+desc_alloc_fail     1
+meta_alloc_fail     1
+free_untracked      5
+reinstalled         0
+legacy_drift        0
+
+==PROBE3 (dedicated run, same boot)
+done fails=0 zfails=0
+RELEASE ok
+(修复前同一复现器: fails=96 zfails=31625, ZFAIL got=上一 cycle 同页 magic — 见
+ results/r03/smoke-fix2/guest-artifacts.txt 与 probe3.c)
+
+==MAPS_CHECK (mixed 40s 运行中快照)
+maps_check: parse: OK / overlap: OK
+maps_check: arena: OK — exactly one mapping covers [10000000,14000000):
+    10000000-14000000 rw-p 00000000 00:00 0                [anon:corten_arena]
+maps_check: arena name: OK — covering line contains 'corten_arena'
+maps_check: RESULT: PASS (pid 962); 同进程 json errors:0 op_errors:0
+(注: 首次 FAIL 为取证脚本 pgrep -f 误中 bash 包装壳, 非内核问题)
+
+==GUEST KUNIT (开机自跑, 本内核)
+corten 24/0/1 (仅 layout skip)
+
+==REVIEW 班次复验 (fix3r, 2026-09-16 ~05:0x, bzimg/r02-m3b-s46-fix3)
+probe3: done fails=0 zfails=0 / RELEASE ok
+touch 4t/15s: exit=0  "errors":0,"op_errors":0
+churn 4t/15s: exit=0  "errors":0,"op_errors":0

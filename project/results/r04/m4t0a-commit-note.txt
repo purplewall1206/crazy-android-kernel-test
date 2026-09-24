@@ -1,0 +1,85 @@
+M4.T0a commit note (code complete 2026-09-16 08:25 CST, worktree
+/home/ppw/linux-6.18-m4t0a branch m4-t0a on ae236ee077ac; NOT committed --
+maintainer to commit after review + night verification).
+
+Suggested subject:
+    mm: CortenMM arena: MODE-process takeover: lock-order inversion,
+    PR_CORTEN_MODE, auto-mmap attach, munmap release rule, fork demotion
+
+Body points (M4T0_SPEC.md; DEV-11/12/13 registered):
+
+1. P0 lock-order inversion (DEV-13): DECLARE/RELEASE now take
+   mmap_write_lock outermost and nest state->ctl_lock inside it
+   (corten_arena_declare_locked()/corten_arena_release_locked() bodies).
+   The drain waits under BOTH locks; deadlock-free because a transaction
+   only percpu_ref tryget/puts (fast hook arch/x86/mm/fault.c:1344 runs
+   before any mmap_lock action; slow gate mm/memory.c:6558 may hold the
+   read lock or a per-VMA lock -- neither can exist across our write
+   lock, and neither ever waits for mmap_write/ctl_lock); the percpu_ref
+   release callback only complete()s from RCU softirq.  mm_exit() drains
+   with mm_users==0 and takes only the lower ctl_lock.  Lock-order
+   kernel-doc updated in include/linux/corten_arena.h (INV2 amendment).
+
+2. PR_CORTEN_MODE=80 (uapi; numbering continues 78/79 per spec):
+   ENTER (CAP_SYS_ADMIN + corten=on; arg3..5 must be 0) sets per-mm
+   mm->corten_mode and eagerly creates the registry with the window
+   cursor (idempotent); EXIT tears every arena of the mm down (RELEASE
+   semantics, one by one, under the write lock) and clears the mode;
+   GET returns 0/1.  DEVIATION vs the spec's uapi comment sketch
+   ("-EBUSY while arenas alive"): EXIT now performs the full teardown,
+   per the r04 task instruction; consistent with the fork policy
+   (DEV-11).  Flagged for the STATE decision log.
+
+3. Auto-mmap transparent takeover (sec 3.1): do_mmap hook after
+   round_hint_to_min()/len alignment, before __get_unmapped_area()
+   (mm/mmap.c:413); whitelist = MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE
+   only (type-nibble check absorbs MAP_SHARED/_VALIDATE and the
+   MAP_DROPPABLE alias; MAP_STACK excluded per OQ-B).  Cursor hands out
+   2M-rounded ranges in [0x100000000000, 0x400000000000); the request is
+   rewritten MAP_FIXED onto the window and the VMA is DECLAREd by the
+   tail hook under the write lock already held.  Hardening beyond spec
+   text (commented at corten_arena_auto_mmap_route()): the route skips
+   past ANY obstacle (MODE-targeted arena or plain legacy VMA) so the
+   MAP_FIXED rewrite can never destroy existing mappings.  Window
+   exhaustion -> graceful legacy degradation, counted in
+   CORTEN_ARENA_STAT_FALLBACKS (named debugfs counters are T0b).
+   OVERCOMMIT_NEVER degrades the whole takeover to legacy (DEV-12).
+
+4. munmap release-on-full-coverage (sec 3.2): a CHUNK from the arena
+   base with a sub-2M tail (the glibc free() shape: user munmaps the
+   page-rounded request length, kernel rounded the arena to 2M) is
+   RELEASEd whole (corten_arena_release_classify()); without it
+   allocator churn leaks one VMA + 2M of window VA per cycle.
+
+5. fork transition (sec 5, DEV-11): dup_mmap() calls
+   corten_arena_fork_demote() right after mmap_write_lock_nested():
+   child inherits the MODE bit, every parent arena is drained, metadata
+   scrubbed (corten_unmap per page; clears T0-R5 drain-window drift),
+   shadow-VMAs restored to plain anonymous VMAs, registry erased,
+   descriptors freed.  The S7 fail-fast is removed.  clone(CLONE_VM)
+   never runs dup_mmap and is untouched.  On scrub/drain errors the
+   demotion still completes (drain-timeout precedent, counted) and the
+   fork aborts.  M5 replaces this with the paper-faithful traversal.
+
+6. NOT in T0a (T0b scope, next shift): mprotect in-arena routing,
+   madvise MADV_FREE/hint rows, move_pages/migrate_pages reject hooks,
+   named debugfs counters, LD_PRELOAD runner, full DoD runs.
+   >>> T0a ALONE IS NOT SUFFICIENT FOR THE JVM: a MODE process that
+   mprotect()s inside an arena gets -EOPNOTSUPP (the S6 reject hook is
+   unchanged), and the JVM (PROT_NONE reserve + mprotect commit) hangs
+   on it.  Complete DoD judgements (metis_eq/JThreadBench/strace
+   equivalence) land with T0b. <<<
+   Interface reservation: the -EOPNOTSUPP hooks stay the single
+   decision points mprotect/madvise routing will replace in T0b.
+
+Tests (mm/corten_arena_test.c, suite corten_arena): mode prctl gates +
+gate-free enter/exit/get; auto-mmap whitelist truth table (>=16 cases);
+window cursor arithmetic (alignment, last-fit, exhaustion); release-rule
+classification (2M-4K / 2M boundaries, mid-arena chunk pass-through);
+route decisions incl. obstacle skipping and counted exhaustion fallback
+(corten=on gated, kunit_skip otherwise); attach + release rule end to
+end with the debugfs ledger; fork demotion (MODE inheritance, teardown,
+clean re-DECLARE, no-arena forks); the dual-kthread DECLARE/RELEASE vs
+fault-reader race reused as the DEV-13 regression plus a window-slot
+variant through corten_arena_auto_attach().  =n folds to stubs;
+checkpatch --strict: 0 errors, 0 warnings, 0 checks on the patch.

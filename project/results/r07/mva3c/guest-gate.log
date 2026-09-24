@@ -1,0 +1,59 @@
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+[mva0] share=/mnt/hostshare
+[mva0] arenas header:             mm               anchor [start,end)                prot cls  rflg pcs status               rfile     poff
+[ok] arenas header has cls/rflg/pcs
+[smoke] SMOKE-DRIVER PASS
+[smoke] debugfs arenas after: 0
+[smoke] SMOKE-DRIVER PASS
+[ok] run_mode_smoke rc=0
+[ok] smoke 26/26 (PASS=26 FAIL=0)
+[ok] JThreadBench 2000x3 x3 rc=0
+[mva0] J1 snapshot before: probes=1 hits=1 carriers=5 vgate=0
+[ok] metis_eq run1 rc=0
+[ok] metis_eq MODE marker
+[ok] metis_eq run2 rc=0
+[ok] metis_eq checksum self-consistent ("distinct_words":65073,"checksum":"2d383eeed4ceb73b")
+[ok] live region rows observed (5)
+            mm               anchor [start,end)                prot cls  rflg pcs status               rfile     poff
+ffff90f2835f4e00 ffff90f280a2dd00 [100000800000,100000a00000)           0b anon 0000 1   active 0000000000000000 00000000
+ffff90f2835f4e00 ffff90f280a2dd00 [100000800000,100000a00000)           0b rsvd 0000 1   active 0000000000000000 00000000
+ffff90f2835f4e00 ffff90f280a44a00 [100080000000,100088000000)           08 anon 0000 1   active 0000000000000000 00000000
+ffff90f2835f4e00 ffff90f281399100 [100048000000,100048200000)           0b anon 0000 1   active 0000000000000000 00000000
+[mva0] J1 snapshot after: probes=1 hits=1 carriers=29 vgate=0
+[ok] J1 prelude: zero window finds across pure MODE workload (hits 1->1)
+[ok] J1 probes observable (probes 1->1)
+[ok] carriers created (carriers 5->29)
+[ok] auto_vgate line present (vgate=0)
+[ok] dmesg corten-quiet
+[ok] mmap1 in window 0x100000000000x
+[ok] touch1 8M verified-write
+[mva1] parks 4->5 hits 2->2 after munmap1
+[ok] S-4: maps has no reservation segment after munmap
+[mva1] parks=5 hits=3 after mmap2 (q=0x100000000000x p=0x100000000000x)
+[ok] FRESH: reactivated window write+readback 8M ok
+[ok] CHUNK: kept half still works after inner munmap
+[ok] CHUNK: dropped half re-materialized, kept half intact
+[ok] CHUNK: maps carries no VMA-split residue
+[ok] S-4b: maps clean after final munmap
+[ok] S-1: fault on munmapped window is SEGV_MAPERR (was ACCERR)
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: MemFree reconciled (3631732 -> 3787508 kB, 8 iters)
+[mva1] probe done passes=18 fails=0
+[ok] mva1_probe rc=0
+[ok] S-1 MAPERR observed live
+[ok] S-4 maps-clean observed live
+[ok] FRESH reactivation observed live
+[ok] CHUNK drop-and-revive observed live
+[ok] punch+fork MemFree reconciled
+[mva0] pool counters: parks=6 (was ) hits=3 park_unmap_fails=0
+[ok] pool churn observed (parks=6 hits=3)
+[ok] park_unmap_fails==0
+[ok] no rss-counter regressions during gate
+[mva0] === DONE PASS=23 FAIL=0 ===

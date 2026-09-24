@@ -1,0 +1,859 @@
+29319 execve("/mnt/cortenmm/bench/mmbench/mmbench", ["/mnt/cortenmm/bench/mmbench/mmbench", "unmap-virt", "high", "8", "1", "20264094"], 0x7ffcecec66c8 /* 30 vars */) = 0
+29319 arch_prctl(0x3001 /* ARCH_??? */, 0x7ffc7b294c40) = -1 EINVAL (Invalid argument)
+29319 brk(NULL)                         = 0x171e2000
+29319 brk(0x171e2dc0)                   = 0x171e2dc0
+29319 arch_prctl(ARCH_SET_FS, 0x171e23c0) = 0
+29319 set_tid_address(0x171e2690)       = 29319
+29319 set_robust_list(0x171e26a0, 24)   = 0
+29319 rseq(0x171e2d60, 0x20, 0, 0x53053053) = 0
+29319 uname({sysname="Linux", nodename="syzkaller", ...}) = 0
+29319 prlimit64(0, RLIMIT_STACK, NULL, {rlim_cur=8192*1024, rlim_max=RLIM64_INFINITY}) = 0
+29319 readlink("/proc/self/exe", "/mnt/cortenmm/bench/mmbench/mmbench", 4096) = 35
+29319 getrandom("\xc7\x21\xf6\x73\x19\xd8\x34\xe4", 8, GRND_NONBLOCK) = 8
+29319 brk(0x17203dc0)                   = 0x17203dc0
+29319 brk(0x17204000)                   = 0x17204000
+29319 mprotect(0x4f6000, 16384, PROT_READ) = 0
+29319 write(2, "mmbench: bench=unmap-virt contention=high threads=8 arena=1024 MB (shared)\n", 75) = 75
+29319 prlimit64(0, RLIMIT_AS, NULL, {rlim_cur=RLIM64_INFINITY, rlim_max=RLIM64_INFINITY}) = 0
+29319 mmap(NULL, 1073741824, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0) = 0x7ff2c9c37000
+29319 write(2, "mmbench: shared arena 1024 MB, 65536 chunks, bitmap 65536 B\n", 60) = 60
+29319 rt_sigaction(SIGRT_1, {sa_handler=0x497070, sa_mask=[], sa_flags=SA_RESTORER|SA_ONSTACK|SA_RESTART|SA_SIGINFO, sa_restorer=0x47db20}, NULL, 8) = 0
+29319 rt_sigprocmask(SIG_UNBLOCK, [RTMIN RT_1], NULL, 8) = 0
+29319 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ff2c9436000
+29319 mprotect(0x7ff2c9437000, 8388608, PROT_READ|PROT_WRITE) = 0
+29319 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+29319 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ff2c9c36910, parent_tid=0x7ff2c9c36910, exit_signal=0, stack=0x7ff2c9436000, stack_size=0x800280, tls=0x7ff2c9c36640} => {parent_tid=[29322]}, 88) = 29322
+29322 rseq(0x7ff2c9c36fe0, 0x20, 0, 0x53053053 <unfinished ...>
+29319 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29322 <... rseq resumed>)               = 0
+29319 <... rt_sigprocmask resumed>NULL, 8) = 0
+29322 set_robust_list(0x7ff2c9c36920, 24 <unfinished ...>
+29319 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+29322 <... set_robust_list resumed>)    = 0
+29319 <... mmap resumed>)               = 0x7ff2c8c35000
+29322 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29319 mprotect(0x7ff2c8c36000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+29322 <... rt_sigprocmask resumed>NULL, 8) = 0
+29319 <... mprotect resumed>)           = 0
+29322 futex(0x7ffc7b2943e4, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29319 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+29319 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ff2c9435910, parent_tid=0x7ff2c9435910, exit_signal=0, stack=0x7ff2c8c35000, stack_size=0x800280, tls=0x7ff2c9435640} <unfinished ...>
+29323 rseq(0x7ff2c9435fe0, 0x20, 0, 0x53053053 <unfinished ...>
+29319 <... clone3 resumed> => {parent_tid=[29323]}, 88) = 29323
+29323 <... rseq resumed>)               = 0
+29319 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29323 set_robust_list(0x7ff2c9435920, 24 <unfinished ...>
+29319 <... rt_sigprocmask resumed>NULL, 8) = 0
+29323 <... set_robust_list resumed>)    = 0
+29319 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+29323 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29319 <... mmap resumed>)               = 0x7ff2c8434000
+29323 <... rt_sigprocmask resumed>NULL, 8) = 0
+29319 mprotect(0x7ff2c8435000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+29323 futex(0x7ffc7b2943e4, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29319 <... mprotect resumed>)           = 0
+29319 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+29319 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ff2c8c34910, parent_tid=0x7ff2c8c34910, exit_signal=0, stack=0x7ff2c8434000, stack_size=0x800280, tls=0x7ff2c8c34640} => {parent_tid=[29324]}, 88) = 29324
+29324 rseq(0x7ff2c8c34fe0, 0x20, 0, 0x53053053 <unfinished ...>
+29319 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29324 <... rseq resumed>)               = 0
+29319 <... rt_sigprocmask resumed>NULL, 8) = 0
+29324 set_robust_list(0x7ff2c8c34920, 24 <unfinished ...>
+29319 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+29324 <... set_robust_list resumed>)    = 0
+29319 <... mmap resumed>)               = 0x7ff2c7c33000
+29324 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29319 mprotect(0x7ff2c7c34000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+29324 <... rt_sigprocmask resumed>NULL, 8) = 0
+29319 <... mprotect resumed>)           = 0
+29324 futex(0x7ffc7b2943e4, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29319 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+29319 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ff2c8433910, parent_tid=0x7ff2c8433910, exit_signal=0, stack=0x7ff2c7c33000, stack_size=0x800280, tls=0x7ff2c8433640} => {parent_tid=[29327]}, 88) = 29327
+29327 rseq(0x7ff2c8433fe0, 0x20, 0, 0x53053053 <unfinished ...>
+29319 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29327 <... rseq resumed>)               = 0
+29319 <... rt_sigprocmask resumed>NULL, 8) = 0
+29327 set_robust_list(0x7ff2c8433920, 24 <unfinished ...>
+29319 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+29327 <... set_robust_list resumed>)    = 0
+29319 <... mmap resumed>)               = 0x7ff2c7432000
+29327 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29319 mprotect(0x7ff2c7433000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+29327 <... rt_sigprocmask resumed>NULL, 8) = 0
+29319 <... mprotect resumed>)           = 0
+29327 futex(0x7ffc7b2943e4, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29319 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+29319 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ff2c7c32910, parent_tid=0x7ff2c7c32910, exit_signal=0, stack=0x7ff2c7432000, stack_size=0x800280, tls=0x7ff2c7c32640} => {parent_tid=[29328]}, 88) = 29328
+29328 rseq(0x7ff2c7c32fe0, 0x20, 0, 0x53053053 <unfinished ...>
+29319 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29328 <... rseq resumed>)               = 0
+29319 <... rt_sigprocmask resumed>NULL, 8) = 0
+29328 set_robust_list(0x7ff2c7c32920, 24 <unfinished ...>
+29319 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+29328 <... set_robust_list resumed>)    = 0
+29319 <... mmap resumed>)               = 0x7ff2c6c31000
+29328 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29319 mprotect(0x7ff2c6c32000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+29328 <... rt_sigprocmask resumed>NULL, 8) = 0
+29319 <... mprotect resumed>)           = 0
+29328 futex(0x7ffc7b2943e4, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29319 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+29319 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ff2c7431910, parent_tid=0x7ff2c7431910, exit_signal=0, stack=0x7ff2c6c31000, stack_size=0x800280, tls=0x7ff2c7431640} => {parent_tid=[29329]}, 88) = 29329
+29329 rseq(0x7ff2c7431fe0, 0x20, 0, 0x53053053 <unfinished ...>
+29319 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29329 <... rseq resumed>)               = 0
+29319 <... rt_sigprocmask resumed>NULL, 8) = 0
+29329 set_robust_list(0x7ff2c7431920, 24 <unfinished ...>
+29319 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+29329 <... set_robust_list resumed>)    = 0
+29319 <... mmap resumed>)               = 0x7ff2c6430000
+29329 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29319 mprotect(0x7ff2c6431000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+29329 <... rt_sigprocmask resumed>NULL, 8) = 0
+29319 <... mprotect resumed>)           = 0
+29329 futex(0x7ffc7b2943e4, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29319 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+29319 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ff2c6c30910, parent_tid=0x7ff2c6c30910, exit_signal=0, stack=0x7ff2c6430000, stack_size=0x800280, tls=0x7ff2c6c30640} => {parent_tid=[29330]}, 88) = 29330
+29330 rseq(0x7ff2c6c30fe0, 0x20, 0, 0x53053053 <unfinished ...>
+29319 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29330 <... rseq resumed>)               = 0
+29319 <... rt_sigprocmask resumed>NULL, 8) = 0
+29330 set_robust_list(0x7ff2c6c30920, 24 <unfinished ...>
+29319 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 <unfinished ...>
+29330 <... set_robust_list resumed>)    = 0
+29319 <... mmap resumed>)               = 0x7ff2c5c2f000
+29330 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29319 mprotect(0x7ff2c5c30000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+29330 <... rt_sigprocmask resumed>NULL, 8) = 0
+29319 <... mprotect resumed>)           = 0
+29330 futex(0x7ffc7b2943e4, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29319 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+29319 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ff2c642f910, parent_tid=0x7ff2c642f910, exit_signal=0, stack=0x7ff2c5c2f000, stack_size=0x800280, tls=0x7ff2c642f640} => {parent_tid=[29331]}, 88) = 29331
+29331 rseq(0x7ff2c642ffe0, 0x20, 0, 0x53053053 <unfinished ...>
+29319 rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+29331 <... rseq resumed>)               = 0
+29319 <... rt_sigprocmask resumed>NULL, 8) = 0
+29331 set_robust_list(0x7ff2c642f920, 24 <unfinished ...>
+29319 futex(0x7ffc7b2943e4, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29331 <... set_robust_list resumed>)    = 0
+29331 rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+29331 futex(0x7ffc7b2943e4, FUTEX_WAKE_PRIVATE, 2147483647) = 8
+29319 <... futex resumed>)              = 0
+29330 <... futex resumed>)              = 0
+29329 <... futex resumed>)              = 0
+29328 <... futex resumed>)              = 0
+29327 <... futex resumed>)              = 0
+29324 <... futex resumed>)              = 0
+29323 <... futex resumed>)              = 0
+29322 <... futex resumed>)              = 0
+29319 futex(0x7ffc7b294404, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29331 munmap(0x7ff2cbc43000, 16384 <unfinished ...>
+29330 munmap(0x7ff2dadb7000, 16384 <unfinished ...>
+29329 munmap(0x7ff2d0fbb000, 16384 <unfinished ...>
+29328 munmap(0x7ff302137000, 16384 <unfinished ...>
+29327 munmap(0x7ff2f446b000, 16384 <unfinished ...>
+29324 munmap(0x7ff2f856f000, 16384 <unfinished ...>
+29323 munmap(0x7ff2f7527000, 16384 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 munmap(0x7ff2ff53b000, 16384 <unfinished ...>
+29331 mmap(0x7ff2cbc43000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2dadb7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2d0fbb000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff302137000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2f446b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2f856f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... munmap resumed>)             = 0
+29331 <... mmap resumed>)               = 0x7ff2cbc43000
+29330 <... mmap resumed>)               = 0x7ff2dadb7000
+29329 <... mmap resumed>)               = 0x7ff2d0fbb000
+29328 <... mmap resumed>)               = 0x7ff302137000
+29327 <... mmap resumed>)               = 0x7ff2f446b000
+29324 <... mmap resumed>)               = 0x7ff2f856f000
+29323 mmap(0x7ff2f7527000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29322 <... munmap resumed>)             = 0
+29331 munmap(0x7ff2f3fa7000, 16384 <unfinished ...>
+29330 munmap(0x7ff2db1f7000, 16384 <unfinished ...>
+29329 munmap(0x7ff2ef587000, 16384 <unfinished ...>
+29328 munmap(0x7ff2d4b8b000, 16384 <unfinished ...>
+29327 munmap(0x7ff30534b000, 16384 <unfinished ...>
+29324 munmap(0x7ff306433000, 16384 <unfinished ...>
+29323 <... mmap resumed>)               = 0x7ff2f7527000
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29323 munmap(0x7ff2d1423000, 16384 <unfinished ...>
+29322 mmap(0x7ff2ff53b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 mmap(0x7ff2f3fa7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2db1f7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2ef587000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2d4b8b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff30534b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff306433000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... munmap resumed>)             = 0
+29331 <... mmap resumed>)               = 0x7ff2f3fa7000
+29330 <... mmap resumed>)               = 0x7ff2db1f7000
+29329 <... mmap resumed>)               = 0x7ff2ef587000
+29328 <... mmap resumed>)               = 0x7ff2d4b8b000
+29327 <... mmap resumed>)               = 0x7ff30534b000
+29324 <... mmap resumed>)               = 0x7ff306433000
+29322 <... mmap resumed>)               = 0x7ff2ff53b000
+29331 munmap(0x7ff300c67000, 16384 <unfinished ...>
+29330 munmap(0x7ff2e5603000, 16384 <unfinished ...>
+29329 munmap(0x7ff2e203b000, 16384 <unfinished ...>
+29328 munmap(0x7ff2f2307000, 16384 <unfinished ...>
+29327 munmap(0x7ff2eed33000, 16384 <unfinished ...>
+29324 munmap(0x7ff2d7073000, 16384 <unfinished ...>
+29323 mmap(0x7ff2d1423000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 munmap(0x7ff2db577000, 16384 <unfinished ...>
+29331 mmap(0x7ff300c67000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2e5603000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2e203b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2f2307000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2eed33000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2d7073000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... mmap resumed>)               = 0x7ff2d1423000
+29331 <... mmap resumed>)               = 0x7ff300c67000
+29330 <... mmap resumed>)               = 0x7ff2e5603000
+29329 <... mmap resumed>)               = 0x7ff2e203b000
+29328 <... mmap resumed>)               = 0x7ff2f2307000
+29327 <... mmap resumed>)               = 0x7ff2eed33000
+29324 <... mmap resumed>)               = 0x7ff2d7073000
+29322 <... munmap resumed>)             = 0
+29331 munmap(0x7ff2dab4f000, 16384 <unfinished ...>
+29330 munmap(0x7ff309b8b000, 16384 <unfinished ...>
+29329 munmap(0x7ff2f5857000, 16384 <unfinished ...>
+29328 munmap(0x7ff2dbcc7000, 16384 <unfinished ...>
+29327 munmap(0x7ff2e029b000, 16384 <unfinished ...>
+29324 munmap(0x7ff2e8c37000, 16384 <unfinished ...>
+29323 munmap(0x7ff2f2e7f000, 16384 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 mmap(0x7ff2db577000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 mmap(0x7ff2dab4f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff309b8b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2f5857000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2dbcc7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2e029b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2e8c37000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... munmap resumed>)             = 0
+29331 <... mmap resumed>)               = 0x7ff2dab4f000
+29330 <... mmap resumed>)               = 0x7ff309b8b000
+29329 <... mmap resumed>)               = 0x7ff2f5857000
+29328 <... mmap resumed>)               = 0x7ff2dbcc7000
+29327 <... mmap resumed>)               = 0x7ff2e029b000
+29324 <... mmap resumed>)               = 0x7ff2e8c37000
+29322 <... mmap resumed>)               = 0x7ff2db577000
+29331 munmap(0x7ff2ee8cf000, 16384 <unfinished ...>
+29330 munmap(0x7ff2fccb3000, 16384 <unfinished ...>
+29329 munmap(0x7ff2e1217000, 16384 <unfinished ...>
+29328 munmap(0x7ff300dd3000, 16384 <unfinished ...>
+29327 munmap(0x7ff2f790b000, 16384 <unfinished ...>
+29324 munmap(0x7ff300933000, 16384 <unfinished ...>
+29323 mmap(0x7ff2f2e7f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 munmap(0x7ff2ee453000, 16384 <unfinished ...>
+29331 mmap(0x7ff2ee8cf000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2fccb3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2e1217000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff300dd3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2f790b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff300933000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... mmap resumed>)               = 0x7ff2f2e7f000
+29331 <... mmap resumed>)               = 0x7ff2ee8cf000
+29330 <... mmap resumed>)               = 0x7ff2fccb3000
+29329 <... mmap resumed>)               = 0x7ff2e1217000
+29328 <... mmap resumed>)               = 0x7ff300dd3000
+29327 <... mmap resumed>)               = 0x7ff2f790b000
+29324 <... mmap resumed>)               = 0x7ff300933000
+29322 <... munmap resumed>)             = 0
+29331 munmap(0x7ff2f9e33000, 16384 <unfinished ...>
+29330 munmap(0x7ff2dd96f000, 16384 <unfinished ...>
+29329 munmap(0x7ff2dda8f000, 16384 <unfinished ...>
+29328 munmap(0x7ff2dff53000, 16384 <unfinished ...>
+29327 munmap(0x7ff2ece07000, 16384 <unfinished ...>
+29324 munmap(0x7ff2d01ab000, 16384 <unfinished ...>
+29323 munmap(0x7ff2d9b33000, 16384 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 mmap(0x7ff2ee453000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 mmap(0x7ff2f9e33000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2dd96f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2dda8f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2dff53000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2ece07000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2d01ab000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... munmap resumed>)             = 0
+29331 <... mmap resumed>)               = 0x7ff2f9e33000
+29330 <... mmap resumed>)               = 0x7ff2dd96f000
+29329 <... mmap resumed>)               = 0x7ff2dda8f000
+29328 <... mmap resumed>)               = 0x7ff2dff53000
+29327 <... mmap resumed>)               = 0x7ff2ece07000
+29324 <... mmap resumed>)               = 0x7ff2d01ab000
+29322 <... mmap resumed>)               = 0x7ff2ee453000
+29331 munmap(0x7ff2f0587000, 16384 <unfinished ...>
+29330 munmap(0x7ff306a1b000, 16384 <unfinished ...>
+29329 munmap(0x7ff2f42ab000, 16384 <unfinished ...>
+29328 munmap(0x7ff2f5a8f000, 16384 <unfinished ...>
+29327 munmap(0x7ff2d4113000, 16384 <unfinished ...>
+29324 munmap(0x7ff2e631b000, 16384 <unfinished ...>
+29323 mmap(0x7ff2d9b33000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 munmap(0x7ff2f0507000, 16384 <unfinished ...>
+29331 mmap(0x7ff2f0587000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff306a1b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2f42ab000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2f5a8f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2d4113000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2e631b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... mmap resumed>)               = 0x7ff2d9b33000
+29331 <... mmap resumed>)               = 0x7ff2f0587000
+29330 <... mmap resumed>)               = 0x7ff306a1b000
+29329 <... mmap resumed>)               = 0x7ff2f42ab000
+29328 <... mmap resumed>)               = 0x7ff2f5a8f000
+29327 <... mmap resumed>)               = 0x7ff2d4113000
+29324 <... mmap resumed>)               = 0x7ff2e631b000
+29322 <... munmap resumed>)             = 0
+29331 munmap(0x7ff2cf293000, 16384 <unfinished ...>
+29330 munmap(0x7ff2ca533000, 16384 <unfinished ...>
+29329 munmap(0x7ff3015df000, 16384 <unfinished ...>
+29328 munmap(0x7ff2cc2f7000, 16384 <unfinished ...>
+29327 munmap(0x7ff2d2d33000, 16384 <unfinished ...>
+29324 munmap(0x7ff2ccf8b000, 16384 <unfinished ...>
+29323 munmap(0x7ff2d117f000, 16384 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 mmap(0x7ff2f0507000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 mmap(0x7ff2cf293000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2ca533000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff3015df000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2cc2f7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2d2d33000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2ccf8b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... munmap resumed>)             = 0
+29331 <... mmap resumed>)               = 0x7ff2cf293000
+29330 <... mmap resumed>)               = 0x7ff2ca533000
+29329 <... mmap resumed>)               = 0x7ff3015df000
+29328 <... mmap resumed>)               = 0x7ff2cc2f7000
+29327 <... mmap resumed>)               = 0x7ff2d2d33000
+29324 <... mmap resumed>)               = 0x7ff2ccf8b000
+29322 <... mmap resumed>)               = 0x7ff2f0507000
+29331 munmap(0x7ff2eb22b000, 16384 <unfinished ...>
+29330 munmap(0x7ff2f37f3000, 16384 <unfinished ...>
+29329 munmap(0x7ff30594b000, 16384 <unfinished ...>
+29328 munmap(0x7ff2d7833000, 16384 <unfinished ...>
+29327 munmap(0x7ff2cb847000, 16384 <unfinished ...>
+29324 munmap(0x7ff2dda93000, 16384 <unfinished ...>
+29323 mmap(0x7ff2d117f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 munmap(0x7ff309a07000, 16384 <unfinished ...>
+29331 mmap(0x7ff2eb22b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2f37f3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff30594b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2d7833000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2cb847000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2dda93000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... mmap resumed>)               = 0x7ff2d117f000
+29331 <... mmap resumed>)               = 0x7ff2eb22b000
+29330 <... mmap resumed>)               = 0x7ff2f37f3000
+29329 <... mmap resumed>)               = 0x7ff30594b000
+29328 <... mmap resumed>)               = 0x7ff2d7833000
+29327 <... mmap resumed>)               = 0x7ff2cb847000
+29324 <... mmap resumed>)               = 0x7ff2dda93000
+29322 <... munmap resumed>)             = 0
+29331 munmap(0x7ff2d17e3000, 16384 <unfinished ...>
+29330 munmap(0x7ff2d027f000, 16384 <unfinished ...>
+29329 munmap(0x7ff2e7b87000, 16384 <unfinished ...>
+29328 munmap(0x7ff2fe343000, 16384 <unfinished ...>
+29327 munmap(0x7ff2d3727000, 16384 <unfinished ...>
+29324 munmap(0x7ff2f121f000, 16384 <unfinished ...>
+29323 munmap(0x7ff2df2d3000, 16384 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29323 <... munmap resumed>)             = 0
+29322 mmap(0x7ff309a07000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 mmap(0x7ff2d17e3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2d027f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2e7b87000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2fe343000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2d3727000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2f121f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 mmap(0x7ff2df2d3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 <... mmap resumed>)               = 0x7ff2d17e3000
+29330 <... mmap resumed>)               = 0x7ff2d027f000
+29329 <... mmap resumed>)               = 0x7ff2e7b87000
+29328 <... mmap resumed>)               = 0x7ff2fe343000
+29327 <... mmap resumed>)               = 0x7ff2d3727000
+29324 <... mmap resumed>)               = 0x7ff2f121f000
+29322 <... mmap resumed>)               = 0x7ff309a07000
+29331 munmap(0x7ff3081f7000, 16384 <unfinished ...>
+29330 munmap(0x7ff2d597f000, 16384 <unfinished ...>
+29329 munmap(0x7ff2e3d7b000, 16384 <unfinished ...>
+29328 munmap(0x7ff306f9b000, 16384 <unfinished ...>
+29327 munmap(0x7ff2fbc8f000, 16384 <unfinished ...>
+29324 munmap(0x7ff2d6e5f000, 16384 <unfinished ...>
+29323 <... mmap resumed>)               = 0x7ff2df2d3000
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 munmap(0x7ff30373f000, 16384 <unfinished ...>
+29331 mmap(0x7ff3081f7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2d597f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2e3d7b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff306f9b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2fbc8f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2d6e5f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 munmap(0x7ff30382b000, 16384 <unfinished ...>
+29331 <... mmap resumed>)               = 0x7ff3081f7000
+29330 <... mmap resumed>)               = 0x7ff2d597f000
+29329 <... mmap resumed>)               = 0x7ff2e3d7b000
+29328 <... mmap resumed>)               = 0x7ff306f9b000
+29327 <... mmap resumed>)               = 0x7ff2fbc8f000
+29324 <... mmap resumed>)               = 0x7ff2d6e5f000
+29322 <... munmap resumed>)             = 0
+29331 munmap(0x7ff2d029b000, 16384 <unfinished ...>
+29330 munmap(0x7ff2dec8b000, 16384 <unfinished ...>
+29329 munmap(0x7ff2dac83000, 16384 <unfinished ...>
+29328 munmap(0x7ff2f18a7000, 16384 <unfinished ...>
+29327 munmap(0x7ff2f9b33000, 16384 <unfinished ...>
+29324 munmap(0x7ff2f8b2f000, 16384 <unfinished ...>
+29323 <... munmap resumed>)             = 0
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 mmap(0x7ff30373f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 mmap(0x7ff2d029b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2dec8b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2dac83000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2f18a7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2f9b33000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2f8b2f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 mmap(0x7ff30382b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 <... mmap resumed>)               = 0x7ff2d029b000
+29330 <... mmap resumed>)               = 0x7ff2dec8b000
+29329 <... mmap resumed>)               = 0x7ff2dac83000
+29328 <... mmap resumed>)               = 0x7ff2f18a7000
+29327 <... mmap resumed>)               = 0x7ff2f9b33000
+29324 <... mmap resumed>)               = 0x7ff2f8b2f000
+29322 <... mmap resumed>)               = 0x7ff30373f000
+29331 munmap(0x7ff2e6b5f000, 16384 <unfinished ...>
+29330 munmap(0x7ff2dd1db000, 16384 <unfinished ...>
+29329 munmap(0x7ff2ecf5f000, 16384 <unfinished ...>
+29328 munmap(0x7ff2f96d7000, 16384 <unfinished ...>
+29327 munmap(0x7ff2cae87000, 16384 <unfinished ...>
+29324 munmap(0x7ff2e8497000, 16384 <unfinished ...>
+29323 <... mmap resumed>)               = 0x7ff30382b000
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 munmap(0x7ff2f852f000, 16384 <unfinished ...>
+29331 mmap(0x7ff2e6b5f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2dd1db000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2ecf5f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2f96d7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2cae87000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2e8497000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 munmap(0x7ff301bab000, 16384 <unfinished ...>
+29331 <... mmap resumed>)               = 0x7ff2e6b5f000
+29330 <... mmap resumed>)               = 0x7ff2dd1db000
+29329 <... mmap resumed>)               = 0x7ff2ecf5f000
+29328 <... mmap resumed>)               = 0x7ff2f96d7000
+29327 <... mmap resumed>)               = 0x7ff2cae87000
+29324 <... mmap resumed>)               = 0x7ff2e8497000
+29322 <... munmap resumed>)             = 0
+29331 munmap(0x7ff2de187000, 16384 <unfinished ...>
+29330 munmap(0x7ff2e82f3000, 16384 <unfinished ...>
+29329 munmap(0x7ff2d2e83000, 16384 <unfinished ...>
+29328 munmap(0x7ff2fa30f000, 16384 <unfinished ...>
+29327 munmap(0x7ff2cceb3000, 16384 <unfinished ...>
+29324 munmap(0x7ff2df7bf000, 16384 <unfinished ...>
+29323 <... munmap resumed>)             = 0
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 mmap(0x7ff2f852f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 mmap(0x7ff2de187000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2e82f3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2d2e83000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2fa30f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2cceb3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2df7bf000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 mmap(0x7ff301bab000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29322 <... mmap resumed>)               = 0x7ff2f852f000
+29331 <... mmap resumed>)               = 0x7ff2de187000
+29330 <... mmap resumed>)               = 0x7ff2e82f3000
+29329 <... mmap resumed>)               = 0x7ff2d2e83000
+29328 <... mmap resumed>)               = 0x7ff2fa30f000
+29327 <... mmap resumed>)               = 0x7ff2cceb3000
+29324 <... mmap resumed>)               = 0x7ff2df7bf000
+29323 <... mmap resumed>)               = 0x7ff301bab000
+29331 munmap(0x7ff2cc107000, 16384 <unfinished ...>
+29330 munmap(0x7ff2e103b000, 16384 <unfinished ...>
+29329 munmap(0x7ff2d01a7000, 16384 <unfinished ...>
+29328 munmap(0x7ff2cd7a3000, 16384 <unfinished ...>
+29327 munmap(0x7ff2dd3b3000, 16384 <unfinished ...>
+29324 munmap(0x7ff2f767b000, 16384 <unfinished ...>
+29322 munmap(0x7ff2e21d3000, 16384 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29323 munmap(0x7ff2f699b000, 16384 <unfinished ...>
+29331 mmap(0x7ff2cc107000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2e103b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2d01a7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2cd7a3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2dd3b3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2f767b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29322 <... munmap resumed>)             = 0
+29331 <... mmap resumed>)               = 0x7ff2cc107000
+29330 <... mmap resumed>)               = 0x7ff2e103b000
+29329 <... mmap resumed>)               = 0x7ff2d01a7000
+29328 <... mmap resumed>)               = 0x7ff2cd7a3000
+29327 <... mmap resumed>)               = 0x7ff2dd3b3000
+29324 <... mmap resumed>)               = 0x7ff2f767b000
+29323 <... munmap resumed>)             = 0
+29322 mmap(0x7ff2e21d3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 munmap(0x7ff2f947f000, 16384 <unfinished ...>
+29330 munmap(0x7ff2e789b000, 16384 <unfinished ...>
+29329 munmap(0x7ff2ed3f3000, 16384 <unfinished ...>
+29328 munmap(0x7ff2ca8d3000, 16384 <unfinished ...>
+29327 munmap(0x7ff2ebfb7000, 16384 <unfinished ...>
+29324 munmap(0x7ff2f792b000, 16384 <unfinished ...>
+29323 mmap(0x7ff2f699b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 <... mmap resumed>)               = 0x7ff2e21d3000
+29331 mmap(0x7ff2f947f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2e789b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2ed3f3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2ca8d3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2ebfb7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2f792b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... mmap resumed>)               = 0x7ff2f699b000
+29331 <... mmap resumed>)               = 0x7ff2f947f000
+29330 <... mmap resumed>)               = 0x7ff2e789b000
+29329 <... mmap resumed>)               = 0x7ff2ed3f3000
+29328 <... mmap resumed>)               = 0x7ff2ca8d3000
+29327 <... mmap resumed>)               = 0x7ff2ebfb7000
+29324 <... mmap resumed>)               = 0x7ff2f792b000
+29322 munmap(0x7ff2e20f3000, 16384 <unfinished ...>
+29331 munmap(0x7ff2edddf000, 16384 <unfinished ...>
+29330 munmap(0x7ff2dddab000, 16384 <unfinished ...>
+29329 munmap(0x7ff305703000, 16384 <unfinished ...>
+29328 munmap(0x7ff2fa8f7000, 16384 <unfinished ...>
+29327 munmap(0x7ff2f7dc3000, 16384 <unfinished ...>
+29324 munmap(0x7ff2d049b000, 16384 <unfinished ...>
+29323 munmap(0x7ff2d75bb000, 16384 <unfinished ...>
+29322 <... munmap resumed>)             = 0
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29323 <... munmap resumed>)             = 0
+29331 mmap(0x7ff2edddf000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2dddab000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff305703000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2fa8f7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2f7dc3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2d049b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29322 mmap(0x7ff2e20f3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 <... mmap resumed>)               = 0x7ff2edddf000
+29330 <... mmap resumed>)               = 0x7ff2dddab000
+29329 <... mmap resumed>)               = 0x7ff305703000
+29328 <... mmap resumed>)               = 0x7ff2fa8f7000
+29327 <... mmap resumed>)               = 0x7ff2f7dc3000
+29324 <... mmap resumed>)               = 0x7ff2d049b000
+29323 mmap(0x7ff2d75bb000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 munmap(0x7ff300f67000, 16384 <unfinished ...>
+29330 munmap(0x7ff2cc463000, 16384 <unfinished ...>
+29329 munmap(0x7ff2f891b000, 16384 <unfinished ...>
+29328 munmap(0x7ff2fad17000, 16384 <unfinished ...>
+29327 munmap(0x7ff2ec417000, 16384 <unfinished ...>
+29324 munmap(0x7ff2df10b000, 16384 <unfinished ...>
+29322 <... mmap resumed>)               = 0x7ff2e20f3000
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29323 <... mmap resumed>)               = 0x7ff2d75bb000
+29331 mmap(0x7ff300f67000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2cc463000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2f891b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2fad17000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2ec417000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2df10b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29322 munmap(0x7ff2d890b000, 16384 <unfinished ...>
+29331 <... mmap resumed>)               = 0x7ff300f67000
+29330 <... mmap resumed>)               = 0x7ff2cc463000
+29329 <... mmap resumed>)               = 0x7ff2f891b000
+29328 <... mmap resumed>)               = 0x7ff2fad17000
+29327 <... mmap resumed>)               = 0x7ff2ec417000
+29324 <... mmap resumed>)               = 0x7ff2df10b000
+29323 munmap(0x7ff2f910b000, 16384 <unfinished ...>
+29331 munmap(0x7ff2e553f000, 16384 <unfinished ...>
+29330 munmap(0x7ff2eaa27000, 16384 <unfinished ...>
+29329 munmap(0x7ff3072b7000, 16384 <unfinished ...>
+29328 munmap(0x7ff2d6843000, 16384 <unfinished ...>
+29327 munmap(0x7ff2d6c53000, 16384 <unfinished ...>
+29324 munmap(0x7ff30559f000, 16384 <unfinished ...>
+29322 <... munmap resumed>)             = 0
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29323 <... munmap resumed>)             = 0
+29331 mmap(0x7ff2e553f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2eaa27000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff3072b7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2d6843000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2d6c53000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff30559f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29322 mmap(0x7ff2d890b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 <... mmap resumed>)               = 0x7ff2e553f000
+29330 <... mmap resumed>)               = 0x7ff2eaa27000
+29329 <... mmap resumed>)               = 0x7ff3072b7000
+29328 <... mmap resumed>)               = 0x7ff2d6843000
+29327 <... mmap resumed>)               = 0x7ff2d6c53000
+29324 <... mmap resumed>)               = 0x7ff30559f000
+29323 mmap(0x7ff2f910b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 munmap(0x7ff2d13d7000, 16384 <unfinished ...>
+29330 munmap(0x7ff303177000, 16384 <unfinished ...>
+29329 munmap(0x7ff2e5043000, 16384 <unfinished ...>
+29328 munmap(0x7ff2e1e23000, 16384 <unfinished ...>
+29327 munmap(0x7ff3028bb000, 16384 <unfinished ...>
+29324 munmap(0x7ff2f7acb000, 16384 <unfinished ...>
+29323 <... mmap resumed>)               = 0x7ff2f910b000
+29322 <... mmap resumed>)               = 0x7ff2d890b000
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29323 munmap(0x7ff2de613000, 16384 <unfinished ...>
+29322 munmap(0x7ff2ec6bf000, 16384 <unfinished ...>
+29331 mmap(0x7ff2d13d7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff303177000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2e5043000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2e1e23000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff3028bb000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2f7acb000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... munmap resumed>)             = 0
+29331 <... mmap resumed>)               = 0x7ff2d13d7000
+29330 <... mmap resumed>)               = 0x7ff303177000
+29329 <... mmap resumed>)               = 0x7ff2e5043000
+29328 <... mmap resumed>)               = 0x7ff2e1e23000
+29327 <... mmap resumed>)               = 0x7ff3028bb000
+29324 <... mmap resumed>)               = 0x7ff2f7acb000
+29322 <... munmap resumed>)             = 0
+29331 munmap(0x7ff303517000, 16384 <unfinished ...>
+29330 munmap(0x7ff2d0e1b000, 16384 <unfinished ...>
+29329 munmap(0x7ff302dc7000, 16384 <unfinished ...>
+29328 munmap(0x7ff2ffbab000, 16384 <unfinished ...>
+29327 munmap(0x7ff2f3e3f000, 16384 <unfinished ...>
+29324 munmap(0x7ff304577000, 16384 <unfinished ...>
+29323 mmap(0x7ff2de613000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29322 mmap(0x7ff2ec6bf000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 mmap(0x7ff303517000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff2d0e1b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff302dc7000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2ffbab000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2f3e3f000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff304577000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... mmap resumed>)               = 0x7ff2de613000
+29322 <... mmap resumed>)               = 0x7ff2ec6bf000
+29331 <... mmap resumed>)               = 0x7ff303517000
+29330 <... mmap resumed>)               = 0x7ff2d0e1b000
+29329 <... mmap resumed>)               = 0x7ff302dc7000
+29328 <... mmap resumed>)               = 0x7ff2ffbab000
+29327 <... mmap resumed>)               = 0x7ff2f3e3f000
+29324 <... mmap resumed>)               = 0x7ff304577000
+29323 munmap(0x7ff2cea53000, 16384 <unfinished ...>
+29331 munmap(0x7ff2fe797000, 16384 <unfinished ...>
+29330 munmap(0x7ff3053ab000, 16384 <unfinished ...>
+29329 munmap(0x7ff2e9c5b000, 16384 <unfinished ...>
+29328 munmap(0x7ff2cafcf000, 16384 <unfinished ...>
+29327 munmap(0x7ff2e28f3000, 16384 <unfinished ...>
+29324 munmap(0x7ff2de4cf000, 16384 <unfinished ...>
+29322 munmap(0x7ff2fe383000, 16384 <unfinished ...>
+29331 <... munmap resumed>)             = 0
+29330 <... munmap resumed>)             = 0
+29329 <... munmap resumed>)             = 0
+29328 <... munmap resumed>)             = 0
+29327 <... munmap resumed>)             = 0
+29324 <... munmap resumed>)             = 0
+29323 <... munmap resumed>)             = 0
+29331 mmap(0x7ff2fe797000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29330 mmap(0x7ff3053ab000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29329 mmap(0x7ff2e9c5b000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29328 mmap(0x7ff2cafcf000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29327 mmap(0x7ff2e28f3000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29324 mmap(0x7ff2de4cf000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29322 <... munmap resumed>)             = 0
+29331 <... mmap resumed>)               = 0x7ff2fe797000
+29330 <... mmap resumed>)               = 0x7ff3053ab000
+29329 <... mmap resumed>)               = 0x7ff2e9c5b000
+29328 <... mmap resumed>)               = 0x7ff2cafcf000
+29327 <... mmap resumed>)               = 0x7ff2e28f3000
+29324 <... mmap resumed>)               = 0x7ff2de4cf000
+29323 mmap(0x7ff2cea53000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29331 futex(0x7ffc7b294404, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29330 futex(0x7ffc7b294404, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29329 futex(0x7ffc7b294404, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29328 futex(0x7ffc7b294404, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29327 futex(0x7ffc7b294404, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29324 futex(0x7ffc7b294404, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29322 mmap(0x7ff2fe383000, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0 <unfinished ...>
+29323 <... mmap resumed>)               = 0x7ff2cea53000
+29322 <... mmap resumed>)               = 0x7ff2fe383000
+29323 futex(0x7ffc7b294404, FUTEX_WAIT_PRIVATE, 0, NULL <unfinished ...>
+29322 futex(0x7ffc7b294404, FUTEX_WAKE_PRIVATE, 2147483647 <unfinished ...>
+29323 <... futex resumed>)              = -1 EAGAIN (Resource temporarily unavailable)
+29319 <... futex resumed>)              = 0
+29331 <... futex resumed>)              = 0
+29330 <... futex resumed>)              = 0
+29329 <... futex resumed>)              = 0
+29322 <... futex resumed>)              = 7
+29319 futex(0x7ff2c9c36910, FUTEX_WAIT_BITSET|FUTEX_CLOCK_REALTIME, 29322, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+29331 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+29330 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+29329 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+29328 <... futex resumed>)              = 0
+29327 <... futex resumed>)              = 0
+29324 <... futex resumed>)              = 0
+29323 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+29331 <... rt_sigprocmask resumed>NULL, 8) = 0
+29330 <... rt_sigprocmask resumed>NULL, 8) = 0
+29329 <... rt_sigprocmask resumed>NULL, 8) = 0
+29328 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+29327 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+29324 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+29322 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+29331 madvise(0x7ff2c5c2f000, 8372224, MADV_DONTNEED <unfinished ...>
+29330 madvise(0x7ff2c6430000, 8372224, MADV_DONTNEED <unfinished ...>
+29329 madvise(0x7ff2c6c31000, 8372224, MADV_DONTNEED <unfinished ...>
+29328 <... rt_sigprocmask resumed>NULL, 8) = 0
+29327 <... rt_sigprocmask resumed>NULL, 8) = 0
+29324 <... rt_sigprocmask resumed>NULL, 8) = 0
+29323 <... rt_sigprocmask resumed>NULL, 8) = 0
+29331 <... madvise resumed>)            = 0
+29330 <... madvise resumed>)            = 0
+29329 <... madvise resumed>)            = 0
+29328 madvise(0x7ff2c7432000, 8372224, MADV_DONTNEED <unfinished ...>
+29327 madvise(0x7ff2c7c33000, 8372224, MADV_DONTNEED <unfinished ...>
+29324 madvise(0x7ff2c8434000, 8372224, MADV_DONTNEED <unfinished ...>
+29322 <... rt_sigprocmask resumed>NULL, 8) = 0
+29331 exit(0 <unfinished ...>
+29330 exit(0 <unfinished ...>
+29329 exit(0 <unfinished ...>
+29328 <... madvise resumed>)            = 0
+29327 <... madvise resumed>)            = 0
+29324 <... madvise resumed>)            = 0
+29323 madvise(0x7ff2c8c35000, 8372224, MADV_DONTNEED <unfinished ...>
+29331 <... exit resumed>)               = ?
+29330 <... exit resumed>)               = ?
+29329 <... exit resumed>)               = ?
+29328 exit(0 <unfinished ...>
+29327 exit(0 <unfinished ...>
+29324 exit(0 <unfinished ...>
+29322 madvise(0x7ff2c9436000, 8372224, MADV_DONTNEED <unfinished ...>
+29328 <... exit resumed>)               = ?
+29327 <... exit resumed>)               = ?
+29324 <... exit resumed>)               = ?
+29323 <... madvise resumed>)            = 0
+29323 exit(0 <unfinished ...>
+29322 <... madvise resumed>)            = 0
+29323 <... exit resumed>)               = ?
+29322 exit(0)                           = ?
+29319 <... futex resumed>)              = 0
+29319 munmap(0x7ff2c9436000, 8392704)   = 0
+29319 munmap(0x7ff2c8c35000, 8392704)   = 0
+29319 munmap(0x7ff2c8434000, 8392704)   = 0
+29319 munmap(0x7ff2c7c33000, 8392704)   = 0
+29319 openat(AT_FDCWD, "/proc/self/statm", O_RDONLY) = 3
+29319 newfstatat(3, "", {st_mode=S_IFREG|0444, st_size=0, ...}, AT_EMPTY_PATH) = 0
+29319 read(3, "270692 123 88 199 0 270411 0\n", 1024) = 29
+29319 write(2, "mmbench: peak RSS ~0 MB\n", 24) = 24
+29319 close(3)                          = 0
+29319 uname({sysname="Linux", nodename="syzkaller", ...}) = 0
+29319 uname({sysname="Linux", nodename="syzkaller", ...}) = 0
+29319 newfstatat(1, "", {st_mode=S_IFCHR|0666, st_rdev=makedev(0x1, 0x3), ...}, AT_EMPTY_PATH) = 0
+29319 ioctl(1, TCGETS, 0x7ffc7b293b00)  = -1 ENOTTY (Inappropriate ioctl for device)
+29319 write(1, "{\"bench\":\"unmap-virt\",\"contention\":\"high\",\"threads\":8,\"ops\":157,\"elapsed_s\":1.052,\"ops_per_us\":3"..., 196) = 196
+29319 munmap(0x7ff2c9c37000, 1073741824) = 0
+29319 exit_group(0)                     = ?

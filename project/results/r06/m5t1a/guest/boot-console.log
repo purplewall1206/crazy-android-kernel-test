@@ -1,0 +1,918 @@
+[    0.000000] Linux version 6.18.32-g025756094542-dirty (ppw@vm) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #9 SMP PREEMPT_DYNAMIC Fri Sep 18 16:27:51 CST 2026
+[    0.000000] Command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on mitigations=off kunit.enable=0 fsck.mode=force fsck.repair=yes
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x00000000bffdcfff] usable
+[    0.000000] BIOS-e820: [mem 0x00000000bffdd000-0x00000000bfffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000feffc000-0x00000000feffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000100000000-0x000000013fffffff] usable
+[    0.000000] NX (Execute Disable) protection: active
+[    0.000000] APIC: Static calls initialized
+[    0.000000] SMBIOS 2.8 present.
+[    0.000000] DMI: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[    0.000000] DMI: Memory slots populated: 1/1
+[    0.000000] Hypervisor detected: KVM
+[    0.000000] last_pfn = 0xbffdd max_arch_pfn = 0x400000000
+[    0.000000] kvm-clock: Using msrs 4b564d01 and 4b564d00
+[    0.000004] kvm-clock: using sched offset of 3766523237 cycles
+[    0.000041] clocksource: kvm-clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+[    0.000091] tsc: Detected 2419.196 MHz processor
+[    0.003038] last_pfn = 0x140000 max_arch_pfn = 0x400000000
+[    0.003454] MTRR map: 4 entries (3 fixed + 1 variable; max 19), built from 8 variable MTRRs
+[    0.003510] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+[    0.004309] last_pfn = 0xbffdd max_arch_pfn = 0x400000000
+[    0.019035] found SMP MP-table at [mem 0x000f5b90-0x000f5b9f]
+[    0.019485] Using GB pages for direct mapping
+[    0.038014] ACPI: Early table checksum verification disabled
+[    0.038047] ACPI: RSDP 0x00000000000F59B0 000014 (v00 BOCHS )
+[    0.038092] ACPI: RSDT 0x00000000BFFE1B9C 000034 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.038097] ACPI: FACP 0x00000000BFFE1A18 000074 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.038132] ACPI: DSDT 0x00000000BFFE0040 0019D8 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.038134] ACPI: FACS 0x00000000BFFE0000 000040
+[    0.038136] ACPI: APIC 0x00000000BFFE1A8C 0000B0 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.038138] ACPI: HPET 0x00000000BFFE1B3C 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.038140] ACPI: WAET 0x00000000BFFE1B74 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.038142] ACPI: Reserving FACP table memory at [mem 0xbffe1a18-0xbffe1a8b]
+[    0.038143] ACPI: Reserving DSDT table memory at [mem 0xbffe0040-0xbffe1a17]
+[    0.038144] ACPI: Reserving FACS table memory at [mem 0xbffe0000-0xbffe003f]
+[    0.038144] ACPI: Reserving APIC table memory at [mem 0xbffe1a8c-0xbffe1b3b]
+[    0.038145] ACPI: Reserving HPET table memory at [mem 0xbffe1b3c-0xbffe1b73]
+[    0.038145] ACPI: Reserving WAET table memory at [mem 0xbffe1b74-0xbffe1b9b]
+[    0.042900] No NUMA configuration found
+[    0.042903] Faking a node at [mem 0x0000000000000000-0x000000013fffffff]
+[    0.042907] NODE_DATA(0) allocated [mem 0x13fffa140-0x13fffdfff]
+[    0.045329] Zone ranges:
+[    0.045330]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+[    0.045332]   DMA32    [mem 0x0000000001000000-0x00000000ffffffff]
+[    0.045333]   Normal   [mem 0x0000000100000000-0x000000013fffffff]
+[    0.045335] Movable zone start for each node
+[    0.045335] Early memory node ranges
+[    0.045335]   node   0: [mem 0x0000000000001000-0x000000000009efff]
+[    0.045337]   node   0: [mem 0x0000000000100000-0x00000000bffdcfff]
+[    0.045338]   node   0: [mem 0x0000000100000000-0x000000013fffffff]
+[    0.045339] Initmem setup node 0 [mem 0x0000000000001000-0x000000013fffffff]
+[    0.051008] On node 0, zone DMA: 1 pages in unavailable ranges
+[    0.058174] On node 0, zone DMA: 97 pages in unavailable ranges
+[    2.058614] On node 0, zone Normal: 35 pages in unavailable ranges
+[    2.062072] ACPI: PM-Timer IO Port: 0x608
+[    2.062172] ACPI: LAPIC_NMI (acpi_id[0xff] dfl dfl lint[0x1])
+[    2.063396] IOAPIC[0]: apic_id 0, version 17, address 0xfec00000, GSI 0-23
+[    2.063415] ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+[    2.063421] ACPI: INT_SRC_OVR (bus 0 bus_irq 5 global_irq 5 high level)
+[    2.063424] ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+[    2.063427] ACPI: INT_SRC_OVR (bus 0 bus_irq 10 global_irq 10 high level)
+[    2.063429] ACPI: INT_SRC_OVR (bus 0 bus_irq 11 global_irq 11 high level)
+[    2.063438] ACPI: Using ACPI (MADT) for SMP configuration information
+[    2.063441] ACPI: HPET id: 0x8086a201 base: 0xfed00000
+[    2.063452] TSC deadline timer available
+[    2.063463] CPU topo: Max. logical packages:   1
+[    2.063465] CPU topo: Max. logical dies:       1
+[    2.063466] CPU topo: Max. dies per package:   1
+[    2.063476] CPU topo: Max. threads per core:   1
+[    2.063478] CPU topo: Num. cores per package:     8
+[    2.063479] CPU topo: Num. threads per package:   8
+[    2.063480] CPU topo: Allowing 8 present CPUs plus 0 hotplug CPUs
+[    2.063602] kvm-guest: APIC: eoi() replaced with kvm_guest_apic_eoi_write()
+[    2.063739] kvm-guest: KVM setup pv remote TLB flush
+[    2.063796] kvm-guest: setup PV sched yield
+[    2.064056] PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+[    2.064061] PM: hibernation: Registered nosave memory: [mem 0x0009f000-0x000fffff]
+[    2.064065] PM: hibernation: Registered nosave memory: [mem 0xbffdd000-0xffffffff]
+[    2.064069] [mem 0xc0000000-0xfeffbfff] available for PCI devices
+[    2.064073] Booting paravirtualized kernel on KVM
+[    2.064102] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1910969940391419 ns
+[    2.081838] setup_percpu: NR_CPUS:64 nr_cpumask_bits:8 nr_cpu_ids:8 nr_node_ids:1
+[    2.149856] percpu: Embedded 52 pages/cpu s174808 r8192 d29992 u262144
+[    2.150299] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on mitigations=off kunit.enable=0 fsck.mode=force fsck.repair=yes
+[    2.150555] corten: requested on, activating at initcall time
+[    2.150652] random: crng init done
+[    2.150654] printk: log buffer data + meta data: 262144 + 917504 = 1179648 bytes
+[    2.275902] Dentry cache hash table entries: 524288 (order: 10, 4194304 bytes, linear)
+[    2.332103] Inode-cache hash table entries: 262144 (order: 9, 2097152 bytes, linear)
+[    2.334770] software IO TLB: area num 8.
+[    4.270081] Fallback order for Node 0: 0 
+[    4.270099] Built 1 zonelists, mobility grouping on.  Total pages: 1048443
+[    4.270104] Policy zone: Normal
+[    4.270109] mem auto-init: stack:off, heap alloc:off, heap free:off
+[    4.311558] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=8, Nodes=1
+[    4.320592] Dynamic Preempt: voluntary
+[    4.756283] rcu: Preemptible hierarchical RCU implementation.
+[    4.756290] rcu: 	RCU event tracing is enabled.
+[    4.756292] rcu: 	RCU restricting CPUs from NR_CPUS=64 to nr_cpu_ids=8.
+[    4.756298] 	Trampoline variant of Tasks RCU enabled.
+[    4.756299] 	Tracing variant of Tasks RCU enabled.
+[    4.756301] rcu: RCU calculated value of scheduler-enlistment delay is 100 jiffies.
+[    4.756303] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=8
+[    4.756566] RCU Tasks: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+[    4.756573] RCU Tasks Trace: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+[    4.773772] NR_IRQS: 4352, nr_irqs: 488, preallocated irqs: 16
+[    4.774961] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    4.841688] Console: colour VGA+ 80x25
+[    4.841782] printk: legacy console [ttyS0] enabled
+[    5.486071] ACPI: Core revision 20250807
+[    5.491752] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    5.501539] APIC: Switch to symmetric I/O mode setup
+[    5.508522] x2apic enabled
+[    5.514705] APIC: Switched APIC routing to: physical x2apic
+[    5.521967] kvm-guest: APIC: send_IPI_mask() replaced with kvm_send_ipi_mask()
+[    5.529363] kvm-guest: APIC: send_IPI_mask_allbutself() replaced with kvm_send_ipi_mask_allbutself()
+[    5.539031] kvm-guest: setup PV IPIs
+[    5.561761] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    5.567839] clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x22df0d21928, max_idle_ns: 440795225288 ns
+[    5.576132] Calibrating delay loop (skipped) preset value.. 4838.39 BogoMIPS (lpj=2419196)
+[    5.579558] x86/cpu: User Mode Instruction Prevention (UMIP) activated
+[    5.581518] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    5.582133] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    5.583316] mitigations: Enabled attack vectors: SMT mitigations: off
+[    5.584238] Speculative Store Bypass: Vulnerable
+[    5.585125] Spectre V2 : Vulnerable
+[    5.586127] ITS: Vulnerable
+[    5.587130] Spectre V1 : Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers
+[    5.588330] x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'
+[    5.589137] x86/fpu: Supporting XSAVE feature 0x002: 'SSE registers'
+[    5.590138] x86/fpu: Supporting XSAVE feature 0x004: 'AVX registers'
+[    5.591137] x86/fpu: Supporting XSAVE feature 0x200: 'Protection Keys User registers'
+[    5.592138] x86/fpu: xstate_offset[2]:  576, xstate_sizes[2]:  256
+[    5.593138] x86/fpu: xstate_offset[9]:  832, xstate_sizes[9]:    8
+[    5.594135] x86/fpu: Enabled xstate features 0x207, context size is 840 bytes, using 'compacted' format.
+[    5.666282] Freeing SMP alternatives memory: 56K
+[    5.667136] pid_max: default: 32768 minimum: 301
+[    5.669161] LSM: initializing lsm=capability,selinux
+[    5.670192] SELinux:  Initializing.
+[    5.674763] Mount-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    5.675360] Mountpoint-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    5.684107] smpboot: CPU0: 13th Gen Intel(R) Core(TM) i9-13900HX (family: 0x6, model: 0xb7, stepping: 0x1)
+[    5.686120] Performance Events: Alderlake Hybrid events, core PMU driver.
+[    5.689186] core: CPUID marked event: 'cpu cycles' unavailable
+[    5.690181] core: CPUID marked event: 'instructions' unavailable
+[    5.691172] core: CPUID marked event: 'bus cycles' unavailable
+[    5.692175] core: CPUID marked event: 'cache references' unavailable
+[    5.693176] core: CPUID marked event: 'cache misses' unavailable
+[    5.694181] core: CPUID marked event: 'branch instructions' unavailable
+[    5.695180] core: CPUID marked event: 'branch misses' unavailable
+[    5.696770] core: The event 0x100 is not supported as a normal event.
+[    5.697178] core: The event 0x300 is not supported as a normal event.
+[    5.698181] core: The event 0x400 is not supported as a normal event.
+[    5.699169] core: The event 0x8000 is not supported as a normal event.
+[    5.700180] core: The event 0x8100 is not supported as a normal event.
+[    5.701178] core: The event 0x8200 is not supported as a normal event.
+[    5.702143] core: The event 0x8300 is not supported as a normal event.
+[    5.703140] core: The event 0x8400 is not supported as a normal event.
+[    5.704153] core: The event 0x8500 is not supported as a normal event.
+[    5.705138] core: The event 0x8600 is not supported as a normal event.
+[    5.706136] core: The event 0x8700 is not supported as a normal event.
+[    5.707279] core: cpu_core PMU driver: 
+[    5.708177] ... version:                   1
+[    5.709171] ... bit width:                 48
+[    5.710137] ... generic counters:          6
+[    5.711170] ... generic bitmap:            000000000000003f
+[    5.712175] ... fixed-purpose counters:    0
+[    5.713138] ... fixed-purpose bitmap:      0000000000000000
+[    5.714176] ... value mask:                0000ffffffffffff
+[    5.715138] ... max period:                000000007fffffff
+[    5.716178] ... global_ctrl mask:          000100000000003f
+[    5.718120] signal: max sigframe size: 3632
+[    5.718315] rcu: Hierarchical SRCU implementation.
+[    5.719137] rcu: 	Max phase no-delay instances is 400.
+[    5.720853] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+[    5.722108] corten: page descriptors enabled
+[    5.722514] smp: Bringing up secondary CPUs ...
+[    5.724120] smpboot: x86: Booting SMP configuration:
+[    5.724138] .... node  #0, CPUs:      #1 #2 #3 #4 #5 #6 #7
+[    5.771178] smp: Brought up 1 node, 8 CPUs
+[    5.773137] smpboot: Total of 8 processors activated (38707.13 BogoMIPS)
+[    5.784724] Memory: 4004792K/4193772K available (19055K kernel code, 2965K rwdata, 8080K rodata, 3056K init, 2252K bss, 183444K reserved, 0K cma-reserved)
+[    5.800135] devtmpfs: initialized
+[    5.807246] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+[    5.808205] posixtimers hash table entries: 4096 (order: 4, 65536 bytes, linear)
+[    5.810267] futex hash table entries: 2048 (131072 bytes on 1 NUMA nodes, total 128 KiB, linear).
+[    5.813120] PM: RTC time: 08:31:40, date: 2026-09-18
+[    5.815744] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    5.816648] audit: initializing netlink subsys (disabled)
+[    5.818209] audit: type=2000 audit(1789720299.742:1): state=initialized audit_enabled=0 res=1
+[    5.818732] thermal_sys: Registered thermal governor 'step_wise'
+[    5.819295] cpuidle: using governor menu
+[    5.825511] PCI: Using configuration type 1 for base access
+[    5.828358] kprobes: kprobe jump-optimization is enabled. All kprobes are optimized if possible.
+[    5.838154] HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+[    5.843173] HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+[    5.943916] ACPI: Added _OSI(Module Device)
+[    5.946171] ACPI: Added _OSI(Processor Device)
+[    5.950138] ACPI: Added _OSI(Processor Aggregator Device)
+[    5.952696] ACPI: 1 ACPI AML tables successfully acquired and loaded
+[    5.965344] ACPI: Interpreter enabled
+[    5.967304] ACPI: PM: (supports S0 S3 S4 S5)
+[    5.970174] ACPI: Using IOAPIC for interrupt routing
+[    5.974069] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[    5.978169] PCI: Using E820 reservations for host bridge windows
+[    5.981611] ACPI: Enabled 2 GPEs in block 00 to 0F
+[    5.992107] ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-ff])
+[    5.994194] acpi PNP0A03:00: _OSC: OS supports [ASPM ClockPM Segments MSI HPX-Type3]
+[    5.999180] acpi PNP0A03:00: _OSC: not requesting OS control; OS requires [ExtendedConfig ASPM ClockPM MSI]
+[    6.004221] acpi PNP0A03:00: fail to add MMCONFIG information, can't access extended configuration space under this bridge
+[    6.008492] PCI host bridge to bus 0000:00
+[    6.010145] pci_bus 0000:00: root bus resource [io  0x0000-0x0cf7 window]
+[    6.013140] pci_bus 0000:00: root bus resource [io  0x0d00-0xffff window]
+[    6.015139] pci_bus 0000:00: root bus resource [mem 0x000a0000-0x000bffff window]
+[    6.020175] pci_bus 0000:00: root bus resource [mem 0xc0000000-0xfebfffff window]
+[    6.024141] pci_bus 0000:00: root bus resource [mem 0x140000000-0x1bfffffff window]
+[    6.029306] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    6.031325] pci 0000:00:00.0: [8086:1237] type 00 class 0x060000 conventional PCI endpoint
+[    6.036809] pci 0000:00:01.0: [8086:7000] type 00 class 0x060100 conventional PCI endpoint
+[    6.042815] pci 0000:00:01.1: [8086:7010] type 00 class 0x010180 conventional PCI endpoint
+[    6.050723] pci 0000:00:01.1: BAR 4 [io  0xc0a0-0xc0af]
+[    6.054578] pci 0000:00:01.1: BAR 0 [io  0x01f0-0x01f7]: legacy IDE quirk
+[    6.060183] pci 0000:00:01.1: BAR 1 [io  0x03f6]: legacy IDE quirk
+[    6.065140] pci 0000:00:01.1: BAR 2 [io  0x0170-0x0177]: legacy IDE quirk
+[    6.070179] pci 0000:00:01.1: BAR 3 [io  0x0376]: legacy IDE quirk
+[    6.076822] pci 0000:00:01.3: [8086:7113] type 00 class 0x068000 conventional PCI endpoint
+[    6.092968] pci 0000:00:01.3: quirk: [io  0x0600-0x063f] claimed by PIIX4 ACPI
+[    6.099283] pci 0000:00:01.3: quirk: [io  0x0700-0x070f] claimed by PIIX4 SMB
+[    6.103468] pci 0000:00:01.3: quirk_piix4_acpi+0x0/0x170 took 10742 usecs
+[    6.108120] pci 0000:00:02.0: [1234:1111] type 00 class 0x030000 conventional PCI endpoint
+[    6.237287] pci 0000:00:02.0: BAR 0 [mem 0xfd000000-0xfdffffff pref]
+[    6.246413] pci 0000:00:02.0: BAR 2 [mem 0xfeb90000-0xfeb90fff]
+[    6.250490] pci 0000:00:02.0: ROM [mem 0xfeb80000-0xfeb8ffff pref]
+[    6.259089] pci 0000:00:02.0: Video device with shadowed ROM at [mem 0x000c0000-0x000dffff]
+[    6.270120] pci 0000:00:03.0: [1af4:1000] type 00 class 0x020000 conventional PCI endpoint
+[    6.275164] pci 0000:00:03.0: BAR 0 [io  0xc080-0xc09f]
+[    6.276163] pci 0000:00:03.0: BAR 1 [mem 0xfeb91000-0xfeb91fff]
+[    6.278228] pci 0000:00:03.0: BAR 4 [mem 0xfe000000-0xfe003fff 64bit pref]
+[    6.280167] pci 0000:00:03.0: ROM [mem 0xfeb00000-0xfeb7ffff pref]
+[    6.283120] pci 0000:00:04.0: [1af4:1001] type 00 class 0x010000 conventional PCI endpoint
+[    6.289170] pci 0000:00:04.0: BAR 0 [io  0xc000-0xc07f]
+[    6.289171] pci 0000:00:04.0: BAR 1 [mem 0xfeb92000-0xfeb92fff]
+[    6.290120] pci 0000:00:04.0: BAR 4 [mem 0xfe004000-0xfe007fff 64bit pref]
+[    6.306120] ACPI: PCI: Interrupt link LNKA configured for IRQ 10
+[    6.308421] ACPI: PCI: Interrupt link LNKB configured for IRQ 10
+[    6.312759] ACPI: PCI: Interrupt link LNKC configured for IRQ 11
+[    6.316827] ACPI: PCI: Interrupt link LNKD configured for IRQ 11
+[    6.322343] ACPI: PCI: Interrupt link LNKS configured for IRQ 9
+[    6.339647] iommu: Default domain type: Translated
+[    6.343385] iommu: DMA domain TLB invalidation policy: lazy mode
+[    6.361120] SCSI subsystem initialized
+[    6.366369] ACPI: bus type USB registered
+[    6.367461] usbcore: registered new interface driver usbfs
+[    6.368441] usbcore: registered new interface driver hub
+[    6.369151] usbcore: registered new device driver usb
+[    6.370418] pps_core: LinuxPPS API ver. 1 registered
+[    6.372135] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    6.373150] PTP clock support registered
+[    6.378423] Advanced Linux Sound Architecture Driver Initialized.
+[    6.388580] NetLabel: Initializing
+[    6.390173] NetLabel:  domain hash size = 128
+[    6.394166] NetLabel:  protocols = UNLABELED CIPSOv4 CALIPSO
+[    6.401043] NetLabel:  unlabeled traffic allowed by default
+[    6.410493] PCI: Using ACPI for IRQ routing
+[    6.414261] pci 0000:00:02.0: vgaarb: setting as boot VGA device
+[    6.415120] pci 0000:00:02.0: vgaarb: bridge control possible
+[    6.415120] pci 0000:00:02.0: vgaarb: VGA device added: decodes=io+mem,owns=io+mem,locks=none
+[    6.429241] vgaarb: loaded
+[    6.436432] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+[    6.441170] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+[    6.454602] clocksource: Switched to clocksource kvm-clock
+[    6.480891] VFS: Disk quotas dquot_6.6.0
+[    6.488584] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    6.502011] pnp: PnP ACPI init
+[    6.507776] pnp: PnP ACPI: found 6 devices
+[    6.542413] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+[    6.556504] NET: Registered PF_INET protocol family
+[    6.562307] IP idents hash table entries: 65536 (order: 7, 524288 bytes, linear)
+[    6.570574] tcp_listen_portaddr_hash hash table entries: 2048 (order: 3, 32768 bytes, linear)
+[    6.577888] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    6.581531] TCP established hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[    6.586097] TCP bind hash table entries: 32768 (order: 8, 1048576 bytes, linear)
+[    6.591885] TCP: Hash tables configured (established 32768 bind 32768)
+[    6.595426] UDP hash table entries: 2048 (order: 5, 131072 bytes, linear)
+[    6.598943] UDP-Lite hash table entries: 2048 (order: 5, 131072 bytes, linear)
+[    6.602945] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    6.613731] RPC: Registered named UNIX socket transport module.
+[    6.620345] RPC: Registered udp transport module.
+[    6.626813] RPC: Registered tcp transport module.
+[    6.632433] RPC: Registered tcp-with-tls transport module.
+[    6.638636] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    6.645357] pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+[    6.649705] pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+[    6.652433] pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000bffff window]
+[    6.655459] pci_bus 0000:00: resource 7 [mem 0xc0000000-0xfebfffff window]
+[    6.658158] pci_bus 0000:00: resource 8 [mem 0x140000000-0x1bfffffff window]
+[    6.661116] pci 0000:00:01.0: PIIX3: Enabling Passive Release
+[    6.664161] pci 0000:00:00.0: Limiting direct PCI/PCI transfers
+[    6.667399] PCI: CLS 0 bytes, default 64
+[    6.669692] PCI-DMA: Using software bounce buffering for IO (SWIOTLB)
+[    6.672340] software IO TLB: mapped [mem 0x00000000bbfdd000-0x00000000bffdd000] (64MB)
+[    6.677105] RAPL PMU: API unit is 2^-32 Joules, 0 fixed counters, 10737418240 ms ovfl timer
+[    6.682606] clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x22df0d21928, max_idle_ns: 440795225288 ns
+[    6.740726] Initialise system trusted keyrings
+[    6.745264] workingset: timestamp_bits=40 max_order=20 bucket_order=0
+[    6.751493] NFS: Registering the id_resolver key type
+[    6.754146] Key type id_resolver registered
+[    6.756885] Key type id_legacy registered
+[    6.763997] 9p: Installing v9fs 9p2000 file system support
+[    6.794277] Key type asymmetric registered
+[    6.797631] Asymmetric key parser 'x509' registered
+[    6.800891] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 251)
+[    6.808815] io scheduler mq-deadline registered
+[    6.812885] io scheduler kyber registered
+[    6.818430] input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input0
+[    6.821695] ACPI: button: Power Button [PWRF]
+[    6.854812] ACPI: \_SB_.LNKC: Enabled at IRQ 11
+[    6.910126] ACPI: \_SB_.LNKD: Enabled at IRQ 10
+[    6.930886] Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled
+[    6.944132] 00:04: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+[    6.966461] Non-volatile memory driver v1.3
+[    6.970395] Linux agpgart interface v0.103
+[    7.050615] ACPI: bus type drm_connector registered
+[    7.131709] loop: module loaded
+[    7.137032] virtio_blk virtio1: 8/0/0 default/read/poll queues
+[    7.181851] virtio_blk virtio1: [vda] 20971520 512-byte logical blocks (10.7 GB/10.0 GiB)
+[    7.204046] zram: Added device: zram0
+[    7.222016] scsi host0: ata_piix
+[    7.228580] scsi host1: ata_piix
+[    7.233294] ata1: PATA max MWDMA2 cmd 0x1f0 ctl 0x3f6 bmdma 0xc0a0 irq 14 lpm-pol 0
+[    7.243052] ata2: PATA max MWDMA2 cmd 0x170 ctl 0x376 bmdma 0xc0a8 irq 15 lpm-pol 0
+[    7.291821] e100: Intel(R) PRO/100 Network Driver
+[    7.299102] e100: Copyright(c) 1999-2006 Intel Corporation
+[    7.305618] e1000: Intel(R) PRO/1000 Network Driver
+[    7.312504] e1000: Copyright (c) 1999-2006 Intel Corporation.
+[    7.318527] e1000e: Intel(R) PRO/1000 Network Driver
+[    7.324484] e1000e: Copyright(c) 1999 - 2015 Intel Corporation.
+[    7.329913] sky2: driver version 1.30
+[    7.336701] usbcore: registered new interface driver usblp
+[    7.342051] usbcore: registered new interface driver usb-storage
+[    7.349596] i8042: PNP: PS/2 Controller [PNP0303:KBD,PNP0f13:MOU] at 0x60,0x64 irq 1,12
+[    7.369026] serio: i8042 KBD port at 0x60,0x64 irq 1
+[    7.375906] serio: i8042 AUX port at 0x60,0x64 irq 12
+[    7.383770] rtc_cmos 00:05: RTC can wake from S4
+[    7.401083] input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input1
+[    7.413571] rtc_cmos 00:05: registered as rtc0
+[    7.416036] rtc_cmos 00:05: alarms up to one day, y3k, 242 bytes nvram, hpet irqs
+[    7.430928] ata2: found unknown device (class 0)
+[    7.432818] device-mapper: ioctl: 4.50.0-ioctl (2025-04-28) initialised: dm-devel@lists.linux.dev
+[    7.441597] ata2.00: ATAPI: QEMU DVD-ROM, 2.5+, max UDMA/100
+[    7.451726] intel_pstate: CPU model not supported
+[    7.472903] hid: raw HID events driver (C) Jiri Kosina
+[    7.484477] usbcore: registered new interface driver usbhid
+[    7.491884] usbhid: USB HID core driver
+[    7.521656] scsi 1:0:0:0: CD-ROM            QEMU     QEMU DVD-ROM     2.5+ PQ: 0 ANSI: 5
+[    7.522936] Initializing XFRM netlink socket
+[    7.554276] NET: Registered PF_INET6 protocol family
+[    7.595822] Segment Routing with IPv6
+[    7.606425] In-situ OAM (IOAM) with IPv6
+[    7.618249] sit: IPv6, IPv4 and MPLS over IPv4 tunneling driver
+[    7.636558] NET: Registered PF_PACKET protocol family
+[    7.651652] 9pnet: Installing 9P2000 support
+[    7.657466] Key type dns_resolver registered
+[    7.685912] sr 1:0:0:0: [sr0] scsi3-mmc drive: 4x/4x cd/rw xa/form2 tray
+[    7.690362] IPI shorthand broadcast: enabled
+[    7.708232] cdrom: Uniform CD-ROM driver Revision: 3.20
+[    7.727804] sched_clock: Marking stable (6937041551, 790115366)->(108752856312, -101025699395)
+[    7.750894] registered taskstats version 1
+[    7.757348] Loading compiled-in X.509 certificates
+[    7.769972] sr 1:0:0:0: Attached scsi generic sg0 type 5
+[    7.779956] Demotion targets for Node 0: null
+[    7.790059] PM:   Magic number: 10:695:523
+[    7.796781] netconsole: network logging started
+[    7.802550] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    7.826632] kworker/u32:1 (98) used greatest stack depth: 13936 bytes left
+[    7.850016] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    7.863783] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    7.882355] ALSA device list:
+[    7.884356] faux_driver regulatory: Direct firmware load for regulatory.db failed with error -2
+[    7.896351]   No soundcards found.
+[    7.904511] cfg80211: failed to load regulatory.db
+[    7.916918] kunit: disabled
+[    7.928969] check access for rdinit=/init failed: -2, ignoring
+[    8.120995] input: ImExPS/2 Generic Explorer Mouse as /devices/platform/i8042/serio1/input/input3
+[    8.133087] md: Waiting for all devices to be available before autodetect
+[    8.143969] md: If you don't use raid, use raid=noautodetect
+[    8.152275] md: Autodetecting RAID arrays.
+[    8.155329] md: autorun ...
+[    8.157307] md: ... autorun DONE.
+[    8.233066] EXT4-fs (vda): recovery complete
+[    8.238380] EXT4-fs (vda): mounted filesystem 56b1695a-8891-40bd-bc42-c7c8a70fe76d r/w with ordered data mode. Quota mode: none.
+[    8.242205] VFS: Mounted root (ext4 filesystem) on device 253:0.
+[    8.252417] devtmpfs: mounted
+[    8.313764] Freeing unused kernel image (initmem) memory: 3056K
+[    8.325965] Write protecting the kernel read-only data: 28672k
+[    8.404872] Freeing unused kernel image (text/rodata gap) memory: 1424K
+[    8.420505] Freeing unused kernel image (rodata/data gap) memory: 112K
+[    8.458264] x86/mm: Checked W+X mappings: passed, no W+X pages found.
+[    8.463669] Run /sbin/init as init process
+[    8.956174] SELinux:  Permission firmware_load in class system not defined in policy.
+[    8.959112] SELinux:  Permission kexec_image_load in class system not defined in policy.
+[    8.964569] SELinux:  Permission kexec_initramfs_load in class system not defined in policy.
+[    8.971041] SELinux:  Permission policy_load in class system not defined in policy.
+[    8.976493] SELinux:  Permission x509_certificate_load in class system not defined in policy.
+[    8.982444] SELinux:  Permission watch_mountns in class file not defined in policy.
+[    8.987972] SELinux:  Permission watch_mountns in class dir not defined in policy.
+[    8.994059] SELinux:  Permission watch_mountns in class lnk_file not defined in policy.
+[    8.999494] SELinux:  Permission watch_mountns in class chr_file not defined in policy.
+[    9.005285] SELinux:  Permission watch_mountns in class blk_file not defined in policy.
+[    9.010955] SELinux:  Permission watch_mountns in class sock_file not defined in policy.
+[    9.016653] SELinux:  Permission watch_mountns in class fifo_file not defined in policy.
+[    9.022699] SELinux:  Permission watch_mountns in class anon_inode not defined in policy.
+[    9.028428] SELinux:  Permission allowed in class io_uring not defined in policy.
+[    9.034241] SELinux:  Class memfd_file not defined in policy.
+[    9.038857] SELinux: the above unknown classes and permissions will be allowed
+[    9.104338] SELinux:  policy capability network_peer_controls=1
+[    9.109610] SELinux:  policy capability open_perms=1
+[    9.113596] SELinux:  policy capability extended_socket_class=1
+[    9.118014] SELinux:  policy capability always_check_network=0
+[    9.122780] SELinux:  policy capability cgroup_seclabel=1
+[    9.126507] SELinux:  policy capability nnp_nosuid_transition=1
+[    9.130642] SELinux:  policy capability genfs_seclabel_symlinks=0
+[    9.134936] SELinux:  policy capability ioctl_skip_cloexec=0
+[    9.139346] SELinux:  policy capability userspace_initial_context=0
+[    9.144671] SELinux:  policy capability netlink_xperm=0
+[    9.148704] SELinux:  policy capability netif_wildcard=0
+[    9.152819] SELinux:  policy capability genfs_seclabel_wildcard=0
+[    9.157199] SELinux:  policy capability functionfs_seclabel=0
+[    9.161470] SELinux:  policy capability memfd_class=0
+[    9.171202] audit: type=1403 audit(1789720303.093:2): auid=4294967295 ses=4294967295 lsm=selinux res=1
+[    9.174827] systemd[1]: Successfully loaded SELinux policy in 337.323ms.
+[    9.390635] systemd[1]: Relabeled /dev/, /dev/shm/, /run/ in 14.528ms.
+[!p]104[?7h[    9.437693] systemd[1]: systemd 257.13-1~deb13u1 running in system mode (+PAM +AUDIT +SELINUX +APPARMOR +IMA +IPE +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBCRYPTSETUP_PLUGINS +LIBFDISK +PCRE2 +PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD +BPF_FRAMEWORK +BTF -XKBCOMMON -UTMP +SYSVINIT +LIBARCHIVE)
+[    9.465304] systemd[1]: Detected virtualization kvm.
+[    9.467988] systemd[1]: Detected architecture x86-64.
+
+[0;1;39mWelcome to [0m[1mDebian GNU/Linux 13 (trixie)[0m[0;1;39m![0m
+
+[    9.480846] systemd[1]: Hostname set to <syzkaller>.
+[    9.546301] systemd[1]: bpf-restrict-fs: BPF LSM hook not enabled in the kernel, BPF LSM not supported.
+[    9.664111] selinuxenabled (115) used greatest stack depth: 12968 bytes left
+[    9.725941] systemd-hiberna (113) used greatest stack depth: 12504 bytes left
+[   10.735770] systemd[1]: Queued start job for default target graphical.target.
+[   10.773505] systemd[1]: Created slice system-getty.slice - Slice /system/getty.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-getty.slice[0m - Slice /system/getty.
+[   10.793023] systemd[1]: Created slice system-modprobe.slice - Slice /system/modprobe.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-modprobe.slice[0m - Slice /system/modprobe.
+[   10.811273] systemd[1]: Created slice system-serial\x2dgetty.slice - Slice /system/serial-getty.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-serial\x2dget…slice[0m - Slice /system/serial-getty.
+[   10.830668] systemd[1]: Created slice user.slice - User and Session Slice.
+[[0;32m  OK  [0m] Created slice [0;1;39muser.slice[0m - User and Session Slice.
+[   10.842892] systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-ask-password-conso…[0mequests to Console Directory Watch.
+[   10.858088] systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-ask-password-wall.…[0md Requests to Wall Directory Watch.
+[   10.883074] systemd[1]: Set up automount proc-sys-fs-binfmt_misc.automount - Arbitrary Executable File Formats File System Automount Point.
+[[0;32m  OK  [0m] Set up automount [0;1;39mproc-sys-fs-binfm…[0mormats File System Automount Point.
+[   10.902040] systemd[1]: Expecting device dev-ttyS0.device - /dev/ttyS0...
+         Expecting device [0;1;39mdev-ttyS0.device[0m - /dev/ttyS0...
+[   10.924520] systemd[1]: Reached target paths.target - Path Units.
+[[0;32m  OK  [0m] Reached target [0;1;39mpaths.target[0m - Path Units.
+[   10.941955] systemd[1]: Reached target remote-fs.target - Remote File Systems.
+[[0;32m  OK  [0m] Reached target [0;1;39mremote-fs.target[0m - Remote File Systems.
+[   10.960183] systemd[1]: Reached target slices.target - Slice Units.
+[[0;32m  OK  [0m] Reached target [0;1;39mslices.target[0m - Slice Units.
+[   10.975090] systemd[1]: Reached target swap.target - Swaps.
+[[0;32m  OK  [0m] Reached target [0;1;39mswap.target[0m - Swaps.
+[   10.999686] systemd[1]: Listening on systemd-creds.socket - Credential Encryption/Decryption.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-creds.socket[0m - Credential Encryption/Decryption.
+[   11.022657] systemd[1]: Listening on systemd-initctl.socket - initctl Compatibility Named Pipe.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-initctl.socke…[0m- initctl Compatibility Named Pipe.
+[   11.037855] systemd[1]: Listening on systemd-journald-dev-log.socket - Journal Socket (/dev/log).
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-journald-dev-…socket[0m - Journal Socket (/dev/log).
+[   11.054632] systemd[1]: Listening on systemd-journald.socket - Journal Sockets.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-journald.socket[0m - Journal Sockets.
+[   11.062515] systemd[1]: systemd-pcrextend.socket - TPM PCR Measurements skipped, unmet condition check ConditionSecurity=measured-uki
+[   11.070003] systemd[1]: systemd-pcrlock.socket - Make TPM PCR Policy skipped, unmet condition check ConditionSecurity=measured-uki
+[   11.082713] systemd[1]: Listening on systemd-sysext.socket - System Extension Image Management.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-sysext.socket[0m… System Extension Image Management.
+[   11.104894] systemd[1]: Listening on systemd-udevd-control.socket - udev Control Socket.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-udevd-control.socket[0m - udev Control Socket.
+[   11.127235] systemd[1]: Listening on systemd-udevd-kernel.socket - udev Kernel Socket.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-udevd-kernel.socket[0m - udev Kernel Socket.
+[   11.146661] systemd[1]: Mounting dev-hugepages.mount - Huge Pages File System...
+         Mounting [0;1;39mdev-hugepages.mount[0m - Huge Pages File System...
+[   11.163136] systemd[1]: Mounting dev-mqueue.mount - POSIX Message Queue File System...
+         Mounting [0;1;39mdev-mqueue.mount[0m - POSIX Message Queue File System...
+[   11.178071] systemd[1]: Mounting proc-sys-fs-binfmt_misc.mount - /proc/sys/fs/binfmt_misc...
+         Mounting [0;1;39mproc-sys-fs-binfmt_misc.mount[0m - /proc/sys/fs/binfmt_misc...
+[   11.209807] systemd[1]: Mounting sys-kernel-debug.mount - /sys/kernel/debug...
+         Mounting [0;1;39msys-kernel-debug.mount[0m - /sys/kernel/debug...
+[   11.237741] systemd[1]: Mounting sys-kernel-tracing.mount - Kernel Trace File System...
+         Mounting [0;1;39msys-kernel-tracing.mo[   11.249132] mount (127) used greatest stack depth: 12408 bytes left
+unt[0m - Kernel Trace File System...
+[   11.280142] systemd[1]: Mounting tmp.mount - Temporary Directory /tmp...
+         Mounting [0;1;39mtmp.mount[0m - Temporary Directory /tmp...
+[   11.301670] systemd[1]: kmod-static-nodes.service - Create List of Static Device Nodes skipped, unmet condition check ConditionFileNotEmpty=/lib/modules/6.18.32-g025756094542-dirty/modules.devname
+[   11.332672] systemd[1]: Starting modprobe@drm.service - Load Kernel Module drm...
+         Starting [0;1;39mmodprobe@drm.service[0m - Load Kernel Module drm...
+[   11.370983] systemd[1]: Starting modprobe@efi_pstore.service - Load Kernel Module efi_pstore...
+         Starting [0;1;39mmodprobe@efi_pstore.servi…[0m - Load Kernel Module efi_pstore...
+[   11.397678] systemd[1]: Starting modprobe@fuse.service - Load Kernel Module fuse...
+         Starting [0;1;39mmodprobe@fuse.service[0m - Load Kernel Module fuse...
+[   11.416704] systemd[1]: systemd-hibernate-clear.service - Clear Stale Hibernate Storage Info skipped, unmet condition check ConditionPathExists=/sys/firmware/efi/efivars/HibernateLocation-8cf2644b-4b0b-428f-9387-6d876050dc67
+[   11.451036] systemd[1]: systemd-hwdb-update.service - Rebuild Hardware Database skipped, unmet condition check ConditionNeedsUpdate=/etc
+[   11.460808] systemd[1]: systemd-journald.service: unit configures an IP firewall, but the local system does not support BPF/cgroup firewalling.
+[   11.469379] systemd[1]: systemd-journald.service: (This warning is only shown for the first unit using IP firewalling.)
+[   11.482649] systemd[1]: Starting systemd-journald.service - Journal Service...
+         Starting [0;1;39msystemd-journald.service[0m - Journal Service...
+[   11.509880] systemd[1]: Starting systemd-modules-load.service - Load Kernel Modules...
+         Starting [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules...
+[   11.535854] systemd[1]: systemd-pcrmachine.service - TPM PCR Machine ID Measurement skipped, unmet condition check ConditionSecurity=measured-uki
+[   11.548338] systemd[1]: Starting systemd-random-seed.service - Load/Save OS Random Seed...
+         Starting [0;1;39msystemd-random-seed.service[0m - Load/Save OS Random Seed...
+[   11.598517] systemd[1]: Starting systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully...
+         Starting [0;1;39msystemd-tmpfiles-setup-de…[0m Device Nodes in /dev gracefully...
+[   11.624471] systemd[1]: systemd-tpm2-setup-early.service - Early TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+[   11.650109] systemd[1]: systemd-tpm2-setup.service - TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+[   11.666841] systemd[1]: Starting systemd-udev-load-credentials.service - Load udev Rules from Credentials...
+         Starting [0;1;39msystemd-udev-load-credent…[0mLoad udev Rules from Credentials...
+[   11.698969] systemd[1]: Starting systemd-udev-trigger.service - Coldplug All udev Devices...
+         Starting [0;1;39msystemd-udev-trigger.service[0m - Coldplug All udev Devices...
+[   11.738165] systemd[1]: Mounted dev-hugepages.mount - Huge Pages File System.
+[[0;32m  OK  [0m] Mounted [0;1;39mdev-hugepages.mount[0m - Huge Pages File System.
+[   11.768798] systemd[1]: Mounted dev-mqueue.mount - POSIX Message Queue File System.
+[[0;32m  OK  [0m] Mounted [0;1;39mdev-mqueue.mount[0m - POSIX Message Queue File System.
+[   11.788942] systemd[1]: Mounted proc-sys-fs-binfmt_misc.mount - /proc/sys/fs/binfmt_misc.
+[[0;32m  OK  [0m] Mounted [0;1;39mproc-sys-fs-binfmt_misc.mount[0m - /proc/sys/fs/binfmt_misc.
+[   11.812377] systemd[1]: Mounted sys-kernel-debug.mount - /sys/kernel/debug.
+[[0;32m  OK  [0m] Mounted [0;1;39msys-kernel-debug.mount[0m - /sys/kernel/debug.
+[   11.835454] systemd[1]: Mounted sys-kernel-tracing.mount - Kernel Trace File System.
+[[0;32m  OK  [0m] Mounted [0;1;39msys-kernel-tracing.mount[0m - Kernel Trace File System.
+[   11.859788] systemd[1]: Mounted tmp.mount - Temporary Directory /tmp.
+[[0;32m  OK  [0m] Mounted [0;1;39mtmp.mount[0m - Temporary Directory /tmp.
+[   11.887739] systemd[1]: modprobe@drm.service: Deactivated successfully.
+[   11.891960] systemd-journald[134]: Collecting audit messages is disabled.
+[   11.895325] systemd[1]: Finished modprobe@drm.service - Load Kernel Module drm.
+[[0;32m  OK  [0m] Finished [0;1;39mmodprobe@drm.service[0m - Load Kernel Module drm.
+[   11.921226] systemd[1]: modprobe@efi_pstore.service: Deactivated successfully.
+[   11.934888] systemd[1]: Finished modprobe@efi_pstore.service - Load Kernel Module efi_pstore.
+[[0;32m  OK  [0m] Finished [0;1;39mmodprobe@efi_pstore.service[0m - Load Kernel Module efi_pstore.
+[   11.968589] systemd[1]: Started systemd-journald.service - Journal Service.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-journald.service[0m - Journal Service.
+[[0;32m  OK  [0m] Finished [0;1;39mmodprobe@fuse.service[0m - Load Kernel Module fuse.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-random-seed.service[0m - Load/Save OS Random Seed.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup-de…[0mic Device Nodes in /dev gracefully.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-udev-load-credent…[0m- Load udev Rules from Credentials.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-udev-trigger.service[0m - Coldplug All udev Devices.
+         Starting [0;1;39mifupdown-pre.service[0m - He…synchronize boot up for ifupdown...
+         Starting [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats...
+         Starting [0;1;39msystemd-journal-flush.ser…[0msh Journal to Persistent Storage...
+         Starting [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables...
+         Starting [0;1;39msystemd-tmpfiles-setup-de…[0meate Static Device Nodes in /dev...
+[   12.381519] systemd-journald[134]: Received client request to flush runtime journal.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats.
+[   12.489820] systemd-journald[134]: File /var/log/journal/1c821f12757d4c338ffdb020ee1ae6e0/system.journal corrupted or uncleanly shut down, renaming and replacing.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup-de…[0mCreate Static Device Nodes in /dev.
+[[0;32m  OK  [0m] Reached target [0;1;39mlocal-fs-pre.target[0m…Preparation for Local File Systems.
+         Starting [0;1;39msystemd-udevd.service[0m - R…ager for Device Events and Files...
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-journal-flush.ser…[0mlush Journal to Persistent Storage.
+         Starting [0;1;39msystemd-tmpfiles-setup.se…[0mate System Files and Directories...
+[[0;32m  OK  [0m] Started [0;1;39msystemd-udevd.service[0m - Ru…anager for Device Events and Files.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup.se…[0mreate System Files and Directories.
+[[0;32m  OK  [0m] Reached target [0;1;39msysinit.target[0m - System Initialization.
+[[0;32m  OK  [0m] Started [0;1;39mapt-daily.timer[0m - Daily apt download activities.
+[[0;32m  OK  [0m] Started [0;1;39mapt-daily-upgrade.timer[0m - …y apt upgrade and clean activities.
+[[0;32m  OK  [0m] Started [0;1;39mdpkg-db-backup.timer[0m - Daily dpkg database backup timer.
+[[0;32m  OK  [0m] Started [0;1;39me2scrub_all.timer[0m - Period…Metadata Check for All Filesystems.
+[[0;32m  OK  [0m] Started [0;1;39mfstrim.timer[0m - Discard unused filesystem blocks once a week.
+[[0;32m  OK  [0m] Started [0;1;39mlogrotate.timer[0m - Daily rotation of log files.
+[[0;32m  OK  [0m] Started [0;1;39mphpsessionclean.timer[0m - Clean PHP session files every 30 mins.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-tmpfiles-clean.tim…[0my Cleanup of Temporary Directories.
+[[0;32m  OK  [0m] Reached target [0;1;39mtimers.target[0m - Timer Units.
+[[0;32m  OK  [0m] Listening on [0;1;39mdbus.socket[0m - D-Bus System Message Bus Socket.
+[[0;32m  OK  [0m] Listening on [0;1;39msshd-unix-local.socke…[0mtemd-ssh-generator, AF_UNIX Local).
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-hostnamed.socket[0m - Hostname Service Socket.
+[[0;32m  OK  [0m] Reached target [0;1;39msockets.target[0m - Socket Units.
+[[0;32m  OK  [0m] Reached target [0;1;39mbasic.target[0m - Basic System.
+[[0;32m  OK  [0m] Started [0;1;39mcron.service[0m - Regular background program processing daemon.
+         Starting [0;1;39mdbus.service[0m - D-Bus System Message Bus...
+         Starting [0;1;39me2scrub_reap.service[0m - Re…ne ext4 Metadata Check Snapshots...
+         Starting [0;1;39msystemd-logind.service[0m - User Login Management...
+[[0;32m  OK  [0m] Found device [0;1;39mdev-ttyS0.device[0m - /dev/ttyS0.
+         Starting [0;1;39mdpkg-db-backup.service[0m - …ily dpkg database backup service...
+         Starting [0;1;39mphpsessionclean.service[0m - Clean php session files...
+[[0;32m  OK  [0m] Started [0;1;39mdbus.service[0m - D-Bus System Message Bus.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-rfkill.socket[0m…ll Switch Status /dev/rfkill Watch.
+[[0;32m  OK  [0m] Finished [0;1;39mdpkg-db-backup.service[0m - Daily dpkg database backup service.
+[[0;32m  OK  [0m] Finished [0;1;39mifupdown-pre.service[0m - He…o synchronize boot up for ifupdown.
+         Starting [0;1;39mnetworking.service[0m - Raise network interfaces...
+[[0;32m  OK  [0m] Finished [0;1;39me2scrub_reap.service[0m - Re…line ext4 Metadata Check Snapshots.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-logind.service[0m - User Login Management.
+[[0m[0;31m*     [0m] (1 of 2) Job phpsessionclean.service/start running (3s / no limit)
+M[K[[0;32m  OK  [0m] Finished [0;1;39mphpsessionclean.service[0m - Clean php session files.
+[K[[0;1;31m*[0m[0;31m*    [0m] Job networking.service/start running (9s / 5min 3s)
+M[K[[0;31m*[0;1;31m*[0m[0;31m*   [0m] Job networking.service/start running (9s / 5min 3s)
+M[K[ [0;31m*[0;1;31m*[0m[0;31m*  [0m] Job networking.service/start running (10s / 5min 3s)
+M[K[  [0;31m*[0;1;31m*[0m[0;31m* [0m] Job networking.service/start running (11s / 5min 3s)
+M[K[   [0;31m*[0;1;31m*[0m[0;31m*[0m] Job networking.service/start running (11s / 5min 3s)
+M[K[[0;32m  OK  [0m] Finished [0;1;39mnetworking.service[0m - Raise network interfaces.
+[K[[0;32m  OK  [0m] Reached target [0;1;39mnetwork.target[0m - Network.
+[[0;32m  OK  [0m] Reached target [0;1;39mnetwork-online.target[0m - Network is Online.
+         Starting [0;1;39mnginx.service[0m - A high pe…erver and a reverse proxy server...
+         Starting [0;1;39mredis-server.service[0m - Advanced key-value store...
+         Starting [0;1;39mssh.service[0m - OpenBSD Secure Shell server...
+         Starting [0;1;39msystemd-user-sessions.service[0m - Permit User Sessions...
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-user-sessions.service[0m - Permit User Sessions.
+[[0;32m  OK  [0m] Started [0;1;39mgetty@tty1.service[0m - Getty on tty1.
+[[0;32m  OK  [0m] Started [0;1;39mserial-getty@ttyS0.service[0m - Serial Getty on ttyS0.
+[[0;32m  OK  [0m] Reached target [0;1;39mgetty.target[0m - Login Prompts.
+[[0;32m  OK  [0m] Started [0;1;39mnginx.service[0m - A high per… server and a reverse proxy server.
+[[0;1;31mFAILED[0m] Failed to start [0;1;39mredis-server.service[0m - Advanced key-value store.
+See 'systemctl status redis-server.service' for details.
+[[0;32m  OK  [0m] Started [0;1;39mssh.service[0m - OpenBSD Secure Shell server.
+[[0;32m  OK  [0m] Reached target [0;1;39mmulti-user.target[0m - Multi-User System.
+[[0;32m  OK  [0m] Reached target [0;1;39mgraphical.target[0m - Graphical Interface.
+[!p]104[?7h[6n[32766;32766H[6n[!p]104[?7h[6n[32766;32766H[6n
+Debian GNU/Linux 13 syzkaller ttyS0
+
+syzkaller login: [   79.636219] audit: type=1107 audit(1789720373.556:3): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { start } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user-runtime-dir@.service" cmdline="/usr/lib/systemd/systemd-logind" function="bus_unit_method_start_generic" scontext=system_u:system_r:kernel_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+[   90.914203] audit: type=1107 audit(1789720384.837:4): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { stop } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user-runtime-dir@.service" cmdline="/usr/lib/systemd/systemd-logind" function="bus_unit_method_start_generic" scontext=system_u:system_r:kernel_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+[   90.979277] audit: type=1107 audit(1789720384.866:5): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { status } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user-runtime-dir@.service" cmdline="/usr/lib/systemd/systemd-logind" function="mac_selinux_filter" scontext=system_u:system_r:kernel_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+[  145.925026] fork_isolation[538]: segfault at 7f4d3ae25000 ip 0000000000401937 sp 00007ffec8e18fd0 error 7 in fork_isolation[1937,401000+98000] likely on CPU 1 (core 1, socket 0)
+[  145.937626] Code: 09 00 e8 bc 96 04 00 31 c0 83 7c 24 14 00 0f 95 c0 e9 26 ff ff ff 31 c0 48 89 c2 48 8d 88 40 ed 96 04 48 83 c0 04 48 c1 e2 0c <48> 89 4c 15 00 48 3d 00 08 00 00 75 e1 48 ba 83 03 9d 73 b0 0f 65
+[  283.220875] hrtimer: interrupt took 3174980 ns
+[  352.984851] audit: type=1400 audit(1789720646.908:6): avc:  denied  { execmem } for  pid=758 comm="java" scontext=system_u:system_r:kernel_t:s0 tcontext=system_u:system_r:kernel_t:s0 tclass=process permissive=1
+[  376.715482] cc1 (818) used greatest stack depth: 12368 bytes left
+[  377.513290] ------------[ cut here ]------------
+[  377.516201] WARNING: CPU: 6 PID: 842 at ./include/linux/rwsem.h:83 find_vma_intersection+0x50/0x60
+[  377.526114] Modules linked in:
+[  377.529372] CPU: 6 UID: 0 PID: 842 Comm: java Not tainted 6.18.32-g025756094542-dirty #9 PREEMPT(voluntary) 
+[  377.536612] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  377.541138] RIP: 0010:find_vma_intersection+0x50/0x60
+[  377.544419] Code: 28 48 83 ea 01 48 83 c7 40 48 89 e6 e8 79 0c de 00 48 8b 54 24 08 65 48 2b 15 64 15 32 02 75 0f 48 83 c4 10 c3 cc cc cc cc 90 <0f> 0b 90 eb d2 e8 86 40 e0 00 66 0f 1f 44 00 00 90 90 90 90 90 90
+[  377.556090] RSP: 0000:ffffa8aec059fe18 EFLAGS: 00010246
+[  377.560200] RAX: 0000000000000000 RBX: 0000100088040000 RCX: 0000000000000002
+[  377.565470] RDX: 0000100088040001 RSI: 0000100088040000 RDI: ffff8e7bc2e13a80
+[  377.571035] RBP: 0000100088040000 R08: ffffa8aec059feec R09: 0000000000000000
+[  377.576163] R10: 0000000000000000 R11: 0000000000000000 R12: ffff8e7bc2e13a80
+[  377.581559] R13: 0000000000000001 R14: ffff8e7bcf1c9000 R15: ffff8e7bcd931cc0
+[  377.583970] FS:  00007f4ed22066c0(0000) GS:ffff8e7c6b9ed000(0000) knlGS:0000000000000000
+[  377.590642] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  377.596735] CR2: 0000100088040000 CR3: 000000010d9d9004 CR4: 0000000000770ef0
+[  377.603468] PKRU: 55555554
+[  377.604987] Call Trace:
+[  377.607697]  <TASK>
+[  377.609900]  corten_arena_fault_owned+0x34/0x80
+[  377.615679]  corten_arena_user_fault+0x95/0x370
+[  377.619443]  do_user_addr_fault+0x230/0x670
+[  377.623051]  exc_page_fault+0x63/0x130
+[  377.631568]  asm_exc_page_fault+0x26/0x30
+[  377.635357] RIP: 0033:0x7f4ed3caf589
+[  377.638188] Code: 07 c5 fe 7f 44 17 e0 c5 f8 77 c3 c5 fe 7f 47 c0 c5 fe 7f 47 e0 c5 f8 77 c3 0f 1f 84 00 00 00 00 00 48 3b 15 89 1c 08 00 77 77 <c5> fe 7f 07 c5 fe 7f 47 20 48 01 d7 48 81 fa 80 00 00 00 76 cc c5
+[  377.652343] RSP: 002b:00007f4ed2203938 EFLAGS: 00010283
+[  377.656929] RAX: 0000100088040000 RBX: 000000000000003f RCX: 0000000000000005
+[  377.662413] RDX: 00000000000001f8 RSI: 0000000000000000 RDI: 0000100088040000
+[  377.669294] RBP: 00007f4ed2203980 R08: ffffffffffffffe0 R09: 00001000000bfa90
+[  377.674602] R10: ffffffffffffffe0 R11: 00001000000bfa90 R12: 0000100088040000
+[  377.679697] R13: 0000000000000000 R14: 00001000000c4a90 R15: 0000100000018f30
+[  377.687579]  </TASK>
+[  377.689846] ---[ end trace 0000000000000000 ]---
+[  392.070680] ------------[ cut here ]------------
+[  392.075030] WARNING: CPU: 0 PID: 2409 at ./include/linux/rwsem.h:83 find_vma_intersection+0x50/0x60
+[  392.081517] Modules linked in:
+[  392.085090] CPU: 0 UID: 0 PID: 2409 Comm: java Tainted: G        W           6.18.32-g025756094542-dirty #9 PREEMPT(voluntary) 
+[  392.095293] Tainted: [W]=WARN
+[  392.098810] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  392.106406] RIP: 0010:find_vma_intersection+0x50/0x60
+[  392.111350] Code: 28 48 83 ea 01 48 83 c7 40 48 89 e6 e8 79 0c de 00 48 8b 54 24 08 65 48 2b 15 64 15 32 02 75 0f 48 83 c4 10 c3 cc cc cc cc 90 <0f> 0b 90 eb d2 e8 86 40 e0 00 66 0f 1f 44 00 00 90 90 90 90 90 90
+[  392.125291] RSP: 0000:ffffa8aec26efe18 EFLAGS: 00010246
+[  392.128696] RAX: 0000000000000000 RBX: 0000100088040000 RCX: 0000000000000002
+[  392.135185] RDX: 0000100088040001 RSI: 0000100088040000 RDI: ffff8e7bc2ca6180
+[  392.141802] RBP: 0000100088040000 R08: ffffa8aec26efeec R09: 0000000000000000
+[  392.147252] R10: 0000000000000000 R11: 0000000000000000 R12: ffff8e7bc2ca6180
+[  392.152672] R13: 0000000000000001 R14: ffff8e7bca0776c0 R15: ffff8e7bcdafca80
+[  392.157653] FS:  00007f720b43b6c0(0000) GS:ffff8e7c6b86d000(0000) knlGS:0000000000000000
+[  392.162522] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  392.168964] CR2: 0000100088040000 CR3: 00000001129ee004 CR4: 0000000000770ef0
+[  392.174386] PKRU: 55555554
+[  392.175627] Call Trace:
+[  392.180022]  <TASK>
+[  392.182351]  corten_arena_fault_owned+0x34/0x80
+[  392.184952]  corten_arena_user_fault+0x95/0x370
+[  392.189752]  do_user_addr_fault+0x230/0x670
+[  392.193357]  exc_page_fault+0x63/0x130
+[  392.195596]  asm_exc_page_fault+0x26/0x30
+[  392.199317] RIP: 0033:0x7f720cee4589
+[  392.202446] Code: 07 c5 fe 7f 44 17 e0 c5 f8 77 c3 c5 fe 7f 47 c0 c5 fe 7f 47 e0 c5 f8 77 c3 0f 1f 84 00 00 00 00 00 48 3b 15 89 1c 08 00 77 77 <c5> fe 7f 07 c5 fe 7f 47 20 48 01 d7 48 81 fa 80 00 00 00 76 cc c5
+[  392.215172] RSP: 002b:00007f720b438938 EFLAGS: 00010283
+[  392.218760] RAX: 0000100088040000 RBX: 000000000000003f RCX: 0000000000000005
+[  392.224251] RDX: 00000000000001f8 RSI: 0000000000000000 RDI: 0000100088040000
+[  392.229383] RBP: 00007f720b438980 R08: ffffffffffffffe0 R09: 00001000000bfb40
+[  392.232646] R10: ffffffffffffffe0 R11: 00001000000bfb40 R12: 0000100088040000
+[  392.239042] R13: 0000000000000000 R14: 00001000000c4b40 R15: 0000100000018fe0
+[  392.242393]  </TASK>
+[  392.243084] ---[ end trace 0000000000000000 ]---
+[  392.295863] ------------[ cut here ]------------
+[  392.298990] WARNING: CPU: 3 PID: 2409 at ./include/linux/rwsem.h:83 find_vma_intersection+0x50/0x60
+[  392.304596] Modules linked in:
+[  392.306164] CPU: 3 UID: 0 PID: 2409 Comm: java Tainted: G        W           6.18.32-g025756094542-dirty #9 PREEMPT(voluntary) 
+[  392.312511] Tainted: [W]=WARN
+[  392.314755] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  392.320255] RIP: 0010:find_vma_intersection+0x50/0x60
+[  392.324167] Code: 28 48 83 ea 01 48 83 c7 40 48 89 e6 e8 79 0c de 00 48 8b 54 24 08 65 48 2b 15 64 15 32 02 75 0f 48 83 c4 10 c3 cc cc cc cc 90 <0f> 0b 90 eb d2 e8 86 40 e0 00 66 0f 1f 44 00 00 90 90 90 90 90 90
+[  392.336696] RSP: 0000:ffffa8aec26efe18 EFLAGS: 00010246
+[  392.340064] RAX: 0000000000000000 RBX: 0000100088000800 RCX: 0000000000000002
+[  392.344675] RDX: 0000100088000801 RSI: 0000100088000800 RDI: ffff8e7bc2ca6180
+[  392.350079] RBP: 0000100088000800 R08: ffffa8aec26efeec R09: 0000000000000000
+[  392.355279] R10: 0000000000000000 R11: 0000000000000000 R12: ffff8e7bc2ca6180
+[  392.360212] R13: 0000000000000001 R14: ffff8e7bca0776c0 R15: ffff8e7bcdafca80
+[  392.363717] FS:  00007f720b43b6c0(0000) GS:ffff8e7c6b92d000(0000) knlGS:0000000000000000
+[  392.367888] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  392.370236] CR2: 0000100088000800 CR3: 00000001129ee006 CR4: 0000000000770ef0
+[  392.374647] PKRU: 55555554
+[  392.376000] Call Trace:
+[  392.378428]  <TASK>
+[  392.380825]  corten_arena_fault_owned+0x34/0x80
+[  392.383292]  corten_arena_user_fault+0x95/0x370
+[  392.386543]  do_user_addr_fault+0x230/0x670
+[  392.390103]  exc_page_fault+0x63/0x130
+[  392.393284]  asm_exc_page_fault+0x26/0x30
+[  392.396392] RIP: 0033:0x7f720cee4589
+[  392.399206] Code: 07 c5 fe 7f 44 17 e0 c5 f8 77 c3 c5 fe 7f 47 c0 c5 fe 7f 47 e0 c5 f8 77 c3 0f 1f 84 00 00 00 00 00 48 3b 15 89 1c 08 00 77 77 <c5> fe 7f 07 c5 fe 7f 47 20 48 01 d7 48 81 fa 80 00 00 00 76 cc c5
+[  392.410835] RSP: 002b:00007f720b438f38 EFLAGS: 00010283
+[  392.414506] RAX: 0000100088000800 RBX: 0000000000000041 RCX: 0000000000000000
+[  392.419561] RDX: 0000000000000208 RSI: 0000000000000000 RDI: 0000100088000800
+[  392.422470] RBP: 00007f720b438f80 R08: 0000000000000000 R09: 00001000000bfb40
+[  392.427027] R10: 0000000000000000 R11: 0000000000000206 R12: 0000100088000800
+[  392.432669] R13: 0000000000000000 R14: 00001000000fcfe0 R15: 0000100000018fe0
+[  392.437358]  </TASK>
+[  392.438197] ---[ end trace 0000000000000000 ]---
+[  392.444032] ------------[ cut here ]------------
+[  392.447823] WARNING: CPU: 1 PID: 2409 at ./include/linux/rwsem.h:83 find_vma_intersection+0x50/0x60
+[  392.455805] Modules linked in:
+[  392.461196] CPU: 1 UID: 0 PID: 2409 Comm: java Tainted: G        W           6.18.32-g025756094542-dirty #9 PREEMPT(voluntary) 
+[  392.469936] Tainted: [W]=WARN
+[  392.472241] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  392.478250] RIP: 0010:find_vma_intersection+0x50/0x60
+[  392.481910] Code: 28 48 83 ea 01 48 83 c7 40 48 89 e6 e8 79 0c de 00 48 8b 54 24 08 65 48 2b 15 64 15 32 02 75 0f 48 83 c4 10 c3 cc cc cc cc 90 <0f> 0b 90 eb d2 e8 86 40 e0 00 66 0f 1f 44 00 00 90 90 90 90 90 90
+[  392.495010] RSP: 0000:ffffa8aec26efe18 EFLAGS: 00010246
+[  392.500360] RAX: 0000000000000000 RBX: 0000100088041000 RCX: 0000000000000002
+[  392.506795] RDX: 0000100088041001 RSI: 0000100088041000 RDI: ffff8e7bc2ca6180
+[  392.511335] RBP: 0000100088041000 R08: ffffa8aec26efeec R09: 0000000000000000
+[  392.516602] R10: 0000000000000000 R11: 0000000000000000 R12: ffff8e7bc2ca6180
+[  392.522956] R13: 0000000000000001 R14: ffff8e7bca0776c0 R15: ffff8e7bcdafca80
+[  392.528268] FS:  00007f720b43b6c0(0000) GS:ffff8e7c6b8ad000(0000) knlGS:0000000000000000
+[  392.533978] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  392.538766] CR2: 0000100088041000 CR3: 00000001129ee002 CR4: 0000000000770ef0
+[  392.542872] PKRU: 55555554
+[  392.545996] Call Trace:
+[  392.548573]  <TASK>
+[  392.550579]  corten_arena_fault_owned+0x34/0x80
+[  392.554565]  corten_arena_user_fault+0x95/0x370
+[  392.558086]  do_user_addr_fault+0x230/0x670
+[  392.561614]  ? handle_softirqs+0xbc/0x290
+[  392.565629]  exc_page_fault+0x63/0x130
+[  392.568832]  asm_exc_page_fault+0x26/0x30
+[  392.571583] RIP: 0033:0x7f720cee45ce
+[  392.574237] Code: fe 7f 40 60 48 83 c7 80 48 81 fa 00 01 00 00 76 2b 48 8d 90 80 00 00 00 48 83 e2 e0 c5 fd 7f 02 c5 fd 7f 42 20 c5 fd 7f 42 40 <c5> fd 7f 42 60 48 83 ea 80 48 39 fa 72 e4 0f 1f 40 00 c5 fe 7f 07
+[  392.587268] RSP: 002b:00007f720b43a568 EFLAGS: 00010283
+[  392.591568] RAX: 0000100088040eb8 RBX: 000000000000003f RCX: 0000000000000006
+[  392.597802] RDX: 0000100088040fa0 RSI: 0000000000000000 RDI: 0000100088041030
+[  392.602274] RBP: 00007f720b43a5b0 R08: 0000100087c4f018 R09: 0000000000000000
+[  392.606033] R10: 0000000000000005 R11: 00007f720cd4c238 R12: 0000100088040eb8
+[  392.610799] R13: 0000000000000000 R14: 00001000000c4b40 R15: 0000100000018fe0
+[  392.617069]  </TASK>
+[  392.619258] ---[ end trace 0000000000000000 ]---
+[  393.494970] ------------[ cut here ]------------
+[  393.499269] WARNING: CPU: 7 PID: 2409 at ./include/linux/rwsem.h:83 find_vma_intersection+0x50/0x60
+[  393.507265] Modules linked in:
+[  393.511357] CPU: 7 UID: 0 PID: 2409 Comm: java Tainted: G        W           6.18.32-g025756094542-dirty #9 PREEMPT(voluntary) 
+[  393.522418] Tainted: [W]=WARN
+[  393.525090] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  393.533241] RIP: 0010:find_vma_intersection+0x50/0x60
+[  393.541037] Code: 28 48 83 ea 01 48 83 c7 40 48 89 e6 e8 79 0c de 00 48 8b 54 24 08 65 48 2b 15 64 15 32 02 75 0f 48 83 c4 10 c3 cc cc cc cc 90 <0f> 0b 90 eb d2 e8 86 40 e0 00 66 0f 1f 44 00 00 90 90 90 90 90 90
+[  393.560866] RSP: 0000:ffffa8aec26efe18 EFLAGS: 00010246
+[  393.567054] RAX: 0000000000000000 RBX: 0000100088001000 RCX: 0000000000000002
+[  393.574381] RDX: 0000100088001001 RSI: 0000100088001000 RDI: ffff8e7bc2ca6180
+[  393.583701] RBP: 0000100088001000 R08: ffffa8aec26efeec R09: 0000000000000000
+[  393.594020] R10: 0000000000000000 R11: 0000000000000000 R12: ffff8e7bc2ca6180
+[  393.600830] R13: 0000000000000001 R14: ffff8e7bca0776c0 R15: ffff8e7bcdafca80
+[  393.607615] FS:  00007f720b43b6c0(0000) GS:ffff8e7c6ba2d000(0000) knlGS:0000000000000000
+[  393.616346] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  393.621279] CR2: 0000100088001000 CR3: 00000001129ee005 CR4: 0000000000770ef0
+[  393.625581] PKRU: 55555554
+[  393.627332] Call Trace:
+[  393.634241]  <TASK>
+[  393.635858]  corten_arena_fault_owned+0x34/0x80
+[  393.638749]  corten_arena_user_fault+0x95/0x370
+[  393.643711]  do_user_addr_fault+0x230/0x670
+[  393.650232]  exc_page_fault+0x63/0x130
+[  393.653513]  asm_exc_page_fault+0x26/0x30
+[  393.657995] RIP: 0033:0x7f720cee4589
+[  393.662084] Code: 07 c5 fe 7f 44 17 e0 c5 f8 77 c3 c5 fe 7f 47 c0 c5 fe 7f 47 e0 c5 f8 77 c3 0f 1f 84 00 00 00 00 00 48 3b 15 89 1c 08 00 77 77 <c5> fe 7f 07 c5 fe 7f 47 20 48 01 d7 48 81 fa 80 00 00 00 76 cc c5
+[  393.678931] RSP: 002b:00007f720b438168 EFLAGS: 00010283
+[  393.682793] RAX: 0000100088001000 RBX: 0000000000000041 RCX: 0101010101010101
+[  393.689024] RDX: 0000000000000208 RSI: 0000000000000000 RDI: 0000100088001000
+[  393.696529] RBP: 00007f720b4381b0 R08: 0000000000000000 R09: 0000000000002000
+[  393.702140] R10: 0000000000000000 R11: 00001000000c0360 R12: 0000100088001000
+[  393.707800] R13: 0000000000000000 R14: 00001001ac001290 R15: 0000100000018fe0
+[  393.714624]  </TASK>
+[  393.717213] ---[ end trace 0000000000000000 ]---
+[  393.730317] ------------[ cut here ]------------
+[  393.734461] WARNING: CPU: 7 PID: 2409 at ./include/linux/rwsem.h:83 find_vma_intersection+0x50/0x60
+[  393.745011] Modules linked in:
+[  393.748135] CPU: 7 UID: 0 PID: 2409 Comm: java Tainted: G        W           6.18.32-g025756094542-dirty #9 PREEMPT(voluntary) 
+[  393.756357] Tainted: [W]=WARN
+[  393.760030] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  393.765378] RIP: 0010:find_vma_intersection+0x50/0x60
+[  393.769734] Code: 28 48 83 ea 01 48 83 c7 40 48 89 e6 e8 79 0c de 00 48 8b 54 24 08 65 48 2b 15 64 15 32 02 75 0f 48 83 c4 10 c3 cc cc cc cc 90 <0f> 0b 90 eb d2 e8 86 40 e0 00 66 0f 1f 44 00 00 90 90 90 90 90 90
+[  393.781787] RSP: 0000:ffffa8aec26efe18 EFLAGS: 00010246
+[  393.785507] RAX: 0000000000000000 RBX: 0000100088042000 RCX: 0000000000000002
+[  393.790918] RDX: 0000100088042001 RSI: 0000100088042000 RDI: ffff8e7bc2ca6180
+[  393.798321] RBP: 0000100088042000 R08: ffffa8aec26efeec R09: 0000000000000000
+[  393.804034] R10: 0000000000000000 R11: 0000000000000000 R12: ffff8e7bc2ca6180
+[  393.809736] R13: 0000000000000001 R14: ffff8e7bca0776c0 R15: ffff8e7bcdafca80
+[  393.815692] FS:  00007f720b43b6c0(0000) GS:ffff8e7c6ba2d000(0000) knlGS:0000000000000000
+[  393.821348] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  393.825480] CR2: 0000100088042000 CR3: 00000001129ee005 CR4: 0000000000770ef0
+[  393.832551] PKRU: 55555554
+[  393.834772] Call Trace:
+[  393.836973]  <TASK>
+[  393.839567]  corten_arena_fault_owned+0x34/0x80
+[  393.842913]  corten_arena_user_fault+0x95/0x370
+[  393.847261]  do_user_addr_fault+0x230/0x670
+[  393.851089]  exc_page_fault+0x63/0x130
+[  393.854655]  asm_exc_page_fault+0x26/0x30
+[  393.857061] RIP: 0033:0x7f720cee45e0
+[  393.861570] Code: 8d 90 80 00 00 00 48 83 e2 e0 c5 fd 7f 02 c5 fd 7f 42 20 c5 fd 7f 42 40 c5 fd 7f 42 60 48 83 ea 80 48 39 fa 72 e4 0f 1f 40 00 <c5> fe 7f 07 c5 fe 7f 47 20 c5 fe 7f 47 40 c5 fe 7f 47 60 c5 f8 77
+[  393.875410] RSP: 002b:00007f720b439c88 EFLAGS: 00010246
+[  393.877966] RAX: 0000100088041e88 RBX: 000000000000003f RCX: 0000000000000006
+[  393.884652] RDX: 0000100088042000 RSI: 0000000000000000 RDI: 0000100088042000
+[  393.890748] RBP: 00007f720b439cd0 R08: 0000100087c747e4 R09: 0000000000000000
+[  393.894556] R10: 00007f720cd69d20 R11: 00007f720cd4c238 R12: 0000100088041e88
+[  393.901736] R13: 0000000000000000 R14: 00001000000c4b40 R15: 0000100000018fe0
+[  393.905893]  </TASK>
+[  393.907780] ---[ end trace 0000000000000000 ]---
+[  393.916732] ------------[ cut here ]------------
+[  393.920556] WARNING: CPU: 7 PID: 2409 at ./include/linux/rwsem.h:83 find_vma_intersection+0x50/0x60
+[  393.926969] Modules linked in:
+[  393.930330] CPU: 7 UID: 0 PID: 2409 Comm: java Tainted: G        W           6.18.32-g025756094542-dirty #9 PREEMPT(voluntary) 
+[  393.938794] Tainted: [W]=WARN
+[  393.941887] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  393.945658] RIP: 0010:find_vma_intersection+0x50/0x60
+[  393.948835] Code: 28 48 83 ea 01 48 83 c7 40 48 89 e6 e8 79 0c de 00 48 8b 54 24 08 65 48 2b 15 64 15 32 02 75 0f 48 83 c4 10 c3 cc cc cc cc 90 <0f> 0b 90 eb d2 e8 86 40 e0 00 66 0f 1f 44 00 00 90 90 90 90 90 90
+[  393.952306] RSP: 0000:ffffa8aec26efe18 EFLAGS: 00010246
+[  393.954330] RAX: 0000000000000000 RBX: 0000100088043000 RCX: 0000000000000002
+[  393.960381] RDX: 0000100088043001 RSI: 0000100088043000 RDI: ffff8e7bc2ca6180
+[  393.964719] RBP: 0000100088043000 R08: ffffa8aec26efeec R09: 0000000000000000
+[  393.969568] R10: 0000000000000000 R11: 0000000000000000 R12: ffff8e7bc2ca6180
+[  393.973660] R13: 0000000000000001 R14: ffff8e7bca0776c0 R15: ffff8e7bcdafca80
+[  393.978591] FS:  00007f720b43b6c0(0000) GS:ffff8e7c6ba2d000(0000) knlGS:0000000000000000
+[  393.984041] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  393.988085] CR2: 0000100088043000 CR3: 00000001129ee005 CR4: 0000000000770ef0
+[  393.993707] PKRU: 55555554
+[  393.995359] Call Trace:
+[  393.997779]  <TASK>
+[  394.000244]  corten_arena_fault_owned+0x34/0x80
+[  394.007631]  corten_arena_user_fault+0x95/0x370
+[  394.011085]  ? timerqueue_add+0x9f/0xc0
+[  394.013210]  do_user_addr_fault+0x230/0x670
+[  394.016875]  exc_page_fault+0x63/0x130
+[  394.020986]  asm_exc_page_fault+0x26/0x30
+[  394.023898] RIP: 0033:0x7f720cee45c0
+[  394.027315] Code: 81 fa 80 00 00 00 76 cc c5 fe 7f 40 40 c5 fe 7f 40 60 48 83 c7 80 48 81 fa 00 01 00 00 76 2b 48 8d 90 80 00 00 00 48 83 e2 e0 <c5> fd 7f 02 c5 fd 7f 42 20 c5 fd 7f 42 40 c5 fd 7f 42 60 48 83 ea
+[  394.044124] RSP: 002b:00007f720b4388f8 EFLAGS: 00010287
+[  394.049007] RAX: 0000100088042e98 RBX: 000000000000003f RCX: 0000000000000006
+[  394.054636] RDX: 0000100088043000 RSI: 0000000000000000 RDI: 0000100088043010
+[  394.061307] RBP: 00007f720b438940 R08: 0000100087c85664 R09: 0000000000000000
+[  394.066099] R10: 00007f720cd4c238 R11: 00007f720cd4c238 R12: 0000100088042e98
+[  394.072858] R13: 0000000000000000 R14: 00001000000c4b40 R15: 0000100000018fe0
+[  394.079248]  </TASK>
+[  394.081786] ---[ end trace 0000000000000000 ]---
+[  394.118857] ------------[ cut here ]------------
+[  394.121903] WARNING: CPU: 7 PID: 2409 at ./include/linux/rwsem.h:83 find_vma_intersection+0x50/0x60
+[  394.129900] Modules linked in:
+[  394.132379] CPU: 7 UID: 0 PID: 2409 Comm: java Tainted: G        W           6.18.32-g025756094542-dirty #9 PREEMPT(voluntary) 
+[  394.140407] Tainted: [W]=WARN
+[  394.142678] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  394.149525] RIP: 0010:find_vma_intersection+0x50/0x60
+[  394.154319] Code: 28 48 83 ea 01 48 83 c7 40 48 89 e6 e8 79 0c de 00 48 8b 54 24 08 65 48 2b 15 64 15 32 02 75 0f 48 83 c4 10 c3 cc cc cc cc 90 <0f> 0b 90 eb d2 e8 86 40 e0 00 66 0f 1f 44 00 00 90 90 90 90 90 90
+[  394.166022] RSP: 0000:ffffa8aec26efe18 EFLAGS: 00010246
+[  394.168004] RAX: 0000000000000000 RBX: 0000100088044000 RCX: 0000000000000002
+[  394.172490] RDX: 0000100088044001 RSI: 0000100088044000 RDI: ffff8e7bc2ca6180
+[  394.177319] RBP: 0000100088044000 R08: ffffa8aec26efeec R09: 0000000000000000
+[  394.179497] R10: 0000000000000000 R11: 0000000000000000 R12: ffff8e7bc2ca6180
+[  394.184874] R13: 0000000000000001 R14: ffff8e7bca0776c0 R15: ffff8e7bcdafca80
+[  394.188575] FS:  00007f720b43b6c0(0000) GS:ffff8e7c6ba2d000(0000) knlGS:0000000000000000
+[  394.193802] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  394.198324] CR2: 0000100088044000 CR3: 00000001129ee005 CR4: 0000000000770ef0
+[  394.204047] PKRU: 55555554
+[  394.206281] Call Trace:
+[  394.208485]  <TASK>
+[  394.210269]  corten_arena_fault_owned+0x34/0x80
+[  394.213806]  corten_arena_user_fault+0x95/0x370
+[  394.217081]  ? vfs_read+0x154/0x340
+[  394.220647]  do_user_addr_fault+0x230/0x670
+[  394.224029]  exc_page_fault+0x63/0x130
+[  394.227515]  asm_exc_page_fault+0x26/0x30
+[  394.231555] RIP: 0033:0x7f720cee45c4
+[  394.234113] Code: 00 00 76 cc c5 fe 7f 40 40 c5 fe 7f 40 60 48 83 c7 80 48 81 fa 00 01 00 00 76 2b 48 8d 90 80 00 00 00 48 83 e2 e0 c5 fd 7f 02 <c5> fd 7f 42 20 c5 fd 7f 42 40 c5 fd 7f 42 60 48 83 ea 80 48 39 fa
+[  394.246141] RSP: 002b:00007f720b439af8 EFLAGS: 00010287
+[  394.250367] RAX: 0000100088043e60 RBX: 000000000000004c RCX: 0000000000000006
+[  394.255890] RDX: 0000100088043fe0 RSI: 0000000000000000 RDI: 0000100088044040
+[  394.262422] RBP: 00007f720b439b40 R08: 0000000000000000 R09: 0000000000000000
+[  394.266618] R10: 000000000000000d R11: 000000000000000c R12: 0000100088043e60
+[  394.269284] R13: 0000000000000000 R14: 00001000000c4b40 R15: 0000100000018fe0
+[  394.272080]  </TASK>
+[  394.273979] ---[ end trace 0000000000000000 ]---
+[  993.703306] kworker/u32:3 (84) used greatest stack depth: 12000 bytes left
+qemu-system-x86_64: terminating on signal 15 from pid 905661 (zcode-cli)
