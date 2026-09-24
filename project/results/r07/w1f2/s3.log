@@ -1,0 +1,19 @@
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+[s3] real swap: /root/bench/s3swap (196604 0KiB used)
+[s3] === branch A: fill -> swapout -> full read-back -> clean swapoff ===
+[s3] A: swapped_out 0 -> 16384, VmSwap=65536kB
+/mnt/hostshare/mve-battery/mve_s3_swapoff.sh: line 157:   417 Segmentation fault      "$W" s3 "$S3_WIN_MB" > "$OUT/$1.log" 2>&1
+[s3] FAIL: branch A: read-back did not verify ([s3] MODE on (pid 417, prctl GET==1)
+S3 ready pid=417 base=0x100000000000 pages=16384 sum=0xf26148224bf92000)
+[s3] FAIL: branch A: swapins did not move (0 -> 0)
+[s3] branch A: swapoff clean PASS (rc=0)
+[s3] branch A ledger: unuse_blind_mms 0 -> 0 (entries gone before swapoff: the early-exit path may skip the walk -- disclosure only)
+[s3] === branch B: blind hold -> bounded spin -> SIGINT -> exit closure -> retry ===
+[s3] B: swapped_out 16384 -> 32768, VmSwap=65536kB
+[s3] branch B: swapoff returned without a spin (blind entries empty this run -- disclosure)
+[s3] branch B: holder exit (V-D exit walk closes the blind entries)
+[s3] branch B: inuse drained to 0 in 0s
+[s3] branch B: retry swapoff PASS (exit walk was the closure)
+[s3] branch B ledger: unuse_blind_mms 0 -> 1, zap_swap_frees 16384 -> 32511, swapins=257
+[s3] branch B: zap_swap_frees advanced (+16127) -- exit walk freed the blind entries
+S3 RESULT FAIL (2)

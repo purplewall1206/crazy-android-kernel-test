@@ -1,0 +1,22 @@
+w1f gate (unuse sweep arm + S-3 two-branch) 2026-09-24 10:40:09
+VM booting in tmux session 'vm' (accel: -enable-kvm -cpu host ...)
+console: tmux attach -t vm   monitor: echo system_reset | sudo socat - UNIX-CONNECT:/home/ppw/vm/monitor.sock (or nc)
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+[10:40:36] == S-3 two-branch (the W1.f criterion) ==
+[s3] FAIL: branch B: SIGINT did NOT interrupt swapoff (state=D) -- hang, escalate
+[s3] branch B: holder exit (V-D exit walk closes the blind entries)
+[s3] branch B: retry swapoff PASS (exit walk was the closure)
+[s3] branch B ledger: unuse_blind_mms 0 -> 0, zap_swap_frees 16384 -> 32768, swapins=0
+[s3] branch B: zap_swap_frees advanced (+16384) -- exit walk freed the blind entries
+[10:43:47] == standard battery ==
+[FAIL] CHUNK: maps shows 1 segment(s):
+[FAIL] mva1_probe rc=1
+[mva0] === DONE PASS=22 FAIL=1 ===
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+/sys/kernel/debug/corten/audit_gate:j1_hits            0
+/sys/kernel/debug/corten/audit_gate:j2_violations      0
+/sys/kernel/debug/corten/audit_gate:gate_pass          1
+/sys/kernel/debug/corten/arena_stats:j1_hits             0
+/sys/kernel/debug/corten/arena_stats:j2_violations       0
+/sys/kernel/debug/corten/arena_stats:unuse_blind_mms     0
+FAIL S-3 rc=1

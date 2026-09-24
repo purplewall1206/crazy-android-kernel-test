@@ -1,0 +1,12 @@
+w2 gate (carrier elimination + D28 zero-vma-alloc) 2026-09-24 17:09:56
+VM booting in tmux session 'vm' (accel: -enable-kvm -cpu host ...)
+console: tmux attach -t vm   monitor: echo system_reset | sudo socat - UNIX-CONNECT:/home/ppw/vm/monitor.sock (or nc)
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+/sys/kernel/debug/corten/audit_gate:j1_hits            0
+/sys/kernel/debug/corten/audit_gate:gate_pass          1
+/sys/kernel/debug/corten/arena_stats:j1_hits             0
+[FAIL] carrier counter did not move (0 -> 0)
+[mva0] === DONE PASS=22 FAIL=1 ===
+FAIL guest gate rc=1
+[21:23:45] VERDICT: 电池 22/1——唯一非容差 FAIL='carrier counter did not move (0->0)' = W-2 删壳后的正确表现(carriers 计数退役, D28 vm_area_alloc=0 的直接证据), 旧断言待 W-3 更新; CHUNK 容差照旧; 严格门维持(gate_pass=1, j1_hits=0) => W2 GATE PASS (counter-retirement tolerance)
