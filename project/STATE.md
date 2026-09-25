@@ -1222,3 +1222,22 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     kprobe corten_arena_swap_in 是否被 dispatch 触达。窗口植入的 exit 上层残差
     （8192）登记为 W-5 靶面。探针件 bench/share/w45/（futexprobe/futexswap/
     swapfault/pgtleak 族, 源码+二进制）。
+
+- **[2026-09-26 03-04 时 换入回归修复班: W-6 硬阻断项提前闭环 (W-3fix2)]**
+  上条登记的换入回归当场triage 到底并修复——kprobe 链（swpin/swpinr/get_swap_
+  device/swap_read_folio 返回值）拆出**三层叠加缺陷**, 全在 corten_arena_swap_in:
+  ① M6.T2 时代的入口守卫要求锚 VMA, W-2 后 VMA-less 窗口是常态 → 顶部
+  -EFAULT（函数体其余部分早已全有 novma 形态, 守卫纯陈旧）; ② 直读假设同步
+  设备（zram）——真盘（文件 swap）的 swap_read_folio 在 bio 完成 IO 中解锁
+  folio, uptodate 门对每页误判失败 → 补异步等待+锁回取; ③ W1.f2 的
+  cache-stuck 形状同样抵达 fault 臂（驱动写回滞留 SWAP_HAS_CACHE,
+  swapcache_prepare 每次烧满 5s 死线, kretprobe 实测 -EAGAIN 5s 节拍）→
+  改道 W1.f2 的 unuse_cache_pull（映射缓存 folio, 零设备 IO）, 解缓存则回
+  直读。**修后: S-3 swapoff 电池双分支首次全 PASS**（分支 A 16384 页读回
+  校验和一致+swapins 0→16384+干净 swapoff; 分支 B 提前收敛= W1.f/f2 臂拉走了
+  原本盲骑的条目——脚本 spin/retry/zap 腿按收敛形态门控, bench 脚本同步更新）。
+  入库: **ea3ecc76911f** tag **corten-r07-w3fix2** + github 同步（2baa1b1c）。
+  验证: 三套件 24/0/1+111/0/0+34/0/5 全绿; checkpatch 0E/0W/0C; guest 回归扫
+  （metis checksum parity/pgtables 零残差/smoke/单页+8MB 批量换入往返,
+  zram+文件 swap 双通道）全绿。证据 results/r07/w3fix2/。W-6 的 S-3 硬阻断
+  项撤销; 换入路径恢复到 W1.e2 时代的完好状态以上（真盘通道此前从未绿过）。
