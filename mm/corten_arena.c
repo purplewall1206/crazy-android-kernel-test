@@ -8187,6 +8187,12 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
  *     is off the LRU, so a swapcache copy left behind would be
  *     uncollectable (upstream leaves the copy for LRU reclaim).
  */
+static int corten_arena_unuse_cache_pull(struct mm_struct *mm,
+					 struct corten_arena *ar,
+					 unsigned long addr,
+					 struct folio *folio,
+					 swp_entry_t entry);
+
 static int corten_arena_swap_in(struct corten_fault_ctx *ctx,
 				const struct corten_pte_meta *m)
 {
@@ -8208,9 +8214,16 @@ static int corten_arena_swap_in(struct corten_fault_ctx *ctx,
 	bool exclusive = true;
 	int ret;
 
+	/* W-2 fixup: a VMA-less window is the NORM now (the carrier retired;
+	 * an auto arena carries no anchor object at all), so the M6.T2-era
+	 * entry guard EFAULTed every swap-in on a novma window before any
+	 * work -- a debugfs-evicted window page faulted back in died with a
+	 * silent SIGSEGV, swapins stuck at 0 (the S-3 swapoff battery leg
+	 * red since the W1.f gates rides the same path).  Everything below
+	 * is vma-aware (pure pgprot, mpol allocation, the novma rmap
+	 * wrapper); @vma stays NULL and takes those arms.
+	 */
 	vma = ctx->vma ? ctx->vma : corten_arena_anchor_vma(ctx->ar);
-	if (!vma)
-		return -EFAULT;
 
 	entry = corten_swap_decode(m);
 	if (unlikely(!entry.val))
@@ -8272,8 +8285,61 @@ retry:
 	 * the in-flight mark, swapcache_clear() releases it below.
 	 */
 	if (swapcache_prepare(entry, 1)) {
+		/*
+		 * W1.f2's cache-stuck shape reaches the fault path too:
+		 * the driver's writeback keep left the folio in the swap
+		 * cache with SWP_HAS_CACHE set (a real-device writeout --
+		 * the arena folio is never LRU-anchored, so the later
+		 * reclaim pass that would retire it never comes), and the
+		 * direct pull spins out its deadline on every fault.  The
+		 * unuse arm's answer applies here unchanged: map THE
+		 * cached folio (already uptodate, no device I/O) through
+		 * the same commit the unuse walk uses.  The pull takes
+		 * the lock-free phase's own sleeping rights (the txn is
+		 * not held); the entry keeps its PTE-held reference until
+		 * the pull's swap_free().
+		 */
+		struct folio *cached = swap_cache_get_folio(entry);
+
+		/* Drop the direct-read folio first: the pulls and the
+		 * deadline spin below share this arm, and neither may
+		 * leak the freshly-allocated one.
+		 */
 		folio_unlock(folio);
 		folio_put(folio);
+		if (cached) {
+			bool cache = true;
+
+			if (folio_lock_killable(cached)) {
+				folio_put(cached);
+				put_swap_device(si);
+				return -EINTR;
+			}
+			folio_wait_writeback(cached);
+			cache = folio_test_swapcache(cached) &&
+				cached->swap.val == entry.val;
+			if (cache) {
+				int pret = corten_arena_unuse_cache_pull(mm,
+								    ctx->ar,
+								    ctx->addr,
+								    cached,
+								    entry);
+
+				folio_unlock(cached);
+				folio_put(cached);
+				put_swap_device(si);
+				/* 0 = mapped here; anything else re-arms
+				 * the fault's own bounded retry.
+				 */
+				return pret;
+			}
+			/* Decached under the lookup: the direct shape
+			 * applies again from the top.
+			 */
+			folio_unlock(cached);
+			folio_put(cached);
+			goto retry;
+		}
 		if (time_after(jiffies, deadline)) {
 			put_swap_device(si);
 			return -EAGAIN;
@@ -8295,6 +8361,24 @@ retry:
 	folio->swap = entry;
 	swap_read_folio(folio, NULL);
 	folio->private = NULL;
+	/* An async device (the real-swap file shape, prio above zram)
+	 * completes the read in the bio end-io, which drops the lock
+	 * __folio_set_locked() took: wait the read out and re-take the
+	 * lock so every tail path's folio_unlock() still pairs and the
+	 * uptodate gate below sees the settled answer.  The synchronous
+	 * shape (zram) reads inline and keeps the lock held -- the
+	 * do_swap_page() sync-branch shape this whole path mirrors.
+	 * Sleeping here is the lock-free phase's own contract (the txn
+	 * is not held; the entry cannot be reused under its reference).
+	 */
+	if (!(si->flags & SWP_SYNCHRONOUS_IO)) {
+		folio_wait_locked(folio);
+		if (folio_lock_killable(folio)) {
+			folio_put(folio);
+			put_swap_device(si);
+			return -EINTR;
+		}
+	}
 
 	count_vm_event(PGMAJFAULT);
 	count_memcg_event_mm(mm, PGMAJFAULT);
