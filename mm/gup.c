@@ -1431,12 +1431,21 @@ static long __get_user_pages(struct mm_struct *mm,
 				goto retry;
 			}
 #ifdef CONFIG_CORTEN_MM_ARENA
-			/* MV2 W-2: a MODE window page has no VMA anywhere
-			 * (the detached carrier retired) -- the corten arm
-			 * answers it entirely, probe (check_vma_flags
-			 * emulation) + follow + fault on the region record
-			 * and the page tables.  1 = not a window address:
-			 * the tree walk below owns it.
+			/*
+			 * MV2 W-3 restructure: the per-iteration triage
+			 * runs the corten arm FIRST, before any tree
+			 * walk.  A MODE mm's window domain has no VMA
+			 * anywhere (the carrier retired), so a window
+			 * address is answered right here by
+			 * corten_gup_window() -- probe + follow + fault
+			 * on the region record and the page tables, no
+			 * vma involved, exactly the way the gate area
+			 * below is answered without a tree VMA.  Return
+			 * 1 = not the window stream's to answer (non-
+			 * MODE, outside the window, an implant range or
+			 * a tree-anchored arena): only then does the
+			 * legacy chain run, and @vma is still stale-or-
+			 * NULL for the lookup to reassign.
 			 */
 			ret = corten_gup_window(mm, start, gup_flags,
 						pages ? &page : NULL);
@@ -1444,6 +1453,12 @@ static long __get_user_pages(struct mm_struct *mm,
 				if (ret)
 					goto out;
 				page_mask = 0;
+				/* The arm answered an address no VMA
+				 * covers: leave no half-valid @vma
+				 * behind for next_page's consumers (the
+				 * next iteration's triage re-resolves).
+				 */
+				vma = NULL;
 				goto next_page;
 			}
 #endif
@@ -1457,7 +1472,13 @@ static long __get_user_pages(struct mm_struct *mm,
 				page_mask = 0;
 				goto next_page;
 			}
-
+			/*
+			 * A genuine tree miss (an unmapped legacy
+			 * address, window or not) keeps the legacy
+			 * semantics.  Every path below this point has
+			 * a non-NULL @vma in hand: check_vma_flags()
+			 * must never see the lookup's miss.
+			 */
 			if (!vma) {
 				ret = -EFAULT;
 				goto out;
@@ -1631,6 +1652,24 @@ retry:
 	/* V-C: the window probe shares this path (no FOLL_ANON caller
 	 * here, so gup_flags stays 0 for the emulation corners).
 	 */
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/* MV2: a MODE window page has no VMA -- its faults are handled
+	 * by the corten fault machinery directly (the same
+	 * __corten_arena_handle_mm_fault the GUP window arm drives).
+	 * A vma-less fault is a real hole/truncation: keep the -EFAULT.
+	 */
+	if (corten_enabled_static() && READ_ONCE(mm->corten_mode) &&
+	    address >= CORTEN_MODE_WINDOW_START &&
+	    address < CORTEN_MODE_WINDOW_END) {
+		unsigned int ff = fault_flags & (FAULT_FLAG_WRITE |
+				FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE |
+				FAULT_FLAG_REMOTE);
+		if (corten_arena_user_fault(mm, address, 0, NULL, &ff) ==
+		    CORTEN_FAULT_MAPERR)
+			return -EFAULT;
+		return 0;
+	}
+#endif
 	vma = gup_vma_lookup(mm, address, 0);
 	if (!vma)
 		return -EFAULT;
@@ -3270,6 +3309,29 @@ static int gup_fast_fallback(unsigned long start, unsigned long nr_pages,
 		return -EOVERFLOW;
 	if (end > TASK_SIZE_MAX)
 		return -EFAULT;
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/* MV2: a MODE mm's window domain has no VMA for the lockless
+	 * fast walk to triage -- its pages answer through the corten
+	 * GUP window arm, which runs under the slow path's mmap_read
+	 * envelope (corten_gup_window()'s own caller contract).  A
+	 * window-domain start sinks the whole call to the locked slow
+	 * path up front, with the same flag shape and locked handling
+	 * as the ordinary fallback leg below: a never-faulted window
+	 * page would otherwise come back as the fast walk's -EFAULT
+	 * (the futex-in-heap-shape false hard error).  FOLL_FAST_ONLY
+	 * keeps its no-slow-fallback contract here -- the lockless
+	 * partial is the answer.
+	 */
+	if (corten_enabled_static() && current->mm &&
+	    READ_ONCE(current->mm->corten_mode) &&
+	    !(gup_flags & FOLL_FAST_ONLY) &&
+	    start >= CORTEN_MODE_WINDOW_START && start < CORTEN_MODE_WINDOW_END)
+		return __get_user_pages_locked(current->mm, start, nr_pages,
+					       pages, &locked,
+					       gup_flags | FOLL_TOUCH |
+					       FOLL_UNLOCKABLE);
+#endif
 
 	nr_pinned = gup_fast(start, end, gup_flags, pages);
 	if (nr_pinned == nr_pages || gup_flags & FOLL_FAST_ONLY)

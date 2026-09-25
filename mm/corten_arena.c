@@ -485,6 +485,19 @@ static atomic_long_t corten_nr_brk_noop;
 static atomic_long_t corten_nr_brk_reject;
 static atomic_long_t corten_nr_heap_lookups;
 
+/* MV2 W-3 (the brk domain's region migration): sys_brk answers on
+ * region form -- the first-grow adoption (declare+VMA removal or the
+ * seed declare), the pure metadata extensions, the trims/releases, and
+ * the legacy degradations (resident heap, mlock-flavoured mm, foreign
+ * tree shape, memory pressure).  The legacy fallback is the D28
+ * disclosure: every count there is a heap VMA the migration did not
+ * take.
+ */
+static atomic_long_t corten_nr_brk_region_adopts;
+static atomic_long_t corten_nr_brk_region_grows;
+static atomic_long_t corten_nr_brk_region_shrinks;
+static atomic_long_t corten_nr_brk_legacy;
+
 /* V-E whitelist ledger (spec sec 1.3 J2, the complete form): walks
  * executed, window-domain classification violations (must stay 0 --
  * same invariant as j2_violations, asserted over the full tree), heap
@@ -2103,7 +2116,19 @@ static void corten_arena_free_ptes_span(struct mm_struct *mm,
 
 	for (addr = start; addr < end;
 	     addr = min((addr | (PMD_SIZE - 1)) + 1, end)) {
+		unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1, end);
 		pmd_t *pmdp = corten_arena_pmd(mm, addr);
+
+		/* MV2 W-3: retire only frames the span fully covers.  A
+		 * legacy-address region (the brk heap) has page-granular
+		 * bounds, so its boundary frames may still carry live
+		 * PTEs -- the region's own kept pages below a trim point,
+		 * or a legacy neighbor sharing the frame (the data
+		 * segment ends where the heap begins).  Window arenas
+		 * are frame-aligned, so for them this changes nothing.
+		 */
+		if ((addr & (PMD_SIZE - 1)) || win_end != addr + PMD_SIZE)
+			continue;
 
 		if (!pmdp || !pmd_present(READ_ONCE(*pmdp)) ||
 		    pmd_leaf(READ_ONCE(*pmdp)))
@@ -2888,6 +2913,19 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_brk_reject));
 	seq_printf(m, "heap_lookups        %ld\n",
 		   atomic_long_read(&corten_nr_heap_lookups));
+	/* MV2 W-3: the heap domain's region migration -- the adoption
+	 * (declare+VMA removal, or the seed declare), the pure metadata
+	 * extensions, the trims/releases, and the legacy fallbacks (the
+	 * D28 disclosure: each count is a heap still on VMA form).
+	 */
+	seq_printf(m, "brk_region_adopts   %ld\n",
+		   atomic_long_read(&corten_nr_brk_region_adopts));
+	seq_printf(m, "brk_region_grows    %ld\n",
+		   atomic_long_read(&corten_nr_brk_region_grows));
+	seq_printf(m, "brk_region_shrinks  %ld\n",
+		   atomic_long_read(&corten_nr_brk_region_shrinks));
+	seq_printf(m, "brk_legacy          %ld\n",
+		   atomic_long_read(&corten_nr_brk_legacy));
 	seq_printf(m, "declare_notes       %ld\n",
 		   atomic_long_read(&corten_nr_declare_notes));
 	seq_printf(m, "zap_pinned          %ld\n",
@@ -3380,6 +3418,23 @@ long corten_arena_test_heap_lookups(void)
 	return atomic_long_read(&corten_nr_heap_lookups);
 }
 
+/* MV2 W-3: the heap region migration's counters (KUnit anchors). */
+long corten_arena_test_brk_region(int which)
+{
+	switch (which) {
+	case 0:
+		return atomic_long_read(&corten_nr_brk_region_adopts);
+	case 1:
+		return atomic_long_read(&corten_nr_brk_region_grows);
+	case 2:
+		return atomic_long_read(&corten_nr_brk_region_shrinks);
+	case 3:
+		return atomic_long_read(&corten_nr_brk_legacy);
+	default:
+		return 0;
+	}
+}
+
 long corten_arena_test_wl_walks(void)
 {
 	return atomic_long_read(&corten_nr_wl_walks);
@@ -3563,7 +3618,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 		 */
 		if (frame < walked_until)
 			continue;
-		walked_until = arena->end >> PMD_SHIFT;
+		walked_until = corten_arena_end_frame(arena);
 
 		for (win = arena->start & PMD_MASK; win < arena->end;
 		     win += PMD_SIZE) {
@@ -3624,7 +3679,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 		/* Same first-frame dedupe as phase A. */
 		if (frame < walked_until)
 			continue;
-		walked_until = arena->end >> PMD_SHIFT;
+		walked_until = corten_arena_end_frame(arena);
 
 		/* Pass B1 -- PMD pages: one per PUD_SIZE span. */
 		for (seg = arena->start & PUD_MASK; seg < arena->end;
@@ -3667,7 +3722,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 
 		if (frame < walked_until)
 			continue;
-		walked_until = arena->end >> PMD_SHIFT;
+		walked_until = corten_arena_end_frame(arena);
 
 		for (seg = arena->start & P4D_MASK; seg < arena->end;
 		     seg += P4D_SIZE) {
@@ -3712,7 +3767,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 
 			if (frame < walked_until)
 				continue;
-			walked_until = arena->end >> PMD_SHIFT;
+			walked_until = corten_arena_end_frame(arena);
 
 			for (seg = arena->start & PGDIR_MASK; seg < arena->end;
 			     seg += PGDIR_SIZE) {
@@ -3826,7 +3881,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		if (frame < drained_until)
 			continue;
 
-		drained_until = arena->end >> PMD_SHIFT;
+		drained_until = corten_arena_end_frame(arena);
 		corten_arena_obs_remove(arena);
 		if (corten_arena_drain(arena))
 			corten_arena_free(arena);
@@ -4236,12 +4291,27 @@ int corten_gup_window(struct mm_struct *mm, unsigned long addr,
 			goto faultin;	/* the carried fault runs below */
 
 		pmdp = corten_arena_pmd(mm, addr);
-		if (!pmdp)
+		/* MV2 W-3 fix: corten_arena_pmd() gates on pgd/p4d/pud
+		 * only, so a PUD page a sibling frame's fault created
+		 * leaves the answer a PMD-slot pointer whose page was
+		 * never installed -- pte_offset_map_lock() NULLs
+		 * deterministically there, and the -EAGAIN it used to
+		 * return is not a transient the GUP caller retries (a
+		 * shared futex's read-retry GUP handed it straight back
+		 * to userspace).  A none (or leaf, which a window
+		 * forbids) PMD is the follow's no-translation shape: the
+		 * faultin leg fill_uppers and the loop re-follows.  A
+		 * failed map -- the PT page racing a zap's RCU free --
+		 * rides the same bounded convergence instead of the
+		 * un-retried errno.
+		 */
+		if (!pmdp || pmd_leaf(READ_ONCE(*pmdp)) ||
+		    !pmd_present(READ_ONCE(*pmdp)))
 			goto faultin;
 
 		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
 		if (!ptep)
-			return -EAGAIN;	/* transient; retry */
+			goto faultin;	/* transient: converge via the fault */
 		pte = ptep_get(ptep);
 		/* The NUMA protnone shape: followed like upstream
 		 * (gup_can_follow_protnone()'s default arm) unless the
@@ -4329,6 +4399,14 @@ int corten_gup_window(struct mm_struct *mm, unsigned long addr,
 		return 0;
 
 faultin:
+		/* faultin_page()'s FOLL_NOFAULT arm: the follow-only
+		 * caller (pin_user_pages_remote() on a window word)
+		 * wants no fault at all -- the follow leg above already
+		 * answered every present shape, so an uncommitted or
+		 * COW-pending shape is its -EFAULT, never a fault.
+		 */
+		if (gup_flags & FOLL_NOFAULT)
+			return -EFAULT;
 		/* The faultin leg (faultin_page()'s flag mapping, minus
 		 * the retry-contract flags -- the arena route never
 		 * drops the mmap lock and never returns VM_FAULT_RETRY,
@@ -4373,6 +4451,33 @@ bool corten_remote_vm_window(struct mm_struct *mm, unsigned long addr)
 	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
 		return false;
 	return !corten_implant_covers(mm, addr, 1);
+}
+
+/*
+ * MV2 W-3 futex arm: the folio family of the unanchored anon shape,
+ * for the one GUP consumer the mapping-derived tests cannot serve.
+ * kernel/futex's get_futex_key() classifies the grabbed page off
+ * folio->mapping alone -- and every vma-less arena install (the auto
+ * windows since the W-2 carrier death, the W-3 heap and thread-stack
+ * regions) leaves mapping == NULL by design (the W1.a novma rmap
+ * contract).  Upstream reads that shape as ZERO_PAGE/gate/truncated
+ * pagecache and EFAULTs the shared futex before any GUP arm is even
+ * consulted -- the metis_eq futex abort.
+ *
+ * The positive family marks are the ones folio_add_anon_rmap_novma()
+ * leaves on every arena anon page: rmap-mapped and swapbacked, neither
+ * anon (native anon always carries its mapping) nor swapcache (the
+ * swap-in installs a fresh folio; a swapcache member behind a live PTE
+ * is the transient the W1.f2 transactions exclude).  The shapes this
+ * rejects on the same branch -- the shared zero page (never rmap'd),
+ * a truncated pagecache folio (not swapbacked) -- stay on the upstream
+ * verdicts.  Callers pair it with the MODE gate; a non-MODE mm has no
+ * such folio family, so the answer is total there by construction.
+ */
+bool corten_folio_is_arena_anon(struct folio *folio)
+{
+	return !folio_test_anon(folio) && !folio_test_swapcache(folio) &&
+	       folio_test_swapbacked(folio) && folio_mapped(folio);
 }
 
 /*
@@ -4693,12 +4798,19 @@ enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
 
 	/* Single-bit whitelist: any other flag-word bit -- MAP_FIXED,
 	 * MAP_FIXED_NOREPLACE, MAP_HUGETLB, MAP_GROWSDOWN, MAP_POPULATE,
-	 * MAP_LOCKED, MAP_SYNC, MAP_STACK, MAP_UNINITIALIZED,
-	 * MAP_DENYWRITE, MAP_EXECUTABLE, MAP_NONBLOCK, ... -- keeps the
-	 * mapping legacy.  MAP_STACK stays excluded per OQ-B until the
-	 * mprotect routing (T0b) can serve thread-stack guard pages.
+	 * MAP_LOCKED, MAP_SYNC, MAP_UNINITIALIZED, MAP_DENYWRITE,
+	 * MAP_EXECUTABLE, MAP_NONBLOCK, ... -- keeps the mapping legacy.
+	 *
+	 * MV2 W-3 (the thread-stack half of the stack delegation item):
+	 * MAP_STACK joins the whitelist -- glibc's pthread_create shape
+	 * is MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK (+NORESERVE), and the
+	 * OQ-B precondition is long closed: the guard-page mprotect at
+	 * the window's low end routes through the T0b protect transaction
+	 * (a CHUNK of the region), the join-time munmap through the
+	 * routed EXACT/pool arm, and the fork mirror carries the record.
+	 * A MODE mm's thread stacks are vma-less regions since this flip.
 	 */
-	if (flags & ~(MAP_TYPE | MAP_ANONYMOUS | MAP_NORESERVE))
+	if (flags & ~(MAP_TYPE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_STACK))
 		return CORTEN_MMAP_LEGACY;
 
 	return CORTEN_MMAP_AUTO;
@@ -5779,7 +5891,7 @@ static void corten_arena_fork_unfreeze_locked(struct corten_mm_state *state)
 		/* Every frame of an arena holds the same descriptor. */
 		if (frame < unfrozen_until)
 			continue;
-		unfrozen_until = arena->end >> PMD_SHIFT;
+		unfrozen_until = corten_arena_end_frame(arena);
 
 		if (!READ_ONCE(arena->frozen))
 			continue;
@@ -5911,7 +6023,7 @@ int corten_arena_fork_begin(struct mm_struct *mm, struct mm_struct *oldmm)
 			continue;
 		if (frame < drained_until)
 			continue;
-		drained_until = arena->end >> PMD_SHIFT;
+		drained_until = corten_arena_end_frame(arena);
 
 		WRITE_ONCE(arena->frozen, true);
 		if (!corten_arena_drain(arena)) {
@@ -6779,7 +6891,7 @@ int corten_arena_fork_commit(struct mm_struct *mm, struct mm_struct *oldmm)
 			continue;
 		if (frame < drained_until)
 			continue;
-		drained_until = arena->end >> PMD_SHIFT;
+		drained_until = corten_arena_end_frame(arena);
 
 		if (ret)
 			break;
@@ -10889,6 +11001,383 @@ static int corten_arena_unmap_chunk_retry(struct mm_struct *mm,
 	return ret;
 }
 
+/* ------------------------------------------------------------------ *
+ * MV2 W-3, item 1: the brk delegation domain's region migration
+ * (V-E.2 resurrection).  The heap domain is the one delegated VMA a
+ * MODE process *grows after* entry: every sys_brk GROW previously ran
+ * do_brk_flags() -- maple-tree state forever.  The routes below move
+ * the whole heap domain onto the region record:
+ *
+ *   - the first post-entry GROW adopts the (PTE-empty) brk VMA as a
+ *     novma region spanning [start_brk, oldbrk) and removes the VMA,
+ *     then extends the region over the grow;
+ *   - every further GROW is a pure metadata extension (frames claimed,
+ *     total_vm charged, ar->end moved -- no tree operation at all);
+ *   - SHRINK trims (transaction zap of [newbrk, oldbrk), full frames
+ *     erased, PT pages of fully-covered frames retired, charge
+ *     refunded) or releases the whole region when brk falls to
+ *     start_brk;
+ *   - NOOP/REJECT arms are unchanged (the V-E notes keep counting).
+ *
+ * The ABI contract survives 1:1: mm->start_brk/mm->brk are the same
+ * numbers with the same guards (min_brk/RLIMIT_DATA/check_brk_limits/
+ * the next-VMA guard all still run in sys_brk before these routes),
+ * the heap stays one contiguous RW span, and sbrk(0) is unchanged.
+ * glibc never learns the difference -- that was the V-E.1 verdict's
+ * point.
+ *
+ * Degradation contract (counted, never fatal): anything unexpected --
+ * non-MODE mm, resident heap pages (written before MODE entry; the
+ * W-4 entry sweep reopens that case), a mlock-flavoured mm (the legacy
+ * arm populates, a region cannot), an unexpected tree shape, memory
+ * pressure -- returns 1 and sys_brk runs the legacy arms unchanged.
+ * Return: 0 = the region answered (caller goes to success), 1 = run
+ * the legacy arm, -errno = reject (the caller's REJECT arm).
+ * ------------------------------------------------------------------
+ */
+
+/*
+ * The heap region: the registry slot at mm->start_brk's frame, claimed
+ * by a live descriptor that starts exactly there.  Called under
+ * mmap_write (sys_brk's contract), so the raw frame load is the same
+ * read DECLARE/RELEASE run under the same lock.
+ */
+static struct corten_arena *corten_brk_region(struct mm_struct *mm,
+					      struct corten_mm_state **statep)
+{
+	/* Pairs with the state_create() publisher (the A5 convention):
+	 * the registry appears at most once per mm.
+	 */
+	struct corten_mm_state *state = smp_load_acquire(&mm->corten_state);
+	struct corten_arena *ar;
+
+	if (statep)
+		*statep = state;
+	if (!state)
+		return NULL;
+
+	ar = xa_load(&state->arenas, mm->start_brk >> PMD_SHIFT);
+	if (!ar || ar == &corten_va_reserve_sentinel ||
+	    READ_ONCE(ar->idle) || READ_ONCE(ar->frozen) ||
+	    READ_ONCE(ar->start) != mm->start_brk)
+		return NULL;
+
+	return ar;
+}
+
+/* The pure extension arm: claim the frames above the current extent
+ * (the boundary frame containing oldbrk is already the region's),
+ * charge the pages, move ar->end.  Frames are claimed under ctl_lock
+ * (the DECLARE/RELEASE writer contract); the pre-check keeps a foreign
+ * slot from being silently overwritten.
+ */
+static int corten_brk_grow_extend(struct mm_struct *mm,
+				  struct corten_mm_state *state,
+				  struct corten_arena *ar,
+				  unsigned long oldbrk, unsigned long newbrk)
+{
+	unsigned long frame, first, last;
+	long pages;
+	int ret = 0;
+
+	first = ((oldbrk - 1) >> PMD_SHIFT) + 1;
+	last = (newbrk - 1) >> PMD_SHIFT;
+
+	mutex_lock(&state->ctl_lock);
+	for (frame = first; frame <= last && !ret; frame++) {
+		if (xa_load(&state->arenas, frame))
+			ret = -EEXIST;
+	}
+	if (!ret) {
+		for (frame = first; frame <= last; frame++) {
+			ret = xa_err(xa_store(&state->arenas, frame, ar,
+					      GFP_KERNEL_ACCOUNT));
+			if (ret)
+				break;
+		}
+		while (ret && frame > first)
+			xa_erase(&state->arenas, --frame);
+	}
+	if (!ret) {
+		pages = (newbrk - oldbrk) >> PAGE_SHIFT;
+		vm_stat_account(mm,
+				corten_take_vm_flags(READ_ONCE(ar->prot)),
+				pages);
+		WRITE_ONCE(ar->end, newbrk);
+		atomic_long_inc(&corten_nr_brk_region_grows);
+	}
+	mutex_unlock(&state->ctl_lock);
+
+	return ret;
+}
+
+/* Seed: the very first GROW with no heap span at all (oldbrk ==
+ * start_brk; binfmt created no bss VMA).  The region is declared
+ * straight over the grow range -- it is VMA-free and PTE-empty by
+ * construction (the next-VMA guard in sys_brk passed, and an
+ * intersection here would have been a pre-existing foreign mapping).
+ */
+static int corten_brk_region_seed(struct mm_struct *mm,
+				  struct corten_mm_state *state,
+				  unsigned long newbrk)
+{
+	u8 perm = CORTEN_PERM_USER | CORTEN_PERM_READ | CORTEN_PERM_WRITE;
+	int ret;
+
+	if (mm->def_flags & VM_LOCKED)
+		return 1;	/* the legacy arm populates; a region cannot */
+	if (find_vma_intersection(mm, mm->start_brk, newbrk))
+		return 1;
+
+	/* The do_brk_flags flag word this replaces is
+	 * VM_DATA_DEFAULT_FLAGS|VM_ACCOUNT|def_flags -- RW with the full
+	 * MAY superset; the declare's novma arm records the same perm
+	 * and the full may_prot bound.
+	 */
+	ret = corten_arena_declare_locked(mm, state, mm->start_brk,
+					  newbrk - mm->start_brk, perm,
+					  NULL, 0, true);
+	if (ret)
+		return 1;
+
+	atomic_long_inc(&corten_nr_brk_region_adopts);
+	return 0;
+}
+
+/* Adopt: the first GROW over an existing (PTE-empty) brk VMA.  Declare
+ * first (failure leaves the VMA untouched), then remove the VMA
+ * through the regular funnel -- the sys_brk SHRINK shape
+ * (do_vmi_align_munmap, no lock drop: the caller holds mmap_write).
+ * The plain anonymous VMA passes the VM_CORTEN funnel guard, and its
+ * total_vm refund mirrors the declare's novma charge.  The uffd Unmap
+ * events ride the caller's uf list.
+ */
+static int corten_brk_region_adopt(struct mm_struct *mm,
+				   struct corten_mm_state *state,
+				   unsigned long oldbrk, unsigned long newbrk,
+				   struct list_head *uf)
+{
+	struct vm_area_struct *vma;
+	struct vma_iterator vmi;
+	u8 perm = CORTEN_PERM_USER;
+	int ret;
+
+	if (mm->def_flags & VM_LOCKED)
+		return 1;	/* the legacy arm populates; a region cannot */
+
+	vma_iter_init(&vmi, mm, mm->start_brk);
+	vma = vma_find(&vmi, oldbrk);
+	if (!vma || !vma_is_anonymous(vma) || vma->vm_file ||
+	    (vma->vm_flags & (VM_SHARED | VM_LOCKED | VM_LOCKONFAULT)) ||
+	    vma->vm_start != mm->start_brk || vma->vm_end != oldbrk)
+		return 1;
+
+	if (vma->vm_flags & VM_READ)
+		perm |= CORTEN_PERM_READ;
+	if (vma->vm_flags & VM_WRITE)
+		perm |= CORTEN_PERM_WRITE;
+	if (vma->vm_flags & VM_EXEC)
+		perm |= CORTEN_PERM_EXEC;
+
+	/* [C1] the adoption range must be PTE-empty: a heap the process
+	 * already wrote before MODE entry keeps its VMA (counted legacy;
+	 * the W-4 entry-sweep transaction is what reopens the resident
+	 * case -- a region born over resident PTEs would leave them
+	 * CORTEN_INVALID and the fault path would MAPERR the process's
+	 * own data).
+	 */
+	if (corten_arena_check_empty_locked(mm, mm->start_brk, oldbrk))
+		return 1;
+
+	ret = corten_arena_declare_locked(mm, state, mm->start_brk,
+					  oldbrk - mm->start_brk, perm,
+					  NULL, 0, true);
+	if (ret)
+		return 1;
+
+	vma_iter_init(&vmi, mm, mm->start_brk);
+	vma = vma_find(&vmi, oldbrk);
+	if (WARN_ON_ONCE(!vma || vma->vm_start != mm->start_brk)) {
+		/* Cannot happen under mmap_write; retire the region and
+		 * let legacy answer if it ever does.
+		 */
+		corten_arena_release_locked(mm, state, mm->start_brk,
+					    oldbrk - mm->start_brk);
+		return 1;
+	}
+	ret = do_vmi_align_munmap(&vmi, vma, mm, mm->start_brk, oldbrk,
+				  uf, false);
+	if (ret) {
+		/* Memory pressure: the VMA survived; retire the region
+		 * (its range is empty) and let legacy answer.
+		 */
+		corten_arena_release_locked(mm, state, mm->start_brk,
+					    oldbrk - mm->start_brk);
+		return 1;
+	}
+
+	atomic_long_inc(&corten_nr_brk_region_adopts);
+	return corten_brk_grow_extend(mm, state,
+				      xa_load(&state->arenas,
+					      mm->start_brk >> PMD_SHIFT),
+				      oldbrk, newbrk);
+}
+
+static int corten_brk_grow_route1(struct mm_struct *mm, unsigned long oldbrk,
+				  unsigned long newbrk, struct list_head *uf)
+{
+	struct corten_mm_state *state;
+	struct corten_arena *ar;
+
+	if (!READ_ONCE(mm->corten_mode) || !corten_enabled_static())
+		return 1;
+
+	ar = corten_brk_region(mm, &state);
+	if (!ar) {
+		/* The adopt/seed arms both need the registry (its
+		 * ctl_lock serializes the frame stores); create it on
+		 * demand like every other first-arena work (A5).
+		 */
+		if (!state) {
+			state = corten_arena_state_create(mm);
+			if (!state)
+				return 1;
+		}
+		if (oldbrk == mm->start_brk)
+			return corten_brk_region_seed(mm, state, newbrk);
+		return corten_brk_region_adopt(mm, state, oldbrk, newbrk,
+					       uf);
+	}
+	if (READ_ONCE(ar->end) != oldbrk)
+		return 1;	/* foreign extent: legacy */
+
+	return corten_brk_grow_extend(mm, state, ar, oldbrk, newbrk);
+}
+
+/* sys_brk GROW arm (mm/mmap.c, MODE mms): runs with mmap_write held,
+ * after min_brk/RLIMIT_DATA/check_brk_limits and the next-VMA
+ * guard_gap check all passed -- the route inherits their verdicts.
+ */
+int corten_brk_grow_route(struct mm_struct *mm, unsigned long oldbrk,
+			  unsigned long newbrk, struct list_head *uf)
+{
+	int ret = corten_brk_grow_route1(mm, oldbrk, newbrk, uf);
+
+	/* The degradation disclosure: every 1 is a heap the migration
+	 * did not take (still a VMA, or about to grow as one).
+	 */
+	if (ret == 1)
+		atomic_long_inc(&corten_nr_brk_legacy);
+	return ret;
+}
+
+static int corten_brk_shrink_route1(struct mm_struct *mm, unsigned long oldbrk,
+				    unsigned long newbrk)
+{
+	struct corten_mm_state *state;
+	struct corten_arena *ar;
+	unsigned long frame, first, last;
+	long pages;
+	int ret;
+
+	if (!READ_ONCE(mm->corten_mode) || !corten_enabled_static())
+		return 1;
+
+	ar = corten_brk_region(mm, &state);
+	if (!ar)
+		return 1;
+	if (READ_ONCE(ar->end) != oldbrk)
+		return 1;
+
+	if (newbrk <= mm->start_brk) {
+		ret = corten_arena_release_locked(mm, state, ar->start,
+						  ar->end - ar->start);
+		if (ret)
+			return 1;
+		atomic_long_inc(&corten_nr_brk_region_shrinks);
+		return 0;
+	}
+
+	/* The content drop: the routed-munmap transaction (per-window,
+	 * metadata-driven -- a boundary frame's kept pages and any
+	 * legacy neighbor sharing it are untouched).
+	 */
+	ret = corten_arena_unmap_chunk(mm, ar, newbrk, oldbrk - newbrk);
+	if (ret == -EAGAIN)
+		ret = corten_arena_unmap_chunk(mm, ar, newbrk,
+					       oldbrk - newbrk);
+	if (ret)
+		return 1;
+
+	/* Frames the trimmed span fully covers leave the registry; the
+	 * boundary frames stay claimed (the kept heap pages' tier-1
+	 * bounds and the transaction seal both read the frame slot).
+	 * PT pages of the retired frames follow -- free_ptes_span's
+	 * boundary guard skips every frame the range does not fully
+	 * cover, so the kept pages' tables survive.
+	 */
+	first = (newbrk + PMD_SIZE - 1) >> PMD_SHIFT;
+	last = (oldbrk >> PMD_SHIFT) - 1;
+
+	if (first <= last) {
+		mutex_lock(&state->ctl_lock);
+		for (frame = first; frame <= last; frame++) {
+			if (xa_load(&state->arenas, frame) == ar)
+				xa_erase(&state->arenas, frame);
+		}
+		WRITE_ONCE(ar->end, newbrk);
+		mutex_unlock(&state->ctl_lock);
+	} else {
+		WRITE_ONCE(ar->end, newbrk);
+	}
+	/* Retires exactly the fully-covered frames' PT pages (its own
+	 * gather; the boundary guard skips the boundary frames).
+	 */
+	corten_arena_free_ptes_novma(mm, newbrk, oldbrk);
+
+	pages = (oldbrk - newbrk) >> PAGE_SHIFT;
+	vm_stat_account(mm, corten_take_vm_flags(READ_ONCE(ar->prot)),
+			-pages);
+	atomic_long_inc(&corten_nr_brk_region_shrinks);
+	return 0;
+}
+
+/* sys_brk SHRINK arm (mm/mmap.c, MODE mms): runs with mmap_write held.
+ * A brk below the region's base releases the whole region (the legacy
+ * arm's answer removes the whole heap VMA too); otherwise the trim is
+ * the chunk-zap transaction over [newbrk, oldbrk), then the frames the
+ * range fully covers are erased and the charge refunded.
+ */
+int corten_brk_shrink_route(struct mm_struct *mm, unsigned long oldbrk,
+			    unsigned long newbrk)
+{
+	int ret = corten_brk_shrink_route1(mm, oldbrk, newbrk);
+
+	if (ret == 1)
+		atomic_long_inc(&corten_nr_brk_legacy);
+	return ret;
+}
+
+/*
+ * MV2 W-3 (the brk delegation domain's region migration): the heap
+ * region lives at the legacy brk addresses, page-granular -- its
+ * boundary frames are generally not PMD-aligned and may be shared with
+ * a legacy neighbor (the data segment ends where the heap begins).  The
+ * route lookups are frame-granular, so a space operation on such a
+ * neighbor resolves the heap region without overlapping it.  Window
+ * isolation made that answer unreachable ("a frame hit implies
+ * overlap"); with a legacy-address region it is the common case and
+ * must read as "none of ours": the route runs legacy.  Every range
+ * classifying route drops non-overlapping lookup hits through this
+ * predicate; a true overlap that crosses the region boundary stays a
+ * PARTIAL reject as before.
+ */
+static bool corten_route_hit(const struct corten_arena *ar,
+			     unsigned long start, unsigned long end)
+{
+	return start < READ_ONCE(ar->end) && end > READ_ONCE(ar->start);
+}
+
 /*
  * sys_munmap() entry routing (sec 5.5).  Runs with no locks held.
  * Return: 0 = run the legacy munmap, 1 = handled, -errno = reject.
@@ -10924,6 +11413,19 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
 		ar_end = corten_arena_lookup_get(mm, end - 1);
 	else
 		ar_end = NULL;	/* same frame: ar_start's reference covers it */
+
+	/* W-3: drop frame-granular hits without a byte overlap -- a
+	 * legacy neighbor sharing the heap region's boundary frame must
+	 * run legacy, not trip the boundary-crossing reject below.
+	 */
+	if (ar_start && !corten_route_hit(ar_start, start, end)) {
+		percpu_ref_put(&ar_start->active);
+		ar_start = NULL;
+	}
+	if (ar_end && !corten_route_hit(ar_end, start, end)) {
+		percpu_ref_put(&ar_end->active);
+		ar_end = NULL;
+	}
 
 	if (!ar_start && !ar_end)
 		return 0;
@@ -11040,6 +11542,14 @@ int corten_arena_munmap_guard(struct mm_struct *mm, unsigned long start,
 		ar = corten_arena_lookup_get(mm, end - 1);
 	if (!ar)
 		return 0;
+	/* W-3: a frame-granular hit without a byte overlap (a legacy
+	 * neighbor sharing the heap region's boundary frame) is not
+	 * ours: run legacy.
+	 */
+	if (!corten_route_hit(ar, start, end)) {
+		percpu_ref_put(&ar->active);
+		return 0;
+	}
 
 	class = corten_arena_unmap_classify(start, end, ar->start, ar->end);
 	switch (class) {
@@ -12003,6 +12513,21 @@ static int corten_arena_mmap_punch_route(struct mm_struct *mm,
 	if (!ar_start && !ar_end)
 		return 0;		/* no arena involved */
 
+	/* W-3: drop frame-granular hits without a byte overlap -- a
+	 * MAP_FIXED overwrite of a legacy neighbor sharing the heap
+	 * region's boundary frame is none of ours: run the legacy flow.
+	 */
+	if (ar_start && !corten_route_hit(ar_start, addr, end)) {
+		percpu_ref_put(&ar_start->active);
+		ar_start = NULL;
+	}
+	if (ar_end && !corten_route_hit(ar_end, addr, end)) {
+		percpu_ref_put(&ar_end->active);
+		ar_end = NULL;
+	}
+	if (!ar_start && !ar_end)
+		return 0;
+
 	ar = ar_start ?: ar_end;
 	class = corten_arena_punch_classify(addr, end, ar->start, ar->end);
 	if (class != CORTEN_UNMAP_CHUNK && class != CORTEN_UNMAP_EXACT) {
@@ -12131,6 +12656,14 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
 	ar = corten_arena_lookup_get(mm, addr);
 	if (!ar)
 		return 0;
+	/* W-3: a frame-granular hit without a byte overlap (a MAP_FIXED
+	 * mark touching only a legacy neighbor that shares the heap
+	 * region's boundary frame) is not ours: run the legacy flow.
+	 */
+	if (!corten_route_hit(ar, start, end)) {
+		percpu_ref_put(&ar->active);
+		return 0;
+	}
 
 	class = corten_arena_unmap_classify(start, end, ar->start, ar->end);
 	if (class != CORTEN_UNMAP_CHUNK && class != CORTEN_UNMAP_EXACT) {
@@ -12611,6 +13144,22 @@ int corten_arena_mprotect_route(struct mm_struct *mm, unsigned long start,
 	if (!ar)
 		return 0;			/* not ours: legacy */
 
+	/* W-3: drop frame-granular hits without a byte overlap -- a
+	 * legacy neighbor sharing the heap region's boundary frame must
+	 * run legacy, not trip the rejects below.
+	 */
+	if (ar_start && !corten_route_hit(ar_start, start, end)) {
+		percpu_ref_put(&ar_start->active);
+		ar_start = NULL;
+	}
+	if (ar_end && !corten_route_hit(ar_end, start, end)) {
+		percpu_ref_put(&ar_end->active);
+		ar_end = NULL;
+	}
+	ar = ar_start ?: ar_end;
+	if (!ar)
+		return 0;			/* none of ours: legacy */
+
 	if (ar_start != ar_end) {
 		ret = -EOPNOTSUPP;		/* crosses an arena boundary */
 		goto out;
@@ -12895,6 +13444,22 @@ long corten_arena_mremap_route(struct mm_struct *mm, unsigned long addr,
 	ar_end = corten_arena_lookup_get(mm, end - 1);
 	ar = ar_start ?: ar_end;
 
+	if (!ar)
+		return 0;			/* legacy mremap */
+
+	/* W-3: drop frame-granular hits without a byte overlap -- a
+	 * legacy neighbor sharing the heap region's boundary frame must
+	 * run legacy, not trip the rejects below.
+	 */
+	if (ar_start && !corten_route_hit(ar_start, addr, end)) {
+		percpu_ref_put(&ar_start->active);
+		ar_start = NULL;
+	}
+	if (ar_end && !corten_route_hit(ar_end, addr, end)) {
+		percpu_ref_put(&ar_end->active);
+		ar_end = NULL;
+	}
+	ar = ar_start ?: ar_end;
 	if (!ar)
 		return 0;			/* legacy mremap */
 
@@ -13224,6 +13789,15 @@ int corten_arena_dontneed_route(struct mm_struct *mm, unsigned long start,
 	ar = corten_arena_lookup_get(mm, start);
 	if (!ar)
 		return 0;
+	/* W-3: a frame-granular hit without a byte overlap (a legacy
+	 * neighbor sharing the heap region's boundary frame) is not
+	 * ours: the drop runs legacy so the neighbor's own pages are
+	 * still answered.
+	 */
+	if (!corten_route_hit(ar, start, end)) {
+		percpu_ref_put(&ar->active);
+		return 0;
+	}
 
 	class = corten_arena_unmap_classify(start, end, ar->start, ar->end);
 	switch (class) {
@@ -13404,6 +13978,18 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 			return 0;
 		ar_start = corten_arena_lookup_get(mm, start);
 		ar_end = corten_arena_lookup_get(mm, end - 1);
+		/* W-3: drop frame-granular hits without a byte overlap
+		 * (a legacy neighbor sharing the heap region's boundary
+		 * frame): the hint runs legacy.
+		 */
+		if (ar_start && !corten_route_hit(ar_start, start, end)) {
+			percpu_ref_put(&ar_start->active);
+			ar_start = NULL;
+		}
+		if (ar_end && !corten_route_hit(ar_end, start, end)) {
+			percpu_ref_put(&ar_end->active);
+			ar_end = NULL;
+		}
 		ar = ar_start ?: ar_end;
 		in_arena = ar_start && ar_start == ar_end &&
 			   corten_arena_unmap_classify(start, end, ar->start,

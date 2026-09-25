@@ -44,6 +44,7 @@
 #include <linux/prctl.h>
 #include <linux/mempolicy.h>
 #include <linux/mmap_lock.h>
+#include <linux/corten_arena.h>	/* the arena anon folio family (MV2 W-3) */
 
 #include "futex.h"
 #include "../locking/rtmutex_common.h"
@@ -669,6 +670,50 @@ again:
 	 */
 	folio = page_folio(page);
 	mapping = READ_ONCE(folio->mapping);
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * MV2 W-3 futex arm: a MODE mm's arena anon folio is unanchored --
+	 * mapping == NULL by design (the W1.a novma rmap contract: an
+	 * auto window has no vma for __folio_set_anon(), so every
+	 * vma-less arena install, window or W-3 heap region, carries a
+	 * NULL mapping).  The !mapping arm below reads that shape as
+	 * ZERO_PAGE/gate/truncated pagecache and EFAULTs every shared
+	 * futex on arena memory before any GUP arm is even consulted --
+	 * the page the fast walk or the corten GUP window arm hands back
+	 * is perfectly good.  The family test sees through the NULL
+	 * mapping (mapped + swapbacked, neither anon nor swapcache), and
+	 * the anonymous-key arm is exactly right for it: for a novma page
+	 * the address IS the identity, so the key is the same
+	 * (mm, page-aligned address) tuple the anon arm builds.  The ro
+	 * contract mirrors it too -- the FOLL_WRITE GUP above already
+	 * broke any fork COW on the way here, so a surviving ro shape is
+	 * a genuinely read-only arena slot, and "a RO anonymous page will
+	 * never change" holds verbatim.
+	 */
+	if (!mapping && READ_ONCE(mm->corten_mode) &&
+	    corten_folio_is_arena_anon(folio)) {
+		/* The ro contract: upstream EFAULTs a ro lookup because
+		 * its shapes (zero page, gate, truncated pagecache) can
+		 * never change identity -- a WAIT on them would block
+		 * forever on a value the kernel cannot see change.  An
+		 * arena-anon page is not one of those shapes: it is a
+		 * real, private, resident page whose identity is its
+		 * (mm, address) -- exactly what the key below encodes.
+		 * A ro WAIT on it is as meaningful as a rw one, so no
+		 * EFAULT here.  Exactly ONE folio_put(): the GUP above
+		 * handed us a single reference (FOLL_GET) and the key
+		 * takes none -- the W-3.2 shape that double-put it freed
+		 * the page under the live PTE (the ft4 uval garbage and
+		 * the -ENOMEM follow-up GUP).
+		 */
+		key->both.offset |= FUT_OFF_MMSHARED; /* ref taken on mm */
+		key->private.mm = mm;
+		key->private.address = address;
+		folio_put(folio);
+		return 0;
+	}
+#endif
 
 	/*
 	 * If folio->mapping is NULL, then it cannot be an anonymous

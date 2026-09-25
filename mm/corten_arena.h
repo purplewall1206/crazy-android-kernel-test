@@ -306,10 +306,14 @@ enum corten_unmap_class corten_arena_punch_classify(unsigned long start,
  * MAP_PRIVATE mapping with no other flag word bits than MAP_NORESERVE is
  * auto-arena-able.  The type-bit check absorbs MAP_SHARED/_VALIDATE and
  * the MAP_DROPPABLE alias; any other bit (MAP_FIXED*, MAP_HUGETLB,
- * MAP_GROWSDOWN, MAP_POPULATE, MAP_LOCKED, MAP_SYNC, MAP_STACK,
+ * MAP_GROWSDOWN, MAP_POPULATE, MAP_LOCKED, MAP_SYNC,
  * MAP_UNINITIALIZED, MAP_DENYWRITE, ...) keeps the mapping legacy.
- * MAP_STACK stays excluded per OQ-B until the mprotect routing (T0b)
- * can serve thread-stack guard pages.
+ *
+ * MV2 W-3: MAP_STACK joined the whitelist (the thread-stack half of the
+ * stack delegation item) -- the OQ-B precondition (mprotect routing
+ * serving thread-stack guard pages) is closed since T0b, and glibc's
+ * pthread_create shape MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK takes the
+ * auto route.
  *
  * V-B.1: @file flips the whitelist to its file mirror -- MAP_PRIVATE
  * with at most MAP_NORESERVE (MAP_ANONYMOUS is absent by construction
@@ -632,6 +636,21 @@ static inline void corten_brk_note(struct mm_struct *mm,
 }
 
 /*
+ * MV2 W-3, item 1: the brk delegation domain's region migration
+ * (V-E.2 resurrection).  The sys_brk GROW/SHRINK arms route here for
+ * MODE mms before the legacy do_brk_flags/do_vmi_align_munmap shapes.
+ * Both run with mmap_write held; the GROW route additionally threads
+ * the syscall's uffd list so the adopt's VMA removal reports its Unmap
+ * events.  Return: 0 = the heap region answered (caller completes on
+ * the region form), 1 = run the legacy arm (counted degradation),
+ * -errno = reject (the caller's REJECT arm).
+ */
+int corten_brk_grow_route(struct mm_struct *mm, unsigned long oldbrk,
+			  unsigned long newbrk, struct list_head *uf);
+int corten_brk_shrink_route(struct mm_struct *mm, unsigned long oldbrk,
+			    unsigned long newbrk);
+
+/*
  * V-A.2a J1 prelude (MV_VMA_FREE_SPEC.md sec 1.3): the find_vma-family
  * window probe.  The exported find_vma()/find_vma_intersection() and
  * lock_vma_under_rcu() call corten_j1_probe() after their lookup; the
@@ -714,9 +733,13 @@ void corten_remote_note_window_short(struct mm_struct *mm,
  * Return: 0 = answered (the grabbed page in *@pagep when the caller
  * asked for pages), a negative errno (-EFAULT for the parked S-1 /
  * magazine reserve / hole shapes -- find_vma()'s own miss errno --
- * -ENOMEM, -EHWPOISON, -EINTR, -EAGAIN), or 1 when the address is not
+ * -ENOMEM, -EHWPOISON, -EINTR), or 1 when the address is not
  * the window stream's to answer (non-MODE, outside the window, an
  * implant range or a tree-anchored arena): the legacy walk owns it.
+ * (The W-3 futex fix removed the -EAGAIN return: a none PMD and a
+ * lost pte_offset_map() race are the follow's no-translation shapes,
+ * answered by the bounded faultin loop instead of an un-retried
+ * errno.)
  *
  * Lifetime: the caller holds mmap_lock for read (the __get_user_pages
  * contract) and the arena fault never returns VM_FAULT_RETRY (the
@@ -1373,6 +1396,24 @@ static inline void corten_j1_probe(struct mm_struct *mm, unsigned long start,
 static inline void corten_brk_note(struct mm_struct *mm,
 				   enum corten_brk_arm arm)
 {
+}
+
+/* MV2 W-3 brk routes: no MODE mm can exist -- the inline fold answers
+ * "run legacy" (1) and the calls compile out to that constant branch.
+ */
+static inline int corten_brk_grow_route(struct mm_struct *mm,
+					unsigned long oldbrk,
+					unsigned long newbrk,
+					struct list_head *uf)
+{
+	return 1;
+}
+
+static inline int corten_brk_shrink_route(struct mm_struct *mm,
+					  unsigned long oldbrk,
+					  unsigned long newbrk)
+{
+	return 1;
 }
 
 static inline struct vm_area_struct *corten_vma_find(struct mm_struct *mm,

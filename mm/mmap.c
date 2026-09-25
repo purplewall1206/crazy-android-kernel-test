@@ -173,6 +173,29 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 
 	/* Always allow shrinking brk. */
 	if (brk <= mm->brk) {
+#ifdef CONFIG_CORTEN_MM_ARENA
+		/* MV2 W-3 (V-E.2 resurrection): on a MODE mm the heap
+		 * domain is a region record -- trim it, or release it
+		 * whole when brk falls to start_brk.  1 = the region did
+		 * not answer (counted degradation): the legacy arm below
+		 * still runs and, finding no brk VMA over a region span,
+		 * rejects exactly like a refused legacy shrink.  The
+		 * route keeps mmap_write held -- success unlocks here.
+		 */
+		{
+			int cret = corten_brk_shrink_route(mm, oldbrk,
+							   newbrk);
+
+			if (cret < 0)
+				goto out;
+			if (cret == 0) {
+				mm->brk = brk;
+				corten_brk_note(mm, CORTEN_BRK_SHRINK);
+				mmap_write_unlock(mm);
+				goto success_unlocked;
+			}
+		}
+#endif
 		/* Search one past newbrk */
 		vma_iter_init(&vmi, mm, newbrk);
 		brkvma = vma_find(&vmi, oldbrk);
@@ -204,6 +227,31 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	if (next && newbrk + __PAGE_SIZE > vm_start_gap(next))
 		goto out;
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/* MV2 W-3: the region GROW arm -- adopt the (PTE-empty) brk VMA
+	 * as the heap region on the first post-entry grow, then extend
+	 * pure metadata (frames + total_vm + ar->end; no tree
+	 * operation).  The guards above (check_brk_limits, the
+	 * guard-gap next-VMA check) already passed; the route inherits
+	 * their verdicts.  1 = counted degradation, the legacy
+	 * do_brk_flags flow below runs.  A -errno rejects (the REJECT
+	 * arm restores origbrk).  The route keeps mmap_write held and
+	 * never populates (the mlock-flavoured mm degrades to legacy),
+	 * so success unlocks here with nothing else to do.
+	 */
+	{
+		int cret = corten_brk_grow_route(mm, oldbrk, newbrk, &uf);
+
+		if (cret < 0)
+			goto out;
+		if (cret == 0) {
+			mm->brk = brk;
+			corten_brk_note(mm, CORTEN_BRK_GROW);
+			mmap_write_unlock(mm);
+			goto success_unlocked;
+		}
+	}
+#endif
 	brkvma = vma_prev_limit(&vmi, mm->start_brk);
 	/* Ok, looks good - let it rip. */
 	if (do_brk_flags(&vmi, brkvma, oldbrk, newbrk - oldbrk, 0) < 0)

@@ -48,6 +48,7 @@
 #include <linux/xarray.h>
 
 struct file;
+struct folio;
 struct mm_struct;
 struct pt_regs;
 struct seq_file;
@@ -176,7 +177,13 @@ enum corten_region_class {
 /**
  * struct corten_arena - descriptor of one declared arena.
  * @start: first VA of the arena (PMD_SIZE aligned).
- * @end: first VA past the arena (PMD_SIZE aligned).
+ * @end: first VA past the arena.  PMD_SIZE aligned for every window
+ *       arena; the MV2 W-3 brk region is only page-granular -- the
+ *       legacy heap addresses are page-aligned, so its end sits
+ *       inside its own last claimed frame.  The registry's per-arena
+ *       frame walks key their dedupe cursor on
+ *       corten_arena_end_frame(), not on a bare end >> PMD_SHIFT,
+ *       for exactly this reason.
  * @prot: CORTEN_PERM_* upper bound recorded from the VMA at DECLARE time.
  * @mm: owning address space (diagnostics back-link; never taken by
  *      reference -- the arena cannot outlive its mm, see
@@ -329,6 +336,26 @@ struct corten_arena {
 
 	struct rcu_head		rcu;
 };
+
+/*
+ * One past @ar's last claimed registry frame -- the exclusive
+ * first-frame cursor every registry walk uses to visit each
+ * descriptor once ("every frame of an arena holds the same
+ * descriptor; drain each one once, at its first frame").  For a
+ * PMD-aligned @end this is the historical end >> PMD_SHIFT; for the
+ * MV2 W-3 brk region (page-granular end, inside its own last frame)
+ * the bare shift under-counts by one and the descriptor's final
+ * frame re-enters the walk body -- the exit drain re-ran
+ * obs_remove/drain/free on a live descriptor, and the second
+ * obs_remove's list_del_rcu wrote through the LIST_POISON pointers
+ * (CONFIG_DEBUG_LIST off): the oopsing task died holding the global
+ * corten_arena_list_lock, which then spun every later DECLARE/exit
+ * in the system forever (the r07 guest mm_exit stall).
+ */
+static inline unsigned long corten_arena_end_frame(const struct corten_arena *ar)
+{
+	return ((READ_ONCE(ar->end) - 1) >> PMD_SHIFT) + 1;
+}
 
 /*
  * MODE-process auto-arena window (DESIGN.md sec 2, M4T0_SPEC.md sec 1.3):
@@ -634,6 +661,17 @@ enum corten_fault_action corten_arena_user_fault(struct mm_struct *mm,
  * because the caller is arch code (arch/x86/mm/fault.c).
  */
 bool corten_fault_window_fallback(struct mm_struct *mm, unsigned long addr);
+
+/*
+ * MV2 W-3 futex arm: the unanchored anon folio family test, for
+ * kernel/futex's get_futex_key() -- the one GUP consumer that classifies
+ * the grabbed page off folio->mapping alone, which every vma-less arena
+ * install leaves NULL by design (the W1.a novma rmap contract).  True
+ * for an arena anon folio (rmap-mapped, swapbacked, neither anon nor
+ * swapcache); the caller gates it on the mm's MODE state.  Declared
+ * here because the caller is outside mm/ (kernel/futex/core.c).
+ */
+bool corten_folio_is_arena_anon(struct folio *folio);
 
 /*
  * Gate-free internal entry points.  They apply no capability check and no
@@ -1018,6 +1056,11 @@ long corten_arena_test_maps_window_rows(void);
 long corten_arena_test_brk_arm(int arm);
 long corten_arena_test_heap_lookups(void);
 
+/* MV2 W-3: the heap region migration's counters (@which indexes
+ * 0=adopts 1=grows 2=shrinks 3=legacy-fallbacks).
+ */
+long corten_arena_test_brk_region(int which);
+
 /* V-E whitelist (J2-complete) ledger: the walk/violation/anomaly
  * counters, the brk-VMA registration observable, and the one-walk
  * per-class histogram (fills @counts, an array of CORTEN_WL_NR_CLASSES
@@ -1200,6 +1243,11 @@ static inline bool
 corten_fault_window_fallback(struct mm_struct *mm, unsigned long addr)
 {
 	return false;
+}
+
+static inline bool corten_folio_is_arena_anon(struct folio *folio)
+{
+	return false;	/* no arena folios: the upstream verdicts stand */
 }
 
 static inline int corten_prctl_arena(unsigned int op, unsigned long addr,
