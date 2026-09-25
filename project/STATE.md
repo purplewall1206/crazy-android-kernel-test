@@ -1141,3 +1141,84 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
   默认接管（exec 自动进场 + guest 全程 MODE 启动门 + N 类缺口从"登记"升级到"无损闭合"
   + mmap-pf 地板的批 mark 重构升为必做——默认接管后它是所有进程的税）+ 届时 VMA 层对
   全部进程成为死代码, 删除账本兑现。
+
+- **[2026-09-24~25 W-1 全系列 ✓ —— 原生 rmap 拱心石落地（MV2 片 1/6）]** 七提交+tag 全入库:
+  W1.a 536635d7879d（vma-free rmap 包装, folio_add/remove_anon_rmap_novma + file 侧
+  novma install/remove——rmap 记账与 vma 解耦的接口面, +251）→ W1.b 0d27489f4781
+  （per-inode file registry + invalidation 枚举: truncate/ invalidate 重锚定走查从
+  i_mmap 改 registry 驱动, +656/−248）→ W1.c 3645f8d51e75（file install/remove 生产
+  调用面翻 novma 包装）→ W1.d 430de7155f3e（ttu file 真路由: rmap_walk_file 对窗口
+  folio 从 registry 枚举, +669）→ W1.e1 b02ffc85af27（原生匿名换出驱动: 驱动直接
+  scan→swap-out, 不经 shrinker 通道, +616/−37）→ W1.e2 82d182cd4989（ttu 匿名守卫
+  翻转到驱动——**W-1 完成** tag corten-r07-w1-complete; 实测 512MiB 全量经 ttu→驱动
+  直驱 driver_swapped=131072, +598/−308）→ W1.f/f2 1b58850d59ea（unuse 窗口扫描 +
+  swapcache pull 臂: 真盘 unuse 的 SWAP_HAS_CACHE 滞留形状在 pull 内改道 unuse_pte
+  语义 cached-folio map, 一次 unuse_mm 收敛, +793/−24）。规格=specs/W1_NATIVE_RMAP_SPEC.md;
+  各片报告 next/w1{a,b,c,d,e1,e2,f,f2}-*.md。验证口径: 各片三套件 KUnit on×2/off 全绿
+  （105/0/0 → 104/0/0 等, 逐片 +1~2 锚）、=n 十四对象零符号、checkpatch 0E/0W/0C;
+  guest 门 22/1（唯一 FAIL=登记的 A.1 CHUNK 容差, mva1_probe 源码已失的过时预期）;
+  w1e2 门 ★ttu 匿名压测翻转实证。**移交**: S-3 read-back swapins 平坦的语义问题
+  （mve 登记）由 W1.f2 收敛; futex 换出边界（见 W-3 条目）。
+- **[2026-09-24 21:23 W-2 ✓ —— carrier 消灭, MODE vma 分配恒 0（MV2 片 2/6）]**
+  commit **680857104271** tag **corten-r07-w2**（8 文件 +1384/−977; 报告
+  next/w2-dev-report.md）。判定: X（子侧不复制 PTE 首 fault 原生路径）否决——匿名页
+  无 swap entry 无 pagecache 挂点, lazy-dup 状态机语义不无损; Y（carrier 降纯元数据锚）
+  采纳——W1.a-e 已拆完全部职责, W-2 只剩删壳。fork_copy_ptes 纯 metadata 化 / GUP-slow
+  摘 carrier（folio 操作改 metadata 驱动）/ rmap.c+gup.c 生产面改造。终判据:
+  **MODE mm 的 vm_area_struct 分配数恒 0（含 detached carrier）**——D28 操作判据的前半
+  （分配面）达成。验证: 三套件 on×2/off 全绿（104/0/0 基线同数）、=n、checkpatch 0E/0W/0C
+  （3658 行）、guest 门 22/1（登记容差）。worktree mva 未提交增量即本片主体。
+- **[2026-09-25 09:57 W-3 ✓ —— 委托域迁移 + GUP 重构（MV2 片 3/6）]** commit
+  **669a33f84279** tag **corten-r07-w3**（7 文件 +1867/−32; 报告 next/w3-dev-report.md;
+  判定先行的四件裁决见报告 §0）。内容: ①brk region 化（V-E.2 复活: sys_brk GROW/SHRINK
+  路由 adopt/seed/extend/trim/release, 全部 fail-open legacy; [C1] 红线=入场前已驻留堆
+  不收, brk_legacy 计数披露, W-4 扫入重开）; ②线程栈 MAP_STACK 白名单翻转（guard 页
+  CHUNK 事务）; ③exec 镜像判定为 W-4 扫入承接（ELF 形状全可表出为 file region record,
+  本片零 binfmt 改动）; ④vdso/vvar 结构性排除+计数（timens 走查/mremap ABI/PFNMAP
+  证据链, CORTEN_WL_SPECIAL 桶, D28 树归零判据豁免口径移交 W-4/W-6 裁定）; ⑤**邻接
+  精度件（隐藏主件）**: 堆 region 页粒度边界共享 data 段 PMD 帧, corten_route_hit 字节
+  级判定补七处范围路由, 否则邻接 mprotect/munmap/MAP_FIXED 硬失败; ⑥**W-3.2 GUP 重构**:
+  __get_user_pages 三路显式流（窗口→corten 臂/legacy 链/真树缺→EFAULT）, check_vma_
+  flags/follow_page_mask/faultin_page 的 vma-NULL 控制流不可达; gup_fast 汇 + futex
+  arena-anon key 臂同系列。验证: 三套件绿（corten_arena 105/0/0 +1 路由锚; corten_fault
+  34/0/5）、=n 14 对象、checkpatch 0E/0W/0C（992 行）; guest 电池 17/6（pre-fix 构建,
+  metis_eq Aborted 一致复现=独立 bug 见下）→ post-fix 构建 smoke 26/26 + JTB 绿;
+  严格门维持（gate_pass==1, j1_hits==0）; brk_legacy=2882 披露（glibc 电池, W-4 靶面）。
+  **已知开口（登记独立件）**: 窗口 futex 在换出边界 EFAULT——驻留页 futex 正常, 换出页
+  WAIT 得 EFAULT; 修复需 futex 路径感知 arena swap 形状。W-3b/W-3c 移交与 metis 门
+  核验状态见下一班条目。
+
+- **[2026-09-26 01-03 时 W-3 收口核验班: metis 门根因修正+双修复入库 (W-3fix)]**
+  任务 2（核验 W-3b/W-3c 与 metis 门）执行中发现并修复两枚真缺陷:
+  - **metis 门 = NOT MET 于 W-3 终件**（复现: rc=134 "futex facility" ×2, 而
+    swapped_out==0——**W-3 的换出边界归因对本失败不成立**）。实证链: strace 定位
+    `futex(0x100001000990, WAIT_BITSET|CLOCK_RT, tid)=-EFAULT` 落在 glibc 线程栈
+    映射（PROT_NONE MAP_STACK declare + 顶片 mprotect RW）内; kprobe get_futex_key
+    ret=0xfffffff2; gup_probe_rejects 每复现 +4 → **失败点=corten_gup_window 的
+    check_vma_flags 仿真**: CHUNK mprotect 只把 perm 提交进槽位（pending-perm）,
+    ar->prot 留在 DECLARE 界, 探针只读 ar->prot → STACK region 的 FOLL_WRITE 全拒。
+    修=探针对齐 FRESH 门规则（m.perm ?: ar->prot, corten_ptdesc_get RCU 钉住读;
+    生产者持 mmap_write/GUP 持 mmap_read 同 mm 互斥）。**修后 metis 双跑 rc=0,
+    checksum 与无 hook 跑同值（零改动契约）**; KUnit 锚 w3_gup_chunk_promoted_perm
+    红→绿。
+  - **exit walk 终段帧退休泄漏**（pgtleak 探针族: 每 MODE 退出 4096/8192
+    pgtables_bytes BUG——W 系列把 V-D 的 B-2 归零打回）: phase A 终段 run 以
+    arena->end（字节粒度）收尾, free_ptes_span 整帧守卫跳过末帧 → PTE 页搁浅
+    （heap region 跨帧形状=printf-only 即可复现 + 全部非帧对齐 end 窗口）。修=zap
+    保持记录跨度、退休伸展到帧界（末帧已验证 walkable）。修后全部探针形态 dmesg
+    泄漏=0; brk_region_exit 锚扩展（fill 末帧+mm_exit 后 pmd 条目非 present）。
+  - 入库: 主树 **d7bd0dd9b5c9** + worktree 平行 e6afdde09eda, tag
+    **corten-r07-w3fix**（锚主树）。验证: 三套件 on×2（24/0/1 · **111/0/0** ·
+    34/0/5）+ off（25/0/0 · 24/0/87 · 7/0/32）全绿; checkpatch 0E/0W/1C; guest
+    电池 22/1（唯一 FAIL=登记 carrier 计数退役容差）+ 严格门维持（gate_pass==1,
+    j1_hits==0）+ 零 pgtables 残差。证据 results/r07/w3fix/（含 kunit/门日志+
+    修复 diff）; **补齐 W-3 欠交的 futex-swapout-boundary.md**（results/r07/w3/
+    与 w3fix/ 双份）。
+  - **核验结论（任务 2 定案）**: W-3b（主栈 GROWSDOWN 臂）维持移交——依赖 W-4
+    迁移事务机（本班未动）; W-3c（resident VMA→region 迁移事务机）= W-4 主体,
+    本班为它清了 exit/perm 两处地基。**新登记硬阻断项**: 换出后窗口页的用户态
+    fault 既不换入也无干净裁决（swapins==0, 进程静默死亡; S-3 swapoff 电池腿自
+    W1.f 起持续 rc=1 同族; 回归窗=W1.e2 后, 未二分）——W-6 前必修, 首分叉点
+    kprobe corten_arena_swap_in 是否被 dispatch 触达。窗口植入的 exit 上层残差
+    （8192）登记为 W-5 靶面。探针件 bench/share/w45/（futexprobe/futexswap/
+    swapfault/pgtleak 族, 源码+二进制）。
