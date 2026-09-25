@@ -11493,6 +11493,77 @@ static void corten_arena_test_w3_futex_gup_shapes(struct kunit *test)
 }
 
 /*
+ * MV2 W-3 fixup: the chunk-promoted perm vs the GUP probe gate.  The
+ * glibc thread-stack shape is a PROT_NONE region declare followed by an
+ * RW mprotect of the top slice -- the mprotect CHUNK route commits the
+ * new perm into the slot metadata (the pending-perm contract) but
+ * deliberately leaves ar->prot at the DECLARE bound (only a whole-arena
+ * EXACT rewrite moves it).  The GUP window arm's check_vma_flags
+ * emulation used to read the region perm alone, so every FOLL_WRITE
+ * access to the promoted slice was rejected at the probe: pthread's
+ * join/descriptor futexes live on exactly that slice, and every shared
+ * futex on them EFAULTed (the metis_eq abort, strace-pinned to the
+ * stack mapping).  The probe now applies the FRESH gate's own rule
+ * (slot perm wins over the DECLARE bound); this anchor drives the
+ * promoted slice (red before the fixup) and the un-promoted remainder
+ * (the guard stays guarded) through both probe shapes.
+ */
+static void corten_arena_test_w3_gup_chunk_promoted_perm(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned int fuwrite = FOLL_WRITE | FOLL_GET | FOLL_TOUCH |
+			       FOLL_UNLOCKABLE;
+	struct page *page = NULL;
+	unsigned long a;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "chunk perm probe requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	/* The glibc stack shape: PROT_NONE auto attach, then the RW chunk. */
+	a = corten_arena_test_mvc_attach(test, mm, 2, PROT_NONE);
+
+	mmap_write_lock(mm);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_mprotect_route(mm, a, PMD_SIZE,
+						    PROT_READ | PROT_WRITE, -1),
+			1);
+	mmap_write_unlock(mm);
+
+	mmap_read_lock(mm);
+	/* The promoted slice: the probe must honor the committed chunk
+	 * contract over the NONE DECLARE bound -- the write shape faults
+	 * the fresh slot in and hands back the exclusive page (before
+	 * the fixup this was the probe's -EFAULT).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_gup_window(mm, a, fuwrite, &page), 0);
+	KUNIT_ASSERT_NOT_NULL(test, page);
+	KUNIT_EXPECT_TRUE(test, PageAnonExclusive(page));
+	put_page(page);
+	page = NULL;
+
+	/* The resident re-follow: same page, the follow answers. */
+	KUNIT_EXPECT_EQ(test, corten_gup_window(mm, a, fuwrite, &page), 0);
+	KUNIT_EXPECT_NOT_NULL(test, page);
+	put_page(page);
+	page = NULL;
+
+	/* The un-promoted remainder (the guard slice): the DECLARE bound
+	 * still rules there -- the write probe stays the loud reject.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_gup_window(mm, a + PMD_SIZE, fuwrite, NULL),
+			-EFAULT);
+	mmap_read_unlock(mm);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/*
  * The read-only committed slot: fork_seed_mapped()'s install shape with
  * the record and the PTE born read-only -- a live RO record cannot be
  * marked DOWN from the seeded RW shape (the mark rule denies a perm
@@ -12828,6 +12899,28 @@ static void corten_arena_test_brk_region_exit(struct kunit *test)
 			  corten_arena_test_region_of(mm,
 						      heap + PMD_SIZE + PAGE_SIZE) == ar);
 
+	/* W-3 fixup anchor: fill the heap's pure-arena tail frame (the
+	 * frame past the data segment's shared one) so its PTE page
+	 * exists, then check the exit walk retires it -- the walk's
+	 * final run used to hand free_ptes_span() the region's byte
+	 * end, and the whole-frame guard skipped exactly this frame,
+	 * stranding one 4096 pgtables_bytes page per MODE exit (the
+	 * guest pgtleak/printf-only repro).
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_fill_window(mm,
+						      heap + PMD_SIZE +
+						      PAGE_SIZE),
+			0);
+	{
+		pmd_t *pmdp = corten_arena_test_pmd(mm,
+						    heap + PMD_SIZE +
+						    PAGE_SIZE);
+
+		KUNIT_ASSERT_NOT_NULL(test, pmdp);
+		KUNIT_ASSERT_TRUE(test, pmd_present(READ_ONCE(*pmdp)));
+	}
+
 	/* Direct hook (the case thread; nothing here munmaps): the
 	 * pre-fix drain loop re-entered at frame 3 and GPF'd on the
 	 * second unlink -- orphaning the global list lock, which hung
@@ -12835,6 +12928,17 @@ static void corten_arena_test_brk_region_exit(struct kunit *test)
 	 * Success: the registry drains and unpublishes cleanly.
 	 */
 	corten_arena_mm_exit(mm);
+	{
+		pmd_t *pmdp = corten_arena_test_pmd(mm,
+						    heap + PMD_SIZE +
+						    PAGE_SIZE);
+
+		/* The pmd page may itself be gone (retired with the pud
+		 * pass); either way the ENTRY for the pure frame must no
+		 * longer point at a PTE page.
+		 */
+		KUNIT_EXPECT_FALSE(test, pmdp && pmd_present(READ_ONCE(*pmdp)));
+	}
 	KUNIT_EXPECT_NULL(test, READ_ONCE(mm->corten_state));
 	KUNIT_EXPECT_NULL(test, corten_arena_test_region_of(mm, heap));
 
@@ -13199,6 +13303,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_mvc_merge_first_row),
 	KUNIT_CASE(corten_arena_test_mvc_gup_probe),
 	KUNIT_CASE(corten_arena_test_w3_futex_gup_shapes),
+	KUNIT_CASE(corten_arena_test_w3_gup_chunk_promoted_perm),
 	KUNIT_CASE(corten_arena_test_w3_futex_key),
 	/* MV2 W-3 restructure: the __get_user_pages() loop's re-triage
 	 * block end to end -- window-domain GUP (resident, parked,

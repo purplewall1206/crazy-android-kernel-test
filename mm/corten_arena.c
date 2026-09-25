@@ -3541,18 +3541,30 @@ static bool corten_arena_exit_p4d_page_clear(p4d_t *p4dp)
  * (no transaction can be in flight); the run is still retired as far
  * as it got and the residue is left to the leak ledger -- WARN once,
  * never hang the dying process.
+ *
+ * @retire_end may extend past @end to the final frame boundary: the
+ * zap stays inside the arena's recorded span (its records end at
+ * arena->end), but the PTE-page retirement must cover the whole walkable
+ * frame -- free_ptes_span()'s whole-frame guard skips a byte-granular
+ * tail, and the legacy pass can never pick the frame up (no tree VMA
+ * covers it -- that is what walkable means here).  Before this split,
+ * every region whose end was not PMD-aligned (the W-3 heap domain:
+ * brk stops wherever malloc stopped; the auto windows the request
+ * rounded up from) stranded its last frame's PTE page as a 4096
+ * pgtables_bytes residue on every MODE exit.
  */
 static void corten_arena_exit_run(struct mm_struct *mm,
 				  struct corten_arena *arena,
 				  struct mmu_gather *tlb,
-				  unsigned long start, unsigned long end)
+				  unsigned long start, unsigned long end,
+				  unsigned long retire_end)
 {
 	if (corten_arena_unmap_chunk_flags(mm, arena, start, end - start,
 					   0, tlb))
 		WARN_ONCE(1,
 			  "corten: exit walk zap failed at [%lx,%lx): PT residue left to the leak ledger\n",
 			  start, end);
-	corten_arena_free_ptes_span(mm, tlb, start, end);
+	corten_arena_free_ptes_span(mm, tlb, start, retire_end);
 }
 
 /*
@@ -3642,14 +3654,26 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 			} else if (!walkable && have_run) {
 				have_run = false;
 				corten_arena_exit_run(mm, arena, tlb,
-						      run_start, win);
+						      run_start, win, win);
 			}
 		}
 
 		if (have_run) {
+			/* The final run closes at the arena's byte end for
+			 * the zap, but its PTE-page retirement reaches the
+			 * frame boundary: the last window was verified
+			 * walkable (no tree VMA anywhere in its frame, and
+			 * the registry slot still names this arena), so the
+			 * frame is exclusively ours and nothing legal lives
+			 * past arena->end -- retiring the whole frame is
+			 * the only arm that ever frees it.
+			 */
+			unsigned long retire_end =
+				((arena->end - 1) & PMD_MASK) + PMD_SIZE;
+
 			have_run = false;
 			corten_arena_exit_run(mm, arena, tlb, run_start,
-					      arena->end);
+					      arena->end, retire_end);
 		}
 	}
 
@@ -4242,6 +4266,52 @@ int corten_gup_window(struct mm_struct *mm, unsigned long addr,
 		 */
 		atomic_long_inc(&corten_nr_gup_probe_rejects);
 		return -EFAULT;
+	}
+
+	/* The FRESH gate's perm rule (fault_once's Invalid-slot gate): a
+	 * slot that carries a perm despite its state is a committed
+	 * mprotect/KEEP_PERM contract and wins over the DECLARE bound --
+	 * a chunk mprotect deliberately leaves ar->prot at the declare
+	 * bound (only a whole-arena EXACT rewrite moves it), so reading
+	 * the region perm alone rejected every FOLL_WRITE access to a
+	 * chunk-promoted slice.  That is the glibc thread-stack shape
+	 * verbatim (PROT_NONE stack declare, RW mprotect of the top
+	 * slice): pthread's join/descriptor futexes live there and every
+	 * shared futex on them EFAULTed -- the metis_eq abort.
+	 *
+	 * Read stability: the perm producers this pre-gate predicts (the
+	 * mprotect/madvise/munmap routes) run under this mm's mmap_write,
+	 * while the GUP window arm runs under its mmap_read -- mutually
+	 * exclusive on the same mm, so the slot read cannot race its own
+	 * producers.  The unlocked writers the slot does share the page
+	 * with (the swap driver's MAPPED->SWAPPED transition) carry the
+	 * perm through unchanged, and the follow/fault legs below stay
+	 * the authority for the final verdict either way, so a torn
+	 * 8-byte read can only mis-shape an errno, never an access.
+	 */
+	{
+		pmd_t *pmdp = corten_arena_pmd(mm, addr);
+
+		if (pmdp && pmd_present(READ_ONCE(*pmdp)) &&
+		    !pmd_leaf(READ_ONCE(*pmdp))) {
+			struct corten_ptdesc *desc =
+				corten_ptdesc_get(pmd_pfn(READ_ONCE(*pmdp)));
+
+			if (desc) {
+				struct corten_pte_meta *meta =
+					READ_ONCE(desc->meta);
+
+				if (meta) {
+					struct corten_pte_meta m =
+						READ_ONCE(meta[corten_slot_index(
+							addr, desc->level)]);
+
+					if (m.perm)
+						perm = m.perm;
+				}
+				corten_ptdesc_put(desc);
+			}
+		}
 	}
 
 	/* check_vma_flags() emulation.  FOLL_ANON must miss a file
@@ -5311,7 +5381,6 @@ static void corten_va_release_frame(struct corten_mm_state *state,
 		}
 		return;	/* marker restored; frame leaks (T0 behaviour) */
 	}
-
 	xa_erase(&state->arenas, addr >> PMD_SHIFT);
 }
 
@@ -10729,7 +10798,7 @@ static bool corten_arena_pool_park_locked(struct mm_struct *mm,
 	 * can commit after the zap returned.
 	 */
 	WRITE_ONCE(ar->idle, true);
-	vma = ar->vma;
+		vma = ar->vma;
 	if (vma)
 		corten_arena_unshadow(ar, vma);
 
