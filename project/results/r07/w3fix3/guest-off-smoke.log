@@ -1,0 +1,50 @@
+=== w3fix3 guest off-smoke (corten=off boot) ===
+$ date (host): 2026年 09月 26日 星期六 08:28:52 CST
+$ bzImage: /tmp/bzImage-w3fix3 sha256 ff20f3662d14b5c4c3ee0aa1a44b93c95e6ad885d5a126b9d31e08083c65374d
+
+$ /home/ppw/vm/gssh echo ok
+ok
+
+$ /home/ppw/vm/gssh 'whoami; uname -r; uptime; cat /proc/cmdline'
+root
+6.18.32-g708c3294698d-dirty
+ 00:28:50 up 1 min,  1 user,  load average: 0.24, 0.08, 0.03
+console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=off kunit.enable=0
+
+$ /home/ppw/vm/gssh 'dmesg | grep -i corten'   (raw)
+[    0.000000] Command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=off kunit.enable=0
+[    0.459561] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=off kunit.enable=0
+
+$ /home/ppw/vm/gssh 'dmesg | grep -i corten | grep -v "Command line\|Kernel command line" | wc -l'   (real corten subsystem output)
+0
+
+$ /home/ppw/vm/gssh 'ls /sys/kernel/debug/corten'
+arena_stats
+arenas
+audit_gate
+dump
+evict
+j2_walk
+j2_walk_every
+stats
+txn
+whitelist
+
+$ /home/ppw/vm/gssh 'dmesg | grep -ciE "corten.*(warn|bug|timed out)|WARNING|BUG|Oops"'
+3
+
+--- verdict analysis (agent) ---
+[dmesg corten output] the only 2 "corten" hits are the bootarg echoes
+("Command line:" / "Kernel command line:", which contain the literal
+"corten=off"); real corten-subsystem output = 0  -> PASS
+[debugfs /sys/kernel/debug/corten] the directory is created by the
+unconditional late_initcall even on corten=off boots; the subsystem
+itself is inert (corten_enabled_static() == 0).  Recorded, not a smoke
+failure criterion.
+[WARNING/BUG/Oops grep = 3] all three are substring false positives:
+  - "PCI: ... report a bug" (ACPI hint text)
+  - 2x "sys-kernel-debug.mount" (matches "BUG" inside "-debug")
+No actual WARN/BUG/Oops  -> PASS
+
+OFF SMOKE VERDICT: PASS (login ok, gssh echo ok, no corten subsystem
+output on a corten=off boot)

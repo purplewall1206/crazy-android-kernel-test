@@ -1,0 +1,89 @@
+=== w3fix3 guest battery item (b): mva0/mva1 gate suite (mva2-guest.sh, corten=on boot) ===
+$ cmd: cp /mnt/mva2-guest.sh /tmp/mva2g/ && bash ./mva2-guest.sh
+$ reference reading (W-3fix2 gate-w3fix-guest.log): DONE PASS=22 FAIL=1, sole FAIL = registered carrier-counter retirement tolerance
+
+[mva0] share=/mnt
+[mva0] arenas header:             mm              shadow [start,end)                prot cls  rflg pcs status               rfile     poff
+[ok] arenas header has cls/rflg/pcs
+[smoke] SMOKE-DRIVER PASS
+[smoke] debugfs arenas after: 0
+[smoke] SMOKE-DRIVER PASS
+[ok] run_mode_smoke rc=0
+[ok] smoke 26/26 (PASS=26 FAIL=0)
+[ok] JThreadBench 2000x3 x3 rc=0
+[mva0] J1 snapshot before: probes=1 hits=1 carriers=0 vgate=0
+[ok] metis_eq run1 rc=0
+[ok] metis_eq MODE marker
+[ok] metis_eq run2 rc=0
+[ok] metis_eq checksum self-consistent ("distinct_words":65073,"checksum":"2d383eeed4ceb73b")
+[ok] live region rows observed (5)
+            mm              shadow [start,end)                prot cls  rflg pcs status               rfile     poff
+ffff9f160006c100 0000000000000000 [100000000000,100000800000)           09 file 0000 1   active ffff9f160150ad00 00000000
+ffff9f160006c100 0000000000000000 [100000800000,100000a00000)           0b anon 0000 1   active 0000000000000000 00000000
+ffff9f160006c100 0000000000000000 [100000800000,100000a00000)           0b rsvd 0000 1   active 0000000000000000 00000000
+ffff9f160006c100 0000000000000000 [100000a00000,100001400000)           08 anon 0000 1   active 0000000000000000 00000000
+[mva0] J1 snapshot after: probes=1 hits=1 carriers=1 vgate=0
+[ok] J1 prelude: zero window finds across pure MODE workload (hits 1->1)
+[ok] J1 probes observable (probes 1->1)
+[FAIL] carrier counter did not move (0 -> 0)
+[ok] auto_vgate line present (vgate=0)
+[ok] dmesg corten-quiet
+[ok] mmap1 in window 0x100000000000x
+[ok] touch1 8M verified-write
+[mva1] parks 8->9 hits 2->2 after munmap1
+[ok] S-4: maps has no reservation segment after munmap
+[mva1] parks=9 hits=3 after mmap2 (q=0x100000000000x p=0x100000000000x)
+[ok] FRESH: reactivated window write+readback 8M ok
+[ok] CHUNK: kept half still works after inner munmap
+[ok] CHUNK: dropped half re-materialized, kept half intact
+[ok] CHUNK: maps carries no VMA-split residue
+[ok] S-4b: maps clean after final munmap
+[ok] S-1: fault on munmapped window is SEGV_MAPERR (was ACCERR)
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: child content verified
+[ok] punchfork: MemFree reconciled (3684624 -> 3792592 kB, 8 iters)
+[mva1] probe done passes=18 fails=0
+[ok] mva1_probe rc=0
+[ok] S-1 MAPERR observed live
+[ok] S-4 maps-clean observed live
+[ok] FRESH reactivation observed live
+[ok] CHUNK drop-and-revive observed live
+[ok] punch+fork MemFree reconciled
+[mva0] pool counters: parks=10 (was ) hits=3 park_unmap_fails=0
+[ok] pool churn observed (parks=10 hits=3)
+[ok] park_unmap_fails==0
+[ok] no rss-counter regressions during gate
+[mva0] === DONE PASS=22 FAIL=1 ===
+GATE_RC=1
+
+=== /sys/kernel/debug/corten/audit_gate (post-gate) ===
+j1_probes          0
+j1_hits            0
+j2_walks           27
+j2_violations      0
+j2_stale           0
+j2_first_violation 0x0
+wl_walks           15
+wl_violations      0
+wl_brk_vmas        11
+wl_delegated_vmas  234
+wl_unclassified    45
+wl_brk_anomalies   0
+gate_pass          1
+
+--- J1 strict gate (awk key parse, no grep digit artifact)
+gate_pass=1 j1_hits=0 j1_probes=0
+J1 STRICT GATE: PASS
+
+=== gate verdict cross-check ===
+raw ok lines:   40
+raw FAIL lines: 1
+[FAIL] carrier counter did not move (0 -> 0)
+
+ITEM (b) VERDICT: PASS (PASS=22 FAIL=1, sole FAIL = 'carrier counter did not move' registered retirement tolerance; J1 strict gate gate_pass=1 j1_hits=0)

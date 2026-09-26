@@ -1,0 +1,31 @@
+[sp-zram] share=/mnt
+[sp-zram] swap table (zram channel):
+NAME                 TYPE      SIZE USED PRIO
+/dev/zram0           partition   2G   0B  100
+/root/bench/swapfile file        2G   0B   -2
+[sp-zram] swapfault: evict wrote pid=19031 pages=2
+[sp-zram] swapfault: /proc/swaps right after evict:
+NAME                 TYPE      SIZE USED PRIO
+/dev/zram0           partition   2G   8K  100
+/root/bench/swapfile file        2G   0B   -2
+[sp-zram] --- swapfault output (rc=0) ---
+corten_mode_hook: MODE on (pid 19031)
+READY
+read: a5
+write ok
+corten_mode_hook: fork-probe OK (threads+arenas alive, child exited 42)
+[ok] swapfault roundtrip: read-back byte intact + late write ok (zram)
+[ok] swapfault: no SIGSEGV/BUS (zram)
+[sp-zram] swapbulk: evict wrote pid=19073 pages=2048
+[sp-zram] swapbulk: /proc/swaps right after evict:
+NAME                 TYPE      SIZE USED PRIO
+/dev/zram0           partition   2G   8K  100
+/root/bench/swapfile file        2G   0B   -2
+[sp-zram] --- swapbulk output (rc=0) ---
+corten_mode_hook: MODE on (pid 19073)
+READY pages=2048
+READBACK OK all 2048 pages
+corten_mode_hook: fork-probe OK (threads+arenas alive, child exited 42)
+[ok] swapbulk roundtrip: all 2048 pages intact (zram)
+[sp-zram] === DONE PASS=3 FAIL=0 (zram channel) ===
+PROBE_RC=0

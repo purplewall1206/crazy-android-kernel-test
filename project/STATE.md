@@ -1285,3 +1285,26 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     680857 实证）, 本次以 force-with-lease 一次性换回主线正身（零内容损失, 旧件
     留 reflog）, 此后推送均为普通快进; D27 孤儿分支形态事实废止（AOSP 真历史已在
     远端）; aosp 远端不碰。
+
+- **[2026-09-26 08:5x r09 maintainer: W-3fix3 ✓ —— swap-in 出口卫生 + 证据缺口补齐]**
+  - 提交: worktree w3fix3 commit **92edc8f27f94** → 主树 cherry-pick **bf2ed6d05794**
+    （HEAD, tag **corten-r07-w3fix3**; 1 文件 +20/−9; pick 后 mm/corten_arena.c 与
+    worktree 验证构建 cmp **字节全等**）。github corten-github 随手同步（D31）。
+  - 内容: ①8376 异步重锁 wait+killable → wait+plain folio_lock（-EINTR 死出口消灭,
+    unpublished-folio 论证入注释, do_swap_page cache 分支同形）②8404 lock_range
+    失败 out_put→out_clear（M6.T2 既有 SWAP_HAS_CACHE 孤儿窗口闭合, D30-F2）③
+    失引用 out_put 死标签折叠。无新 KUnit 锚（两形状均故障注入形, commit 正文如实
+    披露, 既有 roundtrip 锚+guest 电池承担回归）。
+  - 验证: 三套件 on×2（24/0/1+111/0/0+34/0/5, 与 W-3fix2 基线逐格一致）+off
+    （25/0/0+24/0/87+7/0/32）; checkpatch 0E/0W/0C（50 行）; =n 13 对象 RC=0 零
+    符号（主会话补跑, agent 漏项）; **guest 全套重生成且全落盘**（W-3fix2 缺口
+    闭合, 22 日志 results/r07/w3fix3/）: off 冒烟干净（uname g708c329-dirty=修复
+    件, sha256 ff20f366…5374d）→ smoke 26/26 → gate PASS=22 FAIL=1（唯一 FAIL=
+    登记 carrier 容差）+ J1 严格门 gate_pass==1/j1_hits==0/j2 27walks 零违例 →
+    S-3 电池双分支 PASS（A: 16384 页 readback+干净 swapoff; B: 提前收敛形态）→
+    swapfault/swapbulk zram+file 四通道 PASS → metis_eq ×2 checksum 自一致
+    （65073 词, 与 W-3fix 基准同值）→ JTB 2000×3×3 → pgtables==0 + dmesg 零
+    WARN/BUG。台账健康: swapins 32772/retries 0/heals 0, gup_probe_rejects 0。
+  - bzimg/r07-w3fix3/（bzImage-w3fix3-final + SHA256SUMS）+ green.txt 登记行。
+  - 边界: worktree w3fix3 内容全并入后移除; agent 留下的空 tmux vm 会话清理;
+    mva（W-4 在制 +1399 行）未触碰。下一步 = W-4 吸收（task #4）。

@@ -1,0 +1,30 @@
+=== w3fix3 guest battery item (e): swapbulk probe, file swap channel (corten=on boot) ===
+$ cmd: bash /mnt/w3fix3/w3f3-swapprobe.sh file   (driver: /home/ppw/bench/share/w3fix3/w3f3-swapprobe.sh)
+$ probe: /home/ppw/bench/share/w45/swapbulk  (MODE via LD_PRELOAD corten_mode_hook.so, evict via debugfs)
+
+--- channel setup + swap table ---
+[sp-file] share=/mnt
+[sp-file] setup_zram rc!=0 (see log)
+[sp-file] swap table (file channel):
+NAME                 TYPE SIZE USED PRIO
+/root/bench/w3f3swap file 256M   0B  200
+[sp-file] swapfault: evict wrote pid=19167 pages=2
+[sp-file] swapfault: /proc/swaps right after evict:
+NAME                 TYPE SIZE USED PRIO
+--- swapbulk section (raw stdout/stderr) ---
+[sp-file] swapbulk: evict wrote pid=19211 pages=2048
+[sp-file] swapbulk: /proc/swaps right after evict:
+NAME                 TYPE SIZE USED PRIO
+/root/bench/w3f3swap file 256M   8K  200
+[sp-file] --- swapbulk output (rc=0) ---
+corten_mode_hook: MODE on (pid 19211)
+READY pages=2048
+READBACK OK all 2048 pages
+corten_mode_hook: fork-probe OK (threads+arenas alive, child exited 42)
+[ok] swapbulk roundtrip: all 2048 pages intact (file)
+[sp-file] === DONE PASS=3 FAIL=0 (file channel) ===
+PROBE_RC=0
+--- verdicts ---
+[ok] swapbulk roundtrip: all 2048 pages intact (file)
+
+ITEM VERDICT: PASS (READBACK OK all 2048 pages -- 8MiB bulk swapout/swapin roundtrip intact)
