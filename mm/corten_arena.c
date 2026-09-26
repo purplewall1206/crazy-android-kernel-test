@@ -8368,16 +8368,22 @@ retry:
 	 * uptodate gate below sees the settled answer.  The synchronous
 	 * shape (zram) reads inline and keeps the lock held -- the
 	 * do_swap_page() sync-branch shape this whole path mirrors.
-	 * Sleeping here is the lock-free phase's own contract (the txn
-	 * is not held; the entry cannot be reused under its reference).
+	 * The plain, uninterruptible folio_lock() is deliberate: this
+	 * folio is unpublished (the direct path never adds it to the
+	 * swap cache, the slot still holds the swap entry, and it is
+	 * never LRU'd), so once folio_wait_locked() has returned nobody
+	 * can hold or take the lock and the relock cannot fail -- no
+	 * -EINTR exit may exist inside the swapcache_prepare() ..
+	 * swapcache_clear() window, where a raw return would orphan this
+	 * fault's own SWAP_HAS_CACHE mark and wedge the entry for good
+	 * (do_swap_page()'s cache branch relocks with the same plain
+	 * folio_lock()).  Sleeping here is the lock-free phase's own
+	 * contract (the txn is not held; the entry cannot be reused
+	 * under its reference).
 	 */
 	if (!(si->flags & SWP_SYNCHRONOUS_IO)) {
 		folio_wait_locked(folio);
-		if (folio_lock_killable(folio)) {
-			folio_put(folio);
-			put_swap_device(si);
-			return -EINTR;
-		}
+		folio_lock(folio);
 	}
 
 	count_vm_event(PGMAJFAULT);
@@ -8401,7 +8407,13 @@ retry:
 	ret = corten_lock_range(mm, ctx->addr, PAGE_SIZE, &txn);
 	if (ret) {
 		ret = ret == -EAGAIN ? -EAGAIN : -ENOMEM;
-		goto out_put;
+		/* need_clear_cache is true (swapcache_prepare() succeeded
+		 * above): the mark must be released here, or the entry is
+		 * wedged -- every later fault spins out its deadline on a
+		 * SWAP_HAS_CACHE no folio stands behind, and swapoff can
+		 * never drain the type.
+		 */
+		goto out_clear;
 	}
 	if (corten_query(&txn, ctx->addr, &m2)) {
 		ret = -EAGAIN;
@@ -8615,7 +8627,6 @@ out_unlock_txn:
 out_clear:
 	if (need_clear_cache)
 		swapcache_clear(si, entry, 1);
-out_put:
 	folio_unlock(folio);
 	folio_put(folio);
 	put_swap_device(si);
