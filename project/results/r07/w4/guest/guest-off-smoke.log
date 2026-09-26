@@ -1,0 +1,168 @@
+=== W-4 guest off-smoke (corten=off boot) ===
+$ date (host): 2026年 09月 26日 星期六 14:38:31 CST
+$ bzImage: /home/ppw/linux-6.18-mva/arch/x86/boot/bzImage sha256 814a7040eabfa19fe967bef18a5fe2b047fc905b8fcead50e704e57390e7ea5b
+
+$ /home/ppw/vm/gssh 'echo ok'
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+ok
+
+$ /home/ppw/vm/gssh 'whoami; uname -r; uptime; cat /proc/cmdline'
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+root
+6.18.32-gbf2ed6d05794-dirty
+ 06:38:29 up 1 min,  1 user,  load average: 0.06, 0.03, 0.01
+console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=off mitigations=off kunit.enable=0
+
+$ 9p mount:
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+/mnt/hostshare/w45/sweep-live
+
+$ /home/ppw/vm/gssh 'dmesg | grep -i corten'   (raw)
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+[    0.000000] Command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=off mitigations=off kunit.enable=0
+[    0.530537] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=off mitigations=off kunit.enable=0
+
+$ /home/ppw/vm/gssh 'dmesg | grep -i corten | grep -v "Command line\|Kernel command line" | wc -l'   (real corten subsystem output)
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+0
+
+$ prctl(PR_CORTEN_MODE, ENTER) under corten=off (expect EOPNOTSUPP, probe refuses to run):
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+--- arena_stats before ---
+enabled             0
+ptdescs             0
+meta_arrays         0
+meta_bytes          0
+desc_alloc_fail     0
+meta_alloc_fail     0
+free_untracked      0
+reinstalled         0
+legacy_drift        0
+arenas              0
+drain_timeout       0
+auto_mmaps          0
+auto_attach_fail    0
+auto_fallbacks      0
+auto_exhausted      0
+mprotect_routes     0
+madvise_free_txns   0
+madvise_hints       0
+mremap_routes       0
+mremap_rejects      0
+munmap_releases     0
+fork_demotes        0
+fork_faithful       0
+fork_skips          0
+rearm_recovered     0
+rearm_failed        0
+eagain_retries      0
+eagain_leaked       0
+mremap_release_fail 0
+mmap_punches        0
+mmap_punch_rejects  0
+truncate_routes     0
+zap_single_refuses  0
+imap_stale_refuses  0
+implant_drops       0
+ttu_routes          0
+file_mmaps          0
+file_read_faults    0
+file_cow_copies     0
+file_fork_mirrors   0
+seg_claims          0
+mag_skips           0
+va_recycles         0
+pool_parks          0
+pool_hits           0
+pool_misses         0
+pool_over           0
+pool_ejects         0
+park_unmap_fails    0
+auto_vgate          0
+j1_probes           0
+j1_hits             0
+fault_fallback_win  0
+uffd_window_reject  0
+gup_window_miss     0
+remote_win_short    0
+j2_walks            0
+j2_violations       0
+j2_stale            0
+j2_first_violation  0
+msync_window_skips  0
+mincore_routes      0
+madvise_parked      0
+move_pages_window   0
+gup_probes          0
+gup_probe_rejects   0
+maps_window_rows    0
+brk_grow            0
+brk_shrink          0
+brk_noop            0
+brk_reject          0
+heap_lookups        0
+brk_region_adopts   0
+brk_region_grows    0
+brk_region_shrinks  0
+brk_legacy          3338
+sweep_anon_adopts   0
+sweep_file_adopts   0
+sweep_skip_stack    0
+sweep_skip_special  0
+sweep_skip_shared   0
+sweep_skip_window   0
+sweep_skip_other    0
+sweep_pages_resident 0
+declare_notes       0
+zap_pinned          0
+reap_skips          0
+rmap_rejects        0
+swapped_out         0
+swapins             0
+swapin_retries      0
+swapin_heals        0
+zap_swap_frees      0
+driver_swapped      0
+driver_kept         0
+exit_upper_pmds     0
+exit_upper_puds     0
+exit_upper_p4ds     0
+unuse_blind_mms     0
+shrink_scans        0
+aging_passes        0
+shrink_swapped      0
+shrink_skipped      0
+evict_busy          0
+resident_pages      0
+swapped_pages       0
+swapout_rate        0
+swapin_rate         0
+--- end arena_stats before ---
+--- maps before ---
+00400000-00401000 r--p 00000000 00:23 31765426                           /mnt/hostshare/w45/sweep-live
+00401000-004ba000 r-xp 00001000 00:23 31765426                           /mnt/hostshare/w45/sweep-live
+004ba000-004e5000 r--p 000ba000 00:23 31765426                           /mnt/hostshare/w45/sweep-live
+004e6000-004ea000 r--p 000e5000 00:23 31765426                           /mnt/hostshare/w45/sweep-live
+004ea000-004ed000 rw-p 000e9000 00:23 31765426                           /mnt/hostshare/w45/sweep-live
+004ed000-004f3000 rw-p 00000000 00:00 0 
+0d49d000-0d4bf000 rw-p 00000000 00:00 0                                  [heap]
+1000000000-1000800000 rw-p 00000000 00:00 0 
+2000000000-2000200000 rw-p 00000000 00:00 0 
+3000000000-3000040000 rw-p 00000000 00:00 0 
+7f13504cd000-7f13504dd000 r--p 00000000 00:00 0                          [vvar]
+7f13504dd000-7f13504e5000 r--p 00000000 00:00 0                          [vvar_vclock]
+7f13504e5000-7f13504e9000 r-xp 00000000 00:00 0                          [vdso]
+7ffc6f8e2000-7ffc6f903000 rw-p 00000000 00:00 0                          [stack]
+ffffffffff600000-ffffffffff604000 --xp 00000000 00:00 0                  [vsyscall]
+--- end maps before ---
+pre-ENTER: win1 maps=1 win2 maps=1 key maps=1
+ENTER...
+prctl ENTER: Operation not supported
+rc=1
+
+$ /home/ppw/vm/gssh 'dmesg | grep -cE "WARNING|BUG|Oops"'  (substring check incl. false positives)
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+0
+
+$ /home/ppw/vm/gssh 'dmesg | grep -E "WARNING|BUG|Oops"'
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.

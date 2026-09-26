@@ -1308,3 +1308,51 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
   - bzimg/r07-w3fix3/（bzImage-w3fix3-final + SHA256SUMS）+ green.txt 登记行。
   - 边界: worktree w3fix3 内容全并入后移除; agent 留下的空 tmux vm 会话清理;
     mva（W-4 在制 +1399 行）未触碰。下一步 = W-4 吸收（task #4）。
+
+- **[2026-09-26 20:2x~09-27 01:3x r09 W-4 吸收与收口: ★ MV2 W-4 ✓ —— 入场扫入落地（第六片, 含 B1-B5 修复全史）]**
+  - **吸收与重建**: mva worktree 在制 W-4 草稿（+1399）发现基座陈旧（W-3fix 时代文件,
+    缺 W-3fix2 全部三修复——审计教训: 只读 diff 前 150 行即断言"swap_in 零差异"是错误,
+    全量核验后用「W-3fix 基座提取纯 W-4 patch → git apply 到主树正身」重建, swap_in 与
+    主树字节全等）。dev→review 轮 1-3 全程: 草稿骨架对但未收口（宿主首跑 26/116 红, 6 类
+    修复）→ review r1 FAIL(B1 原子上下文 GFP_KERNEL/B2 VM_ACCOUNT committed 泄漏/B3
+    DONTCOPY/WIPEONFORK 收编反转 fork 语义)+A-E 偏差五项采信（enter_sweep 拆分/无
+    anon_vma_put/非排他 fail-open/LOCKED skip/第 4 文件）→ 修复+DAS 首开暴露 B4（W-2
+    时代 fork_copy_ptes 在 RCU 段内分配子 PT+pinned CoW folio——每 MODE fork 必睡, m6t34
+    "DAS 首开翻旧账"模式重现）→ review r2 PASS+N1(pinned 臂 folio_get scratch 引用漏
+    put)/N2(classify 缺 uffd ctx 门) 一行修 → guest 门首跑 FAIL=10+sweep-live fork 腿
+    segfault → B5 双根因: ①fault.c 门只接 user_mode——glibc rseq lazy-clear（fork 后首
+    个内核态写, COW 保缺页）绕门 find_vma 落空 → 双进程静默 SIGSEGV(SI_KERNEL); 修复=门
+    摘 user_mode+内核臂 bad_area_nosemaphore(extable EFAULT) ②V-D exit walk 混编帧整帧
+    跳过 → resident slot 泄漏（metis "Bad page cache" ×2+rss BUG ×8 家族）; 修复=
+    owned-mixed 臂事务 zap arena 自身域、PT 页留 free_pgtables。
+  - **D32 (2026-09-27 主会话裁决·EXIT 语义)**: swept mm 的树为空, EXIT-while-alive 无
+    VMA 可回（EXIT 会拆掉进程自身 TLS/heap——guest smoke 死于 ip 0x44aece 的 TLS 拆除
+    后 canary 读）→ **EXIT 拒绝**: 任一 live arena 带 CORTEN_RF_ADOPTED（rflags bit5,
+    随 release/park/fork 重注册生灭="still swept"而非"ever swept", punch 掉收编段门重
+    开）→ -EBUSY+计数器 exit_swept_refuses+debugfs 行; MODE 对 swept 进程粘性至死亡
+    （exit_mmap 全量收尾）; fork 子侧继承位=正确（a fortiori, review r3 独立复核同意）;
+    ARENA 级 RELEASE 无需守卫（逃生门语义所依）。de-sweep 逆迁移= MV3 级工作。用户可见
+    prctl 契约变更, commit/REPORT 披露。
+  - **smoke 契约件 v2**: 源码找到（share/t0dod/mode-smoke/, maxdepth 教训二度）, 按新
+    契约改写 step-7（双形态: 自进场 EXIT=0+GET=0 / swept -EBUSY+GET=1+stock 存活见证）,
+    四副本同步 sha256=37df16d7…, guest 26/26 双形态全绿。case 数保持 26（gate 硬编码兼
+    容）。mva1_probe 全绿（簇 A 级联全消）。
+  - **入库**: worktree mv-a0 commit **65ecfc3e1702** → 主树 --no-ff merge **64593a2b621d**
+    （HEAD, tag **corten-r07-w4**; 5 文件 +2339/−126; 五文件 cmp 字节全等）。github
+    corten-github 随手同步（D31）。
+  - **验证终读数**: =y #282 构建零新增警告; KUnit on×2（24/0/1+**121/0/0**+34/0/5）+
+    off（25/0/0+26/0/95+7/0/32, skip 对账精确）+ 十锚电池（fork_mirror 走真 fork_commit
+    ——手工建模 dup_mmap 的夹具正是 fork 缺陷漏网原因）; checkpatch --strict 0E/0W/0C
+    （2593 行）; =n 13 对象零符号; **guest 门 PASS=22 FAIL=1**（唯一 FAIL=登记 carrier
+    容差）+ J1 严格门 gate_pass==1/j1_hits==0 + metis_eq ×2 checksum 同基准 + sweep-live
+    PASS + Bad page cache/rss BUG 家族 2→0/8→0 + dmesg corten-quiet + pgtables 残值 1 笔
+    （混编帧 PT 面=登记 W-5 靶面）。bzimg/r07-w4（#282 sha256=16928ba0…）+ green.txt。
+    证据 results/r07/w4/（fix5/fix6/fix7 + guest-fix5/6/7 全档）。
+  - **遗留登记**: ①混编帧 PT 页 pgtables_bytes 残值（1 笔/电池）→ W-5 靶面（与 W-3fix
+    的 exit 上层残差同族）; ②两锚 mmput-action 卫生（fork_mirror/file_exit 裸 mm_alloc
+    断言中止即漏 mm）→ W-5 顺手; ③j2_stale=3（smoke implant punch 的 kfree_rcu 退休窗
+    瞬态, 静默期验证零新增, gate_pass 不受影响）→ 观察; ④KUnit 合成 mm PT 泄漏（C2 片
+    =task #6, W-6 前）; ⑤make 树内串行化约定（本片三次并发 make 撞车）→ 流程改进。
+  - **过程教训**: agent 两次 429 殉职（配额窗 5h）+主会话接管先例三度应用（r07-B.2/
+    W-3fix3/本轮）; 多 agent 并发写同一 worktree 必须串行化; smoke 源码 maxdepth 漏找
+    二度发生。

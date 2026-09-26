@@ -1,0 +1,54 @@
+=== W-4 guest step 2: run_mode_smoke alone on a fresh corten=on boot ===
+$ date (host): 2026年 09月 26日 星期六 14:49:47 CST
+$ boot: cmdline corten=on, uname 6.18.32-gbf2ed6d05794-dirty
+$ pre-run dmesg pgtables_bytes BUG count: 0
+
+$ cp t1c contract binary + driver to guest-local /tmp/smoke2 (9p cwd wedges):
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+b92e768a189befdcd9bdc3c409c22ef421bcbec07b775e7376171e30f1746321  /tmp/smoke2/corten_mode_smoke
+
+$ cd /tmp/smoke2 && bash ./run_mode_smoke.sh:
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+[smoke] debugfs arenas before: 0
+PASS mode-enter
+PASS mode-get-1
+PASS mmap-anon
+PASS mmap-anon-in-window
+PASS mmap-big
+PASS mmap-big-in-window
+PASS mmap-big-next-arena
+PASS mmap-shared-stays-legacy
+PASS mmap-populate-stays-legacy
+PASS mmap-stack-routes-to-window
+PASS munmap-release
+PASS released-arena-unmapped
+PASS released-arena-gone
+PASS mmap-fixed-at-window-addr
+PASS mmap-fixed-rw
+PASS fork
+PASS waitpid
+FAIL fork-child-checks (line 180 errno=0)
+PASS parent-content-after-fork
+PASS munmap-big
+PASS munmap-shared
+PASS munmap-pop
+PASS munmap-stack
+PASS munmap-fixed
+./run_mode_smoke.sh: line 22:   458 Segmentation fault      ./corten_mode_smoke 2>&1
+[smoke] smoke binary rc=139
+[smoke] debugfs arenas after: 0
+[smoke] SMOKE-DRIVER FAIL (1)
+SMOKE_RC=1
+
+$ post dmesg (corten/BUG):
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+[    0.489830] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on mitigations=off kunit.enable=0
+[    0.494709] corten: requested on, activating at initcall time
+[    2.643670] corten: page descriptors enabled
+[    2.817903] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[    6.952729] systemd-debug-g (112) used greatest stack depth: 12568 bytes left
+[    7.982092] systemd[1]: Mounting sys-kernel-debug.mount - /sys/kernel/debug...
+[    8.419259] systemd[1]: Mounted sys-kernel-debug.mount - /sys/kernel/debug.
+[   34.689330] corten_mode_smo[458]: segfault at 298e23e8 ip 000000000044aece sp 00007ffd51737bc0 error 4 in corten_mode_smoke[4aece,401000+98000] likely on CPU 4 (core 4, socket 0)
+[   34.726684] BUG: Bad rss-counter state mm:00000000d7b8ae31 type:MM_SHMEMPAGES val:1 Comm:bash Pid:462
+[   34.726703] BUG: non-zero pgtables_bytes on freeing mm: 4096

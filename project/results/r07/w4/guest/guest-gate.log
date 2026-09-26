@@ -1,0 +1,40 @@
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+[mva0] share=/mnt/hostshare
+[mva0] arenas header:             mm              shadow [start,end)                prot cls  rflg pcs status               rfile     poff
+[ok] arenas header has cls/rflg/pcs
+[smoke] SMOKE-DRIVER FAIL (1)
+[smoke] debugfs arenas after: 0
+[smoke] SMOKE-DRIVER FAIL (1)
+[FAIL] run_mode_smoke rc=1
+[FAIL] smoke PASS=23 FAIL=1
+[ok] JThreadBench 2000x3 x3 rc=0
+[mva0] J1 snapshot before: probes=1 hits=1 carriers=0 vgate=0
+[ok] metis_eq run1 rc=0
+[ok] metis_eq MODE marker
+[ok] metis_eq run2 rc=0
+[ok] metis_eq checksum self-consistent ("distinct_words":65073,"checksum":"2d383eeed4ceb73b")
+[ok] live region rows observed (5)
+            mm              shadow [start,end)                prot cls  rflg pcs status               rfile     poff
+ffff9194030b2d80 0000000000000000 [100000000000,100000800000)           09 file 0000 1   active ffff919405a92500 00000000
+ffff9194030b2d80 0000000000000000 [100000800000,100000a00000)           0b anon 0000 1   active 0000000000000000 00000000
+ffff9194030b2d80 0000000000000000 [100000800000,100000a00000)           0b rsvd 0000 1   active 0000000000000000 00000000
+ffff9194030b2d80 0000000000000000 [100000a00000,100001400000)           08 anon 0000 1   active 0000000000000000 00000000
+[mva0] J1 snapshot after: probes=1 hits=1 carriers=1 vgate=0
+[ok] J1 prelude: zero window finds across pure MODE workload (hits 1->1)
+[ok] J1 probes observable (probes 1->1)
+[FAIL] carrier counter did not move (0 -> 0)
+[ok] auto_vgate line present (vgate=0)
+[ok] dmesg corten-quiet
+./mva2-guest.sh: line 127: 18695 Segmentation fault      LD_PRELOAD="$HOOK" CORTEN_MODE_HOOK_STRICT=1 ./mva1_probe > "$OUT/probe.out" 2>&1
+[FAIL] mva1_probe rc=139
+[FAIL] S-1 MAPERR not observed
+[FAIL] S-4 maps check failed
+[FAIL] FRESH reactivation failed
+[FAIL] CHUNK drop-and-revive failed
+[FAIL] punch+fork MemFree leak
+[FAIL] punch+fork child content check missing
+[mva0] pool counters: parks=7 (was ) hits=3 park_unmap_fails=0
+[ok] pool churn observed (parks=7 hits=3)
+[ok] park_unmap_fails==0
+[ok] no rss-counter regressions during gate
+[mva0] === DONE PASS=14 FAIL=10 ===
