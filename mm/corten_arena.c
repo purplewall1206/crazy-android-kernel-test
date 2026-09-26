@@ -403,6 +403,11 @@ static atomic_long_t corten_nr_implant_drops;
 static atomic_long_t corten_nr_exit_upper_pmds;
 static atomic_long_t corten_nr_exit_upper_puds;
 static atomic_long_t corten_nr_exit_upper_p4ds;
+/* MV2 W-4 (B5/D32): explicit EXIT attempts on a swept mm -- the refusals
+ * (see corten_arena_mode_exit()); the disclosure side of the sticky-MODE
+ * contract.
+ */
+static atomic_long_t corten_nr_exit_swept_refuses;
 /* V-D (S-3 disclosure) / W1.f flip: the ledger kept its name and its
  * debugfs line for the historical record, but the blind spot itself is
  * closed -- unuse_mm() sweeps the window swap entries through the
@@ -497,6 +502,23 @@ static atomic_long_t corten_nr_brk_region_adopts;
 static atomic_long_t corten_nr_brk_region_grows;
 static atomic_long_t corten_nr_brk_region_shrinks;
 static atomic_long_t corten_nr_brk_legacy;
+
+/* MV2 W-4 (the entry sweep): resident-legacy -> region migration
+ * accounting.  The two adopt counters name the arms (anonymous and
+ * private-file VMA -> region); the five skip buckets are the structural
+ * legacy survivors (the wl disclosure's sweep-side twin), where
+ * "other" also collects the fail-open abandons (frame-sharing
+ * neighbour, unfit PTE population, declare failure); resident counts
+ * the present pages the sweep recorded metadata for.
+ */
+static atomic_long_t corten_nr_sweep_anon_adopts;
+static atomic_long_t corten_nr_sweep_file_adopts;
+static atomic_long_t corten_nr_sweep_skip_stack;
+static atomic_long_t corten_nr_sweep_skip_special;
+static atomic_long_t corten_nr_sweep_skip_shared;
+static atomic_long_t corten_nr_sweep_skip_window;
+static atomic_long_t corten_nr_sweep_skip_other;
+static atomic_long_t corten_nr_sweep_pages_resident;
 
 /* V-E whitelist ledger (spec sec 1.3 J2, the complete form): walks
  * executed, window-domain classification violations (must stay 0 --
@@ -1815,7 +1837,8 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 				       struct corten_mm_state *state,
 				       unsigned long addr, unsigned long len,
 				       u8 perm, struct file *file,
-				       unsigned long pgoff, bool novma)
+				       unsigned long pgoff, bool novma,
+				       bool adopt)
 {
 	unsigned long frame, first_frame, last_frame;
 	struct corten_arena *arena;
@@ -1886,11 +1909,17 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 
 	/* [C1] the range must be empty (see the checker's comment) -- the
 	 * cheap safety net both arms share: a slot that carries content
-	 * must never be declared over.
+	 * must never be declared over.  MV2 W-4's sweep arm passes @adopt
+	 * instead: the range IS the content being adopted, and the sweep
+	 * backfills every present PTE's metadata before it unfreezes the
+	 * arena (the same invariant, upheld by the caller's two-phase
+	 * transaction instead of by emptiness).
 	 */
-	ret = corten_arena_check_empty_locked(mm, addr, addr + len);
-	if (ret)
-		goto out_free_arena;
+	if (!adopt) {
+		ret = corten_arena_check_empty_locked(mm, addr, addr + len);
+		if (ret)
+			goto out_free_arena;
+	}
 
 	if (novma) {
 		/* V-A.2a: the auto takeover needs no VMA.  The validation
@@ -1979,6 +2008,20 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 		if (ret)
 			goto out_unwind;
 	}
+
+	/* MV2 W-4: an adopt declaration publishes *frozen*.  Between the
+	 * xarray stores below and the sweep's metadata backfill the slots
+	 * are still INVALID while hardware PTEs are present -- a faulting
+	 * sibling thread resolving this arena through the pre-lock fast
+	 * hook must not dispatch on that half-adopted pair.  The frozen
+	 * bit makes lookup_get() refuse (the fork freeze-window contract),
+	 * so the fault falls back to the legacy VMA, which is still fully
+	 * in place and correct.  The sweep clears the bit once every slot
+	 * is backfilled.  Set under this ctl_lock hold, before any frame
+	 * becomes visible, so no window exists where the arena serves.
+	 */
+	if (adopt)
+		WRITE_ONCE(arena->frozen, true);
 
 	first_frame = addr >> PMD_SHIFT;
 	last_frame = (addr + len - 1) >> PMD_SHIFT;
@@ -2084,7 +2127,7 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
 	 */
 	mmap_write_lock(mm);
 	ret = corten_arena_declare_locked(mm, state, addr, len, 0, NULL, 0,
-					  false);
+					  false, false);
 	mmap_write_unlock(mm);
 
 	return ret;
@@ -2926,6 +2969,27 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_brk_region_shrinks));
 	seq_printf(m, "brk_legacy          %ld\n",
 		   atomic_long_read(&corten_nr_brk_legacy));
+	/* MV2 W-4: the entry sweep -- the two adopt arms, the five skip
+	 * buckets (the structural survivors the wl walk will keep
+	 * classifying) and the resident pages the sweep recorded metadata
+	 * for.
+	 */
+	seq_printf(m, "sweep_anon_adopts   %ld\n",
+		   atomic_long_read(&corten_nr_sweep_anon_adopts));
+	seq_printf(m, "sweep_file_adopts   %ld\n",
+		   atomic_long_read(&corten_nr_sweep_file_adopts));
+	seq_printf(m, "sweep_skip_stack    %ld\n",
+		   atomic_long_read(&corten_nr_sweep_skip_stack));
+	seq_printf(m, "sweep_skip_special  %ld\n",
+		   atomic_long_read(&corten_nr_sweep_skip_special));
+	seq_printf(m, "sweep_skip_shared   %ld\n",
+		   atomic_long_read(&corten_nr_sweep_skip_shared));
+	seq_printf(m, "sweep_skip_window   %ld\n",
+		   atomic_long_read(&corten_nr_sweep_skip_window));
+	seq_printf(m, "sweep_skip_other    %ld\n",
+		   atomic_long_read(&corten_nr_sweep_skip_other));
+	seq_printf(m, "sweep_pages_resident %ld\n",
+		   atomic_long_read(&corten_nr_sweep_pages_resident));
 	seq_printf(m, "declare_notes       %ld\n",
 		   atomic_long_read(&corten_nr_declare_notes));
 	seq_printf(m, "zap_pinned          %ld\n",
@@ -2960,6 +3024,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_exit_upper_puds));
 	seq_printf(m, "exit_upper_p4ds     %ld\n",
 		   atomic_long_read(&corten_nr_exit_upper_p4ds));
+	seq_printf(m, "exit_swept_refuses  %ld\n",
+		   atomic_long_read(&corten_nr_exit_swept_refuses));
 	/* V-D (S-3 disclosure): swapoff unuse visits blind to windows. */
 	/* V-D S-3 disclosure, W1.f residual shape: expected zero (the
 	 * registry arm sweeps the window entries; only a hard arm
@@ -3435,6 +3501,33 @@ long corten_arena_test_brk_region(int which)
 	}
 }
 
+/* MV2 W-4: the entry sweep's counters (KUnit anchors, the same shape
+ * as the brk family above).
+ */
+long corten_arena_test_sweep(int which)
+{
+	switch (which) {
+	case 0:
+		return atomic_long_read(&corten_nr_sweep_anon_adopts);
+	case 1:
+		return atomic_long_read(&corten_nr_sweep_file_adopts);
+	case 2:
+		return atomic_long_read(&corten_nr_sweep_skip_stack);
+	case 3:
+		return atomic_long_read(&corten_nr_sweep_skip_special);
+	case 4:
+		return atomic_long_read(&corten_nr_sweep_skip_shared);
+	case 5:
+		return atomic_long_read(&corten_nr_sweep_skip_window);
+	case 6:
+		return atomic_long_read(&corten_nr_sweep_skip_other);
+	case 7:
+		return atomic_long_read(&corten_nr_sweep_pages_resident);
+	default:
+		return 0;
+	}
+}
+
 long corten_arena_test_wl_walks(void)
 {
 	return atomic_long_read(&corten_nr_wl_walks);
@@ -3634,24 +3727,64 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 
 		for (win = arena->start & PMD_MASK; win < arena->end;
 		     win += PMD_SIZE) {
-			bool walkable;
+			bool owned = xa_load(&state->arenas,
+					     win >> PMD_SHIFT) == arena;
 
 			/* A punched frame is no longer arena property
 			 * (a legacy VMA lives in the hole); the tree
 			 * test catches its implant anyway.
 			 */
-			if (xa_load(&state->arenas,
-				    win >> PMD_SHIFT) != arena)
-				walkable = false;
-			else
-				walkable = corten_arena_exit_span_clear(mm,
-									win,
-									win + PMD_SIZE);
+			if (!owned)
+				goto close_run;
 
-			if (walkable && !have_run) {
+			/* An owned frame that carries a tree VMA (the
+			 * sweep's frame-sharing neighbour: per-VMA
+			 * adoption leaves the refused co-tenant legacy
+			 * -- an exec-mapped text segment refusing
+			 * corten_file_may() next to adopted data
+			 * segments of the same binary is the guest's
+			 * every-binary shape) is neither exclusive nor
+			 * freeable: its PT page is legacy property (the
+			 * legacy free_pgtables() retires it under the
+			 * co-tenant VMA), so the walk zaps the arena's
+			 * own byte range and LEAVES the PT page.
+			 * Skipping the frame wholesale (the pre-fix
+			 * shape) leaked every resident slot's folio
+			 * mapcount and rss to the legacy pass, which
+			 * cannot see a VMA-less PTE.
+			 */
+			if (!corten_arena_exit_span_clear(mm, win,
+							  win + PMD_SIZE)) {
+				unsigned long mix_start = max(win,
+							      arena->start);
+				unsigned long mix_end = min(win + PMD_SIZE,
+							    arena->end);
+
+				if (have_run) {
+					have_run = false;
+					corten_arena_exit_run(mm, arena, tlb,
+							      run_start, win,
+							      win);
+				}
+				if (corten_arena_unmap_chunk_flags(mm, arena,
+								   mix_start,
+								   mix_end -
+								   mix_start,
+								   0, tlb))
+					WARN_ONCE(1,
+						  "corten: exit walk mixed-frame zap failed at [%lx,%lx): PT residue left to the leak ledger\n",
+						  mix_start, mix_end);
+				continue;
+			}
+
+			if (!have_run) {
 				have_run = true;
 				run_start = win;
-			} else if (!walkable && have_run) {
+			}
+			continue;
+
+close_run:
+			if (have_run) {
 				have_run = false;
 				corten_arena_exit_run(mm, arena, tlb,
 						      run_start, win, win);
@@ -5724,7 +5857,7 @@ int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
 
 	ret = corten_arena_declare_locked(mm, state, addr, len,
 					  corten_arena_perm_from_prot(prot),
-					  NULL, 0, true);
+					  NULL, 0, true, false);
 	if (ret) {
 		/* T0a counted attach failures in the per-mm fallback
 		 * bucket; T0b adds the named aggregates on top.
@@ -5770,7 +5903,7 @@ int corten_arena_file_attach(struct mm_struct *mm, unsigned long addr,
 
 	ret = corten_arena_declare_locked(mm, state, addr, len,
 					  corten_arena_perm_from_prot(prot),
-					  file, pgoff, true);
+					  file, pgoff, true, false);
 	if (ret) {
 		corten_arena_auto_fallback(state);
 		atomic_long_inc(&corten_nr_auto_attach_fails);
@@ -5780,6 +5913,853 @@ int corten_arena_file_attach(struct mm_struct *mm, unsigned long addr,
 	}
 
 	return ret;
+}
+
+/* ------------------------------------------------------------------ *
+ * MV2 W-4: the entry sweep -- resident legacy VMA -> region migration
+ * (one-shot transaction machine, w3-dev-report.md sec 4.2).
+ *
+ * ENTER used to leave the pre-existing VMAs alone (the D28 judgement
+ * only covered post-entry producers).  W-4 closes the stock: every
+ * VMA the process brought into MODE is judged once, under the same
+ * mmap_write window EXIT uses, and either migrated (private anonymous
+ * -> an anon region with its resident pages' metadata backfilled and
+ * their folios de-anchored to the W1.a novma family; private file ->
+ * a V-B FILE region, pagecache anchor untouched) or structurally
+ * skipped with a count (the wl buckets' sweep-side twin).
+ *
+ * Two-phase transaction per VMA (the design ruling): every failable
+ * step (pick walk + metadata-array ensure, maple-tree prealloc,
+ * declare_locked itself) runs before anything irreversible; the
+ * surgery + the tree removal after it cannot fail.  An adopt
+ * declaration publishes frozen (see declare_locked), so the half-
+ * backfilled window is invisible to the fault fast hook, and the
+ * sweep unfreezes only when every slot is recorded.
+ *
+ * Locking: mmap_write held throughout (the caller's window); the
+ * folio surgery runs with every corten/ptl lock dropped, holding only
+ * the folio lock -- the W1.e1 picks shape, legal because the
+ * mmap_write plus the vma_start_write() taken before the pick walk
+ * exclude every PTE producer (a per-VMA-lock fault fails its read
+ * lock and blocks on mmap_read; reclaim-side ttu writers can only
+ * remove or convert PTEs, which the surgery's re-verification
+ * re-classifies).
+ * ------------------------------------------------------------------
+ */
+
+/* One (address, folio) pick of the anon surgery: the reference is the
+ * pick's own (folio_get under ptl), consumed by the surgery.
+ */
+struct corten_sweep_pick {
+	unsigned long addr;
+	struct folio *folio;
+	struct list_head link;
+};
+
+/* The non-present PTE families the sweep can adopt: a plain swap
+ * entry is backfillable (corten_swap_replay); the marker families
+ * (migration, hwpoison, uffd-wp, device private/exclusive) belong to
+ * in-flight legacy writers whose semantics the region world does not
+ * model -- their VMA stays legacy.  An out-of-range type refuses too:
+ * the payload would be replayed against a swap device that does not
+ * exist and its teardown's swap_free() would splat.
+ */
+static bool corten_sweep_swp_ok(swp_entry_t entry)
+{
+	return swp_type(entry) < MAX_SWAPFILES &&
+	       !is_migration_entry(entry) &&
+	       !is_hwpoison_entry(entry) &&
+	       !is_pte_marker_entry(entry) &&
+	       !is_pfn_swap_entry(entry);
+}
+
+/* Does this (tracked-or-not) window hold any present translation?
+ * Used by the untracked-window refusal: adopting a window whose PTEs
+ * exist but whose metadata cannot be ensured would leak those pages
+ * (no tree VMA, no metadata -- nothing would ever zap them).
+ */
+static int corten_sweep_window_has_ptes(struct mm_struct *mm,
+					pmd_t *pmdp,
+					unsigned long addr,
+					unsigned long win_end)
+{
+	unsigned long a;
+	int ret = 0;
+
+	for (a = addr; a < win_end && !ret; a += PAGE_SIZE) {
+		pte_t *ptep, cur;
+		spinlock_t *ptl; /* read-only peek: no corten lock held */
+
+		ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
+		if (!ptep)
+			continue;
+		cur = ptep_get(ptep);
+		ret = !pte_none(cur);
+		pte_unmap_unlock(ptep, ptl);
+	}
+
+	return ret;
+}
+
+/*
+ * Phase 1 over one 2M window: collect the present anonymous folios as
+ * picks and vet the whole PTE population for the shapes the surgery
+ * cannot take (a foreign or KSM or large folio, a marker entry).
+ * Also ensures the window's metadata array here, while failure is
+ * still cheap, so the post-publication surgery cannot fail.
+ *
+ * Return: 0 = walked, 1 = VMA unfit (the caller abandons the VMA),
+ * -errno never (lock trouble is reported as 1 -- fail-open).
+ */
+static int corten_sweep_pick_window(struct mm_struct *mm,
+				    unsigned long addr,
+				     unsigned long win_end,
+				     struct list_head *picks,
+				     unsigned long *resident)
+{
+	struct corten_txn txn;
+	pmd_t *pmdp;
+	unsigned long a;
+	int tries = 0;
+	int ret;
+
+	for (;;) {
+		ret = corten_lock_range(mm, addr, win_end - addr, &txn);
+		if (ret != -EAGAIN || ++tries >= 2)
+			break;
+	}
+	/* An untracked window (no descriptor, e.g. the PT page predates a
+	 * corten=off->on flip) or a hole is skipped ONLY when it holds no
+	 * present PTE -- an untracked window with resident content is not
+	 * migratable (its metadata cannot be ensured), and adopting it
+	 * would leak the pages, so the VMA is abandoned.  Persistent
+	 * transitions (-ENOMEM) abandon likewise: fail-open, the VMA
+	 * keeps its legacy life.
+	 */
+	if (ret == -ENOENT || ret == -EOPNOTSUPP) {
+		pmdp = corten_arena_pmd(mm, addr);
+		if (!pmdp || !pmd_present(READ_ONCE(*pmdp)))
+			return 0;
+		if (pmd_leaf(READ_ONCE(*pmdp)))
+			return 1;
+		return corten_sweep_window_has_ptes(mm, pmdp, addr, win_end);
+	}
+	if (ret)
+		return 1;
+
+	/* The surgery phase must be infallible: the metadata array is
+	 * ensured now, under the covering write lock (GFP_NOWAIT inside
+	 * the lock -- a failure abandons this VMA while nothing is
+	 * published yet).
+	 */
+	if (corten_meta_ensure_locked(txn.covering)) {
+		corten_unlock(&txn);
+		return 1;
+	}
+
+	pmdp = corten_arena_pmd(mm, addr);
+	if (!pmdp || !pmd_present(READ_ONCE(*pmdp))) {
+		corten_unlock(&txn);
+		return 0;
+	}
+	if (pmd_leaf(READ_ONCE(*pmdp))) {
+		/* THP leaf: the novma rmap wrappers are order-0 only. */
+		corten_unlock(&txn);
+		return 1;
+	}
+
+	for (a = addr; a < win_end; a += PAGE_SIZE) {
+		struct corten_sweep_pick *p;
+		struct folio *folio;
+		pte_t *ptep, cur;
+		spinlock_t *ptl; /* the pick's ptl; folio_get under it */
+
+		ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
+		if (!ptep)
+			continue;
+		cur = ptep_get(ptep);
+		if (!pte_present(cur) || pte_special(cur)) {
+			/* none / zero page / swap-or-marker entries carry
+			 * no folio reference; the swap families are vetted
+			 * by the completion walk's classifier below.
+			 */
+			if (!pte_none(cur) && is_swap_pte(cur) &&
+			    !corten_sweep_swp_ok(pte_to_swp_entry(cur))) {
+				pte_unmap_unlock(ptep, ptl);
+				corten_unlock(&txn);
+				return 1;
+			}
+			pte_unmap_unlock(ptep, ptl);
+			continue;
+		}
+
+		folio = page_folio(pte_page(cur));
+		if (!folio_test_anon(folio) || folio_test_ksm(folio) ||
+		    folio_nr_pages(folio) != 1) {
+			/* A file page in an anon VMA, a KSM merge or an
+			 * mTHP large folio: anchored shapes the novma
+			 * surgery cannot take in place.
+			 */
+			pte_unmap_unlock(ptep, ptl);
+			corten_unlock(&txn);
+			return 1;
+		}
+
+		/* The surgery's de-anchor needs the folio exclusively
+		 * ours: a fork sibling or a GUP pin keeps rmap-visible
+		 * mappings the novma family cannot own, and an mlocked
+		 * page's PG_mlocked is a munlock-shaped release the
+		 * metadata teardown does not model (freeing one trips
+		 * PAGE_FLAGS_CHECK_AT_FREE).  mapcount under the ptl is
+		 * the R-B read; a non-exclusive shape abandons the VMA
+		 * here, where failure is still free, so the surgery
+		 * itself stays a single arm.
+		 */
+		if (folio_mapcount(folio) != 1 ||
+		    !PageAnonExclusive(&folio->page) ||
+		    folio_maybe_dma_pinned(folio) ||
+		    folio_test_mlocked(folio)) {
+			pte_unmap_unlock(ptep, ptl);
+			corten_unlock(&txn);
+			return 1;
+		}
+
+		folio_get(folio);
+		pte_unmap_unlock(ptep, ptl);
+
+		/* GFP_NOWAIT: the covering desc write lock is still held
+		 * here (write_lock_bh) -- a sleeper here is the sleeping-
+		 * in-atomic bug (the tree-wide red line; the meta-array
+		 * ensure above runs under the same constraint).  An
+		 * allocation failure abandons the VMA, fail-open.
+		 */
+		p = kmalloc(sizeof(*p), GFP_NOWAIT);
+		if (!p) {
+			folio_put(folio);
+			corten_unlock(&txn);
+			return 1;
+		}
+		p->addr = a;
+		p->folio = folio;
+		list_add_tail(&p->link, picks);
+		(*resident)++;
+	}
+	corten_unlock(&txn);
+
+	return 0;
+}
+
+/*
+ * Phase 2, the anon folio surgery (the W-2 migration's core, W1.e1
+ * two-step lock shape): with every corten/ptl lock dropped, take the
+ * folio lock (sleepable), re-open the one-page transaction, and
+ * re-classify the PTE as it stands NOW -- the re-verification the
+ * defensive form demands.  The de-anchor itself (mapping = NULL,
+ * mapcount / swapbacked / AnonExclusive untouched) converts the folio
+ * to the W1.a novma family the arena fault/zap/fork arms consume; no
+ * anon_vma reference is dropped because folio->mapping is an uncounted
+ * back-pointer -- mainline clears it in free_pages_prepare() with no
+ * put, and the anon_vma's own chain reference leaves with
+ * unlink_anon_vmas().  (The brief's anon_vma_put() step would have
+ * unbalanced that refcount; this is the W-4 report's deviation note.)
+ *
+ * Every picked folio was vetted exclusively-ours in the pick walk, so
+ * the resident arm is unconditional; the remaining arms are what a
+ * racing writer can leave behind (a swap-out, the zero page, a
+ * marker).  A kept anchor would leave ->mapping pointing at an
+ * anon_vma whose last chain reference this VMA's unlink drops, so the
+ * half-shaped alternative (metadata only, anchor kept) is not taken.
+ */
+static void corten_sweep_surgery_pick(struct mm_struct *mm,
+				      struct corten_sweep_pick *p, u8 perm)
+{
+	struct corten_txn txn;
+	pmd_t *pmdp;
+	pte_t *ptep, cur;
+	spinlock_t *ptl; /* nests inside the folio lock */
+	struct folio *folio = p->folio;
+	int tries = 0;
+	int ret;
+
+	folio_lock(folio);
+
+	pmdp = corten_arena_pmd(mm, p->addr);
+	if (!pmdp)
+		goto out_put;
+	for (;;) {
+		ret = corten_lock_range(mm, p->addr, PAGE_SIZE, &txn);
+		if (ret != -EAGAIN || ++tries >= 2)
+			break;
+	}
+	if (ret) {
+		/* The window was locked, tracked and ensured in the pick
+		 * walk under the same mmap_write; nothing between the two
+		 * phases can take the descriptor away.  Reachable only on
+		 * the permanent-transition arm, and the slot must then
+		 * not stay pristine behind a published arena.
+		 */
+		WARN_ONCE(1, "corten: sweep surgery lost its window\n");
+		goto out_put;
+	}
+	ptep = pte_offset_map_lock(mm, pmdp, p->addr, &ptl);
+	if (!ptep) {
+		corten_unlock(&txn);
+		goto out_put;
+	}
+	cur = ptep_get(ptep);
+
+	if (pte_present(cur) && !pte_special(cur) &&
+	    page_folio(pte_page(cur)) == folio) {
+		/* The surgery proper: the anchor reference moves from
+		 * the legacy anon_vma world to the metadata world in
+		 * one step.  WRITE_ONCE pairs with the rmap walkers'
+		 * READ_ONCE (page_idle's lockless scan, the same
+		 * constraint __folio_set_anon() documents).
+		 */
+		WRITE_ONCE(folio->mapping, NULL);
+		/* INVALID -> MAPPED through the transaction API (mark()
+		 * cannot take this edge); the PTE itself is not touched.
+		 */
+		if (!WARN_ON_ONCE(corten_map(&txn, p->addr,
+					     folio_page(folio, 0), perm, 0)))
+			atomic_long_inc(&corten_nr_sweep_pages_resident);
+	} else if (pte_present(cur) && pte_special(cur)) {
+		/* The read-fault zero page: the arena's own zero-page pair
+		 * is (PTE = zero page, meta = PRIVATE_ANON) -- exactly
+		 * what the S5 read arm leaves behind -- so record that.
+		 */
+		struct corten_pte_meta m = {
+			.state = CORTEN_PRIVATE_ANON,
+			.perm = perm,
+		};
+
+		if (!WARN_ON_ONCE(corten_mark(&txn, p->addr, PAGE_SIZE, &m)))
+			atomic_long_inc(&corten_nr_sweep_pages_resident);
+	} else if (!pte_none(cur) && is_swap_pte(cur) &&
+		   corten_sweep_swp_ok(pte_to_swp_entry(cur))) {
+		/* Raced swap-out (or was swapped all along): the pair the
+		 * W1.f encoding consumes, PTE untouched.
+		 */
+		struct corten_pte_meta m = {
+			.state = CORTEN_SWAPPED,
+			.perm = perm,
+		};
+
+		corten_swap_encode(&m, pte_to_swp_entry(cur));
+		if (!WARN_ON_ONCE(corten_swap_replay(&txn, p->addr, &m)))
+			atomic_long_inc(&corten_nr_sweep_pages_resident);
+	} else if (!pte_none(cur)) {
+		/* Migration/hwpoison/marker shape at drive time: the
+		 * defensive-form refusal.  The slot stays pristine and
+		 * the legacy writer that owns the entry keeps it -- it
+		 * cannot complete against a VMA that is being removed,
+		 * which is why this arm is WARNed, not handled.
+		 */
+		WARN_ONCE(1, "corten: sweep re-verify refused a PTE shape\n");
+	}
+	/* pte_none: raced unmap -- nothing to record, the FRESH gate
+	 * re-synthesizes on the next fault.
+	 */
+
+	pte_unmap_unlock(ptep, ptl);
+	corten_unlock(&txn);
+out_put:
+	folio_unlock(folio);
+	folio_put(folio);
+}
+
+/*
+ * Phase 2, the completion walk over one window: every non-picked slot
+ * whose PTE is a plain swap entry gets its metadata recorded; picked
+ * slots already carry MAPPED.  Runs before the unfreeze, so the arena
+ * never serves a half-recorded window.  Cannot fail (the arrays were
+ * ensured in phase 1).
+ */
+static void corten_sweep_finish_window(struct mm_struct *mm,
+				       unsigned long addr,
+					unsigned long win_end, u8 perm)
+{
+	struct corten_txn txn;
+	pmd_t *pmdp;
+	unsigned long a;
+	int tries = 0;
+	int ret;
+
+	for (;;) {
+		ret = corten_lock_range(mm, addr, win_end - addr, &txn);
+		if (ret != -EAGAIN || ++tries >= 2)
+			break;
+	}
+	if (ret)
+		return;		/* untracked/transitioning: pristine */
+
+	pmdp = corten_arena_pmd(mm, addr);
+	if (!pmdp || !pmd_present(READ_ONCE(*pmdp)) ||
+	    pmd_leaf(READ_ONCE(*pmdp))) {
+		corten_unlock(&txn);
+		return;
+	}
+
+	for (a = addr; a < win_end; a += PAGE_SIZE) {
+		struct corten_pte_meta m, out;
+		swp_entry_t entry;
+		pte_t *ptep, cur;
+		spinlock_t *ptl; /* the recorder's ptl; txn lock outer */
+
+		ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
+		if (!ptep)
+			continue;
+		cur = ptep_get(ptep);
+		if (pte_present(cur) || pte_none(cur) || !is_swap_pte(cur)) {
+			/* none (never faulted), the zero page (the pass
+			 * below), a real folio (the pick surgery), or a
+			 * marker the sweep refuses.
+			 */
+			pte_unmap_unlock(ptep, ptl);
+			continue;
+		}
+		entry = pte_to_swp_entry(cur);
+		if (!corten_sweep_swp_ok(entry)) {
+			pte_unmap_unlock(ptep, ptl);
+			continue;
+		}
+		pte_unmap_unlock(ptep, ptl);
+
+		if (corten_query(&txn, a, &out) || out.state != CORTEN_INVALID)
+			continue;	/* already recorded */
+		m.state = CORTEN_SWAPPED;
+		m.perm = perm;
+		m.flags = 0;
+		corten_swap_encode(&m, entry);
+		if (!WARN_ON_ONCE(corten_swap_replay(&txn, a, &m)))
+			atomic_long_inc(&corten_nr_sweep_pages_resident);
+	}
+	corten_unlock(&txn);
+}
+
+/*
+ * The zero-page slots (PTE = shared zero page, meta still pristine):
+ * record the arena's own read-arm pair, PRIVATE_ANON(perm), so the
+ * write-fault upgrade path sees the committed virtual allocation.
+ */
+static void corten_sweep_finish_zero_window(struct mm_struct *mm,
+					    unsigned long addr,
+					     unsigned long win_end, u8 perm)
+{
+	struct corten_pte_meta gate = {
+		.state = CORTEN_PRIVATE_ANON,
+		.perm = perm,
+	};
+	struct corten_txn txn;
+	pmd_t *pmdp;
+	unsigned long a;
+	int tries = 0;
+	int ret;
+
+	for (;;) {
+		ret = corten_lock_range(mm, addr, win_end - addr, &txn);
+		if (ret != -EAGAIN || ++tries >= 2)
+			break;
+	}
+	if (ret)
+		return;
+
+	pmdp = corten_arena_pmd(mm, addr);
+	if (!pmdp || !pmd_present(READ_ONCE(*pmdp)) ||
+	    pmd_leaf(READ_ONCE(*pmdp))) {
+		corten_unlock(&txn);
+		return;
+	}
+
+	for (a = addr; a < win_end; a += PAGE_SIZE) {
+		struct corten_pte_meta m;
+		pte_t *ptep, cur;
+		spinlock_t *ptl; /* the recorder's ptl; txn lock outer */
+
+		ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
+		if (!ptep)
+			continue;
+		cur = ptep_get(ptep);
+		if (!pte_present(cur) || !pte_special(cur)) {
+			pte_unmap_unlock(ptep, ptl);
+			continue;
+		}
+		if (corten_query(&txn, a, &m) == 0 &&
+		    m.state == CORTEN_INVALID &&
+		    !WARN_ON_ONCE(corten_mark(&txn, a, PAGE_SIZE, &gate)))
+			atomic_long_inc(&corten_nr_sweep_pages_resident);
+		pte_unmap_unlock(ptep, ptl);
+	}
+	corten_unlock(&txn);
+}
+
+/*
+ * The irreversible tail: remove the migrated VMA from the tree.  The
+ * maple-tree node was preallocated in phase 1, so the clear cannot
+ * fail; the vm_stat_account() refund pairs the declare's take exactly
+ * (both derive from the same flag classification), keeping total_vm
+ * -- and therefore RLIMIT_AS -- untouched.
+ */
+static void corten_sweep_remove_vma(struct mm_struct *mm,
+				    struct vm_area_struct *vma,
+				     struct vma_iterator *vmi)
+{
+	unlink_file_vma(vma);
+	unlink_anon_vmas(vma);
+	vma_iter_clear(vmi);
+	mm->map_count--;
+	vm_stat_account(mm, vma->vm_flags,
+			-(long)vma_pages(vma));
+	/* The committed-memory charge the mapping's mmap() made leaves
+	 * only through the munmap path (vm_unacct_memory(), vma.c's
+	 * nr_accounted leg) -- this removal bypasses that path, so the
+	 * refund is ours to make or the sweep leaks the charge for every
+	 * VM_ACCOUNT VMA it adopts.
+	 */
+	if (vma->vm_flags & VM_ACCOUNT)
+		vm_unacct_memory(vma_pages(vma));
+	vma_mark_detached(vma);
+	remove_vma(vma);
+}
+
+static void corten_sweep_drop_picks(struct list_head *picks)
+{
+	while (!list_empty(picks)) {
+		struct corten_sweep_pick *p;
+
+		p = list_first_entry(picks, struct corten_sweep_pick, link);
+		list_del(&p->link);
+		folio_put(p->folio);
+		kfree(p);
+	}
+}
+
+/*
+ * Adopt one anonymous private VMA.  Returns 0 on adoption (the VMA is
+ * gone from the tree), 1 on a fail-open refusal (the VMA is intact).
+ */
+static int corten_sweep_adopt_anon(struct mm_struct *mm,
+				   struct corten_mm_state *state,
+				   struct vm_area_struct *vma)
+{
+	unsigned long a, end = vma->vm_end, start = vma->vm_start;
+	struct corten_arena *arena;
+	unsigned long resident = 0;
+	LIST_HEAD(picks);
+	u8 perm = corten_arena_prot_from_vma(vma);
+	struct vma_iterator vmi;
+	int ret;
+
+	/* From here to the teardown this VMA refuses per-VMA-lock faults
+	 * (they fall back to mmap_read and block on our mmap_write): no
+	 * new PTE can appear mid-sweep.  The lock is held until the
+	 * mmap_write drops, exactly like the remove faces in mm/mmap.c.
+	 */
+	vma_start_write(vma);
+
+	for (a = start; a < end; a = min((a | (PMD_SIZE - 1)) + 1, end)) {
+		unsigned long win_end = min((a | (PMD_SIZE - 1)) + 1, end);
+
+		ret = corten_sweep_pick_window(mm, a, win_end, &picks,
+					       &resident);
+		if (ret) {
+			corten_sweep_drop_picks(&picks);
+			return 1;
+		}
+	}
+
+	/* The tree removal's node: preallocated while failure is cheap.
+	 * The iterator is initialized against the tree first (the config
+	 * only sets the range; VMA_ITERATOR also binds mm_mt and locks).
+	 */
+	{
+		VMA_ITERATOR(v, mm, start);
+
+		vmi = v;
+	}
+	vma_iter_config(&vmi, start, end);
+	if (vma_iter_prealloc(&vmi, NULL)) {
+		corten_sweep_drop_picks(&picks);
+		mas_destroy(&vmi.mas);
+		return 1;
+	}
+
+	ret = corten_arena_declare_locked(mm, state, start, end - start,
+					  perm, NULL, 0, true, true);
+	if (ret) {
+		corten_sweep_drop_picks(&picks);
+		mas_destroy(&vmi.mas);
+		return 1;
+	}
+	arena = xa_load(&state->arenas, start >> PMD_SHIFT);
+
+	/* Surgery + completion: infallible by construction (the arrays
+	 * were ensured in the pick walk; every failure arm is a WARN).
+	 */
+	while (!list_empty(&picks)) {
+		struct corten_sweep_pick *p;
+
+		p = list_first_entry(&picks, struct corten_sweep_pick,
+				     link);
+		list_del(&p->link);
+		corten_sweep_surgery_pick(mm, p, perm);
+		kfree(p);
+	}
+	for (a = start; a < end; a = min((a | (PMD_SIZE - 1)) + 1, end)) {
+		unsigned long win_end = min((a | (PMD_SIZE - 1)) + 1, end);
+
+		corten_sweep_finish_window(mm, a, win_end, perm);
+		corten_sweep_finish_zero_window(mm, a, win_end, perm);
+	}
+
+	/* Publication: the frozen adopt unfreezes only now, with every
+	 * slot recorded (the fork-unfreeze shape: under ctl_lock).  The
+	 * record's MAY bound and flag reflection ride the same hold --
+	 * the novma declare arm recorded the generic full bound, and the
+	 * mmap_write we hold is the region record's own lock (sec 2.7),
+	 * but the fault walk reads both next to the frozen bit.
+	 */
+	mutex_lock(&state->ctl_lock);
+	if (arena) {
+		WRITE_ONCE(arena->may_prot, corten_region_may_from_vma(vma));
+		WRITE_ONCE(arena->rflags,
+			   corten_region_rflags_from_vma(vma) |
+			   CORTEN_RF_ADOPTED);
+		WRITE_ONCE(arena->frozen, false);
+	}
+	mutex_unlock(&state->ctl_lock);
+
+	corten_sweep_remove_vma(mm, vma, &vmi);
+	atomic_long_inc(&corten_nr_sweep_anon_adopts);
+
+	return 0;
+}
+
+/*
+ * Adopt one private file VMA: declare's FILE arm carries the whole
+ * body -- the region record takes the file reference, the blanket
+ * CORTEN_FILE_MAPPED(perm) mark runs inside declare before
+ * publication, and the per-inode registry (W1.b) joins as the last
+ * publishing step.  The resident PTEs need no surgery (the pagecache
+ * anchor survives the VMA; reclaim routing moves to the registry with
+ * unlink_file_vma), so the sweep only adjusts the record and removes
+ * the VMA.
+ */
+static int corten_sweep_adopt_file(struct mm_struct *mm,
+				   struct corten_mm_state *state,
+				   struct vm_area_struct *vma)
+{
+	unsigned long start = vma->vm_start;
+	struct corten_arena *arena;
+	struct vma_iterator vmi;
+	u8 perm = corten_arena_prot_from_vma(vma);
+	int ret;
+
+	vma_start_write(vma);
+
+	{
+		VMA_ITERATOR(v, mm, start);
+
+		vmi = v;
+	}
+	vma_iter_config(&vmi, start, vma->vm_end);
+	if (vma_iter_prealloc(&vmi, NULL)) {
+		mas_destroy(&vmi.mas);
+		return 1;
+	}
+
+	ret = corten_arena_declare_locked(mm, state, start,
+					  vma->vm_end - start, perm,
+					  vma->vm_file, vma->vm_pgoff,
+					  true, true);
+	if (ret) {
+		mas_destroy(&vmi.mas);
+		return 1;
+	}
+	arena = xa_load(&state->arenas, start >> PMD_SHIFT);
+
+	/* Same record adjustments as the anon arm: the VMA's own MAY
+	 * bound beats the file-wide one, and the flag reflection rides
+	 * along.  Then the immediate unfreeze: the blanket mark inside
+	 * declare already completed the metadata, so the arena can serve
+	 * from publication on.
+	 */
+	mutex_lock(&state->ctl_lock);
+	if (arena) {
+		WRITE_ONCE(arena->may_prot, corten_region_may_from_vma(vma));
+		WRITE_ONCE(arena->rflags,
+			   corten_region_rflags_from_vma(vma) |
+			   CORTEN_RF_ADOPTED);
+		WRITE_ONCE(arena->frozen, false);
+	}
+	mutex_unlock(&state->ctl_lock);
+
+	corten_sweep_remove_vma(mm, vma, &vmi);
+	atomic_long_inc(&corten_nr_sweep_file_adopts);
+
+	return 0;
+}
+
+/*
+ * The sweep's verdict for one VMA: -1 = ours (no count), negative =
+ * skip (the caller's bucket), 0 = anonymous adopt, 1 = file adopt.
+ */
+static int corten_sweep_classify(struct mm_struct *mm,
+				 struct vm_area_struct *vma)
+{
+	vm_flags_t flags = vma->vm_flags;
+
+	/* Our own anchors (targeted-DECLARE shadow pieces, W-2 survivors)
+	 * are not legacy stock: never counted, never migrated.
+	 */
+	if (flags & VM_CORTEN)
+		return -1;
+
+	/* The window domain is the implants' world (W-5's target). */
+	if (vma->vm_end > CORTEN_MODE_WINDOW_START &&
+	    vma->vm_start < CORTEN_MODE_WINDOW_END)
+		return -2;			/* skip: window */
+
+	if (flags & (VM_GROWSDOWN | VM_GROWSUP))
+		return -3;			/* skip: stack */
+	if (arch_vma_name(vma))
+		return -4;			/* skip: special (vdso/vvar) */
+	/* VM_DONTCOPY / VM_WIPEONFORK (MADV_DONTFORK / MADV_WIPEONFORK --
+	 * the key-material shapes) are fork contracts carried by the tree
+	 * VMA: dup_mmap() reads the bit and either skips the clone or
+	 * skips copy_page_range() for it.  A region record has no reader
+	 * for those bits (CORTEN_RF_DONTCOPY/WIPEONFORK are written and
+	 * never read), so adopting would flip the semantics -- the child
+	 * would inherit what the parent asked fork to withhold.  They
+	 * stay legacy.  VM_SEQ_READ/VM_RAND_READ ride along to keep the
+	 * mask aligned with the attach gate (hints only).
+	 */
+	if (flags & (VM_HUGETLB | VM_IO | VM_PFNMAP | VM_MIXEDMAP |
+		     VM_SHADOW_STACK | VM_LOCKED | VM_LOCKONFAULT |
+		     VM_DONTCOPY | VM_WIPEONFORK | VM_SEQ_READ |
+		     VM_RAND_READ))
+		return -5;			/* skip: other (structural) */
+
+#ifdef CONFIG_USERFAULTFD
+	/* A registered userfaultfd context carries no vm_flags bit (the
+	 * flag whitelist above cannot see MODE_MISSING registrations),
+	 * so it gets the same explicit check the attach gate runs: a
+	 * swept uffd VMA would keep its page faults but lose every
+	 * uffd-waiter event.
+	 */
+	if (vma->vm_userfaultfd_ctx.ctx)
+		return -5;			/* skip: other (structural) */
+#endif
+	if (flags & VM_SHARED)
+		return -6;			/* skip: shared */
+
+	if (vma->vm_file) {
+		u8 may;
+
+		/* The V-B file gate (the do_mmap route's own chain): a
+		 * file shape it refuses stays legacy on the same terms.
+		 */
+		if (corten_file_may(vma->vm_file,
+				    (flags & VM_EXEC) ? PROT_EXEC : 0,
+				    vma->vm_pgoff,
+				    vma->vm_end - vma->vm_start, &may))
+			return -5;
+		return 1;
+	}
+	if (vma_is_anonymous(vma))
+		return 0;
+	return -5;				/* skip: other (vm_ops, no file) */
+}
+
+/*
+ * The entry sweep body.  Called from corten_arena_mode_enter() with
+ * @mm's mmap_write held and the MODE bit already set.  Fail-open at
+ * every seam: a refused VMA keeps its legacy life and a count; the
+ * MODE bit is never rolled back (an ENTER that swept nothing is a
+ * MODE process whose stock stays on VMA form -- disclosed, not
+ * failed).
+ *
+ * The registry is created only when there is something to sweep (the
+ * A5 contract survives for the ENTER-only mm: a process with an empty
+ * or all-skipped tree still enters MODE allocation-free).
+ */
+static void corten_arena_mode_sweep(struct mm_struct *mm)
+{
+	struct corten_mm_state *state;
+	struct vm_area_struct **cand, *vma;
+	unsigned int n = 0, i;
+	int nr_vmas;
+
+	mmap_assert_write_locked(mm);
+
+	nr_vmas = mm->map_count;
+	if (!nr_vmas)
+		return;
+
+	cand = kcalloc(nr_vmas, sizeof(*cand), GFP_KERNEL);
+	if (!cand)
+		return;
+
+	{
+		VMA_ITERATOR(vmi, mm, 0);
+
+		for_each_vma(vmi, vma) {
+			int c = corten_sweep_classify(mm, vma);
+
+			switch (c) {
+			case 0:
+			case 1:
+				cand[n++] = vma;
+				break;
+			case -1:
+				break;		/* ours */
+			case -2:
+				atomic_long_inc(&corten_nr_sweep_skip_window);
+				break;
+			case -3:
+				atomic_long_inc(&corten_nr_sweep_skip_stack);
+				break;
+			case -4:
+				atomic_long_inc(&corten_nr_sweep_skip_special);
+				break;
+			case -6:
+				atomic_long_inc(&corten_nr_sweep_skip_shared);
+				break;
+			default:
+				atomic_long_inc(&corten_nr_sweep_skip_other);
+				break;
+			}
+		}
+	}
+
+	if (!n) {
+		kfree(cand);
+		return;		/* nothing adoptable: stay allocation-free */
+	}
+
+	state = corten_arena_get_state(mm);
+	if (!state) {
+		state = corten_arena_state_create(mm);
+		if (!state) {
+			atomic_long_add(n, &corten_nr_sweep_skip_other);
+			kfree(cand);
+			return;
+		}
+	}
+
+	/* Ascending order: the first adopt of a shared 2M frame owns it,
+	 * the frame-sharing neighbour behind it fail-opens to legacy
+	 * (declare's overlap check) -- counted in the same bucket.
+	 */
+	for (i = 0; i < n; i++) {
+		vma = cand[i];
+		if (vma->vm_file ?
+		    corten_sweep_adopt_file(mm, state, vma) :
+		    corten_sweep_adopt_anon(mm, state, vma))
+			atomic_long_inc(&corten_nr_sweep_skip_other);
+	}
+
+	kfree(cand);
 }
 
 int corten_arena_mode_enter(struct mm_struct *mm)
@@ -5804,6 +6784,30 @@ int corten_arena_mode_enter(struct mm_struct *mm)
 	 * route places an arena.
 	 */
 	WRITE_ONCE(mm->corten_mode, true);
+	mmap_write_unlock(mm);
+
+	return 0;
+}
+
+/*
+ * MV2 W-4: the prctl ENTER.  Same window as above, plus the entry
+ * sweep: the stock the process brought into MODE is judged and adopted
+ * here, before the lock drops.  Kept as its own entry point because the
+ * sweep's tree rewrite is the D28 contract change -- the bare A5 enter
+ * above stays the tree-neutral primitive the fork mirror and the rest
+ * of the arena world are specified against (the W-4 report's slicing
+ * note: the sweep's own KUnit anchors use this form, the pre-existing
+ * mode_enter battery keeps the bare one).
+ */
+int corten_arena_mode_enter_sweep(struct mm_struct *mm)
+{
+	if (!mm)
+		return -EINVAL;
+
+	mmap_write_lock(mm);
+	if (!READ_ONCE(mm->corten_mode))
+		WRITE_ONCE(mm->corten_mode, true);
+	corten_arena_mode_sweep(mm);
 	mmap_write_unlock(mm);
 
 	return 0;
@@ -5835,6 +6839,38 @@ int corten_arena_mode_exit(struct mm_struct *mm)
 	 * this write lock first).
 	 */
 	mmap_write_lock(mm);
+
+	/* MV2 W-4 (B5/D32): a swept mm has an EMPTY tree -- there is no
+	 * legacy mapping for EXIT to restore, so leaving MODE would
+	 * strand every adopted span and the process would die on its
+	 * own TLS (the guest smoke's exit-leg SIGSEGV, ip 0x44aece).
+	 * MODE is sticky while swept stock survives: scan the registry
+	 * BEFORE any release runs (a refusal must not leave a
+	 * half-torn-down mm behind), refuse with -EBUSY when any live
+	 * arena still carries CORTEN_RF_ADOPTED, and let exit_mmap() do
+	 * the full teardown at process death (that path owns the
+	 * complete walk).  The bit rides rflags (rewritten by
+	 * release/park re-registration), so the refusal answers "is
+	 * swept stock still here", not "did this mm ever get swept" --
+	 * punch an adopted span away and the mm may leave MODE again.
+	 * The counter is the disclosure; the de-sweep reverse migration
+	 * is MV3-scale work.
+	 */
+	if (state) {
+		unsigned long rf = 0;
+		struct corten_arena *ar;
+
+		while ((ar = xa_find(&state->arenas, &rf, ULONG_MAX,
+				     XA_PRESENT))) {
+			if (ar != &corten_va_reserve_sentinel &&
+			    (READ_ONCE(ar->rflags) & CORTEN_RF_ADOPTED)) {
+				atomic_long_inc(&corten_nr_exit_swept_refuses);
+				mmap_write_unlock(mm);
+				return -EBUSY;
+			}
+			rf++;
+		}
+	}
 
 	if (state) {
 		unsigned long frame = 0;
@@ -5912,7 +6948,7 @@ int corten_prctl_mode(unsigned int op, unsigned long arg3,
 	case CORTEN_MODE_ENTER:
 		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
-		return corten_arena_mode_enter(mm);
+		return corten_arena_mode_enter_sweep(mm);
 	case CORTEN_MODE_EXIT:
 		return corten_arena_mode_exit(mm);
 	default:
@@ -6445,7 +7481,8 @@ static int corten_arena_fork_copy_ptes(struct mm_struct *dst_mm,
 	pte_t *sptep, *dptep;
 	spinlock_t *sptl, *dptl;
 	struct mmu_notifier_range range;
-	unsigned long a;
+	struct folio *prealloc = NULL;
+	unsigned long a, resume = addr;
 	int ret = 0;
 
 	spmdp = corten_arena_pmd(src_mm, addr);
@@ -6473,21 +7510,30 @@ static int corten_arena_fork_copy_ptes(struct mm_struct *dst_mm,
 	mmu_notifier_invalidate_range_start(&range);
 	raw_write_seqcount_begin(&src_mm->write_protect_seq);
 
-	sptep = pte_offset_map(spmdp, addr);
-	if (!sptep) {
-		ret = -EAGAIN;
+retry:
+	/* copy_pte_range()'s canonical order: allocate and map the
+	 * child's PT page FIRST -- pte_alloc_map_lock() can sleep, so it
+	 * must run before the parent's mapping opens the RCU read
+	 * section (pte_offset_map() holds it; a sleeper inside that
+	 * window is the sleeping-in-atomic bug the DEBUG_ATOMIC_SLEEP
+	 * boot caught).  Only then map the parent and take its lock
+	 * nested: the RCU window now allocates nothing.
+	 */
+	dptep = pte_alloc_map_lock(dst_mm, dpmdp, resume, &dptl);
+	if (!dptep) {
+		ret = -ENOMEM;
 		goto out_seq;
 	}
-	dptep = pte_alloc_map_lock(dst_mm, dpmdp, addr, &dptl);
-	if (!dptep) {
-		pte_unmap(sptep);
-		ret = -ENOMEM;
+	sptep = pte_offset_map(spmdp, resume);
+	if (!sptep) {
+		pte_unmap_unlock(dptep, dptl);
+		ret = -EAGAIN;
 		goto out_seq;
 	}
 	sptl = pte_lockptr(src_mm, spmdp);
 	spin_lock_nested(sptl, SINGLE_DEPTH_NESTING);
 
-	for (a = addr; a < win_end; a += PAGE_SIZE, sptep++, dptep++) {
+	for (a = resume; a < win_end; a += PAGE_SIZE, sptep++, dptep++) {
 		pte_t pte = ptep_get(sptep), npte;
 		struct page *page;
 		struct folio *folio;
@@ -6557,15 +7603,21 @@ static int corten_arena_fork_copy_ptes(struct mm_struct *dst_mm,
 			 * polarities reversed).
 			 */
 			if (folio_maybe_dma_pinned(folio)) {
-				struct folio *newfolio;
+				struct folio *newfolio = prealloc;
 
-				newfolio =
-				corten_arena_folio_alloc_novma(dst_mm, a);
+				/* copy_present_page()'s prealloc contract:
+				 * the section allocates nothing -- a
+				 * missing folio hands the allocation out
+				 * to the retry below, where sleeping is
+				 * legal.
+				 */
 				if (!newfolio) {
 					folio_put(folio);
-					ret = -ENOMEM;
+					resume = a;
+					ret = -EAGAIN;
 					break;
 				}
+				prealloc = NULL;
 				folio_copy(newfolio, folio);
 				__folio_mark_uptodate(newfolio);
 				folio_add_anon_rmap_novma(newfolio);
@@ -6584,6 +7636,15 @@ static int corten_arena_fork_copy_ptes(struct mm_struct *dst_mm,
 				if (pte_write(pte))
 					npte = pte_mkwrite_novma(npte);
 				set_pte_at(dst_mm, a, dptep, npte);
+				/* The loop head's folio_get() was this
+				 * arm's scratch reference: the copy,
+				 * unlike the share above, gives the
+				 * child its own page, so the parent's
+				 * folio is dropped here (copy_present_
+				 * page()'s shape) or every pinned page
+				 * this path copies leaks its reference.
+				 */
+				folio_put(folio);
 				copied = true;
 			} else {
 				folio_dup_anon_rmap_novma(folio, page);
@@ -6612,7 +7673,26 @@ static int corten_arena_fork_copy_ptes(struct mm_struct *dst_mm,
 	spin_unlock(sptl);
 	pte_unmap_unlock(dptep - 1, dptl);
 	pte_unmap(sptep - 1);
+
+	/* The section's -EAGAIN: allocate the pinned-folio copy's page
+	 * out here, where the RCU section is closed and sleeping is
+	 * legal (folio_prealloc()'s position in copy_pte_range()), then
+	 * resume the window at the entry that asked for it -- the pass
+	 * never revisits entries it already copied, so the swap-share
+	 * arm's swap_duplicate() cannot double-count.
+	 */
+	if (ret == -EAGAIN) {
+		prealloc = corten_arena_folio_alloc_novma(dst_mm, resume);
+		if (!prealloc) {
+			ret = -ENOMEM;
+			goto out_seq;
+		}
+		ret = 0;
+		goto retry;
+	}
 out_seq:
+	if (prealloc)
+		folio_put(prealloc);
 	raw_write_seqcount_end(&src_mm->write_protect_seq);
 	mmu_notifier_invalidate_range_end(&range);
 	return ret;
@@ -11300,7 +12380,7 @@ static int corten_brk_region_seed(struct mm_struct *mm,
 	 */
 	ret = corten_arena_declare_locked(mm, state, mm->start_brk,
 					  newbrk - mm->start_brk, perm,
-					  NULL, 0, true);
+					  NULL, 0, true, false);
 	if (ret)
 		return 1;
 
@@ -11355,7 +12435,7 @@ static int corten_brk_region_adopt(struct mm_struct *mm,
 
 	ret = corten_arena_declare_locked(mm, state, mm->start_brk,
 					  oldbrk - mm->start_brk, perm,
-					  NULL, 0, true);
+					  NULL, 0, true, false);
 	if (ret)
 		return 1;
 
@@ -13537,7 +14617,7 @@ static long corten_arena_mremap_move(struct mm_struct *mm,
 	 * through the new arena's FRESH path exactly as before.
 	 */
 	ret = corten_arena_declare_locked(mm, state, addr2, len2, perm, NULL,
-					  0, true);
+					  0, true, false);
 	if (ret) {
 		mmap_write_unlock(mm);
 		return -ENOMEM;

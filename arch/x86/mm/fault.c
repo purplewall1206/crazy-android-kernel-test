@@ -1353,6 +1353,17 @@ void do_user_addr_fault(struct pt_regs *regs,
 	 * pkey, so a PK fault can only come from the PKRU and delivery must
 	 * keep the x86 access_error() semantics.
 	 *
+	 * MV2 W-4 (B5): the gate covers kernel-mode accesses to user
+	 * addresses too.  The entry sweep leaves VMA-less regions in the
+	 * legacy domain, and the kernel itself faults on those pages from
+	 * inside syscalls (put_user/get_user/fault-in: glibc's rseq
+	 * lazy-clear is the first post-fork writer on every glibc
+	 * program).  A ring-0 access_error()-style delivery would be
+	 * wrong for them; every fatal verdict takes
+	 * bad_area_nosemaphore(), whose kernel+extable arm fails the
+	 * access (the put_user's EFAULT) instead of signaling, exactly
+	 * like the legacy miss path the fallback arms share.
+	 *
 	 * CONFIG_CORTEN_MM=n compiles the whole block out (binary-path
 	 * zero change); no lock is held here, so the SIGSEGV deliveries
 	 * must not use the x86 bad_area*() helpers, which all release a
@@ -1360,14 +1371,17 @@ void do_user_addr_fault(struct pt_regs *regs,
 	 * variant) are the exits matching the legacy si_codes.
 	 */
 	if (static_branch_unlikely(&corten_enabled_key) &&
-	    user_mode(regs) && !(error_code & X86_PF_PK)) {
+	    !(error_code & X86_PF_PK)) {
 		switch (corten_arena_user_fault(mm, address, error_code,
 						regs, &flags)) {
 		case CORTEN_FAULT_HANDLED:
 			return;
 		case CORTEN_FAULT_ACCERR:
-			force_sig_fault(SIGSEGV, SEGV_ACCERR,
-					(void __user *)address);
+			if (user_mode(regs))
+				force_sig_fault(SIGSEGV, SEGV_ACCERR,
+						(void __user *)address);
+			else
+				bad_area_nosemaphore(regs, error_code, address);
 			return;
 		case CORTEN_FAULT_MAPERR:
 			bad_area_nosemaphore(regs, error_code, address);
@@ -1381,8 +1395,11 @@ void do_user_addr_fault(struct pt_regs *regs,
 			 * through the fast hook (no lock is held here, so
 			 * force_sig_fault() like the ACCERR arm above).
 			 */
-			force_sig_fault(SIGBUS, BUS_ADRERR,
-					(void __user *)address);
+			if (user_mode(regs))
+				force_sig_fault(SIGBUS, BUS_ADRERR,
+						(void __user *)address);
+			else
+				bad_area_nosemaphore(regs, error_code, address);
 			return;
 		default:
 			/* V-A.3b audit #1 (J1 hygiene): a window-domain

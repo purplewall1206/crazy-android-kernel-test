@@ -150,6 +150,19 @@ enum corten_region_class {
 #define CORTEN_RF_ALL							\
 	(CORTEN_RF_SOFTDIRTY | CORTEN_RF_DONTCOPY | CORTEN_RF_WIPEONFORK | \
 	 CORTEN_RF_SEQ_READ | CORTEN_RF_RAND_READ)
+/*
+ * CORTEN_RF_ADOPTED sits outside CORTEN_RF_ALL deliberately: it is not a
+ * VMA-flag reflection and no VMA produces it.  It is the W-4 entry-sweep
+ * adoption marker the region record carries for its life -- the mode-exit
+ * refusal reads it (MV2 W-4 B5 ruling: an alive EXIT has no VMA to return
+ * the swept stock to, so EXIT must refuse with -EBUSY and leave the
+ * teardown to the mm's exit walk).  It rides rflags so it dies with the
+ * descriptor (release/park re-registration rewrites rflags), which keeps
+ * the refusal precise: it answers "is swept stock still here", not "did
+ * this mm ever get swept" -- punch an adopted span away and the mm may
+ * leave MODE again.
+ */
+#define CORTEN_RF_ADOPTED	_BITUL(5)	/* W-4 entry-sweep adoption */
 
 /*
  * pagemap entry bits and the PSS fixed-point shift, shared between the
@@ -1060,6 +1073,12 @@ long corten_arena_test_heap_lookups(void);
  * 0=adopts 1=grows 2=shrinks 3=legacy-fallbacks).
  */
 long corten_arena_test_brk_region(int which);
+
+/* MV2 W-4: the entry sweep's counters (@which indexes 0=anon-adopts
+ * 1=file-adopts 2=skip-stack 3=skip-special 4=skip-shared 5=skip-window
+ * 6=skip-other 7=resident-pages-recorded).
+ */
+long corten_arena_test_sweep(int which);
 
 /* V-E whitelist (J2-complete) ledger: the walk/violation/anomaly
  * counters, the brk-VMA registration observable, and the one-walk

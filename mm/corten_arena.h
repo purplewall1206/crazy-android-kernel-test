@@ -446,6 +446,13 @@ int corten_arena_file_attach(struct mm_struct *mm, unsigned long addr,
  * (the MODE-bit writer contract, sec 1.2).
  */
 int corten_arena_mode_enter(struct mm_struct *mm);
+/*
+ * MV2 W-4: the ENTER the prctl route takes -- the mode bit above plus
+ * the entry sweep over this mm's legacy stock (the D28 closure).  The
+ * bare enter stays the tree-neutral primitive; only the caller that
+ * wants the stock adopted uses this one.
+ */
+int corten_arena_mode_enter_sweep(struct mm_struct *mm);
 int corten_arena_mode_exit(struct mm_struct *mm);
 int corten_arena_mode_get(struct mm_struct *mm);
 
@@ -1475,6 +1482,11 @@ static inline bool corten_addr_in_window(unsigned long addr,
 }
 
 static inline int corten_arena_mode_enter(struct mm_struct *mm)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int corten_arena_mode_enter_sweep(struct mm_struct *mm)
 {
 	return -EOPNOTSUPP;
 }
