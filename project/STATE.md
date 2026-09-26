@@ -1241,3 +1241,47 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
   （metis checksum parity/pgtables 零残差/smoke/单页+8MB 批量换入往返,
   zram+文件 swap 双通道）全绿。证据 results/r07/w3fix2/。W-6 的 S-3 硬阻断
   项撤销; 换入路径恢复到 W1.e2 时代的完好状态以上（真盘通道此前从未绿过）。
+
+- **[2026-09-26 07:4x r09 会话启动（Hermes 自 r08 AskUserQuestion 僵死后重拉）:
+  W-3fix2 审计完成 → FAIL(2 发现) → W-3fix3 修复片开工]**
+  - 锁 owner=claude-code-glm53flash（Hermes 代持, 心跳 07:47→本会话 cron 自动维护）。
+  - **审计（review 级, ea3ecc76911f 逐行）通过项**: ①守卫删除论证成立——函数体全部
+    vma 使用点核查（folio alloc/perm_pgprot/rmap_novma/mmu_cache/corten_pte_mkwrite）
+    全有 NULL 容忍臂（corten_arena.c:873 mkwrite_novma 回退实证）; ②cache-stuck 臂
+    引用收支正确（swap_cache_get_folio 引用全出口配对; folio 锁内 swapcache 成员+
+    swap.val 判定稳定——缓存摘除本持 folio 锁; 锁序 folio_lock→desc_lock 与上游
+    ttu 同向; prepare 失败侧自身无标记可孤儿）; ③异步等待机理正确（async 设备
+    swap_read_folio 于 bio end-io 解锁, wait+relock 恢复 tail 的 folio_unlock 配对;
+    sync 门=SWP_SYNCHRONOUS_IO 与上游 sync 分支同形）。KUnit 24/0/1+111/0/0+34/0/5
+    与登记一致（kmain2.log 复核, 尾部 VFS panic=无盘标准收场）; S-3 电池双分支
+    PASS（s3-final.log）。checkpatch 独立复跑 0E/0W/0C（115 行; 缺 S-o-b 与
+    W-3fix=d7bd0dd 惯例一致, 非本片偏离）。
+  - **D30 (审计判定 FAIL→修复片)**: ①F1=新加的异步等待 folio_lock_killable -EINTR
+    出口（arena.c:8376）实际**不可达**——该 folio 未发布（直读路径永不进 swap
+    cache/PTE 仍是 swap entry/永不 LRU）, folio_wait_locked 返回后无人能持锁,
+    trylock 必成功=死防御代码; 但若未来可达即裸 return 孤儿化自家 SWAP_HAS_CACHE
+    （need_clear_cache=true 窗口内）→ 永久卡死 entry。修法=plain folio_lock（上游
+    do_swap_page cache 分支同形, 不可失败即无出口）。②F2=arena.c:8404
+    corten_lock_range 失败 `goto out_put` 绕过 swapcache_clear——**M6.T2 既有潜伏
+    缺口, 同窗口**; 每次触发永久卡死 entry（后续 fault 每次 5s 死线+swapoff 永不
+    收敛）。修法=goto out_clear（一行）。③证据缺口（登记）: commit message 声称的
+    guest 回归扫（swapbulk 往返/metis parity/smoke/pgtables）无落盘日志（stdout
+    只进会话）, 仅 kmain2.log+s3-final.log 在档; 验证 bzImage 未归档 bzimg/（vm2
+    跑 /tmp/bzImage-main-swapfix3）。**处置**: W-3fix3 修复片（两处修复+全套 guest
+    证据重生成落盘 results/r07/w3fix3/）, worktree w3fix3 @ 708c329, dev agent
+    在制; 审计的 S-3 硬阻断撤销判定**维持**（电池双分支 PASS 为真）, F2 属独立性
+    质缺陷不入 W-6 阻断面。
+  - **运维**: vm（02:15, mva 陈旧 bzImage）/vm2（03:12, /tmp swapfix3 件）双退役
+    （vm2 件先 quarantine 至 bzimg/quarantine-bzImage-main-swapfix3）; mva 分支
+    mixed-reset 至主树 HEAD——**发现 mva worktree 存有 W-4 在制增量 +1399 行**
+    （declare adopt 臂/frozen 发布协议/sweep 八计数器/528 行测试; 基线已含 W-3fix2,
+    swap_in 区与主树零差异）, 与 next/w4-dev-brief.md 安排一致=合法 dev 草稿,
+    r09-B 阶段续作吸收（提交时只 stage 三内核文件, worktree project/ 为 D20-b 前
+    陈旧检出噪声勿动）。
+  - **D31 (2026-09-26 08:0x 用户直接指令·GitHub 同步协议)**: zcode 停机漏推
+    708c329, 已补推（github 远端 corten-github=708c3294698d）。**此后每片入库
+    commit 即随手 `git push github android17-6.18:corten-github`, 不攒批**。形态
+    更正: 远端分支 W-2 后为 5 个同内容重放件（树与主线逐字节一致, merge-base=
+    680857 实证）, 本次以 force-with-lease 一次性换回主线正身（零内容损失, 旧件
+    留 reflog）, 此后推送均为普通快进; D27 孤儿分支形态事实废止（AOSP 真历史已在
+    远端）; aosp 远端不碰。
