@@ -281,7 +281,8 @@ enum corten_mmap_class corten_arena_mmap_classify(unsigned long flags,
 
 int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
 			    unsigned long len, unsigned long prot,
-			    unsigned long flags, bool file);
+			    unsigned long flags, struct file *file,
+			    unsigned long pgoff);
 
 /*
  * [F-B, D-G''] Punch classification (pure, testable): what a non-markable
@@ -1138,7 +1139,9 @@ static inline int corten_arena_mmap_route(struct mm_struct *mm,
 					  unsigned long addr,
 					  unsigned long len,
 					  unsigned long prot,
-					  unsigned long flags, bool file)
+					  unsigned long flags,
+					  struct file *file,
+					  unsigned long pgoff)
 {
 	return 0;
 }

@@ -593,7 +593,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	 */
 	{
 		int cret = corten_arena_mmap_route(mm, addr, len, prot,
-						   flags, file);
+						   flags, file, pgoff);
 
 		if (cret < 0)
 			return cret;

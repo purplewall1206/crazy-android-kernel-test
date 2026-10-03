@@ -7480,6 +7480,24 @@ static void corten_arena_test_op_punch(struct corten_arena_test_op *o)
 	mmap_write_unlock(o->mm);
 }
 
+/* W-5: the explicit-address FILE admission's do_mmap shape -- the same
+ * packed flags encoding as op_sweep_file_map (flags high byte, prot low),
+ * but the raw funnel return with no VMA expectation (an admitted shape
+ * installs a region, not a tree VMA).
+ */
+static void corten_arena_test_op_file_mmap(struct corten_arena_test_op *o)
+{
+	unsigned long populate;
+	LIST_HEAD(uf);
+
+	mmap_write_lock(o->mm);
+	o->retl = (long)do_mmap(o->file, o->addr, o->len, o->flags & 0xff,
+				o->flags >> 8, 0, 0, &populate, &uf);
+	mmap_write_unlock(o->mm);
+	if (!IS_ERR_VALUE((unsigned long)o->retl))
+		o->ret = 0;
+}
+
 static long corten_arena_test_punch(struct kunit *test, struct mm_struct *mm,
 				    struct file *file, unsigned long addr,
 				    unsigned long len)
@@ -7634,10 +7652,18 @@ static void corten_arena_test_noreplace_active(struct kunit *test)
  * rejected -- the incoming VMA becomes a registered implant on freed VA,
  * and the ejected slot can never be handed out again.
  */
+/* D24 (audit #14's plain-MAP_FIXED sibling): legacy MAP_FIXED is
+ * *replace*, so a parked window under one is ejected-and-admitted, never
+ * rejected.  MV2 W-5 re-pins the admission's shape: the mapping is
+ * declared a region (no funnel VMA, no implant entry), and the
+ * exact-extent match meets the parked slot inside the declare's pool
+ * prepare -- the ANON reactivation, not a placement eject.
+ */
 static void corten_arena_test_mapfixed_over_parked(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
+	struct corten_arena *ar;
 	long ejects = corten_arena_test_placement_idle_ejects();
 	long misses = corten_arena_test_pool_misses();
 	unsigned long addr = 0, lenp = PAGE_SIZE, flags;
@@ -7668,38 +7694,42 @@ static void corten_arena_test_mapfixed_over_parked(struct kunit *test)
 	r = corten_arena_test_vm_mmap(test, mm, CORTEN_ARENA_TEST_WIN,
 				      PMD_SIZE, MAP_FIXED);
 	KUNIT_EXPECT_EQ(test, r, CORTEN_ARENA_TEST_WIN);
-	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
 
-	/* The window left the registry whole -- the erase-eject leaves no
-	 * restored markers under the incoming VMA (the recycle-eject would
-	 * re-mark frames the placement backstop then counts occupied and
-	 * the magazine would later serve under the implant), so both
-	 * probes read the freed range as unoccupied.
+	/* MV2 W-5: the admission declared the region -- no legacy VMA,
+	 * no implant registry entry.
 	 */
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
 	KUNIT_EXPECT_FALSE(test,
-			   occupied_incl_idle(mm, CORTEN_ARENA_TEST_WIN,
-					      PMD_SIZE));
-	KUNIT_EXPECT_FALSE(test,
-			   corten_arena_range_overlaps(mm,
-						       CORTEN_ARENA_TEST_WIN,
-						       PMD_SIZE));
+			   corten_implant_covers(mm, CORTEN_ARENA_TEST_WIN,
+						 PMD_SIZE));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), 0);
+
+	/* The reactivated window is live region terrain again: the
+	 * occupancy probes read it as ours (the eject arm's unoccupied
+	 * reading was the funnel-VMA shape), the slot left the pool.
+	 */
+	KUNIT_EXPECT_TRUE(test,
+			  occupied_incl_idle(mm, CORTEN_ARENA_TEST_WIN,
+					     PMD_SIZE));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_range_overlaps(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE));
 	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
 	KUNIT_EXPECT_FALSE(test,
 			   corten_arena_test_pool_idle(mm,
 						       CORTEN_ARENA_TEST_WIN));
-	KUNIT_EXPECT_EQ(test, corten_arena_test_placement_idle_ejects(),
-			ejects + 1);
-
-	/* The implant registry whitelists the placement (the J2 walker's
-	 * legal shape, D24).
+	/* MV2 W-5: the placement-eject counter stays put -- the parked
+	 * slot rode the declare's pool prepare (a reactivation).
 	 */
-	KUNIT_EXPECT_TRUE(test,
-			  corten_implant_covers(mm, CORTEN_ARENA_TEST_WIN,
-						PMD_SIZE));
-	KUNIT_EXPECT_GE(test, corten_arena_test_implant_nr(mm), 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_placement_idle_ejects(),
+			ejects);
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	KUNIT_EXPECT_FALSE(test, READ_ONCE(ar->idle));
 
-	/* The next same-size auto request cannot hit the ejected window:
-	 * a counted pool miss, fresh window placement elsewhere.
+	/* The next same-size auto request cannot hit the reactivated
+	 * window: a counted pool miss, fresh window placement elsewhere.
 	 */
 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	mmap_write_lock(mm);
@@ -7711,6 +7741,177 @@ static void corten_arena_test_mapfixed_over_parked(struct kunit *test)
 	KUNIT_EXPECT_NE(test, addr, CORTEN_ARENA_TEST_WIN);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_misses(), misses + 1);
 
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* MV2 W-5: the anon admission at freed window terrain -- the smoke
+ * contract's mmap-fixed-at-window shape.  The explicit MAP_FIXED declares
+ * an anon region (the funnel's VMA + implant entry are gone), the
+ * sub-extent request ejects the parked prelude through the declare's
+ * pool prepare, and the region serves and releases like any auto window.
+ */
+static void corten_arena_test_explicit_anon_region(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_arena *ar;
+	long implants, routes;
+	unsigned int fflags = FAULT_FLAG_WRITE;
+	unsigned long w;
+	long r;
+	u64 p0 = 0x0ddba11ULL, back;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "explicit region route requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	implants = corten_arena_test_implant_nr(mm);
+	routes = corten_arena_test_named_counter(test, "mmap_region_routes");
+	KUNIT_ASSERT_GE(test, routes, 0);
+
+	/* The prelude: an auto window parked by its munmap (the free()
+	 * shape).
+	 */
+	w = corten_arena_test_vm_mmap(test, mm, 0, PMD_SIZE,
+				      MAP_PRIVATE | MAP_ANONYMOUS |
+				      MAP_NORESERVE);
+	KUNIT_ASSERT_EQ(test, w & ~PAGE_MASK, 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 w, PAGE_SIZE), 1);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_pool_idle(mm, w));
+
+	/* The replace: the sub-extent request cannot reuse the slot; the
+	 * declare ejects it and declares the one-page region.
+	 */
+	r = corten_arena_test_vm_mmap(test, mm, w, PAGE_SIZE, MAP_FIXED);
+	KUNIT_EXPECT_EQ(test, r, (long)w);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, w));
+	KUNIT_EXPECT_FALSE(test, corten_arena_test_pool_idle(mm, w));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), implants);
+	ar = corten_arena_test_region_of(mm, w);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	KUNIT_EXPECT_FALSE(test, READ_ONCE(ar->idle));
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"mmap_region_routes"),
+			routes + 1);
+
+	/* It serves through the region fault path (write, then readback). */
+	KUNIT_ASSERT_EQ(test, corten_arena_user_fault(mm, w, FAULT_FLAG_WRITE,
+						      NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_page_word(mm, w, &p0, true),
+			0);
+	back = 0;
+	KUNIT_ASSERT_EQ(test, corten_arena_test_page_word(mm, w, &back,
+							  false), 0);
+	KUNIT_EXPECT_EQ(test, back, p0);
+
+	/* And releases like any region. */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 w, PAGE_SIZE), 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* MV2 W-5: the explicit-address FILE admission -- the V-B route at an
+ * explicit address.  A private memfd MAP_FIXED over free window terrain
+ * declares a FILE region (no funnel VMA, no implant entry), the read
+ * fault serves through the B.3 arm with the FILE_MAPPED metadata, and
+ * the munmap route releases it.
+ */
+static void corten_arena_test_explicit_file_region(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_arena *ar;
+	struct corten_pte_meta m;
+	struct corten_arena_test_op o;
+	struct file *file;
+	long implants, routes;
+	unsigned int fflags = 0;
+	u64 pat = 0xf11e51de51de51deULL, back;
+	loff_t pos = 0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "explicit region route requires corten=on");
+
+	file = shmem_file_setup("corten_w5expl", 2 * PAGE_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	KUNIT_ASSERT_EQ(test,
+			kernel_write(file, &pat, sizeof(pat), &pos),
+			(ssize_t)sizeof(pat));
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	implants = corten_arena_test_implant_nr(mm);
+	routes = corten_arena_test_named_counter(test, "mmap_region_routes");
+	KUNIT_ASSERT_GE(test, routes, 0);
+
+	/* The shape: private file MAP_FIXED at the window base (no arena
+	 * overlap -- the admission's declare owns the install whole).
+	 */
+	o = (struct corten_arena_test_op){
+		.mm = mm, .fn = corten_arena_test_op_file_mmap,
+		.file = file, .addr = CORTEN_ARENA_TEST_WIN,
+		.len = 2 * PAGE_SIZE,
+		.flags = ((MAP_PRIVATE | MAP_FIXED) << 8) | PROT_READ,
+	};
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
+	KUNIT_EXPECT_EQ(test, o.retl, (long)CORTEN_ARENA_TEST_WIN);
+
+	/* The region: the FILE record folded in, no tree VMA, no
+	 * registry entry.
+	 */
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(ar->rclass), CORTEN_REGION_FILE);
+	KUNIT_EXPECT_PTR_EQ(test, READ_ONCE(ar->rfile), file);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(ar->rpoff), 0);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), implants);
+
+	/* The content serves through the B.3 read arm. */
+	KUNIT_ASSERT_EQ(test, corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
+						      0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	back = 0;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm, CORTEN_ARENA_TEST_WIN,
+						    &back, false), 0);
+	KUNIT_EXPECT_EQ(test, back, pat);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m),
+			0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"mmap_region_routes"),
+			routes + 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 CORTEN_ARENA_TEST_WIN,
+						 2 * PAGE_SIZE), 1);
+	/* The full-coverage munmap parks the window (the T1c contract --
+	 * rclass-blind); a FILE reactivation would take a fresh window
+	 * (the B.1 no-reuse rule), the park is the same either way.
+	 */
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pool_idle(mm,
+						      CORTEN_ARENA_TEST_WIN));
+
+	fput(file);
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
 						 corten_arena_test_op_mode_exit,
@@ -8459,12 +8660,16 @@ static void corten_arena_test_inv_mv2_stale(struct kunit *test)
 						 0, 0), 0);
 }
 
-/* The legal implant end-to-end (D24) plus the fork mirror (V-A.3c): a
- * plain MAP_FIXED over a parked window audits clean, and the child
- * inherits the registry entry -- dup_mmap copies the implant VMA as an
- * ordinary legacy VMA, and without the mirror both the child's fault
- * terminus and this walker would misread it (the harness fork does not
- * dup tree VMAs, so the copied piece is simulated with mkvm).
+/* The legal implant end-to-end (D24) plus the fork mirror (V-A.3c).
+ * MV2 W-5 re-pin: the route no longer produces the entry for the
+ * MAP_FIXED-over-a-parked-window shape (the explicit-address admission
+ * declares a region there -- see mapfixed_over_parked), so the entry is
+ * injected directly (the J2 anchors' convention) with its funnel-VMA
+ * twin simulated by mkvm; the pin is the mirror itself -- dup_mmap
+ * copies an implant VMA as an ordinary legacy VMA, and without the
+ * registry mirror both the child's fault terminus and this walker would
+ * misread it (the harness fork does not dup tree VMAs, so the copied
+ * piece is simulated with mkvm).
  */
 static void corten_arena_test_inv_mv2_implant_fork(struct kunit *test)
 {
@@ -8476,20 +8681,17 @@ static void corten_arena_test_inv_mv2_implant_fork(struct kunit *test)
 		kunit_skip(test, "J2 implant fork requires corten=on");
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
-	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_pool_attach(mm,
-						      CORTEN_ARENA_TEST_WIN,
-						      PMD_SIZE), 0);
-	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_run_op(test, mm,
-						 corten_arena_test_op_munmap_route,
-						 CORTEN_ARENA_TEST_WIN,
-						 PAGE_SIZE), 1);
-	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_vm_mmap(test, mm,
-						  CORTEN_ARENA_TEST_WIN,
-						  PMD_SIZE, MAP_FIXED),
-			CORTEN_ARENA_TEST_WIN);
+
+	/* The registry entry + its tree-VMA twin (the injected producer
+	 * form; the route-level shape is the region admission now).
+	 */
+	mmap_write_lock(mm);
+	corten_implant_mark(mm, CORTEN_ARENA_TEST_WIN, PMD_SIZE);
+	mmap_write_unlock(mm);
+	cvma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
+				      CORTEN_ARENA_TEST_WIN + PMD_SIZE,
+				      CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
 
 	/* The walker's core legal shape: zero violations, entry not
 	 * stale.
@@ -13851,10 +14053,13 @@ static void corten_arena_test_sweep_fork_mirror(struct kunit *test)
 
 	/* The real fork: begin freezes and drains the parent; commit
 	 * mirrors.  The wrappers hold both mmap_writes in the dup_mmap
-	 * order.
+	 * order.  W-4 leftover ② (W-5): the anchor-owned mm rides the
+	 * kunit action form -- an assertion abort mid-case must not leak
+	 * it (the sweep_mixed_frame_exit first-draft lesson).
 	 */
 	child = mm_alloc();
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	kunit_add_action(test, corten_arena_test_mmput_action, child);
 	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
 	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_named_counter(test,
@@ -13965,6 +14170,7 @@ static void corten_arena_test_sweep_fork_mirror(struct kunit *test)
 	 * parent keeps serving.
 	 */
 	mmput(child);
+	kunit_release_action(test, corten_arena_test_mmput_action, child);
 	back = 0;
 	KUNIT_ASSERT_EQ(test,
 			corten_arena_test_page_word(mm, a0, &back, false), 0);
@@ -14017,6 +14223,7 @@ static void corten_arena_test_sweep_file_exit(struct kunit *test)
 	 */
 	child = mm_alloc();
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	kunit_add_action(test, corten_arena_test_mmput_action, child);
 	o = (struct corten_arena_test_op){
 		.mm = child, .fn = corten_arena_test_op_sweep_file_map,
 		.file = file, .addr = CORTEN_ARENA_TEST_NOWHERE,
@@ -14061,6 +14268,7 @@ static void corten_arena_test_sweep_file_exit(struct kunit *test)
 	 */
 	grand = mm_alloc();
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, grand);
+	kunit_add_action(test, corten_arena_test_mmput_action, grand);
 	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_begin(grand, child), 0);
 	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(grand, child), 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_named_counter(test,
@@ -14078,6 +14286,7 @@ static void corten_arena_test_sweep_file_exit(struct kunit *test)
 
 	/* The grandchild's exit returns its mirror. */
 	mmput(grand);
+	kunit_release_action(test, corten_arena_test_mmput_action, grand);
 	KUNIT_EXPECT_EQ(test, folio_mapcount(f0), 1);
 	KUNIT_EXPECT_EQ(test, folio_mapcount(f1), 1);
 	KUNIT_EXPECT_EQ(test, folio_ref_count(f0), ref0 + 0);
@@ -14089,6 +14298,7 @@ static void corten_arena_test_sweep_file_exit(struct kunit *test)
 	 * reach 0 before the pagecache layer ever sees the eviction.
 	 */
 	mmput(child);
+	kunit_release_action(test, corten_arena_test_mmput_action, child);
 	KUNIT_EXPECT_EQ(test, folio_mapcount(f0), 0);
 	KUNIT_EXPECT_EQ(test, folio_mapcount(f1), 0);
 	KUNIT_EXPECT_EQ(test, folio_ref_count(f0), ref0 - 1);
@@ -14351,6 +14561,12 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_noreplace_parked),
 	KUNIT_CASE(corten_arena_test_noreplace_active),
 	KUNIT_CASE(corten_arena_test_mapfixed_over_parked),
+	/* MV2 W-5: the explicit-address region admission (the smoke
+	 * contract's anon shape and the V-B file shape at an explicit
+	 * address -- funnel out, region in, the registry untouched).
+	 */
+	KUNIT_CASE(corten_arena_test_explicit_anon_region),
+	KUNIT_CASE(corten_arena_test_explicit_file_region),
 	KUNIT_CASE(corten_arena_test_occupied_incl_idle),
 	KUNIT_CASE(corten_arena_test_p4_eject),
 	KUNIT_CASE(corten_arena_test_hint_fence),
