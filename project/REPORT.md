@@ -1248,3 +1248,62 @@ run5 登记环境项）。
   3/3 + 金标准审计 + JThreadBench 各班 rc=0），不外推"所有 JVM 应用零缺陷"；
   syz 首轮结论对覆盖面缩限（corten=off）+ 误归因旁证撤回（§3-M7/§5.4）；M7 二轮
   coverage/corpus 数字标注采集时点，挂机未收数前不作 G6 判定**。
+
+## 10. M-V2 章：字面 VMA 移除（MV2, 2026-09-24 ~ 10-04, D28/D29 执行层）
+
+### 10.1 目标与终态
+D28 把 D20 的"诚实化保留"推翻为字面移除: MODE 进程 maple 树条目 == 0（含
+carrier 的 vm_area_struct 分配恒 0）。**终态达成**: tree_entries = 5/进程, 全部
+落在规格登记的结构豁免桶（stack×1 GROWSDOWN、special×3 = vdso/vvar/vclock、
+brk×1 W-3 GROW 臂契约）——可迁形状（匿名私有 + file 私有）收编率 100%
+（动态多段 ELF live audit: wl_file/wl_anon/unclassified delta 全 0）。
+
+### 10.2 切片史（W-1..W-7 + 修复轮, 提交 65+, tag 至 corten-mv2-complete）
+- **W-1 原生 rmap 拱心石**（7 提交）: vma-free rmap 包装/file registry 失效
+  枚举/ttu 双路由/原生匿名换出驱动/unuse sweep——rmap 与 VMA 解耦。
+- **W-2 carrier 消灭**: MODE vma 分配恒 0（分配面判据达成）。
+- **W-3 委托域迁移 + GUP 重构**: brk region 化/MAP_STACK 白名单翻转/exec 镜像
+  判定/vdso 排除/邻接精度/GUP 三态流/futex arena 臂; W-3fix（chunk promoted
+  perm 探针+exit walk 帧退役）+ W-3fix2（novma swap-in 三层, S-3 首绿）。
+- **W-4 入场扫入**（含 B1-B5/N1/N2 修复全史）: prctl ENTER sweep——匿名两相
+  事务+folio 手术（mapping=NULL）、file 臂 V-B 全机制、六桶 skip 分类学、
+  enter_sweep 拆分、INV2'前夜的 frozen 发布协议。guest 门驱动修复: B1 原子
+  睡眠、B2 committed 泄漏、B3 DONTCOPY/WIPEONFORK 语义、B4 RCU 段分配、
+  N1 pinned 引用、N2 uffd ctx 门。
+- **W-5 植入消灭**: 显式 MAP_FIXED 全量裁决（explicit_region_route）, 四个
+  implant_mark 生产点降级不可达 backstop; D33 判据收窄（MAP_SHARED punch =
+  结构性白名单原形）。
+- **W-6/W-6b 终判据 + 收编轮**: wl 六桶逐类计数+tree_entries 载体; 实测照出
+  三存量——J3 = W-2 起 /proc/maps 对 MODE 恒空（C-fix a9c89f5a8968 行 token
+  修复+or-next 同族臂+special_mapping 分类）; J4 = frame-sharing 架构边界
+  （D34 定界, skip_declare=288/88%）。
+- **W-7 multi-record registry**: 帧内记录桶（xa_tag_pointer, INV2' 页域两两
+  不相交, R1 无状态去重取代四游标, 相位 A 帧键重构——design-first 拦下
+  PT-页带活 PTE 退役的 folio 泄漏）, skip_declare 288→0, 树归零兑现。
+
+### 10.3 判定终表
+| 判据 | 终态 |
+|---|---|
+| J1 find_vma 严格零 | PASS（标准电池 0 hits; oracle 族登记型增量） |
+| J2 白名单收缩 | PASS（unclassified 153→0; 三桶+brk 口径） |
+| J3 maps 双源 | PASS after in-slice C-fix（attribution W-2; A.1 对拍
+  procmap-first+pagemap 逐字节同, 2 行 V-B.3 披露） |
+| J4 树归零 live 断言 | PASS（W-7 兑现; tree_entries=5 全豁免桶） |
+| J5 零改动回归集 | PASS（smoke v2 26/26 双形态/metis checksum 同基准/
+  JTB/S-3 双分支/sweep-live/mva1_probe 全绿） |
+| J6 LoC 终账 | VMA 层四件 13,408（vanilla 12,955, 路由钩净 +453）vs
+  corten 生产 23,761+测试 20,573; M-V2 增量后见 §10.4 |
+| J7 pgtables+j2_stale | PASS 带披露（残值 1-2 笔/电池 = free_pgtables
+  混合帧几何门, C2 小片承接; j2_stale=0） |
+
+### 10.4 登记边界（全部非阻断, 编号在案）
+- **D32 sticky-MODE**: swept mm 的显式 EXIT 拒绝（-EBUSY, 位随 punch 生灭）
+  ——树空后无 VMA 可回, 语义自洽; de-sweep 逆迁移 = MV3 级。
+- **D33**: registry 可达性判据收窄至可迁形状; MAP_SHARED punch = wl SHARED
+  桶原形。
+- **C2 残值族**: free_pgtables 混合帧几何门（1-2 笔 8192B/电池, 需动
+  mm/memory.c）+ KUnit 合成 mm PT 泄漏——独立小片承接。
+- **CHUNK maps 残段**: V-C 登记双源渲染行为（mvd-leak §6）, 空真掩盖期结束
+  后按登记重现。
+- **MV3 路线（D29 目标 2）**: 默认进场/无损闭合清单/mmap-pf 批 mark/全系统
+  MODE 电池/删除账兑现——MV2 完成为其前置, 全部前置已就绪。
