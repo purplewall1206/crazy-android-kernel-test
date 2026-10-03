@@ -1419,3 +1419,27 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     -j12 重跑收敛（#297→#300 线健康）; #292 验证件于 =n 链接覆写前抢救归档; 教训:
     config 翻转后立即归档验证件。w6-dev2 判定表+全套工件 results/r07/w6/ +
     next/w6-dev-report.md。
+
+- **[2026-10-04 04:0x r09 W-6b 收口 + D34: J3/J2 转绿, sweep 根因=架构边界, W-7 开启]**
+  - **W-6b 四任务全落**（commit 856416f7ceec, 5 文件 +221/−38, merge d26ffcd780ae 双
+    分支已推）: ①J3 修复 guest 验证 PASS（oracle 正言+maps 17 行双证+A.1 对拍
+    procmap-first+pagemap 逐字节同, 差异恰=V-B.3 披露面; 负言分诊: probe CHUNK
+    17/18=登记陈旧预期非回归）; ②PROCMAP_QUERY or-next 同族臂修（row token 同形,
+    wound 位点 ENOENT→行应答实证, 零回归）; ③C-fix B: x86_64 无 arch_vma_name 为
+    J2 误桶根因——新增 vma_is_special_mapping_family()（mmap.c+mm.h）, wl+sweep
+    并入, wl_unclassified 153→0, wl_special=3/进程, 豁免表 2→3 兑现, KUnit 锚;
+    ④sweep 逐因计数器落地（6 桶）——**347 因式分解: skip_declare=288（88%）=
+    frame-sharing 邻居**（file_may 假设证伪, 全电池 filemay=0）; brk 守卫修复
+    （heap 留 VMA 形归 W-3 GROW 臂, 拔 sys_brk 破坏面, 带锚）。
+  - **D34 (2026-10-04 主会话裁决·frame-sharing 架构边界)**: registry=xa 按帧单记录
+    （INV2/magazine 挂其上）→ 同帧多 VMA（ELF 五段常态）结构性只能收编首段, 邻段
+    fail-open 留树=**架构边界而非缺陷**（内容完整性全电池验证, 零腐坏）。J4 字面
+    树归零需 **multi-record registry = W-7 切片**（D28 字面目标要求, 不做披露收场
+    ——D20-a 先例: 用户拒绝诚实化豁免）。W-7 = registry 数据形状重设计, 设计先行
+    （消费面: fault/gup/fork/exit/j2/wl/magazine 全走查后定形状）。
+  - **W-6 判定终态**: J1✓ J2✓(C-fix B 后 unclassified=0) J3✓(C-fix A+or-next,
+    attribution W-2) J4→**W-7 承接** J5✓ J6 供数 J7✓(残值 1-2 笔方差=C2)。
+    w6b 报告 next/w6b-dev-report.md; 工件 results/r07/w6/ 延续。
+  - **运维新增**: agent 各轮 VM/日志名必须带轮次命名空间（w6-dev2/w6b 同名 gate
+    碰撞仲裁: 先固定 md5 权威件+目录归属移交）; #298 时代日志被复跑覆盖的披露
+    面（18/18 引用源已失, 报告改引 303 完整档）。
