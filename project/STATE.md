@@ -1356,3 +1356,43 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
   - **过程教训**: agent 两次 429 殉职（配额窗 5h）+主会话接管先例三度应用（r07-B.2/
     W-3fix3/本轮）; 多 agent 并发写同一 worktree 必须串行化; smoke 源码 maxdepth 漏找
     二度发生。
+
+- **[2026-10-04 01:0x r09 maintainer: MV2 W-5 ✓ —— 植入消灭落地（第五片）+ D33]**
+  - **实现**: worktree mv-a0 commit **2b5bfdffaa7c**（W-5 主体, 5 文件 +533/−58）+
+    **197d654af9a0**（=n 门控微修）→ 主树 --no-ff merge **21dcc766b4ef**（HEAD, tag
+    **corten-r07-w5**; 六文件 cmp 字节全等）。github 双分支随手同步（D31）。
+  - **核心**: `corten_arena_explicit_region_route()`（arena.c:13949）——MODE mm 显式地址
+    窗口域 MAP_FIXED 全量裁决: 匿名→显式地址 ANON declare（parked 驱逐/再激活内含）,
+    file 私有→corten_file_may+punch 拆重叠+FILE attach（V-B 全机制, W-3 exec 镜像的显式
+    地址形态）, 返 1 免走 mmap_region; 拒绝臂答 funnel 自身 errno 且不写 registry。四个
+    `corten_implant_mark` 生产点降级不可达 backstop（admitted 守卫+注记, 逐点论证表=
+    报告 §2）。非可编码租户形（MAP_SHARED/hugetlb/growsdown 族）=W-6 白名单结构桶。
+  - **D33 (2026-10-04 主会话裁决·判据收窄)**: 规格判据「登记表 API 恒不可达」收窄为
+    **「对可迁形状恒不可达」**——MAP_SHARED punch 走 punch+registry 是规格正确的结构性
+    白名单行为（W-3 §1.3: 共享迁移破坏 pagecache 一致性, wl SHARED 桶原形）, probe
+    punchfork 的 memfd MAP_SHARED punch（16 次）即其活体; guest 计数面
+    （drops/violations/stale）恒零。
+  - **W-4 遗留收编**: ①mixed 帧全空扫描+整帧退役机制留树（arena.c:3685,3838）, 但
+    guest 残值判据未达——三诊断 boot 定界真实根因=**free_pgtables 对 W-4 扫入树内空洞
+    的上层页几何门**（修需动 mm/memory.c, 超片权限）→ **移交 C2 前小片**（与 KUnit PT
+    泄漏同片）, W-5 按登记容差过（1 笔 8192B 与 W-4 基线同值）; ②三处 mmput-action
+    卫生 ✓; ③j2_stale 3→**0** ✓（registry 降级后瞬态消失, 预测命中）。
+  - **验证终读数**: =y #292 零新增警告; KUnit on×2（24/0/1+**123/0/0**+34/0/5）+off
+    （25/0/0+26/0/97+7/0/32, skip 对账精确）; checkpatch --strict 0E/0W/0C（810 行）;
+    =n 13 对象零符号 + **全树 =n task_mmu.o 编译干净（=n 微修后）**; guest 门全绿
+    （smoke v2 26/26 双形态 / metis_eq ×2 checksum 同基准 / sweep-live / mva1_probe
+    18/18 / S-3 PASS / dmesg 静默 / registry 家族恒零 + mmap_region_routes=1 正证据）。
+    bzimg/r07-w5（#292 sha256=9f83ab4c…, 配额黑洞后首次归档）+ green.txt。证据
+    results/r07/w5/。
+  - **=n 微修发现史（诚实三段）**: agent 报"893c804 既有 =n 红（task_mmu.c mvc 接线落
+    ifdef 外）"→ 主会话对象级 =n 复核**未复现**（初判"误诊/构建状态腐坏"）→ 收口时发现
+    worktree 存有 agent 已落未报的修复（corten_row_flags/file 的 =n 中性 stand-in,
+    :613 起 +17）→ 真相: 红为真（基座 893c804 无修时 =n 不编译）, 修复已在树, 我那次
+    干净构建恰含此修。agent 交付消息被截断所致。commit 197d654af9a0 独立入库。
+  - **运维**: 多轮 config 翻转致 worktree 增量构建状态腐坏（=n/=y 混链）, #292 验证件
+    于被 =n 链接覆写前抢救（/tmp 拷贝校验 9f83ab4c 命中）; 全量净重建后台进行; 教训:
+    config 翻转验证后应立即归档 =y 验证件再动配置。
+  - **下一步 = W-6 终判据（MV2 DoD 收官）**: J1 严格零（植入豁免移除—W-5 后已满足
+    前提）/J2 白名单收缩（SHARED/special/stack 三桶）/J3 双源/树归零 live 断言/零改动
+    回归集全量/跨内核 J3 对拍/LoC 终账/REPORT M-V2 章; C2 小片（KUnit PT 泄漏+
+    free_pgtables 几何门）建议 W-6 前并行或收官后立即。

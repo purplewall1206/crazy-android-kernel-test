@@ -1,0 +1,859 @@
+diff --git a/mm/corten_arena.c b/mm/corten_arena.c
+index 2305cfb7613c..1b3e84b3fa80 100644
+--- a/mm/corten_arena.c
++++ b/mm/corten_arena.c
+@@ -245,6 +245,13 @@ static atomic_long_t corten_nr_eagain_leaked;	/* -EAGAIN still escaping */
+ static atomic_long_t corten_nr_mremap_release_fail; /* grow RELEASE fails */
+ static atomic_long_t corten_nr_mmap_punches;	/* file-MAP_FIXED punch routes */
+ static atomic_long_t corten_nr_mmap_punch_rejects; /* unroutable MAP_FIXED */
++/* MV2 W-5: the explicit-address region admission -- window shapes routed
++ * to regions (anon region / V-B FILE region) instead of the funnel's
++ * implant backstop, and the shapes it refuses (the funnel's own errno is
++ * answered; the refuses counter is the disclosure ledger).
++ */
++static atomic_long_t corten_nr_mmap_region_routes; /* explicit region admits */
++static atomic_long_t corten_nr_mmap_region_refuses; /* window refusals */
+ /* V-B.2 (H7) / W1.b: file-side unmap events (truncate / invalidation)
+  * routed into the arena chunk-zap transaction -- since W1.b counted at
+  * the per-inode registry enumeration (one per intersecting region), not
+@@ -2845,6 +2852,14 @@ void corten_arena_stats_report(struct seq_file *m)
+ 		   atomic_long_read(&corten_nr_mmap_punches));
+ 	seq_printf(m, "mmap_punch_rejects  %ld\n",
+ 		   atomic_long_read(&corten_nr_mmap_punch_rejects));
++	/* MV2 W-5: the explicit-address region admission (the routes
++	 * counter moves for every window shape declared a region; the
++	 * refuses ledger is the disclosure side).
++	 */
++	seq_printf(m, "mmap_region_routes  %ld\n",
++		   atomic_long_read(&corten_nr_mmap_region_routes));
++	seq_printf(m, "mmap_region_refuses %ld\n",
++		   atomic_long_read(&corten_nr_mmap_region_refuses));
+ 	/* V-B.2 (H7) / W1.b: the file-event route and the backstops
+ 	 * (the second and third must stay 0).
+ 	 */
+@@ -3660,6 +3675,41 @@ static void corten_arena_exit_run(struct mm_struct *mm,
+ 	corten_arena_free_ptes_span(mm, tlb, start, retire_end);
+ }
+ 
++/*
++ * W-4 leftover ① (closed in W-5): is every PTE of @addr's PMD frame
++ * empty?  A pure ptl-scanned read (INV6: no PTE is written here), on the
++ * dying mm with mmap_write held -- the same fence the exit walk itself
++ * runs under.  No PT page (or a leaf PMD) counts as empty: there is
++ * nothing to retire either way.
++ */
++static bool corten_arena_frame_ptes_empty(struct mm_struct *mm,
++					  unsigned long addr)
++{
++	pmd_t *pmdp = corten_arena_pmd(mm, addr);
++	pte_t *ptep;
++	spinlock_t *ptl;
++	bool empty = true;
++	int i;
++
++	if (!pmdp)
++		return true;
++	if (!pmd_present(READ_ONCE(*pmdp)) || pmd_leaf(READ_ONCE(*pmdp)))
++		return true;
++
++	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
++	if (!ptep)
++		return false;
++	for (i = 0; i < PTRS_PER_PTE; i++) {
++		if (!pte_none(ptep_get(ptep + i))) {
++			empty = false;
++			break;
++		}
++	}
++	pte_unmap_unlock(ptep, ptl);
++
++	return empty;
++}
++
+ /*
+  * V-D (MV_VMA_FREE_SPEC.md sec 3.4): the pure-PT exit walk.  mm_users
+  * is 0 and both the tree and the registry are frozen, so the window
+@@ -3774,6 +3824,23 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
+ 					WARN_ONCE(1,
+ 						  "corten: exit walk mixed-frame zap failed at [%lx,%lx): PT residue left to the leak ledger\n",
+ 						  mix_start, mix_end);
++				/* W-4 leftover ① (W-5): with the arena's own
++				 * range zapped, a frame whose PTEs are all
++				 * empty (the cohabiting legacy VMA carries no
++				 * resident translation) has no reason to keep
++				 * its PT page -- free_pgtables()'s whole-frame
++				 * guard can never pick it up under the
++				 * byte-granular co-tenant.  Retire it through
++				 * the same whole-frame funnel the walkable
++				 * runs use; the upper-table pass below then
++				 * sees the level exclusively ours and closes
++				 * the pgtables_bytes residue with it.
++				 */
++				if (corten_arena_frame_ptes_empty(mm, win))
++					corten_arena_free_ptes_span(mm, tlb,
++								    win,
++								    win +
++								    PMD_SIZE);
+ 				continue;
+ 			}
+ 
+@@ -13715,6 +13782,17 @@ static int corten_arena_placement_punch_idle(struct mm_struct *mm,
+ 		/* The freed VA is legal legacy terrain now: register the
+ 		 * implant the gather below is about to create (D24; the J2
+ 		 * whitelist's producer).
++		 *
++		 * MV2 W-5: every encodable explicit-address shape is
++		 * admitted as a region by corten_arena_explicit_region_route()
++		 * BEFORE this route runs (its declare ejects parked windows
++		 * through the pool prepare), so on this continuation only
++		 * the non-encodable tenant shapes (MAP_SHARED and friends,
++		 * the W-6 whitelist's SHARED bucket) can arrive and the
++		 * mark is their registry producer alone.  Kept as the
++		 * backstop the W-5 criterion documents ("登记表 API 恒不可达"
++		 * for every routed shape); the guest battery's registry
++		 * counters must read zero.
+ 		 */
+ 		corten_implant_mark(mm, addr, len);
+ 	}
+@@ -13731,11 +13809,18 @@ static int corten_arena_placement_punch_idle(struct mm_struct *mm,
+  * root cause.  Ranges the arena cannot own (boundary crossing, two
+  * arenas) are cleanly rejected, same verdict as the munmap route.
+  * Runs under mmap_write (do_mmap's contract).
++ *
++ * @admitted: the W-5 explicit-address region admission
++ * (corten_arena_explicit_region_route()) is only borrowing the overlap
++ * teardown here -- the incoming mapping becomes a region, not a funnel
++ * install, so both registry marks below must stay dead for it.  The
++ * marks' live reachability is the non-encodable tenant continuation
++ * (MAP_SHARED and friends) alone, the W-6 whitelist's SHARED bucket.
+  * Return: 0 = legacy, -errno = reject.
+  */
+ static int corten_arena_mmap_punch_route(struct mm_struct *mm,
+ 					 unsigned long addr, unsigned long len,
+-					 unsigned long flags)
++					 unsigned long flags, bool admitted)
+ {
+ 	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+ 	struct corten_arena *ar_start, *ar_end, *ar;
+@@ -13808,8 +13893,11 @@ static int corten_arena_mmap_punch_route(struct mm_struct *mm,
+ 			 * foreign VMA over the freed arena range -- the
+ 			 * implant registry's second producer.  (@ar may be
+ 			 * freed by now; the range was captured above.)
++			 * MV2 W-5: dead on the @admitted continuation --
++			 * the mapping becomes a V-B FILE region there.
+ 			 */
+-			corten_implant_mark(mm, rel_start, rel_len);
++			if (!admitted)
++				corten_implant_mark(mm, rel_start, rel_len);
+ 		}
+ 		return ret < 0 ? ret : 0;
+ 	}
+@@ -13823,8 +13911,11 @@ static int corten_arena_mmap_punch_route(struct mm_struct *mm,
+ 	if (!ret) {
+ 		/* V-A.3a: the punched hole receives the foreign VMA (the
+ 		 * D-G'' file-MAP_FIXED shape) -- register the implant.
++		 * MV2 W-5: dead on the @admitted continuation -- the hole
++		 * is declared a V-B FILE region there instead.
+ 		 */
+-		corten_implant_mark(mm, addr, len);
++		if (!admitted)
++			corten_implant_mark(mm, addr, len);
+ 	}
+ 
+ 	return ret < 0 ? ret : 0;
+@@ -13853,6 +13944,130 @@ enum corten_mmap_class corten_arena_mmap_classify(unsigned long flags,
+ 	return CORTEN_MMAP_MARK;
+ }
+ 
++/*
++ * MV2 W-5: the explicit-address region admission.  Every explicit-address
++ * (MAP_FIXED / MAP_FIXED_NOREPLACE) install a MODE mm makes into the
++ * window domain is either declared a region here or refused with the
++ * funnel's own errno -- the legacy funnel never sees an encodable window
++ * shape, which is what retires the implant registry from the production
++ * paths (the spec's "登记表 API 恒不可达" criterion; the remaining marks
++ * in the punch routes serve only the non-encodable tenant shapes).
++ *
++ * Encodable shapes (the classify whitelist's flag form, PRIVATE):
++ *   - anonymous: an auto-attach's declare at the explicit address (the
++ *     A.2a novma arm; the smoke contract's mmap-fixed-at-window shape).
++ *     A parked window in range is ejected (or, on an exact-extent match,
++ *     reactivated) by the declare's pool prepare -- the P1b eject lives
++ *     inside the admission for this arm.
++ *   - file-backed: the V-B route (corten_file_may + the punch route's
++ *     overlap teardown + the FILE attach, B.2/B.3 serving) -- the
++ *     "explicit address form" of the W-3 exec mirror's routing, sharing
++ *     its whole mechanism.
++ *
++ * Everything else (MAP_SHARED, hugetlb, growsdown, populate/locked,
++ * foreign-type) returns 0 and stays the legacy funnel's tenant: the
++ * registry's one live producer family, and the W-6 whitelist's SHARED
++ * bucket.  Refusal arms (file_may, the validate checklist,
++ * OVERCOMMIT_NEVER, a failed declare) answer the funnel's own errno and
++ * count in the refuses ledger -- they never write the registry either.
++ *
++ * Runs under mmap_write (do_mmap's contract), after the NOREPLACE
++ * occupancy gate (mmap.c already answered -EEXIST on occupied range).
++ * Return: 0 = not an admission shape, 1 = admitted (the caller completes
++ * the mmap WITHOUT mmap_region(), the mark leg's contract), -errno =
++ * refused.
++ */
++static int corten_arena_explicit_region_route(struct mm_struct *mm,
++					      unsigned long addr,
++					      unsigned long len,
++					      unsigned long prot,
++					      unsigned long flags,
++					      struct file *file,
++					      unsigned long pgoff)
++{
++	unsigned long end = addr + len;
++	int ret;
++
++	if (!READ_ONCE(mm->corten_mode))
++		return 0;
++	if (!(flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)))
++		return 0;
++	if (!len || end <= addr || addr >= CORTEN_MODE_WINDOW_END ||
++	    end <= CORTEN_MODE_WINDOW_START)
++		return 0;
++	/* The classify whitelist's flag form (the encodable set). */
++	if (flags & (MAP_HUGETLB | MAP_GROWSDOWN | MAP_POPULATE | MAP_LOCKED))
++		return 0;
++	if ((flags & MAP_TYPE) != MAP_PRIVATE)
++		return 0;
++	if (!file && !(flags & MAP_ANONYMOUS))
++		return 0;
++
++	/* Live arena overlap: the anon shape is the mark transaction's
++	 * (the dispatch below), the file shape the punch route's -- the
++	 * admission only takes tree-and-live-arena-free terrain.
++	 */
++	if (corten_arena_range_overlaps(mm, addr, len))
++		return 0;
++
++	/* OVERCOMMIT_NEVER's funnel VMA carries the VM_ACCOUNT committed
++	 * charge the declare arm does not model (the W-4 B2 family);
++	 * refuse rather than half-model it.
++	 */
++	if (sysctl_overcommit_memory == OVERCOMMIT_NEVER) {
++		atomic_long_inc(&corten_nr_mmap_region_refuses);
++		return -EOPNOTSUPP;
++	}
++
++	/* The A.2a verification checklist the takeover owns now that
++	 * mmap_region() will not run: may_expand_vm (RLIMIT_AS/DATA),
++	 * def_flags VM_LOCKED, the pkey shape.
++	 */
++	ret = corten_auto_validate(mm, len, prot, flags);
++	if (ret) {
++		atomic_long_inc(&corten_nr_mmap_region_refuses);
++		return ret;
++	}
++
++	if (file) {
++		/* V-B: the do_mmap() file validation chain.  A refusal
++		 * answers the same errno the funnel would give the same
++		 * file at a non-window address.
++		 */
++		ret = corten_file_may(file, prot, pgoff, len, NULL);
++		if (ret) {
++			atomic_long_inc(&corten_nr_mmap_region_refuses);
++			return ret;
++		}
++		/* The D-G'' overlap arm: tear live arena state through
++		 * the punch route's own transaction first; @admitted
++		 * keeps its registry marks dead (the W-5 criterion).  A
++		 * boundary-classified range is the route's -EOPNOTSUPP.
++		 */
++		ret = corten_arena_mmap_punch_route(mm, addr, len, flags,
++						    true);
++		if (ret)
++			return ret;
++		/* The region replaces the funnel's foreign VMA one for
++		 * one: same byte range, same frames, the FILE record and
++		 * B.2/B.3 serving.  A declare failure leaves the hole
++		 * arena-blind -- the punch's documented failed-mapping-
++		 * over-a-reservation semantics.
++		 */
++		ret = corten_arena_file_attach(mm, addr, len, prot, file,
++					       pgoff);
++	} else {
++		ret = corten_arena_auto_attach(mm, addr, len, prot);
++	}
++	if (ret) {
++		atomic_long_inc(&corten_nr_mmap_region_refuses);
++		return ret;
++	}
++
++	atomic_long_inc(&corten_nr_mmap_region_routes);
++	return 1;
++}
++
+ /*
+  * mmap MAP_FIXED into an arena (sec 5.6, paper Fig.8 L1-7): mark the
+  * range as a fresh PRIVATE_ANON allocation; pages already recorded in
+@@ -13864,11 +14079,14 @@ enum corten_mmap_class corten_arena_mmap_classify(unsigned long flags,
+  * Every other MAP_FIXED shape goes through the punch route, so the
+  * overlap removal never reaches the legacy funnel with live arena state
+  * (r05 dg2-analysis.md D1, the D-G'' root cause).
++ * MV2 W-5: the explicit-address region admission runs first -- the
++ * window-domain shapes it admits never reach either dispatch leg below.
+  * Return: 0 = legacy, 1 = marked, -errno = reject.
+  */
+ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
+ 			    unsigned long len, unsigned long prot,
+-			    unsigned long flags, bool file)
++			    unsigned long flags, struct file *file,
++			    unsigned long pgoff)
+ {
+ 	struct corten_arena *ar;
+ 	enum corten_unmap_class class;
+@@ -13878,7 +14096,24 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
+ 	u8 perm = CORTEN_PERM_USER;
+ 	int ret = 0;
+ 
+-	if (!corten_enabled_static() || !READ_ONCE(mm->corten_state))
++	if (!corten_enabled_static())
++		return 0;
++
++	/* MV2 W-5: the admission before the eject -- an admitted shape's
++	 * parked-window teardown happens inside its declare (pool
++	 * prepare), so the P1b mark below only ever sees the
++	 * non-admitted continuation.  It runs ahead of the state gate
++	 * too: a MODE mm whose registry was never created (ENTER-only)
++	 * still owns the window domain, and its admission declares the
++	 * registry on the way (the V-A.3c contract the P4 backstop arm
++	 * used to carry).
++	 */
++	ret = corten_arena_explicit_region_route(mm, addr, len, prot, flags,
++						 file, pgoff);
++	if (ret)
++		return ret;
++
++	if (!READ_ONCE(mm->corten_state))
+ 		return 0;
+ 
+ 	/* V-A.3a P1b (audit #14): parked windows are invisible to both
+@@ -13894,8 +14129,9 @@ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
+ 			return ret;
+ 	}
+ 
+-	if (corten_arena_mmap_classify(flags, file) != CORTEN_MMAP_MARK)
+-		return corten_arena_mmap_punch_route(mm, addr, len, flags);
++	if (corten_arena_mmap_classify(flags, !!file) != CORTEN_MMAP_MARK)
++		return corten_arena_mmap_punch_route(mm, addr, len, flags,
++						     false);
+ 
+ 	ar = corten_arena_lookup_get(mm, addr);
+ 	if (!ar)
+@@ -14998,6 +15234,15 @@ bool corten_arena_placement_backstop(struct mm_struct *mm,
+ 	 * entry whose only effect is a tree lookup that answers the
+ 	 * same legacy MAPERR (harmless; the walker's fallback predicate
+ 	 * collects it).  implant_mark clips to the window itself.
++	 *
++	 * MV2 W-5: unreachable for every encodable explicit-address
++	 * shape -- corten_arena_explicit_region_route() declares those
++	 * as regions (or refuses them) before the funnel runs.  The
++	 * arm's live tenants are the non-encodable continuation (the
++	 * W-6 SHARED bucket) and the fail-open funnels (a degraded
++	 * attach under allocation failure).  Backstop kept per the
++	 * W-5 criterion; the guest battery's registry counters must
++	 * read zero.
+ 	 */
+ 	if (READ_ONCE(mm->corten_mode) && len &&
+ 	    start < CORTEN_MODE_WINDOW_END &&
+diff --git a/mm/corten_arena.h b/mm/corten_arena.h
+index 93413b44494c..b96656781f45 100644
+--- a/mm/corten_arena.h
++++ b/mm/corten_arena.h
+@@ -281,7 +281,8 @@ enum corten_mmap_class corten_arena_mmap_classify(unsigned long flags,
+ 
+ int corten_arena_mmap_route(struct mm_struct *mm, unsigned long addr,
+ 			    unsigned long len, unsigned long prot,
+-			    unsigned long flags, bool file);
++			    unsigned long flags, struct file *file,
++			    unsigned long pgoff);
+ 
+ /*
+  * [F-B, D-G''] Punch classification (pure, testable): what a non-markable
+@@ -1138,7 +1139,9 @@ static inline int corten_arena_mmap_route(struct mm_struct *mm,
+ 					  unsigned long addr,
+ 					  unsigned long len,
+ 					  unsigned long prot,
+-					  unsigned long flags, bool file)
++					  unsigned long flags,
++					  struct file *file,
++					  unsigned long pgoff)
+ {
+ 	return 0;
+ }
+diff --git a/mm/corten_arena_test.c b/mm/corten_arena_test.c
+index 9146035a665b..16fe11674f91 100644
+--- a/mm/corten_arena_test.c
++++ b/mm/corten_arena_test.c
+@@ -7480,6 +7480,24 @@ static void corten_arena_test_op_punch(struct corten_arena_test_op *o)
+ 	mmap_write_unlock(o->mm);
+ }
+ 
++/* W-5: the explicit-address FILE admission's do_mmap shape -- the same
++ * packed flags encoding as op_sweep_file_map (flags high byte, prot low),
++ * but the raw funnel return with no VMA expectation (an admitted shape
++ * installs a region, not a tree VMA).
++ */
++static void corten_arena_test_op_file_mmap(struct corten_arena_test_op *o)
++{
++	unsigned long populate;
++	LIST_HEAD(uf);
++
++	mmap_write_lock(o->mm);
++	o->retl = (long)do_mmap(o->file, o->addr, o->len, o->flags & 0xff,
++				o->flags >> 8, 0, 0, &populate, &uf);
++	mmap_write_unlock(o->mm);
++	if (!IS_ERR_VALUE((unsigned long)o->retl))
++		o->ret = 0;
++}
++
+ static long corten_arena_test_punch(struct kunit *test, struct mm_struct *mm,
+ 				    struct file *file, unsigned long addr,
+ 				    unsigned long len)
+@@ -7634,10 +7652,18 @@ static void corten_arena_test_noreplace_active(struct kunit *test)
+  * rejected -- the incoming VMA becomes a registered implant on freed VA,
+  * and the ejected slot can never be handed out again.
+  */
++/* D24 (audit #14's plain-MAP_FIXED sibling): legacy MAP_FIXED is
++ * *replace*, so a parked window under one is ejected-and-admitted, never
++ * rejected.  MV2 W-5 re-pins the admission's shape: the mapping is
++ * declared a region (no funnel VMA, no implant entry), and the
++ * exact-extent match meets the parked slot inside the declare's pool
++ * prepare -- the ANON reactivation, not a placement eject.
++ */
+ static void corten_arena_test_mapfixed_over_parked(struct kunit *test)
+ {
+ 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+ 	struct mm_struct *mm = t->mm;
++	struct corten_arena *ar;
+ 	long ejects = corten_arena_test_placement_idle_ejects();
+ 	long misses = corten_arena_test_pool_misses();
+ 	unsigned long addr = 0, lenp = PAGE_SIZE, flags;
+@@ -7668,38 +7694,42 @@ static void corten_arena_test_mapfixed_over_parked(struct kunit *test)
+ 	r = corten_arena_test_vm_mmap(test, mm, CORTEN_ARENA_TEST_WIN,
+ 				      PMD_SIZE, MAP_FIXED);
+ 	KUNIT_EXPECT_EQ(test, r, CORTEN_ARENA_TEST_WIN);
+-	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+ 
+-	/* The window left the registry whole -- the erase-eject leaves no
+-	 * restored markers under the incoming VMA (the recycle-eject would
+-	 * re-mark frames the placement backstop then counts occupied and
+-	 * the magazine would later serve under the implant), so both
+-	 * probes read the freed range as unoccupied.
++	/* MV2 W-5: the admission declared the region -- no legacy VMA,
++	 * no implant registry entry.
+ 	 */
++	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+ 	KUNIT_EXPECT_FALSE(test,
+-			   occupied_incl_idle(mm, CORTEN_ARENA_TEST_WIN,
+-					      PMD_SIZE));
+-	KUNIT_EXPECT_FALSE(test,
+-			   corten_arena_range_overlaps(mm,
+-						       CORTEN_ARENA_TEST_WIN,
+-						       PMD_SIZE));
++			   corten_implant_covers(mm, CORTEN_ARENA_TEST_WIN,
++						 PMD_SIZE));
++	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), 0);
++
++	/* The reactivated window is live region terrain again: the
++	 * occupancy probes read it as ours (the eject arm's unoccupied
++	 * reading was the funnel-VMA shape), the slot left the pool.
++	 */
++	KUNIT_EXPECT_TRUE(test,
++			  occupied_incl_idle(mm, CORTEN_ARENA_TEST_WIN,
++					     PMD_SIZE));
++	KUNIT_EXPECT_TRUE(test,
++			  corten_arena_range_overlaps(mm,
++						      CORTEN_ARENA_TEST_WIN,
++						      PMD_SIZE));
+ 	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 0);
+ 	KUNIT_EXPECT_FALSE(test,
+ 			   corten_arena_test_pool_idle(mm,
+ 						       CORTEN_ARENA_TEST_WIN));
+-	KUNIT_EXPECT_EQ(test, corten_arena_test_placement_idle_ejects(),
+-			ejects + 1);
+-
+-	/* The implant registry whitelists the placement (the J2 walker's
+-	 * legal shape, D24).
++	/* MV2 W-5: the placement-eject counter stays put -- the parked
++	 * slot rode the declare's pool prepare (a reactivation).
+ 	 */
+-	KUNIT_EXPECT_TRUE(test,
+-			  corten_implant_covers(mm, CORTEN_ARENA_TEST_WIN,
+-						PMD_SIZE));
+-	KUNIT_EXPECT_GE(test, corten_arena_test_implant_nr(mm), 1);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_placement_idle_ejects(),
++			ejects);
++	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
++	KUNIT_ASSERT_NOT_NULL(test, ar);
++	KUNIT_EXPECT_FALSE(test, READ_ONCE(ar->idle));
+ 
+-	/* The next same-size auto request cannot hit the ejected window:
+-	 * a counted pool miss, fresh window placement elsewhere.
++	/* The next same-size auto request cannot hit the reactivated
++	 * window: a counted pool miss, fresh window placement elsewhere.
+ 	 */
+ 	flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+ 	mmap_write_lock(mm);
+@@ -7717,6 +7747,175 @@ static void corten_arena_test_mapfixed_over_parked(struct kunit *test)
+ 						 0, 0), 0);
+ }
+ 
++/* MV2 W-5: the anon admission at freed window terrain -- the smoke
++ * contract's mmap-fixed-at-window shape.  The explicit MAP_FIXED declares
++ * an anon region (the funnel's VMA + implant entry are gone), the
++ * sub-extent request ejects the parked prelude through the declare's
++ * pool prepare, and the region serves and releases like any auto window.
++ */
++static void corten_arena_test_explicit_anon_region(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	struct corten_arena *ar;
++	long implants, routes;
++	unsigned int fflags = FAULT_FLAG_WRITE;
++	unsigned long w;
++	long r;
++	u64 p0 = 0x0ddba11ULL, back;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "explicit region route requires corten=on");
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	implants = corten_arena_test_implant_nr(mm);
++	routes = corten_arena_test_named_counter(test, "mmap_region_routes");
++	KUNIT_ASSERT_GE(test, routes, 0);
++
++	/* The prelude: an auto window parked by its munmap (the free()
++	 * shape).
++	 */
++	w = corten_arena_test_vm_mmap(test, mm, 0, PMD_SIZE,
++				      MAP_PRIVATE | MAP_ANONYMOUS |
++				      MAP_NORESERVE);
++	KUNIT_ASSERT_EQ(test, w & ~PAGE_MASK, 0);
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_munmap_route,
++						 w, PAGE_SIZE), 1);
++	KUNIT_EXPECT_TRUE(test, corten_arena_test_pool_idle(mm, w));
++
++	/* The replace: the sub-extent request cannot reuse the slot; the
++	 * declare ejects it and declares the one-page region.
++	 */
++	r = corten_arena_test_vm_mmap(test, mm, w, PAGE_SIZE, MAP_FIXED);
++	KUNIT_EXPECT_EQ(test, r, (long)w);
++	KUNIT_EXPECT_NULL(test, vma_lookup(mm, w));
++	KUNIT_EXPECT_FALSE(test, corten_arena_test_pool_idle(mm, w));
++	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), implants);
++	ar = corten_arena_test_region_of(mm, w);
++	KUNIT_ASSERT_NOT_NULL(test, ar);
++	KUNIT_EXPECT_FALSE(test, READ_ONCE(ar->idle));
++	KUNIT_EXPECT_EQ(test, corten_arena_test_named_counter(test,
++						      "mmap_region_routes"),
++			routes + 1);
++
++	/* It serves through the region fault path (write, then readback). */
++	KUNIT_ASSERT_EQ(test, corten_arena_user_fault(mm, w, FAULT_FLAG_WRITE,
++						      NULL, &fflags),
++			CORTEN_FAULT_HANDLED);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_page_word(mm, w, &p0, true),
++			0);
++	back = 0;
++	KUNIT_ASSERT_EQ(test, corten_arena_test_page_word(mm, w, &back,
++							  false), 0);
++	KUNIT_EXPECT_EQ(test, back, p0);
++
++	/* And releases like any region. */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_munmap_route,
++						 w, PAGE_SIZE), 1);
++
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_mode_exit,
++						 0, 0), 0);
++}
++
++/* MV2 W-5: the explicit-address FILE admission -- the V-B route at an
++ * explicit address.  A private memfd MAP_FIXED over free window terrain
++ * declares a FILE region (no funnel VMA, no implant entry), the read
++ * fault serves through the B.3 arm with the FILE_MAPPED metadata, and
++ * the munmap route releases it.
++ */
++static void corten_arena_test_explicit_file_region(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	struct corten_arena *ar;
++	struct corten_pte_meta m;
++	struct corten_arena_test_op o;
++	struct file *file;
++	long implants, routes;
++	unsigned int fflags = 0;
++	u64 pat = 0xf11e51de51de51deULL, back;
++	loff_t pos = 0;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "explicit region route requires corten=on");
++
++	file = shmem_file_setup("corten_w5expl", 2 * PAGE_SIZE, 0);
++	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
++	KUNIT_ASSERT_EQ(test,
++			kernel_write(file, &pat, sizeof(pat), &pos),
++			(ssize_t)sizeof(pat));
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	implants = corten_arena_test_implant_nr(mm);
++	routes = corten_arena_test_named_counter(test, "mmap_region_routes");
++	KUNIT_ASSERT_GE(test, routes, 0);
++
++	/* The shape: private file MAP_FIXED at the window base (no arena
++	 * overlap -- the admission's declare owns the install whole).
++	 */
++	o = (struct corten_arena_test_op){
++		.mm = mm, .fn = corten_arena_test_op_file_mmap,
++		.file = file, .addr = CORTEN_ARENA_TEST_WIN,
++		.len = 2 * PAGE_SIZE,
++		.flags = ((MAP_PRIVATE | MAP_FIXED) << 8) | PROT_READ,
++	};
++	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
++	KUNIT_EXPECT_EQ(test, o.retl, (long)CORTEN_ARENA_TEST_WIN);
++
++	/* The region: the FILE record folded in, no tree VMA, no
++	 * registry entry.
++	 */
++	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
++	KUNIT_ASSERT_NOT_NULL(test, ar);
++	KUNIT_EXPECT_EQ(test, READ_ONCE(ar->rclass), CORTEN_REGION_FILE);
++	KUNIT_EXPECT_PTR_EQ(test, READ_ONCE(ar->rfile), file);
++	KUNIT_EXPECT_EQ(test, READ_ONCE(ar->rpoff), 0);
++	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
++	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), implants);
++
++	/* The content serves through the B.3 read arm. */
++	KUNIT_ASSERT_EQ(test, corten_arena_user_fault(mm, CORTEN_ARENA_TEST_WIN,
++						      0, NULL, &fflags),
++			CORTEN_FAULT_HANDLED);
++	back = 0;
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_test_page_word(mm, CORTEN_ARENA_TEST_WIN,
++						    &back, false), 0);
++	KUNIT_EXPECT_EQ(test, back, pat);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN, &m),
++			0);
++	KUNIT_EXPECT_EQ(test, m.state, CORTEN_FILE_MAPPED);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_named_counter(test,
++						      "mmap_region_routes"),
++			routes + 1);
++
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_munmap_route,
++						 CORTEN_ARENA_TEST_WIN,
++						 2 * PAGE_SIZE), 1);
++	/* The full-coverage munmap parks the window (the T1c contract --
++	 * rclass-blind); a FILE reactivation would take a fresh window
++	 * (the B.1 no-reuse rule), the park is the same either way.
++	 */
++	KUNIT_EXPECT_TRUE(test,
++			  corten_arena_test_pool_idle(mm,
++						      CORTEN_ARENA_TEST_WIN));
++
++	fput(file);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_mode_exit,
++						 0, 0), 0);
++}
++
+ /* The occupancy matrix: occupied_incl_idle() mirrors range_overlaps()
+  * on the live axis and flips on the idle and sentinel axes -- a parked
+  * window and a claimed-but-unallocated magazine frame are both
+@@ -8459,12 +8658,16 @@ static void corten_arena_test_inv_mv2_stale(struct kunit *test)
+ 						 0, 0), 0);
+ }
+ 
+-/* The legal implant end-to-end (D24) plus the fork mirror (V-A.3c): a
+- * plain MAP_FIXED over a parked window audits clean, and the child
+- * inherits the registry entry -- dup_mmap copies the implant VMA as an
+- * ordinary legacy VMA, and without the mirror both the child's fault
+- * terminus and this walker would misread it (the harness fork does not
+- * dup tree VMAs, so the copied piece is simulated with mkvm).
++/* The legal implant end-to-end (D24) plus the fork mirror (V-A.3c).
++ * MV2 W-5 re-pin: the route no longer produces the entry for the
++ * MAP_FIXED-over-a-parked-window shape (the explicit-address admission
++ * declares a region there -- see mapfixed_over_parked), so the entry is
++ * injected directly (the J2 anchors' convention) with its funnel-VMA
++ * twin simulated by mkvm; the pin is the mirror itself -- dup_mmap
++ * copies an implant VMA as an ordinary legacy VMA, and without the
++ * registry mirror both the child's fault terminus and this walker would
++ * misread it (the harness fork does not dup tree VMAs, so the copied
++ * piece is simulated with mkvm).
+  */
+ static void corten_arena_test_inv_mv2_implant_fork(struct kunit *test)
+ {
+@@ -8476,20 +8679,17 @@ static void corten_arena_test_inv_mv2_implant_fork(struct kunit *test)
+ 		kunit_skip(test, "J2 implant fork requires corten=on");
+ 
+ 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+-	KUNIT_ASSERT_EQ(test,
+-			corten_arena_test_pool_attach(mm,
+-						      CORTEN_ARENA_TEST_WIN,
+-						      PMD_SIZE), 0);
+-	KUNIT_ASSERT_EQ(test,
+-			corten_arena_test_run_op(test, mm,
+-						 corten_arena_test_op_munmap_route,
+-						 CORTEN_ARENA_TEST_WIN,
+-						 PAGE_SIZE), 1);
+-	KUNIT_ASSERT_EQ(test,
+-			corten_arena_test_vm_mmap(test, mm,
+-						  CORTEN_ARENA_TEST_WIN,
+-						  PMD_SIZE, MAP_FIXED),
+-			CORTEN_ARENA_TEST_WIN);
++
++	/* The registry entry + its tree-VMA twin (the injected producer
++	 * form; the route-level shape is the region admission now).
++	 */
++	mmap_write_lock(mm);
++	corten_implant_mark(mm, CORTEN_ARENA_TEST_WIN, PMD_SIZE);
++	mmap_write_unlock(mm);
++	cvma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_WIN,
++				      CORTEN_ARENA_TEST_WIN + PMD_SIZE,
++				      CORTEN_ARENA_TEST_FLAGS_OK);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cvma);
+ 
+ 	/* The walker's core legal shape: zero violations, entry not
+ 	 * stale.
+@@ -13851,10 +14051,13 @@ static void corten_arena_test_sweep_fork_mirror(struct kunit *test)
+ 
+ 	/* The real fork: begin freezes and drains the parent; commit
+ 	 * mirrors.  The wrappers hold both mmap_writes in the dup_mmap
+-	 * order.
++	 * order.  W-4 leftover ② (W-5): the anchor-owned mm rides the
++	 * kunit action form -- an assertion abort mid-case must not leak
++	 * it (the sweep_mixed_frame_exit first-draft lesson).
+ 	 */
+ 	child = mm_alloc();
+ 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
++	kunit_add_action(test, corten_arena_test_mmput_action, child);
+ 	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+ 	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+ 	KUNIT_EXPECT_EQ(test, corten_arena_test_named_counter(test,
+@@ -13965,6 +14168,7 @@ static void corten_arena_test_sweep_fork_mirror(struct kunit *test)
+ 	 * parent keeps serving.
+ 	 */
+ 	mmput(child);
++	kunit_release_action(test, corten_arena_test_mmput_action, child);
+ 	back = 0;
+ 	KUNIT_ASSERT_EQ(test,
+ 			corten_arena_test_page_word(mm, a0, &back, false), 0);
+@@ -14017,6 +14221,7 @@ static void corten_arena_test_sweep_file_exit(struct kunit *test)
+ 	 */
+ 	child = mm_alloc();
+ 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
++	kunit_add_action(test, corten_arena_test_mmput_action, child);
+ 	o = (struct corten_arena_test_op){
+ 		.mm = child, .fn = corten_arena_test_op_sweep_file_map,
+ 		.file = file, .addr = CORTEN_ARENA_TEST_NOWHERE,
+@@ -14061,6 +14266,7 @@ static void corten_arena_test_sweep_file_exit(struct kunit *test)
+ 	 */
+ 	grand = mm_alloc();
+ 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, grand);
++	kunit_add_action(test, corten_arena_test_mmput_action, grand);
+ 	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_begin(grand, child), 0);
+ 	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(grand, child), 0);
+ 	KUNIT_EXPECT_EQ(test, corten_arena_test_named_counter(test,
+@@ -14078,6 +14284,7 @@ static void corten_arena_test_sweep_file_exit(struct kunit *test)
+ 
+ 	/* The grandchild's exit returns its mirror. */
+ 	mmput(grand);
++	kunit_release_action(test, corten_arena_test_mmput_action, grand);
+ 	KUNIT_EXPECT_EQ(test, folio_mapcount(f0), 1);
+ 	KUNIT_EXPECT_EQ(test, folio_mapcount(f1), 1);
+ 	KUNIT_EXPECT_EQ(test, folio_ref_count(f0), ref0 + 0);
+@@ -14089,6 +14296,7 @@ static void corten_arena_test_sweep_file_exit(struct kunit *test)
+ 	 * reach 0 before the pagecache layer ever sees the eviction.
+ 	 */
+ 	mmput(child);
++	kunit_release_action(test, corten_arena_test_mmput_action, child);
+ 	KUNIT_EXPECT_EQ(test, folio_mapcount(f0), 0);
+ 	KUNIT_EXPECT_EQ(test, folio_mapcount(f1), 0);
+ 	KUNIT_EXPECT_EQ(test, folio_ref_count(f0), ref0 - 1);
+@@ -14351,6 +14559,12 @@ static struct kunit_case corten_arena_test_cases[] = {
+ 	KUNIT_CASE(corten_arena_test_noreplace_parked),
+ 	KUNIT_CASE(corten_arena_test_noreplace_active),
+ 	KUNIT_CASE(corten_arena_test_mapfixed_over_parked),
++	/* MV2 W-5: the explicit-address region admission (the smoke
++	 * contract's anon shape and the V-B file shape at an explicit
++	 * address -- funnel out, region in, the registry untouched).
++	 */
++	KUNIT_CASE(corten_arena_test_explicit_anon_region),
++	KUNIT_CASE(corten_arena_test_explicit_file_region),
+ 	KUNIT_CASE(corten_arena_test_occupied_incl_idle),
+ 	KUNIT_CASE(corten_arena_test_p4_eject),
+ 	KUNIT_CASE(corten_arena_test_hint_fence),
+diff --git a/mm/corten_fault_test.c b/mm/corten_fault_test.c
+index e24b5c5ba5c9..3945a669af0b 100644
+--- a/mm/corten_fault_test.c
++++ b/mm/corten_fault_test.c
+@@ -1451,7 +1451,7 @@ static void corten_fault_test_churn_repro(struct kunit *test)
+ 					PROT_READ | PROT_WRITE,
+ 					MAP_FIXED | MAP_PRIVATE |
+ 					MAP_ANONYMOUS | MAP_NORESERVE,
+-					false),
++					NULL, 0),
+ 				1);
+ 
+ 		/* touch + in-place readback: the write fault installs a
+@@ -1498,7 +1498,7 @@ static void corten_fault_test_churn_repro(struct kunit *test)
+ 					PROT_READ | PROT_WRITE,
+ 					MAP_FIXED | MAP_PRIVATE |
+ 					MAP_ANONYMOUS | MAP_NORESERVE,
+-					false),
++					NULL, 0),
+ 				1);
+ 		for (i = 0; i < n; i++) {
+ 			pte_t *ptep = ft_pte(t, base + i * PAGE_SIZE);
+@@ -1902,7 +1902,9 @@ static void corten_fault_test_punch_hole(struct kunit *test)
+ 			corten_arena_mmap_route(t->mm, hole, 2 * PAGE_SIZE,
+ 						PROT_READ | PROT_WRITE,
+ 						MAP_PRIVATE | MAP_FIXED,
+-						/* file = */ true),
++						/* no file pointer: the
++						 * punch-only contract */
++						NULL, 0),
+ 			0);
+ 	mmap_write_unlock(t->mm);
+ 
+@@ -2052,7 +2054,9 @@ static void corten_fault_test_punch_head(struct kunit *test)
+ 			corten_arena_mmap_route(t->mm, hole, 2 * PAGE_SIZE,
+ 						PROT_READ | PROT_WRITE,
+ 						MAP_PRIVATE | MAP_FIXED,
+-						/* file = */ true),
++						/* no file pointer: the
++						 * punch-only contract */
++						NULL, 0),
+ 			0);
+ 	mmap_write_unlock(t->mm);
+ 
+diff --git a/mm/mmap.c b/mm/mmap.c
+index 6ffc86e01569..a495e0b99162 100644
+--- a/mm/mmap.c
++++ b/mm/mmap.c
+@@ -593,7 +593,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
+ 	 */
+ 	{
+ 		int cret = corten_arena_mmap_route(mm, addr, len, prot,
+-						   flags, file);
++						   flags, file, pgoff);
+ 
+ 		if (cret < 0)
+ 			return cret;

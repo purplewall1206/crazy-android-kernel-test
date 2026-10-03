@@ -1,0 +1,80 @@
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+=== W-5 guest gate 2026-10-04 00:03:51 kernel=6.18.32-g893c8043990d-dirty ===
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+mmap_punches        0
+mmap_punch_rejects  0
+mmap_region_routes  0
+mmap_region_refuses 0
+implant_drops       0
+j2_violations       0
+j2_stale            0
+=== 1. smoke v2 (双形态 26) ===
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+37df16d7
+PASS munmap-stack
+PASS munmap-fixed
+PASS mode-exit-refused
+PASS mode-sticky-stock-intact
+SMOKE PASS
+[smoke] smoke binary rc=0
+[smoke] debugfs arenas after: 0
+[smoke] SMOKE-DRIVER PASS
+SMOKE_RC=0
+=== 2. metis_eq x2 checksum ===
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+metis1 RC=0
+"distinct_words":65073,"checksum":"2d383eeed4ceb73b"
+metis2 RC=0
+"distinct_words":65073,"checksum":"2d383eeed4ceb73b"
+=== 3. sweep-live ===
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+corten_mode_hook: MODE on (pid 496)
+sweep_anon_adopts 13
+sweep_file_adopts 21
+sweep_skip_other 240
+sweep_pages_resident 2326
+sweep-live RESULT PASS (rc=0)
+SWEEP_RC=0
+=== 4. mva1_probe ===
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+PROBE_RC=0
+18
+[ok] FRESH: reactivated window write+readback 8M ok
+[ok] CHUNK: kept half still works after inner munmap
+[ok] CHUNK: dropped half re-materialized, kept half intact
+[ok] CHUNK: maps carries no VMA-split residue
+[ok] S-4b: maps clean after final munmap
+[ok] S-1: fault on munmapped window is SEGV_MAPERR (was ACCERR)
+[ok] punchfork: MemFree reconciled (3673108 -> 3716304 kB, 8 iters)
+[mva1] probe done passes=18 fails=0
+=== 5. S-3 battery ===
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+[s3] branch B: holder exit (V-D exit walk closes the blind entries)
+[s3] branch B: inuse drained to 0 in 0s
+[s3] branch B: retry swapoff skipped (device already drained by the convergent first swapoff)
+[s3] branch B ledger: unuse_blind_mms 0 -> 0, zap_swap_frees 1 -> 1, swapins=32767
+[s3] branch B: zap_swap_frees N/A this run (entries pulled by unuse, not zapped by exit; swapins=32767 is the closure evidence)
+S3 RESULT PASS
+S3_RC=0
+=== 6. registry 家族终读数 + W-5 正证据 ===
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+mmap_punches        16
+mmap_punch_rejects  0
+mmap_region_routes  1
+mmap_region_refuses 0
+implant_drops       0
+j2_violations       0
+j2_stale            0
+=== 7. pgtables_bytes 残值 (判据==0) ===
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+1
+=== 8. dmesg 静默审计 ===
+Warning: Permanently added '[127.0.0.1]:10022' (ED25519) to the list of known hosts.
+0
+[    0.000000] Command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on mitigations=off kunit.enable=0 log_buf_len=16M
+[    0.658299] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on mitigations=off kunit.enable=0 log_buf_len=16M
+[    0.661000] corten: requested on, activating at initcall time
+[    2.334931] corten: page descriptors enabled
+[    2.482217] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[    7.210442] systemd[1]: Mounting sys-kernel-debug.mount - /sys/kernel/debug...
+[   33.389883] BUG: non-zero pgtables_bytes on freeing mm: 8192
