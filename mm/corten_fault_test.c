@@ -1451,7 +1451,7 @@ static void corten_fault_test_churn_repro(struct kunit *test)
 					PROT_READ | PROT_WRITE,
 					MAP_FIXED | MAP_PRIVATE |
 					MAP_ANONYMOUS | MAP_NORESERVE,
-					false),
+					NULL, 0),
 				1);
 
 		/* touch + in-place readback: the write fault installs a
@@ -1498,7 +1498,7 @@ static void corten_fault_test_churn_repro(struct kunit *test)
 					PROT_READ | PROT_WRITE,
 					MAP_FIXED | MAP_PRIVATE |
 					MAP_ANONYMOUS | MAP_NORESERVE,
-					false),
+					NULL, 0),
 				1);
 		for (i = 0; i < n; i++) {
 			pte_t *ptep = ft_pte(t, base + i * PAGE_SIZE);
@@ -1902,7 +1902,10 @@ static void corten_fault_test_punch_hole(struct kunit *test)
 			corten_arena_mmap_route(t->mm, hole, 2 * PAGE_SIZE,
 						PROT_READ | PROT_WRITE,
 						MAP_PRIVATE | MAP_FIXED,
-						/* file = */ true),
+						/* no file pointer: the
+						 * punch-only contract
+						 */
+						NULL, 0),
 			0);
 	mmap_write_unlock(t->mm);
 
@@ -2052,7 +2055,10 @@ static void corten_fault_test_punch_head(struct kunit *test)
 			corten_arena_mmap_route(t->mm, hole, 2 * PAGE_SIZE,
 						PROT_READ | PROT_WRITE,
 						MAP_PRIVATE | MAP_FIXED,
-						/* file = */ true),
+						/* no file pointer: the
+						 * punch-only contract
+						 */
+						NULL, 0),
 			0);
 	mmap_write_unlock(t->mm);
 
