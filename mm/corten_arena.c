@@ -512,11 +512,12 @@ static atomic_long_t corten_nr_brk_legacy;
 
 /* MV2 W-4 (the entry sweep): resident-legacy -> region migration
  * accounting.  The two adopt counters name the arms (anonymous and
- * private-file VMA -> region); the five skip buckets are the structural
- * legacy survivors (the wl disclosure's sweep-side twin), where
- * "other" also collects the fail-open abandons (frame-sharing
- * neighbour, unfit PTE population, declare failure); resident counts
- * the present pages the sweep recorded metadata for.
+ * private-file VMA -> region); the skip buckets are the structural
+ * legacy survivors (the wl disclosure's sweep-side twin, one per skip
+ * path since W-6b), where "other" collects the fail-open abandons
+ * (unfit PTE population, allocation) and declare names the refused
+ * range (the frame-sharing neighbour); resident counts the present
+ * pages the sweep recorded metadata for.
  */
 static atomic_long_t corten_nr_sweep_anon_adopts;
 static atomic_long_t corten_nr_sweep_file_adopts;
@@ -526,6 +527,17 @@ static atomic_long_t corten_nr_sweep_skip_shared;
 static atomic_long_t corten_nr_sweep_skip_window;
 static atomic_long_t corten_nr_sweep_skip_other;
 static atomic_long_t corten_nr_sweep_pages_resident;
+/* W-6b: the skip composition (the skip_other lump hid the adoption
+ * shortfall's face).  declare = the range refused -- the frame-sharing
+ * neighbour: one arena per 2M frame (corten_arena_overlaps), the
+ * dominant skip of every real process's exec image.
+ */
+static atomic_long_t corten_nr_sweep_skip_flags;
+static atomic_long_t corten_nr_sweep_skip_uffd;
+static atomic_long_t corten_nr_sweep_skip_filemay;
+static atomic_long_t corten_nr_sweep_skip_ops;
+static atomic_long_t corten_nr_sweep_skip_brk;
+static atomic_long_t corten_nr_sweep_skip_declare;
 
 /* V-E whitelist ledger (spec sec 1.3 J2, the complete form): walks
  * executed, window-domain classification violations (must stay 0 --
@@ -3017,6 +3029,18 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_sweep_skip_window));
 	seq_printf(m, "sweep_skip_other    %ld\n",
 		   atomic_long_read(&corten_nr_sweep_skip_other));
+	seq_printf(m, "sweep_skip_flags    %ld\n",
+		   atomic_long_read(&corten_nr_sweep_skip_flags));
+	seq_printf(m, "sweep_skip_uffd     %ld\n",
+		   atomic_long_read(&corten_nr_sweep_skip_uffd));
+	seq_printf(m, "sweep_skip_filemay  %ld\n",
+		   atomic_long_read(&corten_nr_sweep_skip_filemay));
+	seq_printf(m, "sweep_skip_ops      %ld\n",
+		   atomic_long_read(&corten_nr_sweep_skip_ops));
+	seq_printf(m, "sweep_skip_brk      %ld\n",
+		   atomic_long_read(&corten_nr_sweep_skip_brk));
+	seq_printf(m, "sweep_skip_declare  %ld\n",
+		   atomic_long_read(&corten_nr_sweep_skip_declare));
 	seq_printf(m, "sweep_pages_resident %ld\n",
 		   atomic_long_read(&corten_nr_sweep_pages_resident));
 	seq_printf(m, "declare_notes       %ld\n",
@@ -3552,6 +3576,18 @@ long corten_arena_test_sweep(int which)
 		return atomic_long_read(&corten_nr_sweep_skip_other);
 	case 7:
 		return atomic_long_read(&corten_nr_sweep_pages_resident);
+	case 8:
+		return atomic_long_read(&corten_nr_sweep_skip_flags);
+	case 9:
+		return atomic_long_read(&corten_nr_sweep_skip_uffd);
+	case 10:
+		return atomic_long_read(&corten_nr_sweep_skip_filemay);
+	case 11:
+		return atomic_long_read(&corten_nr_sweep_skip_ops);
+	case 12:
+		return atomic_long_read(&corten_nr_sweep_skip_brk);
+	case 13:
+		return atomic_long_read(&corten_nr_sweep_skip_declare);
 	default:
 		return 0;
 	}
@@ -6575,7 +6611,7 @@ static int corten_sweep_adopt_anon(struct mm_struct *mm,
 	if (ret) {
 		corten_sweep_drop_picks(&picks);
 		mas_destroy(&vmi.mas);
-		return 1;
+		return ret;		/* the caller buckets -EEXIST apart */
 	}
 	arena = xa_load(&state->arenas, start >> PMD_SHIFT);
 
@@ -6660,7 +6696,7 @@ static int corten_sweep_adopt_file(struct mm_struct *mm,
 					  true, true);
 	if (ret) {
 		mas_destroy(&vmi.mas);
-		return 1;
+		return ret;		/* the caller buckets -EEXIST apart */
 	}
 	arena = xa_load(&state->arenas, start >> PMD_SHIFT);
 
@@ -6689,7 +6725,18 @@ static int corten_sweep_adopt_file(struct mm_struct *mm,
 /*
  * The sweep's verdict for one VMA: -1 = ours (no count), negative =
  * skip (the caller's bucket), 0 = anonymous adopt, 1 = file adopt.
+ * W-6b: every skip path carries its own bucket -- the skip_other lump
+ * hid the adoption shortfall's composition (the 347/battery reading).
  */
+#define CORTEN_SWEEP_SKIP_WINDOW	(-2)
+#define CORTEN_SWEEP_SKIP_STACK		(-3)
+#define CORTEN_SWEEP_SKIP_SPECIAL	(-4)
+#define CORTEN_SWEEP_SKIP_FLAGS		(-5)
+#define CORTEN_SWEEP_SKIP_SHARED	(-6)
+#define CORTEN_SWEEP_SKIP_UFFD		(-7)
+#define CORTEN_SWEEP_SKIP_FILEMAY	(-8)
+#define CORTEN_SWEEP_SKIP_OPS		(-9)
+#define CORTEN_SWEEP_SKIP_BRK		(-10)
 static int corten_sweep_classify(struct mm_struct *mm,
 				 struct vm_area_struct *vma)
 {
@@ -6704,12 +6751,23 @@ static int corten_sweep_classify(struct mm_struct *mm,
 	/* The window domain is the implants' world (W-5's target). */
 	if (vma->vm_end > CORTEN_MODE_WINDOW_START &&
 	    vma->vm_start < CORTEN_MODE_WINDOW_END)
-		return -2;			/* skip: window */
+		return CORTEN_SWEEP_SKIP_WINDOW;
 
 	if (flags & (VM_GROWSDOWN | VM_GROWSUP))
-		return -3;			/* skip: stack */
-	if (arch_vma_name(vma))
-		return -4;			/* skip: special (vdso/vvar) */
+		return CORTEN_SWEEP_SKIP_STACK;
+	if (arch_vma_name(vma) || vma_is_special_mapping_family(vma))
+		return CORTEN_SWEEP_SKIP_SPECIAL;
+	/* The W-3 brk route owns the heap: the first post-entry GROW
+	 * adopts the VMA itself (vma_find() is its contract).  A sweep
+	 * adoption here would leave that arm empty and the legacy
+	 * do_brk_flags() writing plain PTEs under a foreign region
+	 * record -- the wl classifier's BRK predicate, verbatim.
+	 */
+	if (!vma->vm_file &&
+	    vma->vm_start >= mm->start_brk &&
+	    vma->vm_start < PAGE_ALIGN(mm->brk) &&
+	    vma->vm_end <= PAGE_ALIGN(mm->brk))
+		return CORTEN_SWEEP_SKIP_BRK;
 	/* VM_DONTCOPY / VM_WIPEONFORK (MADV_DONTFORK / MADV_WIPEONFORK --
 	 * the key-material shapes) are fork contracts carried by the tree
 	 * VMA: dup_mmap() reads the bit and either skips the clone or
@@ -6724,7 +6782,7 @@ static int corten_sweep_classify(struct mm_struct *mm,
 		     VM_SHADOW_STACK | VM_LOCKED | VM_LOCKONFAULT |
 		     VM_DONTCOPY | VM_WIPEONFORK | VM_SEQ_READ |
 		     VM_RAND_READ))
-		return -5;			/* skip: other (structural) */
+		return CORTEN_SWEEP_SKIP_FLAGS;
 
 #ifdef CONFIG_USERFAULTFD
 	/* A registered userfaultfd context carries no vm_flags bit (the
@@ -6734,10 +6792,10 @@ static int corten_sweep_classify(struct mm_struct *mm,
 	 * uffd-waiter event.
 	 */
 	if (vma->vm_userfaultfd_ctx.ctx)
-		return -5;			/* skip: other (structural) */
+		return CORTEN_SWEEP_SKIP_UFFD;
 #endif
 	if (flags & VM_SHARED)
-		return -6;			/* skip: shared */
+		return CORTEN_SWEEP_SKIP_SHARED;
 
 	if (vma->vm_file) {
 		u8 may;
@@ -6749,12 +6807,12 @@ static int corten_sweep_classify(struct mm_struct *mm,
 				    (flags & VM_EXEC) ? PROT_EXEC : 0,
 				    vma->vm_pgoff,
 				    vma->vm_end - vma->vm_start, &may))
-			return -5;
+			return CORTEN_SWEEP_SKIP_FILEMAY;
 		return 1;
 	}
 	if (vma_is_anonymous(vma))
 		return 0;
-	return -5;				/* skip: other (vm_ops, no file) */
+	return CORTEN_SWEEP_SKIP_OPS;	/* vm_ops, no file */
 }
 
 /*
@@ -6799,17 +6857,32 @@ static void corten_arena_mode_sweep(struct mm_struct *mm)
 				break;
 			case -1:
 				break;		/* ours */
-			case -2:
+			case CORTEN_SWEEP_SKIP_WINDOW:
 				atomic_long_inc(&corten_nr_sweep_skip_window);
 				break;
-			case -3:
+			case CORTEN_SWEEP_SKIP_STACK:
 				atomic_long_inc(&corten_nr_sweep_skip_stack);
 				break;
-			case -4:
+			case CORTEN_SWEEP_SKIP_SPECIAL:
 				atomic_long_inc(&corten_nr_sweep_skip_special);
 				break;
-			case -6:
+			case CORTEN_SWEEP_SKIP_SHARED:
 				atomic_long_inc(&corten_nr_sweep_skip_shared);
+				break;
+			case CORTEN_SWEEP_SKIP_FLAGS:
+				atomic_long_inc(&corten_nr_sweep_skip_flags);
+				break;
+			case CORTEN_SWEEP_SKIP_UFFD:
+				atomic_long_inc(&corten_nr_sweep_skip_uffd);
+				break;
+			case CORTEN_SWEEP_SKIP_FILEMAY:
+				atomic_long_inc(&corten_nr_sweep_skip_filemay);
+				break;
+			case CORTEN_SWEEP_SKIP_OPS:
+				atomic_long_inc(&corten_nr_sweep_skip_ops);
+				break;
+			case CORTEN_SWEEP_SKIP_BRK:
+				atomic_long_inc(&corten_nr_sweep_skip_brk);
 				break;
 			default:
 				atomic_long_inc(&corten_nr_sweep_skip_other);
@@ -6835,13 +6908,19 @@ static void corten_arena_mode_sweep(struct mm_struct *mm)
 
 	/* Ascending order: the first adopt of a shared 2M frame owns it,
 	 * the frame-sharing neighbour behind it fail-opens to legacy
-	 * (declare's overlap check) -- counted in the same bucket.
+	 * (declare's overlap check) -- its own bucket, the dominant skip
+	 * of a real exec image.
 	 */
 	for (i = 0; i < n; i++) {
+		int ret;
+
 		vma = cand[i];
-		if (vma->vm_file ?
-		    corten_sweep_adopt_file(mm, state, vma) :
-		    corten_sweep_adopt_anon(mm, state, vma))
+		ret = vma->vm_file ?
+		      corten_sweep_adopt_file(mm, state, vma) :
+		      corten_sweep_adopt_anon(mm, state, vma);
+		if (ret == -EEXIST)
+			atomic_long_inc(&corten_nr_sweep_skip_declare);
+		else if (ret)
 			atomic_long_inc(&corten_nr_sweep_skip_other);
 	}
 
@@ -13539,8 +13618,9 @@ int corten_arena_j2_walk_pid(pid_t pid)
  * the whitelist categories (see enum corten_wl_class).  The heap
  * predicate accepts exactly the [start_brk, PAGE_ALIGN(brk)) span --
  * the VMA sys_brk/do_brk_flags maintains; the grows flags carry the
- * main stack; arch_vma_name() the vdso/vvar/vsyscall trio; vm_file
- * any file mapping (exec-time and MAP_SHARED alike).
+ * main stack; arch_vma_name() + the special_mapping family the system
+ * mappings (vdso/vvar/vclock, W-3 item 4: 3/process); vm_file any
+ * file mapping (exec-time and MAP_SHARED alike).
  */
 static enum corten_wl_class
 corten_whitelist_classify(const struct corten_implant_range *implants,
@@ -13566,7 +13646,11 @@ corten_whitelist_classify(const struct corten_implant_range *implants,
 		return CORTEN_WL_BRK;
 	if (vma->vm_flags & (VM_GROWSDOWN | VM_GROWSUP))
 		return CORTEN_WL_STACK;
-	if (arch_vma_name(vma))
+	/* arch_vma_name() is silent for the special_mapping family on
+	 * x86_64 (no override at all) -- the vdso/vvar/vclock trio was
+	 * misbucketed UNCLASSIFIED through W-6's first measurement.
+	 */
+	if (arch_vma_name(vma) || vma_is_special_mapping_family(vma))
 		return CORTEN_WL_SPECIAL;
 	if (vma->vm_file)
 		return CORTEN_WL_FILE;

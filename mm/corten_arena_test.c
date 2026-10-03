@@ -13741,10 +13741,9 @@ static void corten_arena_test_sweep_skip_taxonomy(struct kunit *test)
 	u64 pat = 0;
 	struct vm_area_struct *vma;
 
-	/* The three structural survivors: a grows-flag stack, a
-	 * MAP_SHARED file mapping (the shared bucket; "special" needs an
-	 * arch_vma_name() the synthetic tree cannot produce -- its bucket
-	 * is covered by the wl walker's [vdso] classification), and a
+	/* Three structural survivors: a grows-flag stack, a
+	 * MAP_SHARED file mapping (the shared bucket; the special
+	 * bucket gets its own installer-driven case next), and a
 	 * window-domain VMA (the implant world).
 	 */
 	vma = corten_arena_test_mkvm(mm, CORTEN_ARENA_TEST_START2,
@@ -13798,6 +13797,83 @@ static void corten_arena_test_sweep_skip_taxonomy(struct kunit *test)
 	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
 
 	fput(file);
+}
+
+/*
+ * W-6b (C-fix B): the special_mapping family (vdso/vvar/vclock;
+ * arch_vma_name() is silent for the whole family on x86_64) classifies
+ * CORTEN_WL_SPECIAL and the sweep files it under the special skip --
+ * the installer gives the synthetic tree the real vm_ops.
+ */
+static void corten_arena_test_sweep_skip_special_mapping(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	static struct page *spec_pages[] = { NULL };
+	static const struct vm_special_mapping spec = {
+		.name = "[vdso_test]",
+		.pages = spec_pages,
+	};
+	unsigned long hist[CORTEN_WL_NR_CLASSES];
+	unsigned long addr = CORTEN_ARENA_TEST_NOWHERE + 2 * PMD_SIZE;
+	struct vm_area_struct *vma;
+	long sspec;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "sweep requires corten=on");
+
+	mmap_write_lock(mm);
+	vma = _install_special_mapping(mm, addr, PAGE_SIZE,
+				       VM_READ | VM_MAYREAD, &spec);
+	mmap_write_unlock(mm);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	KUNIT_ASSERT_TRUE(test, vma_is_special_mapping_family(vma));
+
+	sspec = corten_arena_test_sweep(3);
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(3), sspec + 1);
+	/* The system mapping stays VMA-form (the skip, not an adopt). */
+	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, addr));
+
+	/* The histogram (the sweep created the state, so the walk is
+	 * live): exactly one SPECIAL, nothing unclassified -- the C-fix
+	 * B red face is hist[UNCLASSIFIED] == 1 with SPECIAL == 0.
+	 */
+	memset(hist, 0, sizeof(hist));
+	corten_arena_test_wl_histogram(mm, hist);
+	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_SPECIAL], 1);
+	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_UNCLASSIFIED], 0);
+}
+
+/*
+ * W-6b: the heap stays VMA-form through the sweep -- the W-3 brk
+ * route's first GROW adopts the VMA itself (vma_find() is its
+ * contract), so a sweep adoption here would leave the legacy
+ * do_brk_flags() writing plain PTEs under a foreign region record.
+ */
+static void corten_arena_test_sweep_skip_brk(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	const unsigned long heap = 2 * PMD_SIZE;
+	struct vm_area_struct *vma;
+	long sbrk;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "sweep requires corten=on");
+
+	mmap_write_lock(mm);
+	mm->start_brk = heap;
+	mm->brk = heap + 4 * PAGE_SIZE;
+	mmap_write_unlock(mm);
+	vma = corten_arena_test_mkvm(mm, heap, heap + 4 * PAGE_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+
+	sbrk = corten_arena_test_sweep(12);
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(12), sbrk + 1);
+	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, heap));
 }
 
 static void corten_arena_test_sweep_empty_anon(struct kunit *test)
@@ -13922,7 +13998,7 @@ static void corten_arena_test_sweep_fork_flags(struct kunit *test)
 	pte_t *ptep, pte;
 	spinlock_t *ptl; /* read-only inspection under the ptl */
 	unsigned long a0, a1;
-	long other;
+	long other, other6;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "resident-stock sweep requires corten=on");
@@ -13942,7 +14018,11 @@ static void corten_arena_test_sweep_fork_flags(struct kunit *test)
 	};
 	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
 
-	other = corten_arena_test_sweep(6);
+	/* W-6b: the WIPEONFORK refusal reads its own bucket now (the
+	 * skip_other lump split); skip_other itself must not move.
+	 */
+	other = corten_arena_test_sweep(8);
+	other6 = corten_arena_test_sweep(6);
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
 
 	/* The flagged VMA stayed legacy: in the tree with the bit intact,
@@ -13952,7 +14032,8 @@ static void corten_arena_test_sweep_fork_flags(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, gate);
 	KUNIT_EXPECT_TRUE(test, gate->vm_flags & VM_WIPEONFORK);
 	KUNIT_EXPECT_NULL(test, corten_arena_test_region_of(mm, a0));
-	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(6), other + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(8), other + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(6), other6);
 
 	/* The plain neighbour next door moved: the refusal is keyed on
 	 * the bit, not a global sweep failure.
@@ -14507,6 +14588,8 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_sweep_anon_resident),
 	KUNIT_CASE(corten_arena_test_sweep_file_resident),
 	KUNIT_CASE(corten_arena_test_sweep_skip_taxonomy),
+	KUNIT_CASE(corten_arena_test_sweep_skip_special_mapping),
+	KUNIT_CASE(corten_arena_test_sweep_skip_brk),
 	KUNIT_CASE(corten_arena_test_sweep_empty_anon),
 	KUNIT_CASE(corten_arena_test_sweep_zero_page),
 	KUNIT_CASE(corten_arena_test_sweep_fork_flags),

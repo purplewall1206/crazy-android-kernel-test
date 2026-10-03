@@ -3536,6 +3536,7 @@ extern void vm_stat_account(struct mm_struct *, vm_flags_t, long npages);
 
 extern bool vma_is_special_mapping(const struct vm_area_struct *vma,
 				   const struct vm_special_mapping *sm);
+bool vma_is_special_mapping_family(const struct vm_area_struct *vma);
 struct vm_area_struct *_install_special_mapping(struct mm_struct *mm,
 				   unsigned long addr, unsigned long len,
 				   vm_flags_t vm_flags,

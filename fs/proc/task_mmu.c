@@ -859,10 +859,14 @@ static struct vm_area_struct *query_merge_corten_row(struct mm_struct *mm,
 
 	if (corten_row_query(mm, addr, row_out) &&
 	    (!vma || row_out->start < vma->vm_start)) {
-		/* MV2 W-2: NULL -- the row fields render from the record
-		 * (the carrier render context is retired).
+		/* The row wins: hand back the row storage as the token,
+		 * never dereferenced as a vma (every read below is
+		 * row_hit-guarded) -- the same shape the seq_file arm
+		 * keeps.  W-2's NULL here read as ENOENT: the caller's
+		 * !vma check ran before it looked at row_hit.
 		 */
-		return NULL;
+		*row_hit = true;
+		return (struct vm_area_struct *)row_out;
 	}
 	return vma;
 }
