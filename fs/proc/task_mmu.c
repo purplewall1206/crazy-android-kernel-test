@@ -364,11 +364,17 @@ retry:
 		priv->last_pos = *ppos;
 		*ppos = priv->corten_row.end;
 		vma_iter_set(&priv->iter, priv->corten_row.end);
-		/* MV2 W-2: NULL -- the row arm of .show renders from the
-		 * record; the carrier pointer it returned as the render
-		 * context is retired.
+		/* MV2 W-2 retired the carrier render context, but the
+		 * token must stay non-NULL: seq_file reads NULL as
+		 * end-of-stream, which truncated every MODE mm's
+		 * maps/smaps/numa_maps at the first window row (a swept
+		 * MODE mm's tree rows all sit above the window, so the
+		 * first merge step always takes this arm).  W-6: hand
+		 * back the row storage -- never dereferenced as a vma
+		 * (corten_row_active routes all three .show callbacks
+		 * to the record).
 		 */
-		return NULL;
+		return (struct vm_area_struct *)&priv->corten_row;
 	}
 	priv->corten_row_active = false;
 
