@@ -1443,3 +1443,32 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
   - **运维新增**: agent 各轮 VM/日志名必须带轮次命名空间（w6-dev2/w6b 同名 gate
     碰撞仲裁: 先固定 md5 权威件+目录归属移交）; #298 时代日志被复跑覆盖的披露
     面（18/18 引用源已失, 报告改引 303 完整档）。
+
+- **[2026-10-04 05:2x r09 maintainer: ★★ MV2 收官 —— W-7 multi-record 入库,
+  树归零兑现, corten-mv2-complete]**
+  - **W-7 实现**（worktree commit **6e106786496a**, 4 文件 +1636/−598; merge
+    **4eb1d0e50036**, tag **corten-mv2-complete**; Review PASS——slot 协议收口
+    helper 族+强制条件双落: ①42 槽访问点 tag 解码表（报告 §2）②相位 A 专属锚
+    w7_frame_share_exit 红绿）。设计演进三处如实披露（punch 头收缩 R1 退化两级
+    纯规则/T0 release-upgrade PMD 对齐门/slot_cover 页粒度收紧）; 锚 129（+4）。
+  - **终判据兑现**: skip_declare **288→0**; 动态多段 ELF live audit wl_file/
+    wl_anon/unclassified delta 全 0; **tree_entries=5 全白名单内**（stack 1+
+    special 3+brk 1）——D28 字面树归零按 D34 结构豁免口径达成。验证: KUnit
+    on×2 24/0/1+129/0/0+34/0/5 / off 精确对账 / checkpatch 0E/0W/0C / =n 五件
+    全折 / guest 双跑全套绿 / PGTABLES 2 笔容差 / j2_stale=0。bzimg/r07-w7
+    （02209a67…）+ green.txt。
+  - **MV2 判定终表**（详 REPORT §10）: J1/J2/J3/J4/J5/J7 全 PASS（J3=PASS
+    after in-slice C-fix attribution W-2; J7 带披露）; J6 LoC 供数完毕
+    （VMA 四件 13,408 vs corten 44,334）。**MV2 = D28 字面 VMA 移除完成**
+    （W-1..W-7 + 修复轮 65+ 提交, tag 链 corten-r07-w1..w7 + corten-mv2-complete）。
+  - **登记边界（非阻断, 编号在案）**: D32 sticky-MODE / D33 判据收窄 / C2 残值
+    族（free_pgtables 几何门+KUnit 泄漏, 独立小片）/ CHUNK maps 残段（V-C 登记
+    重现）/ MV3 路线全部前置就绪（D29 目标 2: 默认进场/无损闭合/批 mark/全系统
+    电池/删除账）。
+  - **REPORT M-V2 章**落 cortenmm 仓库 project/REPORT.md §10（本地提交, push
+    随网络恢复）; **GitHub 推送**: W-7 前全部已推（c04afab 双分支）, W-7 后本地
+    领先 3 提交（6e10678+4eb1d0e+STATE 终章）遇 TLS 瞬断累积, 恢复后补推（铁律
+    4 本地累积条款）。
+  - **r09 会话使命完成**（W-4 入场→W-5→W-6→W-6b→W-7 全链 + r08 遗留两项旧账
+    清偿）: 后续 = MV3 系列（D29）新指令轮或收尾。锁 owner=claude-code-glm53flash
+    提醒归还 Hermes。
