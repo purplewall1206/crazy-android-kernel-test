@@ -1775,6 +1775,17 @@ bool vma_is_special_mapping(const struct vm_area_struct *vma,
 }
 
 /*
+ * The special_mapping family as a class (any _install_special_mapping
+ * product: the vdso/vvar/vclock trio and friends).  arch_vma_name() is
+ * silent for these on most architectures -- their names render from
+ * vm_ops->name -- so class-level recognizers read the vm_ops.
+ */
+bool vma_is_special_mapping_family(const struct vm_area_struct *vma)
+{
+	return vma->vm_ops == &special_mapping_vmops;
+}
+
+/*
  * Called with mm->mmap_lock held for writing.
  * Insert a new vma covering the given region, with the given flags.
  * Its pages are supplied by the given array of struct page *.
