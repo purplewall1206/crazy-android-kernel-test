@@ -2160,8 +2160,7 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 			1);
 
 	rcu_read_lock();
-	ar = xa_load(&mm->corten_state->arenas,
-		     CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
 	KUNIT_ASSERT_NOT_NULL(test, ar);
 	KUNIT_EXPECT_EQ(test, ar->rclass, CORTEN_REGION_FILE);
 	KUNIT_EXPECT_PTR_EQ(test, ar->rfile, file);
@@ -2193,8 +2192,7 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
 	 */
 	mmap_read_lock(mm);
 	rcu_read_lock();
-	ar = xa_load(&mm->corten_state->arenas,
-		     CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
 	if (ar) {
 		struct file *rfile = ar->rfile;
 
@@ -3932,7 +3930,7 @@ static void corten_arena_test_file_fork_mirror(struct kunit *test)
 	 * same object, the same pgoff (INV-MV3(d) both sides).
 	 */
 	rcu_read_lock();
-	ar = xa_load(&child->corten_state->arenas, addr >> PMD_SHIFT);
+	ar = corten_arena_test_region_of(child, addr);
 	KUNIT_ASSERT_NOT_NULL(test, ar);
 	KUNIT_EXPECT_EQ(test, ar->rclass, CORTEN_REGION_FILE);
 	KUNIT_EXPECT_PTR_EQ(test, ar->rfile, file);
@@ -4901,8 +4899,8 @@ static void corten_arena_test_fork_faithful(struct kunit *test)
 	cstate = READ_ONCE(child->corten_state);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cstate);
 	rcu_read_lock();
-	car = xa_load(&cstate->arenas,
-		      CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
+	car = corten_arena_test_region_of(child,
+					  CORTEN_ARENA_TEST_BASE);
 	if (car) {
 		KUNIT_EXPECT_TRUE(test,
 				  car->start == CORTEN_ARENA_TEST_BASE &&
@@ -5159,8 +5157,8 @@ static void corten_arena_test_fork_multipiece(struct kunit *test)
 		struct corten_arena *car;
 
 		rcu_read_lock();
-		car = xa_load(&corten_arena_state(child)->arenas,
-			      CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
+		car = corten_arena_test_region_of(child,
+						  CORTEN_ARENA_TEST_BASE);
 		if (car)
 			KUNIT_EXPECT_PTR_EQ(test, READ_ONCE(car->vma),
 					    vma_lookup(child,
@@ -5316,10 +5314,9 @@ static void corten_arena_test_fork_perm(struct kunit *test)
 
 	/* The arena upper bounds mirror. */
 	rcu_read_lock();
-	ar = xa_load(&corten_arena_state(mm)->arenas,
-		     CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
-	par = xa_load(&corten_arena_state(child)->arenas,
-		      CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_BASE);
+	par = corten_arena_test_region_of(child,
+					  CORTEN_ARENA_TEST_BASE);
 	if (ar && par)
 		KUNIT_EXPECT_EQ(test, READ_ONCE(par->prot),
 				READ_ONCE(ar->prot));
@@ -5362,25 +5359,19 @@ static void corten_arena_test_fork_perm(struct kunit *test)
 static void corten_arena_test_inv7_walk(struct mm_struct *mm, long *violated,
 					long *checked)
 {
-	struct corten_mm_state *state = corten_arena_state(mm);
 	struct corten_arena *arena;
-	unsigned long frame = 0, seen_until = 0;
+	unsigned long frame = 0;
+	unsigned int idx = 0;
 
 	*violated = 0;
 	*checked = 0;
-	if (!state)
+	if (!corten_arena_state(mm))
 		return;
 
 	rcu_read_lock();
-	xa_for_each(&state->arenas, frame, arena) {
+	/* The R1 walk (W-7): each record once, at its start frame. */
+	while ((arena = corten_arena_test_record_next(mm, &frame, &idx))) {
 		unsigned long addr;
-
-		/* M4.T1: reserve markers are not arenas. */
-		if (arena == &corten_va_reserve_sentinel)
-			continue;
-		if (frame < seen_until)
-			continue;
-		seen_until = corten_arena_end_frame(arena);
 
 		for (addr = arena->start; addr < arena->end;
 		     addr = min((addr | (PMD_SIZE - 1)) + 1, arena->end)) {
@@ -8759,7 +8750,7 @@ static void corten_arena_test_j2_triggers(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 1);
 	/* mm_exit walks the dying registry (the mirrored arena's child).
-	 */
+	*/
 	mmput(child);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 2);
 
@@ -9520,7 +9511,7 @@ static void corten_arena_test_inv_mv3(struct kunit *test)
 	state = READ_ONCE(mm->corten_state);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, state);
 	rcu_read_lock();
-	ar = xa_load(&state->arenas, CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
 	if (ar)
 		WRITE_ONCE(ar->rclass, CORTEN_REGION_ANON);
@@ -9529,14 +9520,14 @@ static void corten_arena_test_inv_mv3(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, corten_region_invariants_ok(mm));
 	mmap_read_unlock(mm);
 	rcu_read_lock();
-	ar = xa_load(&state->arenas, CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
 	if (ar)
 		WRITE_ONCE(ar->rclass, CORTEN_REGION_RESERVED);
 	rcu_read_unlock();
 
 	/* Tear the MAY bound: may < prot must be reported. */
 	rcu_read_lock();
-	ar = xa_load(&state->arenas, CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
 	if (ar)
 		WRITE_ONCE(ar->prot, (u8)(ar->may_prot + 1));
 	rcu_read_unlock();
@@ -9548,7 +9539,7 @@ static void corten_arena_test_inv_mv3(struct kunit *test)
 	 * reactivation re-stamps both fields wholesale.
 	 */
 	rcu_read_lock();
-	ar = xa_load(&state->arenas, CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
 	if (ar)
 		WRITE_ONCE(ar->prot, CORTEN_PERM_USER);
 	rcu_read_unlock();
@@ -10210,8 +10201,7 @@ static void corten_arena_test_carrier_vma(struct kunit *test)
 	 * carrier (a struct vm_area_struct the old shape allocated).
 	 */
 	rcu_read_lock();
-	ar = xa_load(&READ_ONCE(mm->corten_state)->arenas,
-		     CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
 	KUNIT_EXPECT_TRUE(test, ar->auto_shape);
 	KUNIT_EXPECT_NULL(test, READ_ONCE(ar->vma));
@@ -10297,8 +10287,7 @@ static void corten_arena_test_fork_punch_novma(struct kunit *test)
 	}
 	mmap_write_unlock(mm);
 	rcu_read_lock();
-	ar = xa_load(&state->arenas,
-		     CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_BASE);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
 	if (ar)
 		WRITE_ONCE(ar->vma, NULL);
@@ -12485,15 +12474,19 @@ static void corten_arena_test_exit_punchfork(struct kunit *test)
 		KUNIT_EXPECT_EQ(test, mm_pgtables_bytes(child), 0);
 		mmdrop(child);
 
-		/* The iteration-end munmap over the punched arena answers
-		 * -ENOENT (the start frame is a hole; the guest's silent
-		 * munmap failure -- the arena stays live until exit).
+		/* The iteration-end munmap over the punched arena: W-7
+		 * re-anchors the record at the punch end, so the range
+		 * crosses the surviving record's boundary and the route
+		 * answers the documented -EOPNOTSUPP fail-open (the
+		 * pre-W-7 shape answered -ENOENT: the arena was unslotted
+		 * at its punched start frame and invisible).  The arena
+		 * stays live until exit either way.
 		 */
 		KUNIT_ASSERT_EQ(test,
 				corten_arena_test_run_op(test, mm,
 							 corten_arena_test_op_munmap_route,
 							 w, 4 * PMD_SIZE),
-				-ENOENT);
+				-EOPNOTSUPP);
 	}
 
 	fput(memfd);
@@ -14584,6 +14577,418 @@ static void corten_arena_test_sweep_exit_refusal(struct kunit *test)
 			refuses + 1);
 }
 
+/* ------------------------------------------------------------------ *
+ * MV2 W-7: the multi-record registry (the D34 closure).  The stock of
+ * every case: three page-granular private-anon VMAs inside ONE PMD
+ * frame at NOWHERE, pairwise page-disjoint -- the ELF load image shape
+ * the single-record registry could not adopt (declare's frame-occupancy
+ * C1 fail-opened every neighbour into the tree: the skip_declare=288/
+ * battery bucket).  After ENTER each of them is its own region record
+ * in one shared frame slot (a corten_frame_bucket).
+ * ------------------------------------------------------------------
+ */
+#define CORTEN_W7_A	(CORTEN_ARENA_TEST_NOWHERE + 8UL * PAGE_SIZE)
+#define CORTEN_W7_B	(CORTEN_ARENA_TEST_NOWHERE + 64UL * PAGE_SIZE)
+#define CORTEN_W7_C	(CORTEN_ARENA_TEST_NOWHERE + 128UL * PAGE_SIZE)
+#define CORTEN_W7_SEG	(2UL * PAGE_SIZE)
+
+/* One W-7 stock mm: the three VMAs, the named ones faulted resident
+ * (@res page count) with one written word each.  Owns the mm (the
+ * anchor-action form).
+ */
+static struct mm_struct *
+corten_arena_test_w7_mm(struct kunit *test, unsigned long res)
+{
+	struct corten_arena_test_op o;
+	struct mm_struct *mm;
+	const unsigned long addrs[] = { CORTEN_W7_A, CORTEN_W7_B,
+					CORTEN_W7_C };
+	unsigned long i;
+
+	mm = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, mm);
+	kunit_add_action(test, corten_arena_test_mmput_action, mm);
+
+	for (i = 0; i < ARRAY_SIZE(addrs); i++) {
+		struct vm_area_struct *vma =
+			corten_arena_test_mkvm(mm, addrs[i],
+					       addrs[i] + CORTEN_W7_SEG,
+					       CORTEN_ARENA_TEST_FLAGS_OK);
+
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+		if (i < res) {
+			o = (struct corten_arena_test_op){
+				.mm = mm,
+				.fn = corten_arena_test_op_sweep_fault,
+				.addr = addrs[i],
+				.len = PAGE_SIZE,
+				.flags = 0x1,
+			};
+			KUNIT_ASSERT_EQ(test,
+					corten_arena_test_run_op_full(test,
+								      &o),
+					0);
+		}
+	}
+
+	return mm;
+}
+
+/* Anchor W7-①③⑥: the frame-sharing adoption itself.  All three
+ * segments adopt (the pre-W-7 sweep adopted only the first), the
+ * shared frame's slot decodes page-granular for every consumer family
+ * (lookup / region_of / query / the row stream), the bucket members
+ * pass the record invariants, and the shrinker's frame-keyed count
+ * reads each resident page exactly once.
+ */
+static void corten_arena_test_w7_frame_share_adopt(struct kunit *test)
+{
+	struct mm_struct *mm;
+	struct corten_arena *ra, *rb, *rc;
+	struct corten_region_row row;
+	struct corten_row_iter rit;
+	long adopts, resident, skipd, rpages;
+	u64 pat, back;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "W-7 frame share requires corten=on");
+
+	mm = corten_arena_test_w7_mm(test, 2);
+	adopts = corten_arena_test_sweep(0);
+	resident = corten_arena_test_sweep(7);
+	skipd = corten_arena_test_sweep(13);
+	rpages = corten_arena_test_resident_pages();
+	KUNIT_ASSERT_GE(test, rpages, 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_page_word(mm, CORTEN_W7_A,
+							  &pat, true), 0);
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
+
+	/* All three adopted; the tree over the frame is empty. */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(0), adopts + 3);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(7), resident + 2);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(13), skipd);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_W7_A));
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_W7_B));
+	KUNIT_EXPECT_EQ(test, mm->map_count, 0);
+
+	/* The shared frame decodes page-granular: three distinct
+	 * records, each answering its own pages and none else's.
+	 */
+	rcu_read_lock();
+	ra = corten_arena_lookup(mm, CORTEN_W7_A);
+	rb = corten_arena_lookup(mm, CORTEN_W7_B);
+	rc = corten_arena_lookup(mm, CORTEN_W7_C);
+	KUNIT_ASSERT_NOT_NULL(test, ra);
+	KUNIT_ASSERT_NOT_NULL(test, rb);
+	KUNIT_ASSERT_NOT_NULL(test, rc);
+	KUNIT_EXPECT_FALSE(test, ra == rb);
+	KUNIT_EXPECT_FALSE(test, rb == rc);
+	KUNIT_EXPECT_EQ(test, ra->start, CORTEN_W7_A);
+	KUNIT_EXPECT_EQ(test, ra->end, CORTEN_W7_A + CORTEN_W7_SEG);
+	KUNIT_EXPECT_EQ(test, rb->start, CORTEN_W7_B);
+	/* An unclaimed page of the shared frame is a registry hole
+	 * (INV2' page granularity), not the neighbour's record.
+	 */
+	KUNIT_EXPECT_NULL(test,
+			  corten_arena_lookup(mm, CORTEN_W7_C +
+						   CORTEN_W7_SEG +
+						   PAGE_SIZE));
+	rcu_read_unlock();
+	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_W7_B +
+						 PAGE_SIZE), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_query(mm,
+					   CORTEN_W7_C + CORTEN_W7_SEG +
+					   PAGE_SIZE), 0);
+	KUNIT_EXPECT_PTR_EQ(test,
+			    corten_arena_test_region_of(mm, CORTEN_W7_A +
+							PAGE_SIZE), ra);
+	KUNIT_EXPECT_PTR_EQ(test,
+			    corten_arena_test_region_of(mm, CORTEN_W7_B), rb);
+
+	/* The row stream renders each record in [start) order. */
+	mmap_read_lock(mm);
+	corten_row_iter_init(&rit);
+	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &rit, &row));
+	KUNIT_EXPECT_EQ(test, row.start, CORTEN_W7_A);
+	KUNIT_EXPECT_EQ(test, row.end, CORTEN_W7_A + CORTEN_W7_SEG);
+	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &rit, &row));
+	KUNIT_EXPECT_EQ(test, row.start, CORTEN_W7_B);
+	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &rit, &row));
+	KUNIT_EXPECT_EQ(test, row.start, CORTEN_W7_C);
+	KUNIT_EXPECT_FALSE(test, corten_row_next(mm, &rit, &row));
+	corten_row_query(mm, CORTEN_W7_A + PAGE_SIZE, &row);
+	KUNIT_EXPECT_EQ(test, row.start, CORTEN_W7_A);
+	mmap_read_unlock(mm);
+
+	/* The content still serves (the adopted residents). */
+	back = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_page_word(mm, CORTEN_W7_A,
+						    &back, false), 0);
+	KUNIT_EXPECT_EQ(test, back, pat);
+
+	/* The shrinker count: each resident page once (the frame-keyed
+	 * descriptor read, not per bucket member).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_resident_pages(),
+			rpages + 2);
+
+	/* INV-MV3 over the bucket: the record pairings and the INV2'
+	 * page-disjointness hold.  Tearing the disjointness by hand
+	 * must report.
+	 */
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
+	mmap_read_unlock(mm);
+	rcu_read_lock();
+	WRITE_ONCE(ra->end, READ_ONCE(rb->end));
+	rcu_read_unlock();
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_FALSE(test, corten_region_invariants_ok(mm));
+	mmap_read_unlock(mm);
+	rcu_read_lock();
+	WRITE_ONCE(ra->end, CORTEN_W7_A + CORTEN_W7_SEG);
+	rcu_read_unlock();
+
+	/* C1' (: the frame is shared, the pages are not): a declare
+	 * over A's own range still rejects; so does a sweep re-arm over
+	 * an overlapping VMA (its skip_declare bucket, honest form).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_declare(mm, CORTEN_W7_A & PMD_MASK,
+					     PMD_SIZE), -EEXIST);
+	{
+		struct vm_area_struct *v = corten_arena_test_mkvm(mm,
+						CORTEN_W7_A + PAGE_SIZE,
+						CORTEN_W7_A + 3 * PAGE_SIZE,
+						CORTEN_ARENA_TEST_FLAGS_OK);
+
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, v);
+	}
+	KUNIT_EXPECT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(13), skipd + 1);
+	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_W7_A +
+					       PAGE_SIZE));
+}
+
+/* Anchor W7-④: the fork mirror over a shared frame -- the child
+ * registry buckets its own copies, both records answer, the INV7
+ * checker's R1 walk sees every bucket member and reports no drift.
+ */
+static void corten_arena_test_w7_frame_share_fork(struct kunit *test)
+{
+	struct mm_struct *mm, *child;
+	struct corten_arena *ra, *rca;
+	struct corten_pte_meta m;
+	long faithful;
+	u64 p0, back;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "W-7 frame-share fork requires corten=on");
+
+	mm = corten_arena_test_w7_mm(test, 2);
+	faithful = corten_arena_test_named_counter(test, "fork_faithful");
+	KUNIT_ASSERT_GE(test, faithful, 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_page_word(mm, CORTEN_W7_A,
+							  &p0, true), 0);
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
+	ra = corten_arena_test_region_of(mm, CORTEN_W7_A);
+	KUNIT_ASSERT_NOT_NULL(test, ra);
+	KUNIT_EXPECT_FALSE(test, READ_ONCE(ra->frozen));
+
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	kunit_add_action(test, corten_arena_test_mmput_action, child);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_named_counter(test,
+							      "fork_faithful"),
+			faithful + 1);
+
+	/* The child's shared-frame records: its own objects, both
+	 * sides' slots MAPPED SHARED, the parent unfrozen.
+	 */
+	rca = corten_arena_test_region_of(child, CORTEN_W7_A);
+	KUNIT_ASSERT_NOT_NULL(test, rca);
+	KUNIT_EXPECT_FALSE(test, rca == ra);
+	KUNIT_ASSERT_NOT_NULL(test,
+			      corten_arena_test_region_of(child,
+							  CORTEN_W7_B));
+	KUNIT_ASSERT_EQ(test, corten_arena_test_meta(child, CORTEN_W7_A, &m),
+			0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, m.flags, CORTEN_PF_SHARED |
+			CORTEN_PF_WRITABLE);
+	KUNIT_EXPECT_FALSE(test, READ_ONCE(ra->frozen));
+
+	/* The INV7 checker's R1 walk over the bucket: no drift, the
+	 * child content mirrors the parent's word.
+	 */
+	{
+		long violated = -1, checked = -1;
+
+		corten_arena_test_inv7_walk(child, &violated, &checked);
+		KUNIT_EXPECT_EQ(test, violated, 0);
+		KUNIT_EXPECT_EQ(test, checked, 2);
+	}
+	back = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_page_word(child, CORTEN_W7_A,
+						    &back, false), 0);
+	KUNIT_EXPECT_EQ(test, back, p0);
+}
+
+/* Anchor W7-⑤ (the phase-A rework's dedicated anchor): with two
+ * co-frame members resident, zapping member A's clip must leave the
+ * frame's PT page up under member B's live translation -- the
+ * whole-frame retirement at the first member's reach is exactly the
+ * pre-W-7 hazard shape.  B's own zap drops its PTE; the exit's
+ * registry drain then clears the frame's tables and empties the
+ * registry without residue.
+ */
+static void corten_arena_test_w7_frame_share_exit(struct kunit *test)
+{
+	struct mm_struct *mm;
+	struct corten_arena *ra, *rb;
+	long rpages, timeouts;
+	u64 pat, back;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "W-7 frame-share exit requires corten=on");
+
+	mm = corten_arena_test_w7_mm(test, 2);
+	timeouts = corten_arena_test_drain_timeouts();
+	rpages = corten_arena_test_resident_pages();
+	KUNIT_ASSERT_EQ(test, corten_arena_test_page_word(mm, CORTEN_W7_A,
+							  &pat, true), 0);
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
+	ra = corten_arena_test_region_of(mm, CORTEN_W7_A);
+	rb = corten_arena_test_region_of(mm, CORTEN_W7_B);
+	KUNIT_ASSERT_NOT_NULL(test, ra);
+	KUNIT_ASSERT_NOT_NULL(test, rb);
+
+	/* Member A's clip zap: B's translation and content must
+	 * survive it -- a frame retirement here is the red face.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_unmap_chunk(mm, ra, CORTEN_W7_A,
+						 CORTEN_W7_SEG), 0);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_pt_present(mm, CORTEN_W7_B));
+	{
+		struct corten_pte_meta m;
+
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_meta(mm, CORTEN_W7_B, &m),
+				0);
+		KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	}
+	back = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_page_word(mm, CORTEN_W7_B,
+						    &back, false), 0);
+
+	/* B's own zap drops its PTE; the frame is empty but still
+	 * tracked (retirement is the exit walk's whole-frame job).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_unmap_chunk(mm, rb, CORTEN_W7_B,
+						 CORTEN_W7_SEG), 0);
+	/* The zaps drop content + metadata (KEEP_PERM), not the frame's
+	 * PT page -- retirement is the exit walk's whole-frame job (the
+	 * pt_present probe is the page-table level).  The metadata is
+	 * the slot truth: both members reset to Invalid.
+	 */
+	{
+		struct corten_pte_meta m;
+
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_meta(mm, CORTEN_W7_A, &m),
+				0);
+		KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_meta(mm, CORTEN_W7_B, &m),
+				0);
+		KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
+	}
+
+	/* The exit: walk + drain over the bucket shape.  The registry
+	 * unpublishes, the resident count returns, the frame's PT page
+	 * retires exactly once, no drain timeout.
+	 */
+	corten_arena_mm_exit(mm);
+	KUNIT_EXPECT_NULL(test, READ_ONCE(mm->corten_state));
+	KUNIT_EXPECT_FALSE(test, corten_arena_test_pt_present(mm,
+							      CORTEN_W7_A));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_resident_pages(), rpages);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
+	kunit_release_action(test, corten_arena_test_mmput_action, mm);
+}
+
+/* Anchor W7-⑦: the punch route over one co-frame member -- only the
+ * punched record leaves the shared frame; the neighbour's membership,
+ * content and lookup path survive (the bare-erase form would have
+ * dropped the whole slot).
+ */
+static void corten_arena_test_w7_frame_share_punch(struct kunit *test)
+{
+	struct corten_arena_test_op o;
+	struct mm_struct *mm;
+	struct file *file;
+	struct corten_arena *ra, *rb;
+	loff_t pos = 0;
+	u64 pat, back;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "W-7 frame-share punch requires corten=on");
+
+	file = shmem_file_setup("corten_w7punch", PAGE_SIZE, 1);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	KUNIT_ASSERT_EQ(test,
+			kernel_write(file, &pat, sizeof(pat), &pos),
+			(ssize_t)sizeof(pat));
+
+	mm = corten_arena_test_w7_mm(test, 2);
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
+	rb = corten_arena_test_region_of(mm, CORTEN_W7_B);
+	KUNIT_ASSERT_NOT_NULL(test, rb);
+
+	/* MAP_FIXED over A's head page: the punch route erases the
+	 * punched frame membership and re-anchors the record at the
+	 * punch end (the W-7 head-shrink -- the R1 walks key on the
+	 * start-frame slot); the co-frame record keeps its slot.
+	 */
+	o = (struct corten_arena_test_op){
+		.mm = mm, .fn = corten_arena_test_op_sweep_file_map,
+		.file = file, .addr = CORTEN_W7_A,
+		.len = PAGE_SIZE,
+		.flags = ((MAP_PRIVATE | MAP_FIXED) << 8) | PROT_READ,
+	};
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
+
+	ra = corten_arena_test_region_of(mm, CORTEN_W7_A + PAGE_SIZE);
+	KUNIT_ASSERT_NOT_NULL(test, ra);
+	KUNIT_EXPECT_EQ(test, ra->start, CORTEN_W7_A + PAGE_SIZE);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_W7_A + PAGE_SIZE));
+	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_W7_A));
+	KUNIT_EXPECT_PTR_EQ(test,
+			    corten_arena_test_region_of(mm, CORTEN_W7_B),
+			    rb);
+	rcu_read_lock();
+	KUNIT_EXPECT_PTR_EQ(test, corten_arena_lookup(mm, CORTEN_W7_B), rb);
+	rcu_read_unlock();
+	back = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_page_word(mm, CORTEN_W7_B,
+						    &back, false), 0);
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
+	mmap_read_unlock(mm);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_sweep_anon_resident),
 	KUNIT_CASE(corten_arena_test_sweep_file_resident),
@@ -14597,6 +15002,11 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_sweep_file_exit),
 	KUNIT_CASE(corten_arena_test_sweep_mixed_frame_exit),
 	KUNIT_CASE(corten_arena_test_sweep_exit_refusal),
+	/* MV2 W-7: the multi-record registry (D34 closure) anchors. */
+	KUNIT_CASE(corten_arena_test_w7_frame_share_adopt),
+	KUNIT_CASE(corten_arena_test_w7_frame_share_fork),
+	KUNIT_CASE(corten_arena_test_w7_frame_share_exit),
+	KUNIT_CASE(corten_arena_test_w7_frame_share_punch),
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
 	KUNIT_CASE(corten_arena_test_declare_query),

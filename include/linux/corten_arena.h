@@ -189,14 +189,13 @@ enum corten_region_class {
 
 /**
  * struct corten_arena - descriptor of one declared arena.
- * @start: first VA of the arena (PMD_SIZE aligned).
- * @end: first VA past the arena.  PMD_SIZE aligned for every window
- *       arena; the MV2 W-3 brk region is only page-granular -- the
- *       legacy heap addresses are page-aligned, so its end sits
- *       inside its own last claimed frame.  The registry's per-arena
- *       frame walks key their dedupe cursor on
- *       corten_arena_end_frame(), not on a bare end >> PMD_SHIFT,
- *       for exactly this reason.
+ * @start: first VA of the arena.  PMD_SIZE aligned for every window
+ *         arena and every targeted DECLARE; a sweep-adopted region
+ *         (MV2 W-4/W-7) inherits its VMA's page alignment, as does
+ *         the MV2 W-3 brk region's page-granular end.
+ * @end: first VA past the arena.  Page-granular in the legacy domain
+ *       (the W-3 brk region, the adopted VMA bounds); PMD-rounded in
+ *       the window domain.
  * @prot: CORTEN_PERM_* upper bound recorded from the VMA at DECLARE time.
  * @mm: owning address space (diagnostics back-link; never taken by
  *      reference -- the arena cannot outlive its mm, see
@@ -351,24 +350,15 @@ struct corten_arena {
 };
 
 /*
- * One past @ar's last claimed registry frame -- the exclusive
- * first-frame cursor every registry walk uses to visit each
- * descriptor once ("every frame of an arena holds the same
- * descriptor; drain each one once, at its first frame").  For a
- * PMD-aligned @end this is the historical end >> PMD_SHIFT; for the
- * MV2 W-3 brk region (page-granular end, inside its own last frame)
- * the bare shift under-counts by one and the descriptor's final
- * frame re-enters the walk body -- the exit drain re-ran
- * obs_remove/drain/free on a live descriptor, and the second
- * obs_remove's list_del_rcu wrote through the LIST_POISON pointers
- * (CONFIG_DEBUG_LIST off): the oopsing task died holding the global
- * corten_arena_list_lock, which then spun every later DECLARE/exit
- * in the system forever (the r07 guest mm_exit stall).
+ * W-7 (multi-record registry): the per-frame cursor walks of the
+ * single-record era (keyed on "one past @ar's last claimed frame") are
+ * gone.  Their r07 lesson -- a mis-counted cursor re-ran obs_remove/
+ * drain/free on a live descriptor and wedged every later DECLARE/exit
+ * behind the global list lock -- is carried by the R1 walk rule
+ * (corten_region_next): a record is produced exactly once, when the
+ * walk visits its start frame.  Stateless, so there is no cursor left
+ * to mis-count.
  */
-static inline unsigned long corten_arena_end_frame(const struct corten_arena *ar)
-{
-	return ((READ_ONCE(ar->end) - 1) >> PMD_SHIFT) + 1;
-}
 
 /*
  * MODE-process auto-arena window (DESIGN.md sec 2, M4T0_SPEC.md sec 1.3):
@@ -436,8 +426,17 @@ struct corten_implant_range {
 
 /**
  * struct corten_mm_state - per-mm arena registry, lazily allocated.
- * @arenas: 2M frame index (addr >> PMD_SHIFT) -> struct corten_arena *.
- *          Stores happen only under @ctl_lock; loads are lockless RCU.
+ * @arenas: 2M frame index (addr >> PMD_SHIFT) -> slot value.  W-7
+ *          multi-record shape: the slot names the record set covering
+ *          the frame -- a bare struct corten_arena * while a single
+ *          record claims it (the common case), a tagged
+ *          corten_frame_bucket pointer once page-disjoint records
+ *          share the frame (the ELF-segment shape), the reserve
+ *          sentinel for claimed-but-unallocated magazine frames.
+ *          Records in one slot are page-range disjoint (INV2'); the
+ *          slot decodes only through the arena layer's slot helpers.
+ *          Stores happen only under @ctl_lock (or the punch routes'
+ *          mmap_write); loads are lockless RCU.
  * @nr: number of active arenas; the lookup fast path short-circuits on
  *      zero without touching the xarray.
  * @ctl_lock: serializes DECLARE/RELEASE (including the drain wait) so
@@ -580,9 +579,11 @@ enum corten_fault_action {
 /**
  * struct corten_region_iter - enumeration cursor of the region registry.
  * @frame: next 2M frame index to examine.
- * @last: arena pointer produced by the previous corten_region_next()
- *        call (the pointer-dedup key: one region spans several frame
- *        slots and must be produced exactly once).
+ * @idx: next bucket-member candidate inside the frame's slot (W-7: a
+ *       shared frame's slot carries a bucket of page-disjoint records).
+ * @last: the record produced by the previous corten_region_next() call.
+ * @fresh: true until the walk's first frame is examined (a seeded
+ *         mid-registry walk emits the seed frame's straddling records).
  *
  * Stack-allocate, zero with corten_region_iter_init().
  *
@@ -594,13 +595,17 @@ enum corten_fault_action {
  */
 struct corten_region_iter {
 	unsigned long frame;
+	unsigned int idx;
 	struct corten_arena *last;
+	bool fresh;
 };
 
 static inline void corten_region_iter_init(struct corten_region_iter *it)
 {
 	it->frame = 0;
+	it->idx = 0;
 	it->last = NULL;
+	it->fresh = true;
 }
 
 /** One renderable window-domain row (a region or a punched piece). */
@@ -757,8 +762,9 @@ struct corten_arena *corten_region_lookup(struct mm_struct *mm,
  * @mm: address space whose regions to walk.
  * @it: the caller's cursor (advanced by the call).
  *
- * Produces each region exactly once (frame slots of one region are
- * pointer-deduplicated), in ascending [start) order, skipping the
+ * The R1 walk (W-7): produces each record exactly once -- a record is
+ * emitted when the walk visits its start frame, bucket members of a
+ * shared frame included -- in ascending [start) order, skipping the
  * magazine reserve markers (they are not regions).  Unlike the point
  * lookup this is the full-registry view: parked (RESERVED) regions are
  * produced too -- rendering/visibility decisions belong to the consumer.
@@ -1010,6 +1016,13 @@ long corten_arena_test_va_recycles(void);
  */
 struct corten_arena *corten_arena_test_region_of(struct mm_struct *mm,
 						 unsigned long addr);
+/* W-7 fixture hook: the registry's R1 record-once walk (the INV7
+ * checker and any test-side registry sweep).  *@frame/@*idx are the
+ * caller's cursor, zero-initialized before the first call.
+ */
+struct corten_arena *corten_arena_test_record_next(struct mm_struct *mm,
+						   unsigned long *frame,
+						   unsigned int *idx);
 long corten_arena_test_auto_vgate(void);
 long corten_arena_test_j1_probes(void);
 long corten_arena_test_j1_hits(void);

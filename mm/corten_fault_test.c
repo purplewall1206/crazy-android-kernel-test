@@ -2072,8 +2072,17 @@ static void corten_fault_test_punch_head(struct kunit *test)
 	KUNIT_EXPECT_PTR_EQ(test, READ_ONCE(ar->vma),
 			    vma_lookup(t->mm, hole + 2 * PAGE_SIZE));
 	percpu_ref_put(&ar->active);
-	KUNIT_EXPECT_NULL(test, xa_load(&corten_arena_state(t->mm)->arenas,
-					hole >> PMD_SHIFT));
+	/* W-7: the head punch re-anchors the record at the punch end
+	 * (the start-frame slot is what the R1 walks key on), so the
+	 * punched range's registry-truth is the LOOKUP level: the hole
+	 * answers no arena (the record's extent excludes it), which is
+	 * the D-G'' fault-safety contract the raw slot probe used to
+	 * carry.
+	 */
+	KUNIT_EXPECT_NULL(test, corten_arena_lookup(t->mm, hole));
+	ar = corten_arena_test_region_of(t->mm, hole + 2 * PAGE_SIZE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+	KUNIT_EXPECT_EQ(test, ar->start, hole + 2 * PAGE_SIZE);
 
 	/* Emulate the overlap gather's free of the doomed middle through
 	 * the regular funnel (the guard only reads VM_CORTEN).
