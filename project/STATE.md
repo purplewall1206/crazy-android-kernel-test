@@ -1396,3 +1396,26 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     前提）/J2 白名单收缩（SHARED/special/stack 三桶）/J3 双源/树归零 live 断言/零改动
     回归集全量/跨内核 J3 对拍/LoC 终账/REPORT M-V2 章; C2 小片（KUnit PT 泄漏+
     free_pgtables 几何门）建议 W-6 前并行或收官后立即。
+
+- **[2026-10-04 02-0x r09 W-6 中期: 4 PASS/3 FAIL —— 三存量缺口实测照出, W-4b 开启]**
+  - w6-dev2 电池（#300 a76defaa, 含 wl 六桶枚举+tree_entries 载体=commit 6bca0e7e078a
+    已入库）: J1/J5/J6/J7 PASS（J1 豁免臂经论证留 backstop=D33; LoC 终账 VMA 四件
+    13,408 vs corten 生产 23,761+测试 20,573）; **J3/J2/J4 FAIL 全为新测量照出的存量**:
+    ①**J3 真回归（W-2 起 /proc/maps 对 MODE 恒空）**: W-2 680857 行臂 return NULL →
+    seq_file NULL=EOF, 渲染臂死码; 被空真负言断言掩盖至今, W-6 oracle 首见。**C-fix A
+    已入库 a9c89f5a8968**（行臂返还 row 存储 token, 不作 vma 解引用; =n 干净）; PROCMAP_QUERY
+    or-next 同族臂（query_merge_corten_row NULL+调用方不查 row_hit）并入下轮。
+    ②J2: vdso/vvar/vclock=special_mapping, arch_vma_name 不触发 → 误桶 UNCLASSIFIED
+    （wl_special 恒 0）; 修=分类器 vm_ops 判据+豁免表 2→3。③**J4=真 MV2 缺口**:
+    tree_entries 静态 10/动态 31（file×23!）, skip_other=347/电池——sweep 收编率不足,
+    exec 镜像/heap 留树（W-3 §1.4 判"全可表出"未兑现）→ **W-4b 收编完备性切片开启**
+    （skip 逐因编码→修拒收臂→tree_entries→0）。
+  - PASS 面全读数: smoke v2 26/26 双形态/JTB 3/3/metis ×2 checksum 同基准/sweep-live/
+    mva1_probe 18/18/S-3 双分支 PASS/KUnit on×2+off 全绿（123/0/0）/=n 零符号/
+    checkpatch 0E/0W/0C/j2_stale=0/registry 恒零+mmap_region_routes=1/PGTABLES=1（C2
+    容差）。A.1 侧: smoke 24/1（唯一 FAIL=W-3 语义晚于 A.1, 预期披露）; oracle A.1
+    rc=3（process_vm_readv=V-C 能力）→ 披露 skip-leg 变体取 17 行快照。
+  - **运维**: worktree 增量构建状态腐坏（=n/=y 翻转+并发残）致 fixdep 随机 .d 丢失,
+    -j12 重跑收敛（#297→#300 线健康）; #292 验证件于 =n 链接覆写前抢救归档; 教训:
+    config 翻转后立即归档验证件。w6-dev2 判定表+全套工件 results/r07/w6/ +
+    next/w6-dev-report.md。
