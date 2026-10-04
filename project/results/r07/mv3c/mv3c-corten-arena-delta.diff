@@ -1,0 +1,88 @@
+diff --git a/mm/corten_arena.c b/mm/corten_arena.c
+index 67b71e8f6baf..ab18faaa00dd 100644
+--- a/mm/corten_arena.c
++++ b/mm/corten_arena.c
+@@ -4580,7 +4580,32 @@ void corten_arena_mm_exit(struct mm_struct *mm)
+ 	 */
+ 	corten_arena_exit_walk(mm, state);
+ 
+-	/* Unpublish; no reader can be racing (mm_users == 0). */
++	/* MV3.c (the drain takes the lock): the unpublish and the drain
++	 * below run under this mm's mmap_write, restoring the W-7
++	 * registry-writer premise ("every registry writer holds the owner
++	 * mm's mmap_write") for the exit path.  DEV-13's ctl-only spelling
++	 * was deadlock-safe ("the lower lock alone cannot form a cycle")
++	 * but left the premise broken: any reader-side mutation that
++	 * relies on the mmap-lock mutual exclusion -- a remote face's
++	 * faultin leg chief among them -- had no fence against the drain,
++	 * which is why the remote copy face had to go follow-only (the
++	 * POKE COW-break degradation, MV3.b).  The hold is uncontended:
++	 * mm_users is 0, so no GUP/remote face can be inside (every one
++	 * of them enters through an mm reference), the shrinker and the
++	 * oom reaper need mmget_not_zero(), and the file-event route
++	 * never takes this mm's mmap locks (its zap is ptl-serialized,
++	 * fenced from the teardown by the tryget_live/kill ledger).  The
++	 * drain keeps its bounded wait: a leaked transaction reference
++	 * degrades to the counted leak, never to a hung exit.  Lock
++	 * order: mmap_write > ctl_lock (the declared order) and
++	 * mmap_write > i_mmap_write (the arena free's registry unlink),
++	 * both established edges.
++	 */
++	mmap_write_lock(mm);
++
++	/* Unpublish; the write lock fences even a hypothetical reader
++	 * (mm_users == 0 already did).
++	 */
+ 	smp_store_release(&mm->corten_state, NULL);
+ 
+ 	/* A5 (G5-fix): did this registry ever hold arena state?  The
+@@ -4599,9 +4624,10 @@ void corten_arena_mm_exit(struct mm_struct *mm)
+ 	INIT_LIST_HEAD(&state->arena_pool);
+ 	state->nr_pool = 0;
+ 
+-	/* DEV-13: exit drains with mm_users already 0 and takes only the
+-	 * lower ctl_lock -- "the lower lock alone" cannot form a cycle.
++	/* The drain runs under the write lock (MV3.c, above); ctl_lock
++	 * nests as everywhere else (mmap > ctl).
+ 	 */
++	mmap_assert_write_locked(mm);
+ 	mutex_lock(&state->ctl_lock);
+ 
+ 	/* The R1 walk (W-7): drain each record once, at its start frame.
+@@ -4623,6 +4649,8 @@ void corten_arena_mm_exit(struct mm_struct *mm)
+ 
+ 	mutex_unlock(&state->ctl_lock);
+ 
++	mmap_write_unlock(mm);
++
+ 	/* M6.T3: leave the shrinker registry first, then wait out the
+ 	 * grace period before the state memory is reused -- a shrinker
+ 	 * reader that found this node under RCU either finished (its mm
+@@ -12203,9 +12231,25 @@ static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
+ 
+ 		if (ret)
+ 			return ret;
+-		if (tracked)
+-			this_cpu_inc(READ_ONCE(mm->corten_state)->stats[
++		/* MV3.c: the state can unpublish mid-chunk -- the file-event
++		 * route reaches a dying mm's chunk past the exit's
++		 * smp_store_release (the route takes no mmap lock, so the
++		 * MV3.c drain hold does not fence it).  One load, NULL
++		 * checked: a lost advisory increment beats a NULL deref.
++		 * A non-NULL load is also safe against the state free:
++		 * tracked means a descriptor answered, so the exit is the
++		 * arena-bearing shape and pays synchronize_rcu() before
++		 * corten_arena_state_free() -- a full grace period after
++		 * this increment.
++		 */
++		if (tracked) {
++			struct corten_mm_state *st =
++					READ_ONCE(mm->corten_state);
++
++			if (st)
++				this_cpu_inc(st->stats[
+ 					CORTEN_ARENA_STAT_MUNMAP_TXNS]);
++		}
+ 
+ 		start = win_end;
+ 	}
