@@ -1481,3 +1481,16 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     条件变化或换通道。运维: 仓库 http.version=HTTP/1.1 已设（修代理下挂死）;
     SSH 备用 key /tmp/gh_push_key（账号 hermes-tag-sync-20261004）。MV2 交付
     GitHub 侧: 分支+主链 tag 完整在线。
+
+- **[2026-10-04 用户指令: MV3 开工（D29 路线）]**
+  - 首片 = **MV3.a 默认进场**（execve 换 mm 即 MODE）: 任务书
+    next/mv3a-dev-brief.md（主会话默认裁决六条: 门位=exec_mmap 新 mm 安装点;
+    新参数 corten_mode_default 默认 off 与 corten=on 语义分离——既有电池零
+    扰动; 不调 enter_sweep——exec 时 mm 近空走 A5 惰性; suid 不特判（D29）;
+    re-exec 幂等; ELF/brk/栈全由既有路由承接）。dev agent mv3a-dev 在制。
+  - MV3.b 清单需对当前态重triage: PROCMAP or-next 残差已由 W-6b or-next 修
+    兑现（消项）; S-3 read-back 已由 W-3fix2 兑现（消项）; 余 bpf_iter/trace
+    符号化、mseal、madvise WILLNEED 族待 MV3.b 片。
+  - 顺序: MV3.a → MV3.b（重triage 后余项）→ MV3.c（批 mark 重构, 性能地板
+    收窄）→ MV3.d（全系统 MODE 电池, 翻 corten_mode_default）→ MV3.e（删除
+    账清单）。
