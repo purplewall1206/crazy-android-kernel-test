@@ -1,0 +1,29 @@
+diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
+index d186b500fffb..fe0ab9c1c78a 100644
+--- a/fs/proc/task_mmu.c
++++ b/fs/proc/task_mmu.c
+@@ -613,7 +613,24 @@ static struct file *corten_row_file(const struct corten_region_row *row)
+ 		return READ_ONCE(row->ar->rfile);
+ 	return NULL;
+ }
++#else
++/* =n: the row answer is unreachable (corten_row_query() stubs false, so
++ * *row_hit never sets), but the mvc procmap-query wiring below still
++ * names the helpers -- the same neutral stand-ins as every other =n
++ * stub in this file.
++ */
++static vm_flags_t corten_row_flags(const struct corten_region_row *row)
++{
++	return 0;
++}
+ 
++static struct file *corten_row_file(const struct corten_region_row *row)
++{
++	return NULL;
++}
++#endif
++
++#ifdef CONFIG_CORTEN_MM_ARENA
+ static void show_corten_map_row(struct seq_file *m,
+ 				const struct corten_region_row *row)
+ {

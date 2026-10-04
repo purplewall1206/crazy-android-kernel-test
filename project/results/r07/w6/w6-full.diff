@@ -1,0 +1,179 @@
+diff --git a/mm/corten_arena.c b/mm/corten_arena.c
+index acfdd60f75cc..2ae5ab92a7c0 100644
+--- a/mm/corten_arena.c
++++ b/mm/corten_arena.c
+@@ -543,6 +543,20 @@ static atomic_long_t corten_nr_wl_brk_vmas;
+ static atomic_long_t corten_nr_wl_delegated_vmas;
+ static atomic_long_t corten_nr_wl_unclassified;
+ static atomic_long_t corten_nr_wl_brk_anomalies;
++/* W-6: the per-class split of the delegated composition (the guest
++ * battery reads FILE and ANON at zero -- the "anonymous/file-private
++ * leftover = FAIL" line needs the buckets apart, the merged
++ * wl_delegated_vmas cannot prove it), plus the audited mm's tree
++ * entry count (the tree-zeroing live assertion's debugfs carrier).
++ */
++static atomic_long_t corten_nr_wl_shadow;
++static atomic_long_t corten_nr_wl_implant;
++static atomic_long_t corten_nr_wl_stack;
++static atomic_long_t corten_nr_wl_special;
++static atomic_long_t corten_nr_wl_file;
++static atomic_long_t corten_nr_wl_anon;
++static atomic_long_t corten_nr_tree_entries;
++static atomic_long_t corten_nr_tree_entries_pid;
+ 
+ /* MV2 W-2: the detached-carrier counter retired with the object -- a
+  * MODE mm allocates no vm_area_struct, detached included (the D28
+@@ -3477,7 +3491,7 @@ long corten_arena_test_j2_first_violation(void)
+ static int corten_whitelist_scan(struct mm_struct *mm,
+ 				 const struct corten_implant_range *implants,
+ 				 unsigned int nr_implants,
+-				 unsigned long *hist);
++				 unsigned long *hist, bool publish);
+ long corten_arena_test_brk_arm(int arm)
+ {
+ 	switch (arm) {
+@@ -3576,7 +3590,7 @@ void corten_arena_test_wl_histogram(struct mm_struct *mm,
+ 
+ 	mutex_lock(&state->ctl_lock);
+ 	corten_whitelist_scan(mm, state->implants, state->nr_implants,
+-			      counts);
++			      counts, false);
+ 	mutex_unlock(&state->ctl_lock);
+ }
+ #endif
+@@ -13570,9 +13584,10 @@ corten_whitelist_classify(const struct corten_implant_range *implants,
+ static int corten_whitelist_scan(struct mm_struct *mm,
+ 				 const struct corten_implant_range *implants,
+ 				 unsigned int nr_implants,
+-				 unsigned long *hist)
++				 unsigned long *hist, bool publish)
+ {
+ 	struct vm_area_struct *vma;
++	unsigned long nr_entries = 0;
+ 	unsigned int brk_vmas = 0;
+ 	int violations = 0;
+ 
+@@ -13585,6 +13600,7 @@ static int corten_whitelist_scan(struct mm_struct *mm,
+ 	mas_for_each(&mas, vma, ULONG_MAX) {
+ 		enum corten_wl_class c;
+ 
++		nr_entries++;
+ 		c = corten_whitelist_classify(implants, nr_implants,
+ 					      mm, vma);
+ 
+@@ -13601,10 +13617,40 @@ static int corten_whitelist_scan(struct mm_struct *mm,
+ 			if (c == CORTEN_WL_UNCLASSIFIED)
+ 				atomic_long_inc(&corten_nr_wl_unclassified);
+ 		}
++		/* W-6: the per-class ledger (see the declarations). */
++		switch (c) {
++		case CORTEN_WL_SHADOW:
++			atomic_long_inc(&corten_nr_wl_shadow);
++			break;
++		case CORTEN_WL_IMPLANT:
++			atomic_long_inc(&corten_nr_wl_implant);
++			break;
++		case CORTEN_WL_STACK:
++			atomic_long_inc(&corten_nr_wl_stack);
++			break;
++		case CORTEN_WL_SPECIAL:
++			atomic_long_inc(&corten_nr_wl_special);
++			break;
++		case CORTEN_WL_FILE:
++			atomic_long_inc(&corten_nr_wl_file);
++			break;
++		case CORTEN_WL_ANON:
++			atomic_long_inc(&corten_nr_wl_anon);
++			break;
++		default:
++			break;
++		}
+ 	}
+ 	rcu_read_unlock();
+ 
+ 	atomic_long_inc(&corten_nr_wl_walks);
++	/* W-6: the tree-zeroing live assertion's debugfs carrier -- the
++	 * audited mm's entry count, read next to tree_entries_pid.  Only
++	 * the debugfs-audit entry publishes, so the pair always describes
++	 * one audit (the route-internal scans leave both untouched).
++	 */
++	if (publish)
++		atomic_long_set(&corten_nr_tree_entries, nr_entries);
+ 	if (violations) {
+ 		atomic_long_add(violations, &corten_nr_wl_violations);
+ 		WARN_ONCE(1,
+@@ -13631,7 +13677,7 @@ int corten_audit_whitelist_walk(struct mm_struct *mm)
+ 
+ 	mutex_lock(&state->ctl_lock);
+ 	violations = corten_whitelist_scan(mm, state->implants,
+-					   state->nr_implants, NULL);
++					   state->nr_implants, NULL, true);
+ 	mutex_unlock(&state->ctl_lock);
+ 
+ 	return violations;
+@@ -13649,7 +13695,7 @@ int corten_audit_whitelist_walk_locked(struct mm_struct *mm)
+ 		return 0;
+ 
+ 	return corten_whitelist_scan(mm, state->implants,
+-				     state->nr_implants, NULL);
++				     state->nr_implants, NULL, false);
+ }
+ 
+ /* debugfs "whitelist <pid>" backend (mm/corten.c owns the file). */
+@@ -13657,6 +13703,7 @@ int corten_arena_wl_audit_pid(pid_t pid)
+ {
+ 	struct task_struct *task;
+ 	struct mm_struct *mm;
++	pid_t audited;
+ 	int ret;
+ 
+ 	if (!corten_enabled_static())
+@@ -13668,12 +13715,20 @@ int corten_arena_wl_audit_pid(pid_t pid)
+ 	if (!task)
+ 		return -ESRCH;
+ 
++	audited = task_pid_nr(task);
+ 	mm = get_task_mm(task);
+ 	put_task_struct(task);
+ 	if (!mm)
+ 		return -EINVAL;
+ 
+ 	ret = corten_audit_whitelist_walk(mm);
++	/* W-6: stamp the audited pid so the tree_entries render (the
++	 * tree-zeroing live assertion's debugfs carrier) is attributable.
++	 * The mode gate mirrors the walk's own early-out: a non-MODE mm
++	 * is not audited and must not move the pair.
++	 */
++	if (ret >= 0 && READ_ONCE(mm->corten_mode))
++		atomic_long_set(&corten_nr_tree_entries_pid, audited);
+ 	mmput(mm);
+ 
+ 	return ret;
+@@ -13725,6 +13780,27 @@ void corten_arena_audit_gate_report(struct seq_file *m)
+ 	seq_printf(m, "wl_unclassified    %ld\n",
+ 		   atomic_long_read(&corten_nr_wl_unclassified));
+ 	seq_printf(m, "wl_brk_anomalies   %ld\n", wl_anom);
++	/* W-6: the delegated composition split (the guest battery reads
++	 * FILE and ANON at zero) and the last audit's tree entry count
++	 * (the tree-zeroing live assertion's debugfs carrier, read next
++	 * to tree_entries_pid).
++	 */
++	seq_printf(m, "wl_shadow          %ld\n",
++		   atomic_long_read(&corten_nr_wl_shadow));
++	seq_printf(m, "wl_implant         %ld\n",
++		   atomic_long_read(&corten_nr_wl_implant));
++	seq_printf(m, "wl_stack           %ld\n",
++		   atomic_long_read(&corten_nr_wl_stack));
++	seq_printf(m, "wl_special         %ld\n",
++		   atomic_long_read(&corten_nr_wl_special));
++	seq_printf(m, "wl_file            %ld\n",
++		   atomic_long_read(&corten_nr_wl_file));
++	seq_printf(m, "wl_anon            %ld\n",
++		   atomic_long_read(&corten_nr_wl_anon));
++	seq_printf(m, "tree_entries       %ld\n",
++		   atomic_long_read(&corten_nr_tree_entries));
++	seq_printf(m, "tree_entries_pid   %ld\n",
++		   atomic_long_read(&corten_nr_tree_entries_pid));
+ 	seq_printf(m, "gate_pass          %d\n",
+ 		   !hits && !viol && !wl_viol && !wl_anom);
+ }

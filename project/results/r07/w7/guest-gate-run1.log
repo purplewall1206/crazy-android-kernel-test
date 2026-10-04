@@ -1,0 +1,368 @@
+=== W-7 guest gate 2026-10-04 07:14:49 ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+6.18.32-g856416f7ceec-dirty
+=== 0. 基线计数 ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+j1_probes          0
+j1_hits            0
+j2_walks           0
+j2_violations      0
+j2_stale           0
+j2_first_violation 0x0
+wl_walks           0
+wl_violations      0
+wl_brk_vmas        0
+wl_delegated_vmas  0
+wl_unclassified    0
+wl_brk_anomalies   0
+wl_shadow          0
+wl_implant         0
+wl_stack           0
+wl_special         0
+wl_file            0
+wl_anon            0
+tree_entries       0
+tree_entries_pid   0
+gate_pass          1
+--- arena_stats 关键族
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+arenas              0
+mmap_punches        0
+mmap_punch_rejects  0
+mmap_region_routes  0
+mmap_region_refuses 0
+implant_drops       0
+j2_walks            0
+j2_violations       0
+j2_stale            0
+j2_first_violation  0
+gup_probes          0
+maps_window_rows    0
+sweep_anon_adopts   0
+sweep_file_adopts   0
+sweep_skip_stack    0
+sweep_skip_special  0
+sweep_skip_shared   0
+sweep_skip_window   0
+sweep_skip_other    0
+sweep_skip_flags    0
+sweep_skip_uffd     0
+sweep_skip_filemay  0
+sweep_skip_ops      0
+sweep_skip_brk      0
+sweep_skip_declare  0
+sweep_pages_resident 0
+--- arenas 行数 (boot 基线)
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+1
+=== 1. smoke v2 (双形态 26) ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+37df16d7
+SMOKE_RC=0
+PASS munmap-stack
+PASS munmap-fixed
+PASS mode-exit-refused
+PASS mode-sticky-stock-intact
+SMOKE PASS
+[smoke] smoke binary rc=0
+[smoke] debugfs arenas after: 0
+[smoke] SMOKE-DRIVER PASS
+26
+0
+=== 2. JTB (2000x3 x3) ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+JTB_OK=3
+=== 3. metis_eq x2 checksum ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+metis1 RC=0
+"distinct_words":65073,"checksum":"2d383eeed4ceb73b"
+metis2 RC=0
+"distinct_words":65073,"checksum":"2d383eeed4ceb73b"
+=== 4. sweep-live ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+SWEEP_RC=124
+swapin_rate         0
+--- end arena_stats after ---
+--- sweep counters after ---
+corten_mode_hook: MODE on (pid 18618)
+corten_mode_hook: MODE on (pid 18619)
+corten_mode_hook: MODE on (pid 18620)
+=== 5. mva1_probe ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+PROBE_RC=1
+17
+[ok] FRESH: reactivated window write+readback 8M ok
+[ok] CHUNK: kept half still works after inner munmap
+[ok] CHUNK: dropped half re-materialized, kept half intact
+[FAIL] CHUNK: maps shows 1 segment(s):
+[ok] S-4b: maps clean after final munmap
+[ok] S-1: fault on munmapped window is SEGV_MAPERR (was ACCERR)
+[ok] punchfork: MemFree reconciled (3578808 -> 3734392 kB, 8 iters)
+[mva1] probe done passes=17 fails=1
+=== 6. S-3 电池 (双分支) ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+S3_RC=0
+[s3] branch A: swapoff clean PASS (rc=0)
+[s3] branch A ledger: unuse_blind_mms 0 -> 0 (entries gone before swapoff: the early-exit path may skip the walk -- disclosure only)
+[s3] === branch B: blind hold -> bounded spin -> SIGINT -> exit closure -> retry ===
+[s3] B: swapped_out 16384 -> 32768, VmSwap=65536kB
+[s3] branch B: swapoff returned without a spin (blind entries empty this run -- disclosure)
+[s3] branch B: early convergence -- the W1.f/f2 unuse arms pulled the entries (swapins advanced); the spin/retry/zap legs below are N/A this run
+[s3] branch B: holder exit (V-D exit walk closes the blind entries)
+[s3] branch B: inuse drained to 0 in 0s
+[s3] branch B: retry swapoff skipped (device already drained by the convergent first swapoff)
+[s3] branch B ledger: unuse_blind_mms 0 -> 0, zap_swap_frees 0 -> 0, swapins=32768
+[s3] branch B: zap_swap_frees N/A this run (entries pulled by unuse, not zapped by exit; swapins=32768 is the closure evidence)
+S3 RESULT PASS
+=== 7. J3 oracle: 注册驱动 (in-boot 断言 + 快照; guest 本地盘副本保 dev:ino 稳定) ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+j3w dev=regular file maj:min=0:0 inode=293286 bytes=915272
+J3_DRIVER_RC=0
+[j3] checkpoint pid=18807 win_rw=0x100000000000 magic=0x100000e00000
+[j3] maps window rows: 5
+[j3] audit_gate j1_probes=2 j1_hits=0 j2_violations=0
+[j3] maps_window_rows= gup_probes=
+[j3] snapshot: /tmp/j3-snap
+[j3] PASS (in-boot assertions; run cmp_j3.sh for the cross-boot diff)
+=== 8. J3 oracle: 手动第二跑 (live wl/tree audit @ready; w6b: guest 侧驱动, setsid-over-ssh 挂连规避 + pgrep -x 自匹配规避) ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+/tmp/w7/j3live.sh: line 2: cd: /tmp/w6: No such file or directory
+[j3] ready win_rw=0x100000000000 magic=0x100000e00000
+/tmp/w7/j3live.sh: line 6: /tmp/w6/j3pid: No such file or directory
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+cat: /tmp/w7/j3pid: No such file or directory
+--- audit j3-live pid= pre
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+j1_probes          4
+j1_hits            0
+j2_walks           69
+j2_violations      0
+j2_stale           0
+j2_first_violation 0x0
+wl_walks           43
+wl_violations      0
+wl_brk_vmas        19
+wl_delegated_vmas  183
+wl_unclassified    0
+wl_brk_anomalies   0
+wl_shadow          0
+wl_implant         88
+wl_stack           43
+wl_special         129
+wl_file            1
+wl_anon            10
+tree_entries       0
+tree_entries_pid   0
+gate_pass          1
+--- wl-write rc:
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+wl_write_rc=1
+bash: line 1: echo: write error: Invalid argument
+--- audit j3-live pid= post
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+j1_probes          4
+j1_hits            0
+j2_walks           69
+j2_violations      0
+j2_stale           0
+j2_first_violation 0x0
+wl_walks           43
+wl_violations      0
+wl_brk_vmas        19
+wl_delegated_vmas  183
+wl_unclassified    0
+wl_brk_anomalies   0
+wl_shadow          0
+wl_implant         88
+wl_stack           43
+wl_special         129
+wl_file            1
+wl_anon            10
+tree_entries       0
+tree_entries_pid   0
+gate_pass          1
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+j3 exited
+--- arenas 行数 (j3 退出后)
+1
+=== 9. 终读数 ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+j1_probes          4
+j1_hits            0
+j2_walks           70
+j2_violations      0
+j2_stale           0
+j2_first_violation 0x0
+wl_walks           44
+wl_violations      0
+wl_brk_vmas        20
+wl_delegated_vmas  187
+wl_unclassified    0
+wl_brk_anomalies   0
+wl_shadow          0
+wl_implant         88
+wl_stack           44
+wl_special         132
+wl_file            1
+wl_anon            10
+tree_entries       0
+tree_entries_pid   0
+gate_pass          1
+--- arena_stats 全量
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+enabled             1
+ptdescs             319
+meta_arrays         319
+meta_bytes          1306624
+desc_alloc_fail     0
+meta_alloc_fail     0
+free_untracked      0
+reinstalled         0
+legacy_drift        0
+arenas              0
+drain_timeout       0
+auto_mmaps          44
+auto_attach_fail    0
+auto_fallbacks      0
+auto_exhausted      0
+mprotect_routes     1822
+madvise_free_txns   0
+madvise_hints       2
+mremap_routes       0
+mremap_rejects      0
+munmap_releases     9
+fork_demotes        0
+fork_faithful       26
+fork_skips          0
+rearm_recovered     24
+rearm_failed        0
+eagain_retries      0
+eagain_leaked       0
+mremap_release_fail 0
+mmap_punches        16
+mmap_punch_rejects  0
+mmap_region_routes  1
+mmap_region_refuses 0
+truncate_routes     0
+zap_single_refuses  0
+imap_stale_refuses  0
+implant_drops       0
+ttu_routes          0
+file_mmaps          4
+file_read_faults    4520
+file_cow_copies     0
+file_fork_mirrors   329
+seg_claims          16
+mag_skips           0
+va_recycles         5
+pool_parks          14
+pool_hits           5
+pool_misses         39
+pool_over           0
+pool_ejects         1
+park_unmap_fails    0
+auto_vgate          0
+j1_probes           4
+j1_hits             0
+fault_fallback_win  2
+uffd_window_reject  0
+gup_window_miss     0
+remote_win_short    0
+j2_walks            70
+j2_violations       0
+j2_stale            0
+j2_first_violation  0
+msync_window_skips  0
+mincore_routes      2
+madvise_parked      0
+move_pages_window   0
+gup_probes          10
+gup_probe_rejects   0
+maps_window_rows    161
+brk_grow            72
+brk_shrink          0
+brk_noop            0
+brk_reject          11
+heap_lookups        45
+brk_region_adopts   11
+brk_region_grows    61
+brk_region_shrinks  0
+brk_legacy          3470
+sweep_anon_adopts   57
+sweep_file_adopts   260
+sweep_skip_stack    18
+sweep_skip_special  54
+sweep_skip_shared   0
+sweep_skip_window   0
+sweep_skip_other    0
+sweep_skip_flags    1
+sweep_skip_uffd     0
+sweep_skip_filemay  0
+sweep_skip_ops      0
+sweep_skip_brk      7
+sweep_skip_declare  0
+sweep_pages_resident 2435
+declare_notes       372
+zap_pinned          0
+reap_skips          0
+rmap_rejects        0
+swapped_out         32768
+swapins             32768
+swapin_retries      0
+swapin_heals        0
+zap_swap_frees      0
+driver_swapped      34
+driver_kept         32734
+exit_upper_pmds     59
+exit_upper_puds     38
+exit_upper_p4ds     0
+exit_swept_refuses  1
+unuse_blind_mms     0
+shrink_scans        1536
+aging_passes        25344
+shrink_swapped      0
+shrink_skipped      0
+evict_busy          0
+resident_pages      0
+swapped_pages       0
+swapout_rate        0
+swapin_rate         0
+--- arenas 全表
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+            mm              shadow [start,end)                prot cls  rflg pcs status               rfile     poff
+=== 9b. W-7 终判据: 动态 ELF 多段收编 (live wl/tree audit) ===
+crit.sh staged
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+j3w pid=18968 mode=?
+wl_write_rc=0
+wl_walks           46
+wl_violations      0
+wl_brk_vmas        22
+wl_delegated_vmas  195
+wl_unclassified    0
+wl_brk_anomalies   0
+wl_shadow          0
+wl_implant         88
+wl_stack           46
+wl_special         138
+wl_file            1
+wl_anon            10
+tree_entries       5
+tree_entries_pid   18968
+gate_pass          1
+W7_CRITERION_J3W=11 (wl_file+wl_anon+wl_unclassified)
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+j3w-killed
+--- W-7 终判据读数汇总 (上块 W7_CRITERION_* 与 wl_*/tree_entries) ---
+=== 10. pgtables 残值 + j2_stale + dmesg 审计 ===
+Warning: Permanently added '[127.0.0.1]:10027' (ED25519) to the list of known hosts.
+[   57.977948] BUG: non-zero pgtables_bytes on freeing mm: 8192
+PGTABLES_COUNT=1
+0
+[    0.000000] Command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on mitigations=off kunit.enable=0 log_buf_len=16M
+[    0.882722] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on mitigations=off kunit.enable=0 log_buf_len=16M
+[    0.885055] corten: requested on, activating at initcall time
+[    2.813841] corten: page descriptors enabled
+[    2.956045] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[    7.110726] systemd[1]: Mounting sys-kernel-debug.mount - /sys/kernel/debug...
+[   57.977948] BUG: non-zero pgtables_bytes on freeing mm: 8192

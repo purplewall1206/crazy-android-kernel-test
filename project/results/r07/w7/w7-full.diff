@@ -1,0 +1,3164 @@
+diff --git a/include/linux/corten_arena.h b/include/linux/corten_arena.h
+index 67eaf1f4f5e5..53bd61734ece 100644
+--- a/include/linux/corten_arena.h
++++ b/include/linux/corten_arena.h
+@@ -189,14 +189,13 @@ enum corten_region_class {
+ 
+ /**
+  * struct corten_arena - descriptor of one declared arena.
+- * @start: first VA of the arena (PMD_SIZE aligned).
+- * @end: first VA past the arena.  PMD_SIZE aligned for every window
+- *       arena; the MV2 W-3 brk region is only page-granular -- the
+- *       legacy heap addresses are page-aligned, so its end sits
+- *       inside its own last claimed frame.  The registry's per-arena
+- *       frame walks key their dedupe cursor on
+- *       corten_arena_end_frame(), not on a bare end >> PMD_SHIFT,
+- *       for exactly this reason.
++ * @start: first VA of the arena.  PMD_SIZE aligned for every window
++ *         arena and every targeted DECLARE; a sweep-adopted region
++ *         (MV2 W-4/W-7) inherits its VMA's page alignment, as does
++ *         the MV2 W-3 brk region's page-granular end.
++ * @end: first VA past the arena.  Page-granular in the legacy domain
++ *       (the W-3 brk region, the adopted VMA bounds); PMD-rounded in
++ *       the window domain.
+  * @prot: CORTEN_PERM_* upper bound recorded from the VMA at DECLARE time.
+  * @mm: owning address space (diagnostics back-link; never taken by
+  *      reference -- the arena cannot outlive its mm, see
+@@ -351,24 +350,15 @@ struct corten_arena {
+ };
+ 
+ /*
+- * One past @ar's last claimed registry frame -- the exclusive
+- * first-frame cursor every registry walk uses to visit each
+- * descriptor once ("every frame of an arena holds the same
+- * descriptor; drain each one once, at its first frame").  For a
+- * PMD-aligned @end this is the historical end >> PMD_SHIFT; for the
+- * MV2 W-3 brk region (page-granular end, inside its own last frame)
+- * the bare shift under-counts by one and the descriptor's final
+- * frame re-enters the walk body -- the exit drain re-ran
+- * obs_remove/drain/free on a live descriptor, and the second
+- * obs_remove's list_del_rcu wrote through the LIST_POISON pointers
+- * (CONFIG_DEBUG_LIST off): the oopsing task died holding the global
+- * corten_arena_list_lock, which then spun every later DECLARE/exit
+- * in the system forever (the r07 guest mm_exit stall).
++ * W-7 (multi-record registry): the per-frame cursor walks of the
++ * single-record era (keyed on "one past @ar's last claimed frame") are
++ * gone.  Their r07 lesson -- a mis-counted cursor re-ran obs_remove/
++ * drain/free on a live descriptor and wedged every later DECLARE/exit
++ * behind the global list lock -- is carried by the R1 walk rule
++ * (corten_region_next): a record is produced exactly once, when the
++ * walk visits its start frame.  Stateless, so there is no cursor left
++ * to mis-count.
+  */
+-static inline unsigned long corten_arena_end_frame(const struct corten_arena *ar)
+-{
+-	return ((READ_ONCE(ar->end) - 1) >> PMD_SHIFT) + 1;
+-}
+ 
+ /*
+  * MODE-process auto-arena window (DESIGN.md sec 2, M4T0_SPEC.md sec 1.3):
+@@ -436,8 +426,17 @@ struct corten_implant_range {
+ 
+ /**
+  * struct corten_mm_state - per-mm arena registry, lazily allocated.
+- * @arenas: 2M frame index (addr >> PMD_SHIFT) -> struct corten_arena *.
+- *          Stores happen only under @ctl_lock; loads are lockless RCU.
++ * @arenas: 2M frame index (addr >> PMD_SHIFT) -> slot value.  W-7
++ *          multi-record shape: the slot names the record set covering
++ *          the frame -- a bare struct corten_arena * while a single
++ *          record claims it (the common case), a tagged
++ *          corten_frame_bucket pointer once page-disjoint records
++ *          share the frame (the ELF-segment shape), the reserve
++ *          sentinel for claimed-but-unallocated magazine frames.
++ *          Records in one slot are page-range disjoint (INV2'); the
++ *          slot decodes only through the arena layer's slot helpers.
++ *          Stores happen only under @ctl_lock (or the punch routes'
++ *          mmap_write); loads are lockless RCU.
+  * @nr: number of active arenas; the lookup fast path short-circuits on
+  *      zero without touching the xarray.
+  * @ctl_lock: serializes DECLARE/RELEASE (including the drain wait) so
+@@ -580,9 +579,11 @@ enum corten_fault_action {
+ /**
+  * struct corten_region_iter - enumeration cursor of the region registry.
+  * @frame: next 2M frame index to examine.
+- * @last: arena pointer produced by the previous corten_region_next()
+- *        call (the pointer-dedup key: one region spans several frame
+- *        slots and must be produced exactly once).
++ * @idx: next bucket-member candidate inside the frame's slot (W-7: a
++ *       shared frame's slot carries a bucket of page-disjoint records).
++ * @last: the record produced by the previous corten_region_next() call.
++ * @fresh: true until the walk's first frame is examined (a seeded
++ *         mid-registry walk emits the seed frame's straddling records).
+  *
+  * Stack-allocate, zero with corten_region_iter_init().
+  *
+@@ -594,13 +595,17 @@ enum corten_fault_action {
+  */
+ struct corten_region_iter {
+ 	unsigned long frame;
++	unsigned int idx;
+ 	struct corten_arena *last;
++	bool fresh;
+ };
+ 
+ static inline void corten_region_iter_init(struct corten_region_iter *it)
+ {
+ 	it->frame = 0;
++	it->idx = 0;
+ 	it->last = NULL;
++	it->fresh = true;
+ }
+ 
+ /** One renderable window-domain row (a region or a punched piece). */
+@@ -757,8 +762,9 @@ struct corten_arena *corten_region_lookup(struct mm_struct *mm,
+  * @mm: address space whose regions to walk.
+  * @it: the caller's cursor (advanced by the call).
+  *
+- * Produces each region exactly once (frame slots of one region are
+- * pointer-deduplicated), in ascending [start) order, skipping the
++ * The R1 walk (W-7): produces each record exactly once -- a record is
++ * emitted when the walk visits its start frame, bucket members of a
++ * shared frame included -- in ascending [start) order, skipping the
+  * magazine reserve markers (they are not regions).  Unlike the point
+  * lookup this is the full-registry view: parked (RESERVED) regions are
+  * produced too -- rendering/visibility decisions belong to the consumer.
+@@ -1010,6 +1016,13 @@ long corten_arena_test_va_recycles(void);
+  */
+ struct corten_arena *corten_arena_test_region_of(struct mm_struct *mm,
+ 						 unsigned long addr);
++/* W-7 fixture hook: the registry's R1 record-once walk (the INV7
++ * checker and any test-side registry sweep).  *@frame/@*idx are the
++ * caller's cursor, zero-initialized before the first call.
++ */
++struct corten_arena *corten_arena_test_record_next(struct mm_struct *mm,
++						   unsigned long *frame,
++						   unsigned int *idx);
+ long corten_arena_test_auto_vgate(void);
+ long corten_arena_test_j1_probes(void);
+ long corten_arena_test_j1_hits(void);
+diff --git a/mm/corten_arena.c b/mm/corten_arena.c
+index 8b4a8d58b33a..43e6c2501ca4 100644
+--- a/mm/corten_arena.c
++++ b/mm/corten_arena.c
+@@ -115,6 +115,7 @@ static int corten_va_mag_alloc_cpu(struct mm_struct *mm,
+ 				   unsigned long len2, unsigned long *addr2,
+ 				   int cpu);
+ static void corten_va_release_frame(struct corten_mm_state *state,
++				    struct corten_arena *ar,
+ 				    unsigned long addr);
+ 
+ /* V-A.3c INV-MV2 audit walker samples, defined in the audit section
+@@ -626,6 +627,399 @@ static LIST_HEAD(corten_mm_registry);
+  * treats it as an obstacle exactly like a live arena.
+  */
+ struct corten_arena corten_va_reserve_sentinel;
++
++/* ------------------------------------------------------------------ *
++ * W-7: the multi-record registry slot (D34 closure).
++ *
++ * A 2M frame's slot names the record set covering the frame: a bare
++ * struct corten_arena * while one record claims it, a tagged
++ * corten_frame_bucket pointer once page-disjoint records share the
++ * frame (the ELF load image shape: r--/r-x/rw- segment tails and
++ * heads inside one PMD), the reserve sentinel for magazine frames.
++ * Invariant INV2' (the page-level successor of the single-record
++ * era's frame exclusivity): two live records of one mm never overlap
++ * in PAGE range; frame overlap is legal exactly under that condition
++ * and is what a bucket records.  INV2' is established at the three
++ * insert sites (DECLARE/adopt, fork-child mirror) by
++ * corten_arena_overlaps()'s per-member page-range test -- the C1
++ * equivalent.
++ *
++ * Window-domain records are structurally unbucketable: a magazine or
++ * pool window's page domain is its whole frames (a partial co-tenant
++ * would page-overlap and C1' rejects it), and the sentinel claims
++ * whole frames.  Buckets only ever form in the legacy domain, between
++ * page-granular records (adopted segments, the brk region).
++ *
++ * The slot decodes ONLY through the helpers below -- every reader of
++ * a slot value in this file goes through corten_slot_arena() /
++ * corten_slot_cover() / corten_slot_has() / the bucket form, never
++ * through a raw xa_load() cast (a tagged pointer dereferenced as a
++ * descriptor is a random crash).
++ * ------------------------------------------------------------------
++ */
++
++/* The shared-frame member set: sorted by @rec[i]->start, RCU-freed
++ * (lookups run lockless), copy-updated on every membership change
++ * (writers hold mmap_write; declare/release/fork hold ctl_lock too --
++ * the same serialization the single-record stores ran under).
++ */
++struct corten_frame_bucket {
++	unsigned int		nr;	/* member count */
++	struct rcu_head		rcu;
++	struct corten_arena	*rec[] __counted_by(nr);
++};
++
++#define CORTEN_SLOT_BUCKET_TAG	1UL
++
++/* The bucket form of a slot value, or NULL. */
++static inline struct corten_frame_bucket *corten_slot_bucket(void *slot)
++{
++	if (!xa_pointer_tag(slot))
++		return NULL;
++	return xa_untag_pointer(slot);
++}
++
++/* The slot's single record, or NULL when the slot is a bucket, a
++ * reserve marker or empty.  This is the decode for every consumer
++ * whose contract is "the frame is exclusively this record" (park
++ * parkability, the magazine obstacle scans): a bucket in such a frame
++ * is an INV2-window-domain violation and must read as "no single
++ * owner", never as a dereference.
++ */
++static inline struct corten_arena *corten_slot_arena(void *slot)
++{
++	if (!slot || xa_pointer_tag(slot))
++		return NULL;
++	if (slot == &corten_va_reserve_sentinel)
++		return NULL;
++	return slot;
++}
++
++/* The record covering @addr, or NULL.  W-7: the resolution is
++ * page-granular for every slot form -- a single record answers only
++ * inside its recorded range, a bucket only the member covering @addr
++ * (co-frame records are page-disjoint, so a miss is a genuine hole: an
++ * unclaimed tail between two segments, a punched prefix -- the punch
++ * route's head-shrink re-anchors the record past it -- and the
++ * caller's fallback is the correct verdict).  The pre-W-7 form answered
++ * frame-granular and left the range bound to each caller's own
++ * [start,end) check; those checks (fault_owned tier 1, the route
++ * classifiers) stay as the transaction-seal defense.  Parked (idle)
++ * records are lookup-invisible (T1c).
++ */
++static inline struct corten_arena *corten_slot_cover(void *slot,
++						     unsigned long addr)
++{
++	struct corten_frame_bucket *b;
++	struct corten_arena *ar;
++	unsigned int i;
++
++	if (!slot)
++		return NULL;
++	b = corten_slot_bucket(slot);
++	if (!b) {
++		if (slot == &corten_va_reserve_sentinel)
++			return NULL;
++		ar = slot;
++		if (addr < READ_ONCE(ar->start) || addr >= READ_ONCE(ar->end))
++			return NULL;
++	} else {
++		ar = NULL;
++		for (i = 0; i < b->nr; i++) {
++			struct corten_arena *m = READ_ONCE(b->rec[i]);
++
++			if (READ_ONCE(m->idle))
++				continue;
++			if (addr >= READ_ONCE(m->start) &&
++			    addr < READ_ONCE(m->end)) {
++				ar = m;
++				break;
++			}
++		}
++		if (!ar)
++			return NULL;
++	}
++	if (READ_ONCE(ar->idle))
++		return NULL;
++	return ar;
++}
++
++/* Does the slot's member set contain @ar?  The [F-A] tier-2 / [F-B
++ * seal] / sweep-ownership decode: "frame f still belongs to @ar".
++ */
++static inline bool corten_slot_has(void *slot, const struct corten_arena *ar)
++{
++	struct corten_frame_bucket *b;
++	unsigned int i;
++
++	if (slot == ar)
++		return true;
++	b = corten_slot_bucket(slot);
++	if (!b)
++		return false;
++	for (i = 0; i < b->nr; i++)
++		if (READ_ONCE(b->rec[i]) == ar)
++			return true;
++	return false;
++}
++
++/* The member of @frame's slot whose recorded extent starts exactly at
++ * @start -- the RELEASE / pool-release / brk-region lookup decode (the
++ * single-record era read the slot bare).  Caller holds the registry
++ * writer locks or rcu_read_lock().
++ */
++static struct corten_arena *corten_slot_by_start(struct xarray *xa,
++						 unsigned long frame,
++						 unsigned long start)
++{
++	void *slot = xa_load(xa, frame);
++	struct corten_frame_bucket *b = corten_slot_bucket(slot);
++	unsigned int n, i;
++
++	n = b ? b->nr : 1;
++	for (i = 0; i < n; i++) {
++		struct corten_arena *m = b ? READ_ONCE(b->rec[i]) :
++					     corten_slot_arena(slot);
++
++		if (m && READ_ONCE(m->start) == start)
++			return m;
++	}
++	return NULL;
++}
++
++/* The registry's R1 walk cursor (see corten_registry_next()).  The
++ * public struct corten_region_iter carries the same fields -- the
++ * /proc row stream embeds it by value, so one shape serves both.
++ */
++
++/* Produce the next live record of @state's registry, ascending by
++ * [start), each exactly once.  The R1 rule (W-7): a record is emitted
++ * at the first frame of its span the walk can still see --
++ *
++ *   emit @m at frame F  iff  this is the walk's first examined frame
++ *     (the seeded mid-registry walks: the row stream's
++ *     covering-or-next seed must surface the straddling record)
++ *     or F is @m's start frame
++ *     or @m's start-frame slot no longer contains @m (a head punch
++ *     erased it -- @F is the first surviving slot).
++ *
++ * The third clause is what keeps a punched-span record emitted once:
++ * a mid-span punch leaves the start frame intact, so the record
++ * re-surfacing after the hole is recognized as already-emitted, while
++ * a head punch (start slot gone) re-anchors the emission at the first
++ * survivor -- the same semantics the single-record era's consecutive
++ * pointer dedupe grew into.  A bucket frame emits its due members in
++ * [start) order.  Stateless beyond the cursor -- the single-record era
++ * keyed its per-arena frame walks on computed "one past the last
++ * frame" cursors, and the r07 guest mm_exit stall (a mis-counted
++ * cursor re-draining a live descriptor) is exactly the failure class
++ * the rule removes.
++ *
++ * Locking: the caller's fence -- rcu_read_lock(), mmap_read (writers
++ * excluded, buckets are copy-updated) or mmap_write.  Reserve markers
++ * are skipped.  Returns NULL when the walk is exhausted (and resets
++ * the cursor).
++ */
++static struct corten_arena *corten_registry_next(struct corten_mm_state *state,
++						 struct corten_region_iter *it)
++{
++	for (;;) {
++		void *slot;
++		struct corten_frame_bucket *b;
++		struct corten_arena *ar = NULL;
++		unsigned long prev = it->frame;
++		bool first_at_frame;
++		unsigned int n;
++
++		slot = xa_find(&state->arenas, &it->frame, ULONG_MAX,
++			       XA_PRESENT);
++		if (!slot) {
++			it->frame = 0;
++			it->idx = 0;
++			it->last = NULL;
++			return NULL;
++		}
++		/* Frames strictly below the found index that the find
++		 * jumped were empty; a record surfacing after the jump
++		 * has its lower slots erased (or the walk was just
++		 * seeded mid-registry).
++		 */
++		first_at_frame = it->fresh || it->frame > prev;
++		it->fresh = false;
++
++		b = corten_slot_bucket(slot);
++		n = b ? b->nr : 1;
++		while (it->idx < n) {
++			ar = b ? READ_ONCE(b->rec[it->idx]) :
++				 corten_slot_arena(slot);
++			it->idx++;
++			if (!ar)
++				continue;
++			if ((ar->start >> PMD_SHIFT) == it->frame)
++				break;			/* start frame */
++			if (first_at_frame)
++				break;			/* seed / survivor */
++			if (!corten_slot_has(xa_load(&state->arenas,
++						     ar->start >> PMD_SHIFT),
++					     ar))
++				break;			/* head-punched */
++			ar = NULL;			/* continuation */
++		}
++		if (ar) {
++			it->last = ar;
++			return ar;
++		}
++		it->frame++;
++		it->idx = 0;
++	}
++}
++
++/* Add @ar to @frame's member set (the DECLARE/fork-child publish).
++ * A bucket change is a copy-update: the previous bucket dies by
++ * kfree_rcu() after the tagged store publishes the new one.  An empty
++ * frame takes its first member plain; a marker frame is overwritten
++ * plain -- the magazine-serve transition (the handed-out frames' arena
++ * covers their whole page domain, so no bucket can form there).  A
++ * single-record slot always forms a bucket: the new record passed C1',
++ * so the two are page-disjoint co-tenants.  Callers hold the registry
++ * writer locks.  Returns the xa_store status (0 or -errno).
++ */
++static int corten_slot_insert(struct xarray *xa, unsigned long frame,
++			      struct corten_arena *ar)
++{
++	struct corten_frame_bucket *b, *nb;
++	void *old = xa_load(xa, frame);
++	bool placed = false;
++	unsigned int n, i, j;
++	int ret;
++
++	if (WARN_ON_ONCE(old == ar))
++		return -EEXIST;	/* C1' owns overlap rejection */
++
++	b = corten_slot_bucket(old);
++	if (!b && (!old || old == &corten_va_reserve_sentinel))
++		return xa_err(xa_store(xa, frame, ar, GFP_KERNEL));
++
++	if (!b) {
++		struct corten_arena *first = old;
++
++		nb = kzalloc(struct_size(nb, rec, 2), GFP_KERNEL);
++		if (!nb)
++			return -ENOMEM;
++		nb->nr = 2;
++		if (READ_ONCE(first->start) <= READ_ONCE(ar->start)) {
++			nb->rec[0] = first;
++			nb->rec[1] = ar;
++		} else {
++			nb->rec[0] = ar;
++			nb->rec[1] = first;
++		}
++		ret = xa_err(xa_store(xa, frame,
++				      xa_tag_pointer(nb, CORTEN_SLOT_BUCKET_TAG),
++				      GFP_KERNEL));
++		if (ret)
++			kfree(nb);
++		return ret;
++	}
++
++	n = b->nr + 1;
++	nb = kzalloc(struct_size(nb, rec, n), GFP_KERNEL);
++	if (!nb)
++		return -ENOMEM;
++	nb->nr = n;
++	for (i = 0, j = 0; i < n; i++) {
++		if (!placed && (j >= b->nr ||
++				READ_ONCE(b->rec[j]->start) >
++				READ_ONCE(ar->start))) {
++			nb->rec[i] = ar;
++			placed = true;
++		} else {
++			nb->rec[i] = b->rec[j++];
++		}
++	}
++	ret = xa_err(xa_store(xa, frame,
++			      xa_tag_pointer(nb, CORTEN_SLOT_BUCKET_TAG),
++			      GFP_KERNEL));
++	if (ret) {
++		kfree(nb);
++		return ret;
++	}
++	kfree_rcu(b, rcu);
++	return 0;
++}
++
++/* Drop @ar from @frame's member set (the RELEASE/punch/declare-unwind
++ * publish).  @restore: when @ar is the frame's last member and the
++ * frame sits inside a claimed magazine segment, the slot returns to
++ * the reserve marker instead of empty (the va_release_frame contract);
++ * with co-members present it is ignored -- a marker must never share a
++ * frame with live records.  An already-empty slot is legal (the punch
++ * route erased it first); any other foreign shape is a kernel bug and
++ * WARNs, leaving the slot untouched.  A failed shrink store falls back
++ * to the whole-slot erase: a bucket that names @ar past its free would
++ * be a UAF for every later walk, while a lost co-membership degrades
++ * open (the lookups miss into the legacy funnel) -- the release-side
++ * ENOMEM corner, loudly.
++ */
++static void corten_slot_remove(struct xarray *xa, unsigned long frame,
++			       struct corten_arena *ar, bool restore)
++{
++	struct corten_frame_bucket *b, *nb;
++	void *old = xa_load(xa, frame);
++	unsigned int n, i, j;
++	int ret;
++
++	if (!old)
++		return;		/* already punched away: legal since D-G'' */
++
++	if (old == ar) {
++		if (restore)
++			xa_store(xa, frame, &corten_va_reserve_sentinel,
++				 GFP_KERNEL);
++		else
++			xa_erase(xa, frame);
++		return;
++	}
++
++	b = corten_slot_bucket(old);
++	if (WARN_ON_ONCE(!b))
++		return;		/* foreign marker/record: leave it be */
++
++	n = b->nr;
++	for (i = 0; i < n && b->rec[i] != ar; i++)
++		;
++	if (WARN_ON_ONCE(i == n))
++		return;		/* not a member: kernel bug */
++
++	if (n == 2) {
++		ret = xa_err(xa_store(xa, frame, b->rec[i ^ 1], GFP_KERNEL));
++		if (!ret)
++			kfree_rcu(b, rcu);
++		else
++			xa_erase(xa, frame);	/* the no-dangling fallback */
++		return;
++	}
++
++	nb = kzalloc(struct_size(nb, rec, n - 1), GFP_KERNEL);
++	if (nb) {
++		nb->nr = n - 1;
++		for (i = 0, j = 0; i < nb->nr; i++, j++) {
++			if (b->rec[j] == ar)
++				j++;
++			nb->rec[i] = b->rec[j];
++		}
++		ret = xa_err(xa_store(xa, frame,
++				      xa_tag_pointer(nb, CORTEN_SLOT_BUCKET_TAG),
++				      GFP_KERNEL));
++		if (!ret) {
++			kfree_rcu(b, rcu);
++			return;
++		}
++		kfree(nb);
++	}
++	xa_erase(xa, frame);		/* the no-dangling fallback */
++}
++
+ /* M5 faithful-fork counters (M5_FORK_SPEC.md 1.3-④6): fork_demotes stays
+  * as the historical T0 telemetry and no longer grows.
+  */
+@@ -1094,7 +1488,8 @@ static void corten_arena_unshadow(struct corten_arena *arena,
+  */
+ static inline struct vm_area_struct *corten_arena_anchor_vma(struct corten_arena *ar)
+ {
+-	return READ_ONCE(ar->vma);
++	/* NULL ar (the exit walk's content-driven run zap) has none. */
++	return ar ? READ_ONCE(ar->vma) : NULL;
+ }
+ 
+ /* ------------------------------------------------------------------ *
+@@ -1586,7 +1981,9 @@ bool corten_zap_single_guard(struct vm_area_struct *vma)
+ bool corten_region_invariants_ok(struct mm_struct *mm)
+ {
+ 	struct corten_mm_state *state;
++	struct corten_region_iter it;
+ 	unsigned long frame = 0;
++	void *slot;
+ 	struct corten_arena *ar;
+ 	bool ok = true;
+ 
+@@ -1595,16 +1992,39 @@ bool corten_region_invariants_ok(struct mm_struct *mm)
+ 	if (!state)
+ 		return true;
+ 
+-	xa_for_each(&state->arenas, frame, ar) {
+-		if (ar == &corten_va_reserve_sentinel)
+-			continue;
+-		/* Dedup across one region's frames: check at the first. */
+-		if (frame && xa_load(&state->arenas, frame - 1) == ar)
+-			continue;
++	/* The record pairings, once per record (the R1 walk). */
++	corten_region_iter_init(&it);
++	while ((ar = corten_registry_next(state, &it))) {
+ 		if (!corten_region_record_ok(ar))
+ 			ok = false;
+ 	}
+ 
++	/* INV2' (W-7): bucket co-members are page-range disjoint.  The
++	 * single-record slots cannot violate it (their record owns the
++	 * whole frame set it stored over).
++	 */
++	rcu_read_lock();
++	xa_for_each(&state->arenas, frame, slot) {
++		struct corten_frame_bucket *b = corten_slot_bucket(slot);
++		unsigned int i, j;
++
++		if (!b)
++			continue;
++		for (i = 0; i < b->nr; i++) {
++			for (j = i + 1; j < b->nr; j++) {
++				struct corten_arena *a = b->rec[i];
++				struct corten_arena *c = b->rec[j];
++
++				if (READ_ONCE(a->start) < READ_ONCE(c->end) &&
++				    READ_ONCE(c->start) < READ_ONCE(a->end))
++					ok = false;
++			}
++			if (!corten_region_record_ok(b->rec[i]))
++				ok = false;
++		}
++	}
++	rcu_read_unlock();
++
+ 	return ok;
+ }
+ 
+@@ -1668,22 +2088,41 @@ static int corten_arena_validate_vma(struct vm_area_struct *vma,
+ 	return 0;
+ }
+ 
++/* [C1'] the DECLARE overlap check, W-7 page-range form: a range may
++ * share frames with existing records, never pages.  The old
++ * frame-occupancy form is the D34 boundary this slice removes.  A
++ * magazine reserve marker does not overlap-reject (the magazine's own
++ * serve re-registers over its markers); a targeted DECLARE hitting a
++ * markered frame still fails -- validate_vma finds no VMA there.
++ */
+ static bool corten_arena_overlaps(struct corten_mm_state *state,
+ 				  unsigned long addr, unsigned long len)
+ {
+ 	unsigned long frame = addr >> PMD_SHIFT;
+ 	unsigned long last = (addr + len - 1) >> PMD_SHIFT;
++	struct corten_frame_bucket *b;
++	struct corten_arena *ar;
++	unsigned int i;
++	void *slot;
+ 
+ 	for (; frame <= last; frame++) {
+-		struct corten_arena *ar = xa_load(&state->arenas, frame);
++		slot = xa_load(&state->arenas, frame);
++		if (!slot)
++			continue;
++		b = corten_slot_bucket(slot);
++		if (!b) {
++			ar = corten_slot_arena(slot);
++			if (ar && addr < ar->end && addr + len > ar->start)
++				return true;
++			continue;
++		}
++		for (i = 0; i < b->nr; i++) {
++			ar = READ_ONCE(b->rec[i]);
+ 
+-		/* Magazine reserve markers are not arenas: the magazine's
+-		 * own frames must not overlap-reject its own allocations.
+-		 * A targeted DECLARE hitting a markered frame still fails
+-		 * -- validate_vma finds no VMA there.
+-		 */
+-		if (ar && ar != &corten_va_reserve_sentinel)
+-			return true;
++			if (addr < READ_ONCE(ar->end) &&
++			    addr + len > READ_ONCE(ar->start))
++				return true;
++		}
+ 	}
+ 
+ 	return false;
+@@ -1871,7 +2310,7 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
+ 				       unsigned long addr, unsigned long len,
+ 				       u8 perm, struct file *file,
+ 				       unsigned long pgoff, bool novma,
+-				       bool adopt)
++				       bool adopt, struct corten_arena **out)
+ {
+ 	unsigned long frame, first_frame, last_frame;
+ 	struct corten_arena *arena;
+@@ -2059,8 +2498,7 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
+ 	first_frame = addr >> PMD_SHIFT;
+ 	last_frame = (addr + len - 1) >> PMD_SHIFT;
+ 	for (frame = first_frame; frame <= last_frame; frame++) {
+-		ret = xa_err(xa_store(&state->arenas, frame, arena,
+-				      GFP_KERNEL));
++		ret = corten_slot_insert(&state->arenas, frame, arena);
+ 		if (ret)
+ 			goto out_unwind;
+ 	}
+@@ -2109,18 +2547,26 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
+ 	if (novma)
+ 		atomic_long_inc(&corten_nr_declare_notes);
+ 
++	if (out)
++		*out = arena;
++
+ 	return 0;
+ 
+ out_unwind:
+ 	/* The arena is dead here (nothing published but some frame
+ 	 * slots) -- undo the stores; the record is never re-read after
+ 	 * this (the descriptor is freed below), so no register() stamp
+-	 * is owed.  V-B.1: the file payload's reference (register_file's
+-	 * get_file) is disarmed; the region was never linked into the
+-	 * registry (the link is past every failure path -- W1.b).
++	 * is owed.  W-7: the undo is a membership remove, not a bare
++	 * erase -- an earlier frame's store may have formed a bucket with
++	 * a co-frame record, whose own membership must survive.  No
++	 * marker restore: a failed magazine serve loses its markers,
++	 * exactly like the pre-W-7 unwind.  V-B.1: the file payload's
++	 * reference (register_file's get_file) is disarmed; the region
++	 * was never linked into the registry (the link is past every
++	 * failure path -- W1.b).
+ 	 */
+ 	while (frame > first_frame)
+-		xa_erase(&state->arenas, --frame);
++		corten_slot_remove(&state->arenas, --frame, arena, false);
+ 	if (file)
+ 		corten_region_file_disarm(arena);
+ 	if (!novma)
+@@ -2160,7 +2606,7 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
+ 	 */
+ 	mmap_write_lock(mm);
+ 	ret = corten_arena_declare_locked(mm, state, addr, len, 0, NULL, 0,
+-					  false, false);
++					  false, false, NULL);
+ 	mmap_write_unlock(mm);
+ 
+ 	return ret;
+@@ -2293,15 +2739,12 @@ static int corten_arena_release_arena_locked(struct mm_struct *mm,
+ 	first_frame = arena->start >> PMD_SHIFT;
+ 	last_frame = (arena->end - 1) >> PMD_SHIFT;
+ 	for (frame = first_frame; frame <= last_frame; frame++) {
+-		struct corten_arena *stale = xa_load(&state->arenas, frame);
+-
+ 		/* [F-B] An already-NULL frame is legal since the D-G''
+ 		 * punch route: a file MAP_FIXED may have erased the hole's
+ 		 * frames earlier.  Only a foreign entry is a kernel bug.
+-		 */
+-		if (WARN_ON_ONCE(stale && stale != arena))
+-			break;
+-		/* M4.T1: magazine frames get their reserve marker back
++		 * W-7: the unpublish is membership-aware (corten_slot_
++		 * remove); its WARN covers the foreign-entry case.
++		 * M4.T1: magazine frames get their reserve marker back
+ 		 * (and the range joins the recycle list) instead of a
+ 		 * bare erase -- the warm xarray subtree and the recycled
+ 		 * VA are the point of the magazine.  Hole frames stay
+@@ -2309,8 +2752,7 @@ static int corten_arena_release_arena_locked(struct mm_struct *mm,
+ 		 * legacy VMA lives there, and restoring a marker would
+ 		 * make them read as "claimed and free" to the magazine.
+ 		 */
+-		if (stale == arena)
+-			corten_va_release_frame(state, frame << PMD_SHIFT);
++		corten_va_release_frame(state, arena, frame << PMD_SHIFT);
+ 	}
+ 	if (!was_idle) {
+ 		refcount_set(&state->nr, refcount_read(&state->nr) - 1);
+@@ -2464,9 +2906,12 @@ static int corten_arena_release_locked(struct mm_struct *mm,
+ 
+ 	mutex_lock(&state->ctl_lock);
+ 
+-	/* RELEASE must hit one declared arena exactly (by start). */
+-	arena = xa_load(&state->arenas, addr >> PMD_SHIFT);
+-	if (!arena || arena->start != addr || arena->end != addr + len) {
++	/* RELEASE must hit one declared arena exactly (by start).  W-7:
++	 * the start frame may be a bucket; resolve by member.
++	 */
++	arena = corten_slot_by_start(&state->arenas, addr >> PMD_SHIFT,
++				     addr);
++	if (!arena || arena->end != addr + len) {
+ 		mutex_unlock(&state->ctl_lock);
+ 		return -ENOENT;
+ 	}
+@@ -3284,13 +3729,49 @@ struct corten_arena *corten_arena_test_region_of(struct mm_struct *mm,
+ 						 unsigned long addr)
+ {
+ 	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+-	struct corten_arena *ar;
++	struct corten_frame_bucket *b;
++	void *slot;
++	unsigned int i;
+ 
+ 	if (!state)
+ 		return NULL;
+ 
+-	ar = xa_load(&state->arenas, addr >> PMD_SHIFT);
++	/* W-7 fixture decode: state inspection, not lookup semantics --
++	 * parked (idle) records stay visible.  A bucket answers the
++	 * member whose recorded range covers @addr.
++	 */
++	slot = xa_load(&state->arenas, addr >> PMD_SHIFT);
++	b = corten_slot_bucket(slot);
++	if (!b)
++		return corten_slot_arena(slot);
++	for (i = 0; i < b->nr; i++) {
++		struct corten_arena *m = READ_ONCE(b->rec[i]);
++
++		if (addr >= READ_ONCE(m->start) && addr < READ_ONCE(m->end))
++			return m;
++	}
++	return NULL;
++}
++
++/* W-7 fixture R1 walk: the registry's record-once iteration for test
++ * bodies (the INV7 checker).  *@frame/@*idx are the caller's cursor,
++ * zero-initialized.  rcu_read_lock() or mmap_read contract, like the
++ * production walk.
++ */
++struct corten_arena *corten_arena_test_record_next(struct mm_struct *mm,
++						   unsigned long *frame,
++						   unsigned int *idx)
++{
++	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
++	struct corten_region_iter it = { .frame = *frame, .idx = *idx };
++	struct corten_arena *ar;
+ 
++	if (!state)
++		return NULL;
++
++	ar = corten_registry_next(state, &it);
++	*frame = it.frame;
++	*idx = it.idx;
+ 	return ar;
+ }
+ 
+@@ -3388,10 +3869,9 @@ bool corten_arena_test_pool_idle(struct mm_struct *mm, unsigned long addr)
+ 
+ 	if (!state)
+ 		return false;
+-	ar = xa_load(&state->arenas, addr >> PMD_SHIFT);
++	ar = corten_slot_arena(xa_load(&state->arenas, addr >> PMD_SHIFT));
+ 
+-	return ar && ar != &corten_va_reserve_sentinel &&
+-	       READ_ONCE(ar->idle);
++	return ar && READ_ONCE(ar->idle);
+ }
+ 
+ /* V-A.1 hook: does @addr's window still carry a tracked PT page?  The
+@@ -3700,29 +4180,24 @@ static bool corten_arena_exit_p4d_page_clear(p4d_t *p4dp)
+  * as it got and the residue is left to the leak ledger -- WARN once,
+  * never hang the dying process.
+  *
+- * @retire_end may extend past @end to the final frame boundary: the
+- * zap stays inside the arena's recorded span (its records end at
+- * arena->end), but the PTE-page retirement must cover the whole walkable
+- * frame -- free_ptes_span()'s whole-frame guard skips a byte-granular
+- * tail, and the legacy pass can never pick the frame up (no tree VMA
+- * covers it -- that is what walkable means here).  Before this split,
+- * every region whose end was not PMD-aligned (the W-3 heap domain:
+- * brk stops wherever malloc stopped; the auto windows the request
+- * rounded up from) stranded its last frame's PTE page as a 4096
+- * pgtables_bytes residue on every MODE exit.
++ * W-7 frame keying: @start/@end are whole walkable frames.  The zap is
++ * content-driven (unmap_chunk_flags walks PTEs and metadata, no record
++ * scope), so one close clears every co-record's pages of the run's
++ * frames before the retirement frees their PT pages -- the ordering
++ * that keeps a shared frame's live translations off a retired page
++ * table.  No anchor: a walkable frame carries no tree VMA, so every
++ * member record is an auto shape with a NULL carrier.
+  */
+ static void corten_arena_exit_run(struct mm_struct *mm,
+-				  struct corten_arena *arena,
+ 				  struct mmu_gather *tlb,
+-				  unsigned long start, unsigned long end,
+-				  unsigned long retire_end)
++				  unsigned long start, unsigned long end)
+ {
+-	if (corten_arena_unmap_chunk_flags(mm, arena, start, end - start,
++	if (corten_arena_unmap_chunk_flags(mm, NULL, start, end - start,
+ 					   0, tlb))
+ 		WARN_ONCE(1,
+ 			  "corten: exit walk zap failed at [%lx,%lx): PT residue left to the leak ledger\n",
+ 			  start, end);
+-	corten_arena_free_ptes_span(mm, tlb, start, retire_end);
++	corten_arena_free_ptes_span(mm, tlb, start, end);
+ }
+ 
+ /*
+@@ -3803,145 +4278,114 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
+ 	 */
+ 	struct mmu_gather tlb_;
+ 	struct mmu_gather *tlb = &tlb_;
+-	struct corten_arena *arena;
+-	unsigned long frame, win, run_start = 0;
+-	unsigned long seg, walked_until = 0;
++	unsigned long frame, run_start = 0, run_frame = 0, run_end = 0;
+ 	unsigned long done_pmd_seg = 0, done_pud_seg = 0;
++	void *slot;
+ 	bool have_run = false;
+ 
+ 	mmap_write_lock(mm);
+ 	tlb_gather_mmu_fullmm(tlb, mm);
+ 
+-	/* A) zap + PTE-page retirement, window by window. */
++	/* A) zap + PTE-page retirement, frame by frame.  W-7: a frame's
++	 * slot may name a bucket of page-disjoint co-records.  A walkable
++	 * frame (no tree VMA anywhere in it) joins a retiring run whose
++	 * close zaps the WHOLE frame range by PTE content before the
++	 * retirement frees the PT pages -- every co-record's
++	 * translations die inside that same close, so a frame can never
++	 * be retired under a still-translated co-member (the
++	 * single-record cursor form retired whole frames on the first
++	 * record's reach; at tree-zero that hands the neighbour's live
++	 * PTEs a freed PT page).  A mixed frame (a tree VMA lives there:
++	 * a targeted shadow piece, a punch implant, the sweep's refused
++	 * co-tenant) breaks the run and is processed in place -- each
++	 * member's byte clip is zapped under its own anchor and the PT
++	 * page is left to the legacy pass unless it has gone all-empty.
++	 */
+ 	frame = 0;
+-	xa_for_each(&state->arenas, frame, arena) {
+-		if (arena == &corten_va_reserve_sentinel)
++	xa_for_each(&state->arenas, frame, slot) {
++		struct corten_frame_bucket *b;
++		unsigned long win = frame << PMD_SHIFT;
++
++		if (slot == &corten_va_reserve_sentinel)
+ 			continue;
+ 
+-		/* Every frame of an arena holds the same descriptor; walk
+-		 * each one once, at its first frame.
++		/* xa_for_each silently skips hole frames: a punched hole
++		 * closes the run right here.
+ 		 */
+-		if (frame < walked_until)
+-			continue;
+-		walked_until = corten_arena_end_frame(arena);
++		if (have_run && frame != run_frame + 1) {
++			have_run = false;
++			corten_arena_exit_run(mm, tlb, run_start, run_end);
++		}
+ 
+-		for (win = arena->start & PMD_MASK; win < arena->end;
+-		     win += PMD_SIZE) {
+-			bool owned = xa_load(&state->arenas,
+-					     win >> PMD_SHIFT) == arena;
++		if (!corten_arena_exit_span_clear(mm, win, win + PMD_SIZE)) {
++			unsigned int nr, i;
+ 
+-			/* A punched frame is no longer arena property
+-			 * (a legacy VMA lives in the hole); the tree
+-			 * test catches its implant anyway.
+-			 */
+-			if (!owned)
+-				goto close_run;
+-
+-			/* An owned frame that carries a tree VMA (the
+-			 * sweep's frame-sharing neighbour: per-VMA
+-			 * adoption leaves the refused co-tenant legacy
+-			 * -- an exec-mapped text segment refusing
+-			 * corten_file_may() next to adopted data
+-			 * segments of the same binary is the guest's
+-			 * every-binary shape) is neither exclusive nor
+-			 * freeable: its PT page is legacy property (the
+-			 * legacy free_pgtables() retires it under the
+-			 * co-tenant VMA), so the walk zaps the arena's
+-			 * own byte range and LEAVES the PT page.
+-			 * Skipping the frame wholesale (the pre-fix
+-			 * shape) leaked every resident slot's folio
+-			 * mapcount and rss to the legacy pass, which
+-			 * cannot see a VMA-less PTE.
+-			 */
+-			if (!corten_arena_exit_span_clear(mm, win,
+-							  win + PMD_SIZE)) {
+-				unsigned long mix_start = max(win,
+-							      arena->start);
+-				unsigned long mix_end = min(win + PMD_SIZE,
+-							    arena->end);
+-
+-				if (have_run) {
+-					have_run = false;
+-					corten_arena_exit_run(mm, arena, tlb,
+-							      run_start, win,
+-							      win);
+-				}
+-				if (corten_arena_unmap_chunk_flags(mm, arena,
+-								   mix_start,
+-								   mix_end -
+-								   mix_start,
++			if (have_run) {
++				have_run = false;
++				corten_arena_exit_run(mm, tlb, run_start,
++						      run_end);
++			}
++			b = corten_slot_bucket(slot);
++			nr = b ? b->nr : 1;
++			for (i = 0; i < nr; i++) {
++				struct corten_arena *m = b ?
++					READ_ONCE(b->rec[i]) :
++					corten_slot_arena(slot);
++				unsigned long ms = max(win,
++						       READ_ONCE(m->start));
++				unsigned long me = min(win + PMD_SIZE,
++						       READ_ONCE(m->end));
++
++				if (ms >= me)
++					continue;
++				if (corten_arena_unmap_chunk_flags(mm, m,
++								   ms,
++								   me - ms,
+ 								   0, tlb))
+ 					WARN_ONCE(1,
+ 						  "corten: exit walk mixed-frame zap failed at [%lx,%lx): PT residue left to the leak ledger\n",
+-						  mix_start, mix_end);
+-				/* W-4 leftover ① (W-5): with the arena's own
+-				 * range zapped, a frame whose PTEs are all
+-				 * empty (the cohabiting legacy VMA carries no
+-				 * resident translation) has no reason to keep
+-				 * its PT page -- free_pgtables()'s whole-frame
+-				 * guard can never pick it up under the
+-				 * byte-granular co-tenant.  Retire it through
+-				 * the same whole-frame funnel the walkable
+-				 * runs use; the upper-table pass below then
+-				 * sees the level exclusively ours and closes
+-				 * the pgtables_bytes residue with it.
+-				 */
+-				if (corten_arena_frame_ptes_empty(mm, win))
+-					corten_arena_free_ptes_span(mm, tlb,
+-								    win,
+-								    win +
+-								    PMD_SIZE);
+-				continue;
+-					corten_arena_free_ptes_span(mm, tlb,
+-								    win,
+-								    win +
+-								    PMD_SIZE);
+-				continue;
+-			}
+-
+-			if (!have_run) {
+-				have_run = true;
+-				run_start = win;
++						  ms, me);
+ 			}
++			/* W-4 leftover ① (W-5): with the members' own
++			 * ranges zapped, a frame whose PTEs are all empty
++			 * (the cohabiting legacy VMA carries no resident
++			 * translation) has no reason to keep its PT page
++			 * -- free_pgtables()'s whole-frame guard can never
++			 * pick it up under the byte-granular co-tenant.
++			 * Retire it through the same whole-frame funnel the
++			 * walkable runs use; the upper-table pass below
++			 * then sees the level exclusively ours and closes
++			 * the pgtables_bytes residue with it.
++			 */
++			if (corten_arena_frame_ptes_empty(mm, win))
++				corten_arena_free_ptes_span(mm, tlb, win,
++							    win + PMD_SIZE);
+ 			continue;
+-
+-close_run:
+-			if (have_run) {
+-				have_run = false;
+-				corten_arena_exit_run(mm, arena, tlb,
+-						      run_start, win, win);
+-			}
+ 		}
+ 
+-		if (have_run) {
+-			/* The final run closes at the arena's byte end for
+-			 * the zap, but its PTE-page retirement reaches the
+-			 * frame boundary: the last window was verified
+-			 * walkable (no tree VMA anywhere in its frame, and
+-			 * the registry slot still names this arena), so the
+-			 * frame is exclusively ours and nothing legal lives
+-			 * past arena->end -- retiring the whole frame is
+-			 * the only arm that ever frees it.
+-			 */
+-			unsigned long retire_end =
+-				((arena->end - 1) & PMD_MASK) + PMD_SIZE;
+-
+-			have_run = false;
+-			corten_arena_exit_run(mm, arena, tlb, run_start,
+-					      arena->end, retire_end);
++		if (!have_run) {
++			have_run = true;
++			run_start = win;
+ 		}
++		run_frame = frame;
++		run_end = win + PMD_SIZE;
++	}
++	if (have_run) {
++		have_run = false;
++		corten_arena_exit_run(mm, tlb, run_start, run_end);
+ 	}
+ 
+-	/* B) upper-table self-teardown, one ascending registry pass per
+-	 * level.  Segments are visited in ascending arena order; the
+-	 * done_* cursors keep one level's page processed exactly once
+-	 * when neighbouring arenas share it.
++	/* B) upper-table self-teardown, one ascending frame pass per
++	 * level (frame-keyed since W-7: a bucket slot is one frame like
++	 * any other).  The done_* cursors keep one level's page
++	 * processed exactly once when neighbouring frames share it --
++	 * co-frame records included.
+ 	 *
+ 	 * The pass separation is load-bearing: a level's page can only be
+ 	 * retired once every page the level below holds in its span is
+-	 * gone, and that lower-level retirement of a later arena runs
+-	 * AFTER the first arena reaches the shared upper page.  A single
+-	 * interleaved pass tested the upper page while a later arena's
++	 * gone, and that lower-level retirement of a later frame runs
++	 * AFTER the first frame reaches the shared upper page.  A single
++	 * interleaved pass tested the upper page while a later frame's
+ 	 * lower pages still sat in it, skipped it (the conservative
+ 	 * leave-it rule) and never came back -- the mm's last retiring PMD
+ 	 * page stranded the PUD page above it as a 4096 pgtables_bytes
+@@ -3950,42 +4394,36 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
+ 	 * window base and a chunk-carved 128MiB arena one segment up).
+ 	 */
+ 	frame = 0;
+-	walked_until = 0;
+-	xa_for_each(&state->arenas, frame, arena) {
+-		if (arena == &corten_va_reserve_sentinel)
+-			continue;
++	done_pmd_seg = 0;
++	xa_for_each(&state->arenas, frame, slot) {
++		unsigned long win = frame << PMD_SHIFT;
++		unsigned long seg;
++		pud_t *pudp;
++		pmd_t *pmdp;
+ 
+-		/* Same first-frame dedupe as phase A. */
+-		if (frame < walked_until)
++		if (slot == &corten_va_reserve_sentinel)
+ 			continue;
+-		walked_until = corten_arena_end_frame(arena);
+ 
+ 		/* Pass B1 -- PMD pages: one per PUD_SIZE span. */
+-		for (seg = arena->start & PUD_MASK; seg < arena->end;
+-		     seg += PUD_SIZE) {
+-			pud_t *pudp;
+-			pmd_t *pmdp;
+-
+-			if (seg < done_pmd_seg)
+-				continue;
+-			done_pmd_seg = seg + PUD_SIZE;
++		seg = win & PUD_MASK;
++		if (seg < done_pmd_seg)
++			continue;
++		done_pmd_seg = seg + PUD_SIZE;
+ 
+-			pudp = corten_arena_pud(mm, seg);
+-			if (!pudp || !pud_present(READ_ONCE(*pudp)) ||
+-			    pud_leaf(READ_ONCE(*pudp)))
+-				continue;
+-			if (!corten_arena_exit_span_clear(mm, seg,
+-							  seg + PUD_SIZE))
+-				continue;
+-			pmdp = pmd_offset(pudp, seg);
+-			if (!corten_arena_exit_pmd_page_clear(pmdp))
+-				continue;
++		pudp = corten_arena_pud(mm, seg);
++		if (!pudp || !pud_present(READ_ONCE(*pudp)) ||
++		    pud_leaf(READ_ONCE(*pudp)))
++			continue;
++		if (!corten_arena_exit_span_clear(mm, seg, seg + PUD_SIZE))
++			continue;
++		pmdp = pmd_offset(pudp, seg);
++		if (!corten_arena_exit_pmd_page_clear(pmdp))
++			continue;
+ 
+-			pud_clear(pudp);
+-			pmd_free_tlb(tlb, pmdp, seg);
+-			mm_dec_nr_pmds(mm);
+-			atomic_long_inc(&corten_nr_exit_upper_pmds);
+-		}
++		pud_clear(pudp);
++		pmd_free_tlb(tlb, pmdp, seg);
++		mm_dec_nr_pmds(mm);
++		atomic_long_inc(&corten_nr_exit_upper_pmds);
+ 	}
+ 
+ 	/* Pass B2 -- PUD pages: one per P4D span (the pgd slot itself on
+@@ -3994,40 +4432,35 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
+ 	 * sees the span's whole lower level gone.
+ 	 */
+ 	frame = 0;
+-	walked_until = 0;
+-	xa_for_each(&state->arenas, frame, arena) {
+-		if (arena == &corten_va_reserve_sentinel)
++	done_pud_seg = 0;
++	xa_for_each(&state->arenas, frame, slot) {
++		unsigned long win = frame << PMD_SHIFT;
++		unsigned long seg;
++		p4d_t *p4dp;
++		pud_t *pudp;
++
++		if (slot == &corten_va_reserve_sentinel)
+ 			continue;
+ 
+-		if (frame < walked_until)
++		seg = win & P4D_MASK;
++		if (seg < done_pud_seg)
+ 			continue;
+-		walked_until = corten_arena_end_frame(arena);
++		done_pud_seg = seg + P4D_SIZE;
+ 
+-		for (seg = arena->start & P4D_MASK; seg < arena->end;
+-		     seg += P4D_SIZE) {
+-			p4d_t *p4dp;
+-			pud_t *pudp;
+-
+-			if (seg < done_pud_seg)
+-				continue;
+-			done_pud_seg = seg + P4D_SIZE;
+-
+-			p4dp = p4d_offset(pgd_offset(mm, seg), seg);
+-			if (!p4d_present(READ_ONCE(*p4dp)) ||
+-			    p4d_leaf(READ_ONCE(*p4dp)))
+-				continue;
+-			if (!corten_arena_exit_span_clear(mm, seg,
+-							  seg + P4D_SIZE))
+-				continue;
+-			pudp = pud_offset(p4dp, seg);
+-			if (!corten_arena_exit_pud_page_clear(pudp))
+-				continue;
++		p4dp = p4d_offset(pgd_offset(mm, seg), seg);
++		if (!p4d_present(READ_ONCE(*p4dp)) ||
++		    p4d_leaf(READ_ONCE(*p4dp)))
++			continue;
++		if (!corten_arena_exit_span_clear(mm, seg, seg + P4D_SIZE))
++			continue;
++		pudp = pud_offset(p4dp, seg);
++		if (!corten_arena_exit_pud_page_clear(pudp))
++			continue;
+ 
+-			p4d_clear(p4dp);
+-			pud_free_tlb(tlb, pudp, seg);
+-			mm_dec_nr_puds(mm);
+-			atomic_long_inc(&corten_nr_exit_upper_puds);
+-		}
++		p4d_clear(p4dp);
++		pud_free_tlb(tlb, pudp, seg);
++		mm_dec_nr_puds(mm);
++		atomic_long_inc(&corten_nr_exit_upper_puds);
+ 	}
+ 
+ 	/* Pass B3 -- P4D pages: real only on a runtime-unfolded p4d; the
+@@ -4039,34 +4472,30 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
+ 	 */
+ 	if (!mm_p4d_folded(mm)) {
+ 		frame = 0;
+-		walked_until = 0;
+-		xa_for_each(&state->arenas, frame, arena) {
+-			if (arena == &corten_va_reserve_sentinel)
+-				continue;
++		xa_for_each(&state->arenas, frame, slot) {
++			unsigned long win = frame << PMD_SHIFT;
++			unsigned long seg;
++			pgd_t *pgdp;
++			p4d_t *p4dp;
+ 
+-			if (frame < walked_until)
++			if (slot == &corten_va_reserve_sentinel)
+ 				continue;
+-			walked_until = corten_arena_end_frame(arena);
+ 
+-			for (seg = arena->start & PGDIR_MASK; seg < arena->end;
+-			     seg += PGDIR_SIZE) {
+-				pgd_t *pgdp;
+-				p4d_t *p4dp;
++			seg = win & PGDIR_MASK;
+ 
+-				pgdp = pgd_offset(mm, seg);
+-				if (!pgd_present(READ_ONCE(*pgdp)))
+-					continue;
+-				if (!corten_arena_exit_span_clear(mm, seg,
+-								  seg + PGDIR_SIZE))
+-					continue;
+-				p4dp = p4d_offset(pgdp, seg);
+-				if (!corten_arena_exit_p4d_page_clear(p4dp))
+-					continue;
++			pgdp = pgd_offset(mm, seg);
++			if (!pgd_present(READ_ONCE(*pgdp)))
++				continue;
++			if (!corten_arena_exit_span_clear(mm, seg,
++							  seg + PGDIR_SIZE))
++				continue;
++			p4dp = p4d_offset(pgdp, seg);
++			if (!corten_arena_exit_p4d_page_clear(p4dp))
++				continue;
+ 
+-				pgd_clear(pgdp);
+-				p4d_free_tlb(tlb, p4dp, seg);
+-				atomic_long_inc(&corten_nr_exit_upper_p4ds);
+-			}
++			pgd_clear(pgdp);
++			p4d_free_tlb(tlb, p4dp, seg);
++			atomic_long_inc(&corten_nr_exit_upper_p4ds);
+ 		}
+ 	}
+ 
+@@ -4085,7 +4514,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
+ void corten_arena_mm_exit(struct mm_struct *mm)
+ {
+ 	struct corten_mm_state *state;
+-	unsigned long frame = 0, drained_until = 0;
++	struct corten_region_iter it;
+ 	struct corten_arena *arena;
+ 	bool had_arenas;
+ 
+@@ -4143,24 +4572,16 @@ void corten_arena_mm_exit(struct mm_struct *mm)
+ 	 */
+ 	mutex_lock(&state->ctl_lock);
+ 
+-	xa_for_each(&state->arenas, frame, arena) {
+-		/* M4.T1: reserve markers are not arenas. */
+-		if (arena == &corten_va_reserve_sentinel)
+-			continue;
+-
+-		/* Every frame of an arena holds the same descriptor; drain
+-		 * each one once, at its first frame.  A drain timeout (a
+-		 * leaked reference -- mm_users is 0 here, so only a kernel
+-		 * bug can cause it) must not hang exit_mmap: count the
+-		 * leak, keep the descriptor alive (a straggler put would
+-		 * otherwise UAF), and let the teardown finish.  A leaked
+-		 * ~150-byte descriptor on a broken kernel beats an
+-		 * unkillable dying process.
+-		 */
+-		if (frame < drained_until)
+-			continue;
+-
+-		drained_until = corten_arena_end_frame(arena);
++	/* The R1 walk (W-7): drain each record once, at its start frame.
++	 * A drain timeout (a leaked reference -- mm_users is 0 here, so
++	 * only a kernel bug can cause it) must not hang exit_mmap: count
++	 * the leak, keep the descriptor alive (a straggler put would
++	 * otherwise UAF), and let the teardown finish.  A leaked
++	 * ~150-byte descriptor on a broken kernel beats an unkillable
++	 * dying process.
++	 */
++	corten_region_iter_init(&it);
++	while ((arena = corten_registry_next(state, &it))) {
+ 		corten_arena_obs_remove(arena);
+ 		if (corten_arena_drain(arena))
+ 			corten_arena_free(arena);
+@@ -4229,7 +4650,6 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
+ 					 unsigned long addr)
+ {
+ 	struct corten_mm_state *state;
+-	struct corten_arena *ar;
+ 
+ 	RCU_LOCKDEP_WARN(!rcu_read_lock_held(),
+ 			 "arena lookup without rcu_read_lock() protection");
+@@ -4241,24 +4661,16 @@ struct corten_arena *corten_arena_lookup(struct mm_struct *mm,
+ 	if (!state || !refcount_read(&state->nr))
+ 		return NULL;
+ 
+-	/* M4.T1: reserve markers of claimed-but-unallocated magazine
+-	 * frames read as "no arena" -- the frames are not arena property
+-	 * until handed out and DECLAREd.
++	/* W-7: the slot decodes page-granular -- a shared frame's bucket
++	 * answers the member whose recorded range covers @addr, a
++	 * single-record slot (and a magazine reserve marker, M4.T1)
++	 * keeps the historical frame-granular semantics.  A parked
++	 * (pooled) record stays lookup-invisible (T1c, decoded in
++	 * corten_slot_cover): the range was munmapped and must keep
++	 * legacy semantics.
+ 	 */
+-	ar = xa_load(&state->arenas, addr >> PMD_SHIFT);
+-	if (ar == &corten_va_reserve_sentinel)
+-		return NULL;
+-
+-	/* T1c: a parked (pooled) arena is lookup-invisible -- the range
+-	 * was munmapped and must keep legacy semantics (no arena: faults
+-	 * fall to the legacy funnel on the reserved PROT_NONE mapping,
+-	 * munmap/mprotect routes run legacy).  Its window comes back only
+-	 * through the pool reactivation.
+-	 */
+-	if (ar && READ_ONCE(ar->idle))
+-		return NULL;
+-
+-	return ar;
++	return corten_slot_cover(xa_load(&state->arenas, addr >> PMD_SHIFT),
++				 addr);
+ }
+ 
+ struct corten_arena *corten_region_lookup(struct mm_struct *mm,
+@@ -4275,7 +4687,6 @@ struct corten_arena *corten_region_next(struct mm_struct *mm,
+ 					struct corten_region_iter *it)
+ {
+ 	struct corten_mm_state *state;
+-	struct corten_arena *ar;
+ 
+ 	/* Locking contract (sec 2.4): the caller holds mmap_lock for
+ 	 * read or RCU (see the header).  The walk only reads frame slots
+@@ -4285,25 +4696,10 @@ struct corten_arena *corten_region_next(struct mm_struct *mm,
+ 	if (!state)
+ 		return NULL;
+ 
+-	for (;;) {
+-		ar = xa_find(&state->arenas, &it->frame, ULONG_MAX,
+-			     XA_PRESENT);
+-		if (!ar)
+-			return NULL;
+-		it->frame++;
+-		/* Magazine reserve markers are not regions. */
+-		if (ar == &corten_va_reserve_sentinel)
+-			continue;
+-		/* Pointer dedup: later frame slots of the region just
+-		 * produced are skipped, so each region is produced exactly
+-		 * once (a punched hole's NULL frames are skipped by
+-		 * xa_find; the pieces table carries the split, sec 2.1).
+-		 */
+-		if (ar == it->last)
+-			continue;
+-		it->last = ar;
+-		return ar;
+-	}
++	/* The R1 walk (W-7): each record once, at its start frame,
++	 * buckets included.
++	 */
++	return corten_registry_next(state, it);
+ }
+ 
+ /* ------------------------------------------------------------------ *
+@@ -5341,6 +5737,7 @@ static int corten_va_seg_claim(struct mm_struct *mm,
+ 		unsigned long end = start + seg_size;
+ 		unsigned long frame, last;
+ 		struct corten_va_segrec *rec;
++		void *slot;
+ 		int ret;
+ 
+ 		if (end > CORTEN_MODE_WINDOW_END || end <= start)
+@@ -5364,22 +5761,34 @@ static int corten_va_seg_claim(struct mm_struct *mm,
+ 		/* Arena obstacles: jump past the arena extent; a marker of
+ 		 * a foreign (disjoint by cursor) segment is jumped one
+ 		 * frame -- it should not exist here, but a stale one must
+-		 * not be handed out either.
++		 * not be handed out either.  W-7: the slot decodes through
++		 * the single-record form -- a bucket in the window domain
++		 * would be the INV2 violation; skip it loudly, never
++		 * dereference it.
+ 		 */
+ 		last = start >> PMD_SHIFT;
+ 		for (frame = last; frame < last + CORTEN_VA_SEG_FRAMES;
+ 		     frame++) {
+-			struct corten_arena *ar = xa_load(&state->arenas,
+-							 frame);
++			struct corten_arena *ar;
+ 
+-			if (!ar)
++			slot = xa_load(&state->arenas, frame);
++			if (!slot)
+ 				continue;
+-			if (ar == &corten_va_reserve_sentinel) {
++			if (corten_slot_bucket(slot)) {
++				/* A page-granular targeted record's
++				 * co-frame (W-7): every member ends
++				 * inside this frame -- jump it whole.
++				 */
+ 				start = (frame + 1) * PMD_SIZE;
+ 			} else {
+-				start = round_up(ar->end, PMD_SIZE);
+-				if (start < ar->end)
+-					return -ENOSPC;
++				ar = corten_slot_arena(slot);
++				if (!ar) {
++					start = (frame + 1) * PMD_SIZE;
++				} else {
++					start = round_up(ar->end, PMD_SIZE);
++					if (start < ar->end)
++						return -ENOSPC;
++				}
+ 			}
+ 			break;
+ 		}
+@@ -5605,13 +6014,18 @@ static int corten_va_mag_alloc(struct mm_struct *mm,
+  * this mm's mmap_write, in place of the release loop's xa_erase.
+  */
+ static void corten_va_release_frame(struct corten_mm_state *state,
++				    struct corten_arena *ar,
+ 				    unsigned long addr)
+ {
+ 	struct corten_va_freeblk *blk;
+ 
+ 	if (corten_va_in_seg(state, addr)) {
+-		xa_store(&state->arenas, addr >> PMD_SHIFT,
+-			 &corten_va_reserve_sentinel, GFP_KERNEL);
++		/* W-7: the slot unpublish is membership-aware -- a
++		 * co-frame record (impossible in the magazine domain by
++		 * INV2', but never a bare overwrite) survives it.
++		 */
++		corten_slot_remove(&state->arenas, addr >> PMD_SHIFT, ar,
++				   true);
+ 
+ 		/* Extend the tail block when contiguous (the common
+ 		 * multi-frame release), else push a new one.
+@@ -5636,7 +6050,7 @@ static void corten_va_release_frame(struct corten_mm_state *state,
+ 		}
+ 		return;	/* marker restored; frame leaks (T0 behaviour) */
+ 	}
+-	xa_erase(&state->arenas, addr >> PMD_SHIFT);
++	corten_slot_remove(&state->arenas, addr >> PMD_SHIFT, ar, false);
+ }
+ 
+ /*
+@@ -5979,7 +6393,7 @@ int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
+ 
+ 	ret = corten_arena_declare_locked(mm, state, addr, len,
+ 					  corten_arena_perm_from_prot(prot),
+-					  NULL, 0, true, false);
++					  NULL, 0, true, false, NULL);
+ 	if (ret) {
+ 		/* T0a counted attach failures in the per-mm fallback
+ 		 * bucket; T0b adds the named aggregates on top.
+@@ -6025,7 +6439,7 @@ int corten_arena_file_attach(struct mm_struct *mm, unsigned long addr,
+ 
+ 	ret = corten_arena_declare_locked(mm, state, addr, len,
+ 					  corten_arena_perm_from_prot(prot),
+-					  file, pgoff, true, false);
++					  file, pgoff, true, false, NULL);
+ 	if (ret) {
+ 		corten_arena_auto_fallback(state);
+ 		atomic_long_inc(&corten_nr_auto_attach_fails);
+@@ -6607,13 +7021,12 @@ static int corten_sweep_adopt_anon(struct mm_struct *mm,
+ 	}
+ 
+ 	ret = corten_arena_declare_locked(mm, state, start, end - start,
+-					  perm, NULL, 0, true, true);
++					  perm, NULL, 0, true, true, &arena);
+ 	if (ret) {
+ 		corten_sweep_drop_picks(&picks);
+ 		mas_destroy(&vmi.mas);
+ 		return ret;		/* the caller buckets -EEXIST apart */
+ 	}
+-	arena = xa_load(&state->arenas, start >> PMD_SHIFT);
+ 
+ 	/* Surgery + completion: infallible by construction (the arrays
+ 	 * were ensured in the pick walk; every failure arm is a WARN).
+@@ -6693,12 +7106,11 @@ static int corten_sweep_adopt_file(struct mm_struct *mm,
+ 	ret = corten_arena_declare_locked(mm, state, start,
+ 					  vma->vm_end - start, perm,
+ 					  vma->vm_file, vma->vm_pgoff,
+-					  true, true);
++					  true, true, &arena);
+ 	if (ret) {
+ 		mas_destroy(&vmi.mas);
+ 		return ret;		/* the caller buckets -EEXIST apart */
+ 	}
+-	arena = xa_load(&state->arenas, start >> PMD_SHIFT);
+ 
+ 	/* Same record adjustments as the anon arm: the VMA's own MAY
+ 	 * bound beats the file-wide one, and the flag reflection rides
+@@ -7023,38 +7435,55 @@ int corten_arena_mode_exit(struct mm_struct *mm)
+ 	 */
+ 	if (state) {
+ 		unsigned long rf = 0;
+-		struct corten_arena *ar;
++		void *slot;
+ 
+-		while ((ar = xa_find(&state->arenas, &rf, ULONG_MAX,
+-				     XA_PRESENT))) {
+-			if (ar != &corten_va_reserve_sentinel &&
+-			    (READ_ONCE(ar->rflags) & CORTEN_RF_ADOPTED)) {
+-				atomic_long_inc(&corten_nr_exit_swept_refuses);
+-				mmap_write_unlock(mm);
+-				return -EBUSY;
++		rcu_read_lock();
++		while ((slot = xa_find(&state->arenas, &rf, ULONG_MAX,
++				       XA_PRESENT))) {
++			struct corten_frame_bucket *b =
++				corten_slot_bucket(slot);
++			unsigned int n = b ? b->nr : 1, i;
++
++			for (i = 0; i < n; i++) {
++				struct corten_arena *m = b ?
++					READ_ONCE(b->rec[i]) :
++					corten_slot_arena(slot);
++
++				if (m && (READ_ONCE(m->rflags) &
++					  CORTEN_RF_ADOPTED)) {
++					rcu_read_unlock();
++					atomic_long_inc(&corten_nr_exit_swept_refuses);
++					mmap_write_unlock(mm);
++					return -EBUSY;
++				}
+ 			}
+ 			rf++;
+ 		}
++		rcu_read_unlock();
+ 	}
+ 
+ 	if (state) {
+ 		unsigned long frame = 0;
+ 
+ 		for (;;) {
+-			struct corten_arena *ar;
++			struct corten_frame_bucket *b;
++			struct corten_arena *ar = NULL;
++			void *slot;
+ 			int r;
+ 
+-			ar = xa_find(&state->arenas, &frame, ULONG_MAX,
+-				     XA_PRESENT);
++			rcu_read_lock();
++			slot = xa_find(&state->arenas, &frame, ULONG_MAX,
++				       XA_PRESENT);
++			/* W-7: the slot decodes to the frame's first
++			 * member (buckets included); markers are not
++			 * arenas.
++			 */
++			b = corten_slot_bucket(slot);
++			ar = b ? (b->nr ? READ_ONCE(b->rec[0]) : NULL) :
++				 corten_slot_arena(slot);
++			rcu_read_unlock();
+ 			if (!ar)
+ 				break;
+-			/* M4.T1: reserve markers are not arenas; release
+-			 * only consumes live arenas, so skip forward.
+-			 */
+-			if (ar == &corten_va_reserve_sentinel) {
+-				frame++;
+-				continue;
+-			}
+ 
+ 			r = corten_arena_release_locked(mm, state, ar->start,
+ 							ar->end - ar->start);
+@@ -7073,6 +7502,8 @@ int corten_arena_mode_exit(struct mm_struct *mm)
+ 			 * magazine frames (if any) are back to sentinels
+ 			 * and are skipped above; entries below it cannot
+ 			 * reappear (no new registration under this lock).
++			 * The frame itself may still hold co-frame
++			 * members -- the next scan finds them.
+ 			 */
+ 			frame = ar->start >> PMD_SHIFT;
+ 		}
+@@ -7150,19 +7581,11 @@ int corten_prctl_mode(unsigned int op, unsigned long arg3,
+  */
+ static void corten_arena_fork_unfreeze_locked(struct corten_mm_state *state)
+ {
+-	unsigned long frame = 0, unfrozen_until = 0;
++	struct corten_region_iter it;
+ 	struct corten_arena *arena;
+ 
+-	xa_for_each(&state->arenas, frame, arena) {
+-		/* M4.T1: reserve markers are not arenas. */
+-		if (arena == &corten_va_reserve_sentinel)
+-			continue;
+-
+-		/* Every frame of an arena holds the same descriptor. */
+-		if (frame < unfrozen_until)
+-			continue;
+-		unfrozen_until = corten_arena_end_frame(arena);
+-
++	corten_region_iter_init(&it);
++	while ((arena = corten_registry_next(state, &it))) {
+ 		if (!READ_ONCE(arena->frozen))
+ 			continue;
+ 		/* The drain-timeout shape (E5, a kernel bug): reinit
+@@ -7194,7 +7617,7 @@ void corten_arena_fork_abort(struct mm_struct *oldmm)
+ int corten_arena_fork_begin(struct mm_struct *mm, struct mm_struct *oldmm)
+ {
+ 	struct corten_mm_state *old_state;
+-	unsigned long frame = 0, drained_until = 0;
++	struct corten_region_iter it;
+ 	struct corten_arena *arena;
+ 
+ 	/* MODE-bit inheritance (the T0 sec 5.2 rule, moved here by
+@@ -7287,14 +7710,8 @@ int corten_arena_fork_begin(struct mm_struct *mm, struct mm_struct *oldmm)
+ 	 * allocation above can fail, so nothing frozen is ever unwound
+ 	 * inside begin itself.
+ 	 */
+-	xa_for_each(&old_state->arenas, frame, arena) {
+-		/* M4.T1: reserve markers are not arenas. */
+-		if (arena == &corten_va_reserve_sentinel)
+-			continue;
+-		if (frame < drained_until)
+-			continue;
+-		drained_until = corten_arena_end_frame(arena);
+-
++	corten_region_iter_init(&it);
++	while ((arena = corten_registry_next(old_state, &it))) {
+ 		WRITE_ONCE(arena->frozen, true);
+ 		if (!corten_arena_drain(arena)) {
+ 			/* Leaked transaction reference -- a kernel bug
+@@ -7521,8 +7938,11 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
+ 	first = ar->start >> PMD_SHIFT;
+ 	last = (ar->end - 1) >> PMD_SHIFT;
+ 	for (frame = first; frame <= last; frame++) {
+-		ret = xa_err(xa_store(&state->arenas, frame, child,
+-				      GFP_KERNEL));
++		/* W-7: the child joins its frames as the page-disjoint
++		 * co-tenant of any record already registered there
++		 * (bucket formation), same as a declare.
++		 */
++		ret = corten_slot_insert(&state->arenas, frame, child);
+ 		if (ret)
+ 			goto out_unwind;
+ 	}
+@@ -7548,7 +7968,7 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
+ 
+ out_unwind:
+ 	while (frame > first)
+-		xa_erase(&state->arenas, --frame);
++		corten_slot_remove(&state->arenas, --frame, child, false);
+ 	mutex_unlock(&state->ctl_lock);
+ 	percpu_ref_exit(&child->active);
+ out_put_child:
+@@ -8148,7 +8568,7 @@ int corten_arena_fork_commit(struct mm_struct *mm, struct mm_struct *oldmm)
+ {
+ 	struct corten_mm_state *old_state, *state;
+ 	struct corten_pte_meta *snap;
+-	unsigned long frame = 0, drained_until = 0;
++	struct corten_region_iter it;
+ 	struct corten_arena *arena;
+ 	bool did_arena = false;
+ 	int ret = 0;
+@@ -8199,14 +8619,8 @@ int corten_arena_fork_commit(struct mm_struct *mm, struct mm_struct *oldmm)
+ 	 * oldmm's mmap_write), and the frozen-bit accounting below is
+ 	 * re-taken under the lock.
+ 	 */
+-	xa_for_each(&old_state->arenas, frame, arena) {
+-		/* M4.T1: reserve markers are not arenas. */
+-		if (arena == &corten_va_reserve_sentinel)
+-			continue;
+-		if (frame < drained_until)
+-			continue;
+-		drained_until = corten_arena_end_frame(arena);
+-
++	corten_region_iter_init(&it);
++	while ((arena = corten_registry_next(old_state, &it))) {
+ 		if (ret)
+ 			break;
+ 		if (fatal_signal_pending(current)) {
+@@ -8410,7 +8824,8 @@ bool corten_arena_fault_owned(struct corten_arena *ar, struct mm_struct *mm,
+ 		return false;
+ 
+ 	rcu_read_lock();
+-	owned = xa_load(&state->arenas, addr >> PMD_SHIFT) == ar;
++	owned = corten_slot_has(xa_load(&state->arenas, addr >> PMD_SHIFT),
++				ar);
+ 	rcu_read_unlock();
+ 	if (!owned)
+ 		return false;
+@@ -8453,7 +8868,7 @@ static bool corten_arena_txn_owned(struct corten_arena *ar,
+ 
+ 	rcu_read_lock();
+ 	frame = xa_load(&state->arenas, addr >> PMD_SHIFT);
+-	owned = frame == ar;
++	owned = corten_slot_has(frame, ar);
+ 	rcu_read_unlock();
+ 
+ 	return owned;
+@@ -11013,9 +11428,16 @@ enum corten_unmap_class corten_arena_release_classify(enum corten_unmap_class
+ 	 * kernel-private padding.  Without this rule every such munmap
+ 	 * would keep the VMA + 2M of window VA alive and dedup_eq-style
+ 	 * churn would exhaust the window.
++	 *
++	 * W-7: the padding rationale holds only where the extent really
++	 * was rounded -- a PMD-aligned record.  A page-granular record
++	 * (a W-4-adopted segment, the W-3 brk region) has no padding:
++	 * every page past @end is user property, and the upgrade here
++	 * would release-kill live content the punch never named.
+ 	 */
+ 	if (class == CORTEN_UNMAP_CHUNK && start == ar_start &&
+-	    ar_end - end < PMD_SIZE)
++	    ar_end - end < PMD_SIZE &&
++	    !(ar_start & (PMD_SIZE - 1)) && !(ar_end & (PMD_SIZE - 1)))
+ 		return CORTEN_UNMAP_EXACT;
+ 
+ 	return class;
+@@ -11757,17 +12179,10 @@ static void corten_arena_pool_eject_locked(struct corten_mm_state *state,
+ 	first = ar->start >> PMD_SHIFT;
+ 	last = (ar->end - 1) >> PMD_SHIFT;
+ 	for (frame = first; frame <= last; frame++) {
+-		struct corten_arena *stale = xa_load(&state->arenas, frame);
+-
+-		if (WARN_ON_ONCE(stale && stale != ar))
+-			break;
+-		if (stale == ar) {
+-			if (recycle)
+-				corten_va_release_frame(state,
+-							frame << PMD_SHIFT);
+-			else
+-				xa_erase(&state->arenas, frame);
+-		}
++		if (recycle)
++			corten_va_release_frame(state, ar, frame << PMD_SHIFT);
++		else
++			corten_slot_remove(&state->arenas, frame, ar, false);
+ 	}
+ 	atomic_long_inc(&corten_nr_pool_ejects);
+ 
+@@ -11918,17 +12333,23 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
+ {
+ 	unsigned long frame, first, last;
+ 	struct corten_arena *ar;
++	void *slot;
+ 	bool intact = true;
+ 
+ 	first = addr >> PMD_SHIFT;
+ 	last = (addr + len - 1) >> PMD_SHIFT;
+ 
+-	ar = xa_load(&state->arenas, first);
+-	if (ar && ar != &corten_va_reserve_sentinel &&
+-	    READ_ONCE(ar->idle) && ar->start == addr && ar->end == addr + len) {
++	ar = corten_slot_arena(xa_load(&state->arenas, first));
++	if (ar && READ_ONCE(ar->idle) && ar->start == addr &&
++	    ar->end == addr + len) {
+ 		int ret;
+ 
+ 		for (frame = first; frame <= last; frame++) {
++			/* Strict bare-pointer identity: a parked window's
++			 * slots are its own (a bucket would be the INV2
++			 * window-domain violation, never accepted as
++			 * "intact").
++			 */
+ 			if (xa_load(&state->arenas, frame) != ar) {
+ 				intact = false;
+ 				break;
+@@ -11971,14 +12392,26 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
+ 
+ 	/* Anything else parked inside the range is inert residue for the
+ 	 * fresh path (e.g. an mmap of a different size landing on a
+-	 * parked arena's slots via the global placer).
++	 * parked arena's slots via the global placer).  W-7: the slot
++	 * decodes member-wise -- a bucket here is a page-granular
++	 * targeted-DECLARE co-frame (legal since the multi-record
++	 * registry), its members eject individually.
+ 	 */
+ 	for (frame = first; frame <= last; frame++) {
+-		ar = xa_load(&state->arenas, frame);
+-
+-		if (ar && ar != &corten_va_reserve_sentinel &&
+-		    READ_ONCE(ar->idle))
+-			corten_arena_pool_eject_locked(state, ar, true);
++		struct corten_frame_bucket *b;
++		unsigned int n, i;
++
++		slot = xa_load(&state->arenas, frame);
++		b = corten_slot_bucket(slot);
++		n = b ? b->nr : 1;
++		for (i = 0; i < n; i++) {
++			ar = b ? READ_ONCE(b->rec[i]) :
++				 corten_slot_arena(slot);
++
++			if (ar && READ_ONCE(ar->idle))
++				corten_arena_pool_eject_locked(state, ar,
++							       true);
++		}
+ 	}
+ 
+ 	return 1;
+@@ -12230,8 +12663,9 @@ static int corten_arena_pool_release(struct mm_struct *mm, unsigned long start,
+ 	mmap_write_lock(mm);
+ 	mutex_lock(&state->ctl_lock);
+ 
+-	arena = xa_load(&state->arenas, start >> PMD_SHIFT);
+-	if (!arena || arena->start != start || arena->end != start + len) {
++	arena = corten_slot_by_start(&state->arenas, start >> PMD_SHIFT,
++				     start);
++	if (!arena || arena->end != start + len) {
+ 		mutex_unlock(&state->ctl_lock);
+ 		mmap_write_unlock(mm);
+ 		return -ENOENT;
+@@ -12465,10 +12899,10 @@ static struct corten_arena *corten_brk_region(struct mm_struct *mm,
+ 	if (!state)
+ 		return NULL;
+ 
+-	ar = xa_load(&state->arenas, mm->start_brk >> PMD_SHIFT);
+-	if (!ar || ar == &corten_va_reserve_sentinel ||
+-	    READ_ONCE(ar->idle) || READ_ONCE(ar->frozen) ||
+-	    READ_ONCE(ar->start) != mm->start_brk)
++	ar = corten_slot_by_start(&state->arenas,
++				  mm->start_brk >> PMD_SHIFT,
++				  mm->start_brk);
++	if (!ar || READ_ONCE(ar->idle) || READ_ONCE(ar->frozen))
+ 		return NULL;
+ 
+ 	return ar;
+@@ -12545,7 +12979,7 @@ static int corten_brk_region_seed(struct mm_struct *mm,
+ 	 */
+ 	ret = corten_arena_declare_locked(mm, state, mm->start_brk,
+ 					  newbrk - mm->start_brk, perm,
+-					  NULL, 0, true, false);
++					  NULL, 0, true, false, NULL);
+ 	if (ret)
+ 		return 1;
+ 
+@@ -12566,6 +13000,7 @@ static int corten_brk_region_adopt(struct mm_struct *mm,
+ 				   unsigned long oldbrk, unsigned long newbrk,
+ 				   struct list_head *uf)
+ {
++	struct corten_arena *ar;
+ 	struct vm_area_struct *vma;
+ 	struct vma_iterator vmi;
+ 	u8 perm = CORTEN_PERM_USER;
+@@ -12600,7 +13035,7 @@ static int corten_brk_region_adopt(struct mm_struct *mm,
+ 
+ 	ret = corten_arena_declare_locked(mm, state, mm->start_brk,
+ 					  oldbrk - mm->start_brk, perm,
+-					  NULL, 0, true, false);
++					  NULL, 0, true, false, NULL);
+ 	if (ret)
+ 		return 1;
+ 
+@@ -12626,10 +13061,9 @@ static int corten_brk_region_adopt(struct mm_struct *mm,
+ 	}
+ 
+ 	atomic_long_inc(&corten_nr_brk_region_adopts);
+-	return corten_brk_grow_extend(mm, state,
+-				      xa_load(&state->arenas,
+-					      mm->start_brk >> PMD_SHIFT),
+-				      oldbrk, newbrk);
++	ar = corten_slot_by_start(&state->arenas, mm->start_brk >> PMD_SHIFT,
++				  mm->start_brk);
++	return corten_brk_grow_extend(mm, state, ar, oldbrk, newbrk);
+ }
+ 
+ static int corten_brk_grow_route1(struct mm_struct *mm, unsigned long oldbrk,
+@@ -12730,10 +13164,8 @@ static int corten_brk_shrink_route1(struct mm_struct *mm, unsigned long oldbrk,
+ 
+ 	if (first <= last) {
+ 		mutex_lock(&state->ctl_lock);
+-		for (frame = first; frame <= last; frame++) {
+-			if (xa_load(&state->arenas, frame) == ar)
+-				xa_erase(&state->arenas, frame);
+-		}
++		for (frame = first; frame <= last; frame++)
++			corten_slot_remove(&state->arenas, frame, ar, false);
+ 		WRITE_ONCE(ar->end, newbrk);
+ 		mutex_unlock(&state->ctl_lock);
+ 	} else {
+@@ -13151,15 +13583,53 @@ static int corten_arena_mmap_punch(struct mm_struct *mm,
+ 	int ret;
+ 
+ 	for (frame = start >> PMD_SHIFT; frame <= last; frame++) {
+-		struct corten_arena *stale = xa_erase(&state->arenas, frame);
+-
+-		if (WARN_ON_ONCE(stale && stale != ar))
+-			return -EIO;
++		/* W-7: membership-aware unpublish -- only @ar leaves the
++		 * frame; a co-frame record (page-disjoint) keeps its
++		 * slot.  The hole itself stays bare-erased (no marker
++		 * restore: the punched frames are skipped at magazine
++		 * allocation, the T0 obstacle contract).
++		 */
++		corten_slot_remove(&state->arenas, frame, ar, false);
+ 	}
+ 	ret = corten_arena_unmap_chunk_retry(mm, ar, start, end - start);
+ 	if (ret)
+ 		return ret;
+ 
++	/* W-7: a punch that clips the record's head re-anchors the
++	 * record at the punch end.  The R1 registry walks emit a record
++	 * once, keyed on its start-frame slot -- which the head punch
++	 * just erased -- so the surviving extent takes the start with it
++	 * (the honest shape: the punched prefix is legacy property now,
++	 * and every walk stays keyed without re-anchoring heuristics).
++	 * The auto charge for the prefix is refunded here; the release
++	 * refunds the surviving extent.  The FILE payload's pgoff
++	 * derivation (INV-MV3(d)) rides the same shift.  A tail or
++	 * interior punch leaves the start alone.
++	 */
++	if (start <= READ_ONCE(ar->start) && end < READ_ONCE(ar->end)) {
++		unsigned long ps = end;
++		long pages = (long)((ps - READ_ONCE(ar->start)) >>
++				    PAGE_SHIFT);
++
++		if (pages > 0) {
++			if (READ_ONCE(ar->auto_shape)) {
++				vm_flags_t vf;
++
++				vf = corten_take_vm_flags(READ_ONCE(ar->prot));
++				vm_stat_account(mm, vf, -pages);
++			}
++			if (READ_ONCE(ar->rclass) == CORTEN_REGION_FILE)
++				WRITE_ONCE(ar->rpoff,
++					   READ_ONCE(ar->rpoff) +
++					   (pages << PAGE_SHIFT));
++			WRITE_ONCE(ar->start, ps);
++			corten_slot_insert(&state->arenas,
++					   ps >> PMD_SHIFT, ar);
++		}
++	}
++	if (ret)
++		return ret;
++
+ 	/* Split every shadow piece the range intersects.  Non-shadow VMAs
+ 	 * in the range (file mappings of earlier punches) are the gather's
+ 	 * own legacy business -- nothing in the descriptor references
+@@ -13925,6 +14395,7 @@ static int corten_arena_placement_punch_idle(struct mm_struct *mm,
+ 	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+ 	struct corten_arena *ar;
+ 	unsigned long frame, first, last;
++	void *slot;
+ 	bool ejected = false;
+ 
+ 	if (!state || !READ_ONCE(state->nr_pool))
+@@ -13934,10 +14405,24 @@ static int corten_arena_placement_punch_idle(struct mm_struct *mm,
+ 	last = (addr + len - 1) >> PMD_SHIFT;
+ 
+ 	mutex_lock(&state->ctl_lock);
+-	xa_for_each_range(&state->arenas, frame, ar, first, last) {
+-		if (ar != &corten_va_reserve_sentinel && READ_ONCE(ar->idle)) {
+-			corten_arena_pool_eject_locked(state, ar, false);
+-			ejected = true;
++	xa_for_each_range(&state->arenas, frame, slot, first, last) {
++		struct corten_frame_bucket *b = corten_slot_bucket(slot);
++		unsigned int n = b ? b->nr : 1, i;
++
++		/* W-7: the members decode out of the slot; buckets are
++		 * legacy-domain shapes and their members are live (never
++		 * idle), so this walk ejects from single-record frames
++		 * only -- decode anyway, never dereference a raw slot.
++		 */
++		for (i = 0; i < n; i++) {
++			ar = b ? READ_ONCE(b->rec[i]) :
++				 corten_slot_arena(slot);
++
++			if (ar && READ_ONCE(ar->idle)) {
++				corten_arena_pool_eject_locked(state, ar,
++							       false);
++				ejected = true;
++			}
+ 		}
+ 	}
+ 	mutex_unlock(&state->ctl_lock);
+@@ -15018,7 +15503,7 @@ static long corten_arena_mremap_move(struct mm_struct *mm,
+ 	 * through the new arena's FRESH path exactly as before.
+ 	 */
+ 	ret = corten_arena_declare_locked(mm, state, addr2, len2, perm, NULL,
+-					  0, true, false);
++					  0, true, false, NULL);
+ 	if (ret) {
+ 		mmap_write_unlock(mm);
+ 		return -ENOMEM;
+@@ -15250,6 +15735,7 @@ bool corten_arena_range_overlaps(struct mm_struct *mm, unsigned long start,
+ 	struct corten_mm_state *state;
+ 	struct corten_arena *ar;
+ 	unsigned long frame;
++	void *slot;
+ 	bool ret = false;
+ 
+ 	state = READ_ONCE(mm->corten_state);
+@@ -15265,14 +15751,25 @@ bool corten_arena_range_overlaps(struct mm_struct *mm, unsigned long start,
+ 		return false;
+ 
+ 	rcu_read_lock();
+-	xa_for_each_range(&state->arenas, frame, ar, start >> PMD_SHIFT,
++	xa_for_each_range(&state->arenas, frame, slot, start >> PMD_SHIFT,
+ 			  (start + len - 1) >> PMD_SHIFT) {
+-		if (ar == &corten_va_reserve_sentinel || READ_ONCE(ar->idle))
+-			continue;
+-		if (start < ar->end && start + len > ar->start) {
+-			ret = true;
+-			break;
++		struct corten_frame_bucket *b = corten_slot_bucket(slot);
++		unsigned int n = b ? b->nr : 1, i;
++
++		for (i = 0; i < n; i++) {
++			ar = b ? READ_ONCE(b->rec[i]) :
++				 corten_slot_arena(slot);
++
++			if (!ar || READ_ONCE(ar->idle))
++				continue;
++			if (start < READ_ONCE(ar->end) &&
++			    start + len > READ_ONCE(ar->start)) {
++				ret = true;
++				break;
++			}
+ 		}
++		if (ret)
++			break;
+ 	}
+ 	rcu_read_unlock();
+ 
+@@ -15305,6 +15802,7 @@ bool corten_arena_range_occupied_incl_idle(struct mm_struct *mm,
+ 	struct corten_mm_state *state;
+ 	struct corten_arena *ar;
+ 	unsigned long frame;
++	void *slot;
+ 	bool ret = false;
+ 
+ 	state = READ_ONCE(mm->corten_state);
+@@ -15320,19 +15818,30 @@ bool corten_arena_range_occupied_incl_idle(struct mm_struct *mm,
+ 		return false;
+ 
+ 	rcu_read_lock();
+-	xa_for_each_range(&state->arenas, frame, ar, start >> PMD_SHIFT,
++	xa_for_each_range(&state->arenas, frame, slot, start >> PMD_SHIFT,
+ 			  (start + len - 1) >> PMD_SHIFT) {
+-		if (ar == &corten_va_reserve_sentinel) {
++		struct corten_frame_bucket *b = corten_slot_bucket(slot);
++		unsigned int n = b ? b->nr : 1, i;
++
++		if (!b && slot == &corten_va_reserve_sentinel) {
+ 			/* Slot-keyed marker: the iteration index is the frame
+ 			 * it claims -- that IS the overlap.
+ 			 */
+ 			ret = true;
+ 			break;
+ 		}
+-		if (start < ar->end && start + len > ar->start) {
+-			ret = true;
+-			break;
++		for (i = 0; i < n; i++) {
++			ar = b ? READ_ONCE(b->rec[i]) :
++				 corten_slot_arena(slot);
++
++			if (ar && start < READ_ONCE(ar->end) &&
++			    start + len > READ_ONCE(ar->start)) {
++				ret = true;
++				break;
++			}
+ 		}
++		if (ret)
++			break;
+ 	}
+ 	rcu_read_unlock();
+ 
+@@ -15366,6 +15875,7 @@ bool corten_arena_placement_backstop(struct mm_struct *mm,
+ 	struct corten_mm_state *state;
+ 	struct corten_arena *ar;
+ 	unsigned long frame;
++	void *slot;
+ 
+ 	if (!corten_enabled_static())
+ 		return false;
+@@ -15374,15 +15884,23 @@ bool corten_arena_placement_backstop(struct mm_struct *mm,
+ 	if (state && len &&
+ 	    (refcount_read(&state->nr) || READ_ONCE(state->nr_pool))) {
+ 		rcu_read_lock();
+-		xa_for_each_range(&state->arenas, frame, ar,
++		xa_for_each_range(&state->arenas, frame, slot,
+ 				  start >> PMD_SHIFT,
+ 				  (start + len - 1) >> PMD_SHIFT) {
+-			if (ar == &corten_va_reserve_sentinel)
+-				continue;
+-			if (start < ar->end && start + len > ar->start) {
+-				rcu_read_unlock();
+-				atomic_long_inc(&corten_nr_placement_backstop);
+-				return true;
++			struct corten_frame_bucket *b =
++				corten_slot_bucket(slot);
++			unsigned int n = b ? b->nr : 1, i;
++
++			for (i = 0; i < n; i++) {
++				ar = b ? READ_ONCE(b->rec[i]) :
++					 corten_slot_arena(slot);
++
++				if (ar && start < READ_ONCE(ar->end) &&
++				    start + len > READ_ONCE(ar->start)) {
++					rcu_read_unlock();
++					atomic_long_inc(&corten_nr_placement_backstop);
++					return true;
++				}
+ 			}
+ 		}
+ 		rcu_read_unlock();
+@@ -15495,6 +16013,7 @@ static bool corten_arena_window_parked_span(struct mm_struct *mm,
+ 	struct corten_mm_state *state;
+ 	struct corten_arena *ar;
+ 	unsigned long frame, expect, found = 0;
++	void *slot;
+ 
+ 	state = READ_ONCE(mm->corten_state);
+ 	if (!state)
+@@ -15509,13 +16028,25 @@ static bool corten_arena_window_parked_span(struct mm_struct *mm,
+ 	expect = ((start + len - 1) >> PMD_SHIFT) - (start >> PMD_SHIFT) + 1;
+ 
+ 	rcu_read_lock();
+-	xa_for_each_range(&state->arenas, frame, ar, start >> PMD_SHIFT,
++	xa_for_each_range(&state->arenas, frame, slot, start >> PMD_SHIFT,
+ 			  (start + len - 1) >> PMD_SHIFT) {
+-		if (ar != &corten_va_reserve_sentinel &&
+-		    !READ_ONCE(ar->idle)) {
+-			/* An active frame: the route arms below own it,
+-			 * this is not S-5 land.
+-			 */
++		struct corten_frame_bucket *b = corten_slot_bucket(slot);
++		unsigned int n = b ? b->nr : 1, i;
++		bool active = false;
++
++		for (i = 0; i < n; i++) {
++			ar = b ? READ_ONCE(b->rec[i]) :
++				 corten_slot_arena(slot);
++
++			if (ar && !READ_ONCE(ar->idle)) {
++				/* An active frame: the route arms below own
++				 * it, this is not S-5 land.
++				 */
++				active = true;
++				break;
++			}
++		}
++		if (active) {
+ 			found = 0;
+ 			break;
+ 		}
+@@ -15846,13 +16377,20 @@ long corten_arena_mincore_route(struct mm_struct *mm, unsigned long addr,
+ 	 */
+ 	rcu_read_lock();
+ 	for (f = addr >> PMD_SHIFT; (f << PMD_SHIFT) < fend; f++) {
+-		struct corten_arena *ar = xa_load(&state->arenas, f);
++		void *slot = xa_load(&state->arenas, f);
++		struct corten_arena *ar;
+ 
+-		if (!ar) {
++		if (!slot) {
+ 			rcu_read_unlock();
+ 			return -EAGAIN;	/* hole or implant: legacy tree */
+ 		}
+-		if (ar != &corten_va_reserve_sentinel && !READ_ONCE(ar->idle))
++		/* W-7 decode: a bucket is a page-granular targeted
++		 * record's co-frame -- live, so the frame's content
++		 * walk answers it below.
++		 */
++		ar = corten_slot_arena(slot);
++		if ((ar && !READ_ONCE(ar->idle)) ||
++		    (!ar && corten_slot_bucket(slot)))
+ 			active++;
+ 	}
+ 	rcu_read_unlock();
+@@ -15870,9 +16408,8 @@ long corten_arena_mincore_route(struct mm_struct *mm, unsigned long addr,
+ 		bool idle;
+ 
+ 		rcu_read_lock();
+-		ar = xa_load(&state->arenas, f);
+-		idle = !ar || ar == &corten_va_reserve_sentinel ||
+-		       READ_ONCE(ar->idle);
++		ar = corten_slot_arena(xa_load(&state->arenas, f));
++		idle = !ar || READ_ONCE(ar->idle);
+ 		rcu_read_unlock();
+ 
+ 		fs = max(fs, addr);
+@@ -16943,27 +17480,40 @@ int corten_arena_unuse_windows(struct mm_struct *mm, unsigned int type)
+ 
+ 	for (;;) {
+ 		struct corten_arena *arena;
++		void *slot;
+ 		unsigned long wstart, wend;
++		unsigned int nr, i;
+ 		int ret;
+ 
+ 		rcu_read_lock();
+-		arena = xa_find(&state->arenas, &idx, ULONG_MAX, XA_PRESENT);
+-		if (!arena || arena == &corten_va_reserve_sentinel) {
+-			rcu_read_unlock();
+-			if (!arena)
+-				break;
+-			idx++;
+-			continue;
+-		}
++		slot = xa_find(&state->arenas, &idx, ULONG_MAX, XA_PRESENT);
+ 		rcu_read_unlock();
++		if (!slot)
++			break;
+ 
+-		wstart = max(idx << PMD_SHIFT, READ_ONCE(arena->start));
+-		wend = min((idx + 1) << PMD_SHIFT, READ_ONCE(arena->end));
+-		if (wstart < wend) {
+-			ret = corten_arena_unuse_window(mm, arena, wstart,
+-							wend, type);
+-			if (ret)
+-				return ret;
++		/* W-7: the frame's full member set sweeps its own clip --
++		 * the co-frame records are page-disjoint, so the clips
++		 * never double-pull a slot.
++		 */
++		nr = 1;
++		if (corten_slot_bucket(slot))
++			nr = corten_slot_bucket(slot)->nr;
++		for (i = 0; i < nr; i++) {
++			arena = nr == 1 ? corten_slot_arena(slot) :
++					  READ_ONCE(corten_slot_bucket(slot)->rec[i]);
++			if (!arena)
++				continue;
++			wstart = max(idx << PMD_SHIFT,
++				     READ_ONCE(arena->start));
++			wend = min((idx + 1) << PMD_SHIFT,
++				   READ_ONCE(arena->end));
++			if (wstart < wend) {
++				ret = corten_arena_unuse_window(mm, arena,
++								wstart, wend,
++								type);
++				if (ret)
++					return ret;
++			}
+ 		}
+ 		idx++;
+ 		cond_resched();
+@@ -17477,25 +18027,27 @@ static long corten_mm_state_pages(struct mm_struct *mm, long *swapped_out)
+ 		goto out;
+ 
+ 	for (;;) {
+-		struct corten_arena *arena;
+-		unsigned long wstart;
+ 		struct corten_ptdesc *desc;
++		void *slot;
+ 
+ 		rcu_read_lock();
+-		arena = xa_find(&state->arenas, &idx, ULONG_MAX, XA_PRESENT);
+-		if (!arena || arena == &corten_va_reserve_sentinel) {
++		slot = xa_find(&state->arenas, &idx, ULONG_MAX, XA_PRESENT);
++		if (!slot) {
+ 			rcu_read_unlock();
+-			if (!arena)
+-				break;
+-			idx++;
+-			continue;
++			break;
+ 		}
+-		wstart = max(idx << PMD_SHIFT, READ_ONCE(arena->start));
+-		desc = corten_arena_window_desc(mm, wstart);
+-		if (desc) {
+-			resident += READ_ONCE(desc->nr_mapped);
+-			swapped += READ_ONCE(desc->nr_swapped);
+-			corten_ptdesc_put(desc);
++		/* The frame-keyed count (W-7): one descriptor per frame
++		 * exactly once, bucket members included -- the bucket
++		 * shape itself never names a descriptor.
++		 */
++		if (slot != &corten_va_reserve_sentinel) {
++			desc = corten_arena_window_desc(mm,
++							idx << PMD_SHIFT);
++			if (desc) {
++				resident += READ_ONCE(desc->nr_mapped);
++				swapped += READ_ONCE(desc->nr_swapped);
++				corten_ptdesc_put(desc);
++			}
+ 		}
+ 		rcu_read_unlock();
+ 		idx++;
+@@ -17644,6 +18196,25 @@ static void corten_arena_shrink_walk(struct mm_struct *mm,
+ 	corten_unlock(&txn);
+ }
+ 
++/* The pass-1 flag store: the pass-2 handoff.  A GFP_NOWAIT store
++ * failure just means the window is aged again on the next rotation;
++ * the evict shape never consumes epochs and never feeds the aging
++ * bookkeeping.
++ */
++static void corten_shrink_aged_flag(struct corten_mm_state *state,
++				    unsigned long key)
++{
++	if (!xa_store(&state->shrink_aged, key, xa_mk_value(1), GFP_NOWAIT))
++		atomic_long_inc(&corten_nr_aging_passes);
++}
++
++/* W-7: per-frame member pin bound of the shrink slices.  Window-domain
++ * frames never bucket (INV2'); a legacy anon bucket is a handful of
++ * segment records at most -- the cap only bounds the pin set, extra
++ * members take the next rotation.
++ */
++#define CORTEN_SHRINK_PIN_MAX	4
++
+ /* Pass 2 slice: evaluate up to @max_windows windows whose pass-1 flag
+  * is set -- pick the pages that stayed cold, erase the flag (a hot
+  * window is re-aged by a later pass 1; a swapped-out window has
+@@ -17658,9 +18229,18 @@ static void corten_shrink_eval_slice(struct mm_struct *mm,
+ 	int windows = 0;
+ 
+ 	while (windows < max_windows && w->budget > 0) {
+-		struct corten_arena *arena;
++		/* W-7: the frame's full member set is pinned and walked --
++		 * a legacy-domain anon bucket's co-records are page-
++		 * disjoint, so their clips never double-scan a page.
++		 * CORTEN_SHRINK_PIN_MAX bounds the pin set; a deeper
++		 * bucket's rest gets its turn on the next rotation (the
++		 * frame re-flags and re-walks every member).
++		 */
++		struct corten_arena *pin[CORTEN_SHRINK_PIN_MAX];
++		struct corten_frame_bucket *b;
+ 		unsigned long key, fstart, fend;
+-		void *v;
++		void *slot, *v;
++		unsigned int nr, i, npin = 0;
+ 
+ 		rcu_read_lock();
+ 		v = xa_find(&state->shrink_aged, &idx, ULONG_MAX, XA_PRESENT);
+@@ -17669,28 +18249,38 @@ static void corten_shrink_eval_slice(struct mm_struct *mm,
+ 			break;
+ 		}
+ 		key = idx;
+-		arena = xa_load(&state->arenas, key);
+-		if (!arena || arena == &corten_va_reserve_sentinel ||
+-		    !percpu_ref_tryget_live(&arena->active)) {
+-			rcu_read_unlock();
+-			xa_erase(&state->shrink_aged, key);
+-			idx = key + 1;
+-			windows++;
+-			continue;
++		slot = xa_load(&state->arenas, key);
++		b = corten_slot_bucket(slot);
++		nr = b ? b->nr : 1;
++		for (i = 0; i < nr && npin < CORTEN_SHRINK_PIN_MAX; i++) {
++			struct corten_arena *arena = b ?
++				READ_ONCE(b->rec[i]) :
++				corten_slot_arena(slot);
++
++			if (arena &&
++			    percpu_ref_tryget_live(&arena->active))
++				pin[npin++] = arena;
+ 		}
+ 		rcu_read_unlock();
+ 
+ 		xa_erase(&state->shrink_aged, key);
+ 		w->eval = true;
+-		if (!READ_ONCE(arena->frozen) && !READ_ONCE(arena->idle)) {
+-			fstart = max(key << PMD_SHIFT, READ_ONCE(arena->start));
+-			fend = min((key << PMD_SHIFT) + PMD_SIZE,
+-				   READ_ONCE(arena->end));
+-			if (fstart < fend)
+-				corten_arena_shrink_walk(mm, arena, fstart,
+-							 fend, w);
++		for (i = 0; i < npin; i++) {
++			struct corten_arena *arena = pin[i];
++
++			if (!READ_ONCE(arena->frozen) &&
++			    !READ_ONCE(arena->idle)) {
++				fstart = max(key << PMD_SHIFT,
++					     READ_ONCE(arena->start));
++				fend = min((key << PMD_SHIFT) + PMD_SIZE,
++					   READ_ONCE(arena->end));
++				if (fstart < fend)
++					corten_arena_shrink_walk(mm, arena,
++								 fstart,
++								 fend, w);
++			}
++			percpu_ref_put(&arena->active);
+ 		}
+-		percpu_ref_put(&arena->active);
+ 		idx = key + 1;
+ 		windows++;
+ 	}
+@@ -17714,12 +18304,18 @@ static void corten_shrink_age_slice(struct mm_struct *mm,
+ 	int windows = 0;
+ 
+ 	while (windows < max_windows && w->budget > 0) {
+-		struct corten_arena *arena;
++		/* W-7: same member set walk as the eval slice -- the pin
++		 * bound and the rotation-resume semantics carry over.
++		 */
++		struct corten_arena *pin[CORTEN_SHRINK_PIN_MAX];
++		struct corten_frame_bucket *b;
+ 		unsigned long key, fstart, fend;
++		void *slot;
++		unsigned int nr, i, npin = 0;
+ 
+ 		rcu_read_lock();
+-		arena = xa_find(&state->arenas, &idx, ULONG_MAX, XA_PRESENT);
+-		if (!arena) {
++		slot = xa_find(&state->arenas, &idx, ULONG_MAX, XA_PRESENT);
++		if (!slot) {
+ 			/* Rotation exhausted: restart from frame 0 on the
+ 			 * next slice/scan (no same-scan wrap).
+ 			 */
+@@ -17728,37 +18324,47 @@ static void corten_shrink_age_slice(struct mm_struct *mm,
+ 			return;
+ 		}
+ 		key = idx;
+-		if (arena == &corten_va_reserve_sentinel ||
+-		    !percpu_ref_tryget_live(&arena->active)) {
+-			rcu_read_unlock();
+-			idx = key + 1;
+-			continue;
++		b = corten_slot_bucket(slot);
++		nr = b ? b->nr : 1;
++		for (i = 0; i < nr && npin < CORTEN_SHRINK_PIN_MAX; i++) {
++			struct corten_arena *arena = b ?
++				READ_ONCE(b->rec[i]) :
++				corten_slot_arena(slot);
++
++			if (arena &&
++			    percpu_ref_tryget_live(&arena->active))
++				pin[npin++] = arena;
+ 		}
+ 		rcu_read_unlock();
+ 
+-		if (!READ_ONCE(arena->frozen) && !READ_ONCE(arena->idle)) {
+-			fstart = max(key << PMD_SHIFT, READ_ONCE(arena->start));
+-			fend = min((key << PMD_SHIFT) + PMD_SIZE,
+-				   READ_ONCE(arena->end));
+-			if (fstart < fend) {
+-				corten_arena_shrink_walk(mm, arena, fstart,
+-							 fend, w);
+-				/* The flag is the pass-2 handoff; a
+-				 * GFP_NOWAIT store failure just means the
+-				 * window is aged again next rotation.
+-				 * The evict shape never consumes epochs
+-				 * and never feeds the aging bookkeeping.
+-				 */
+-				if (!w->force) {
+-					if (!xa_store(&state->shrink_aged, key,
+-						      xa_mk_value(1),
+-						      GFP_NOWAIT))
+-						atomic_long_inc(&corten_nr_aging_passes);
++		for (i = 0; i < npin; i++) {
++			struct corten_arena *arena = pin[i];
++
++			if (!READ_ONCE(arena->frozen) &&
++			    !READ_ONCE(arena->idle)) {
++				fstart = max(key << PMD_SHIFT,
++					     READ_ONCE(arena->start));
++				fend = min((key << PMD_SHIFT) + PMD_SIZE,
++					   READ_ONCE(arena->end));
++				if (fstart < fend) {
++					corten_arena_shrink_walk(mm, arena,
++								 fstart,
++								 fend, w);
++					/* The flag is the pass-2 handoff; a
++					 * GFP_NOWAIT store failure just means
++					 * the window is aged again next
++					 * rotation.  The evict shape never
++					 * consumes epochs and never feeds the
++					 * aging bookkeeping.
++					 */
++					if (!w->force)
++						corten_shrink_aged_flag(state,
++									key);
++					windows++;
+ 				}
+-				windows++;
+ 			}
++			percpu_ref_put(&arena->active);
+ 		}
+-		percpu_ref_put(&arena->active);
+ 		idx = key + 1;
+ 	}
+ 
+diff --git a/mm/corten_arena_test.c b/mm/corten_arena_test.c
+index 49066d7f1f44..7bf06a0f1ce2 100644
+--- a/mm/corten_arena_test.c
++++ b/mm/corten_arena_test.c
+@@ -2160,8 +2160,7 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
+ 			1);
+ 
+ 	rcu_read_lock();
+-	ar = xa_load(&mm->corten_state->arenas,
+-		     CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
++	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+ 	KUNIT_ASSERT_NOT_NULL(test, ar);
+ 	KUNIT_EXPECT_EQ(test, ar->rclass, CORTEN_REGION_FILE);
+ 	KUNIT_EXPECT_PTR_EQ(test, ar->rfile, file);
+@@ -2193,8 +2192,7 @@ static void corten_arena_test_file_lifecycle(struct kunit *test)
+ 	 */
+ 	mmap_read_lock(mm);
+ 	rcu_read_lock();
+-	ar = xa_load(&mm->corten_state->arenas,
+-		     CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
++	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+ 	if (ar) {
+ 		struct file *rfile = ar->rfile;
+ 
+@@ -3932,7 +3930,7 @@ static void corten_arena_test_file_fork_mirror(struct kunit *test)
+ 	 * same object, the same pgoff (INV-MV3(d) both sides).
+ 	 */
+ 	rcu_read_lock();
+-	ar = xa_load(&child->corten_state->arenas, addr >> PMD_SHIFT);
++	ar = corten_arena_test_region_of(child, addr);
+ 	KUNIT_ASSERT_NOT_NULL(test, ar);
+ 	KUNIT_EXPECT_EQ(test, ar->rclass, CORTEN_REGION_FILE);
+ 	KUNIT_EXPECT_PTR_EQ(test, ar->rfile, file);
+@@ -4901,8 +4899,8 @@ static void corten_arena_test_fork_faithful(struct kunit *test)
+ 	cstate = READ_ONCE(child->corten_state);
+ 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cstate);
+ 	rcu_read_lock();
+-	car = xa_load(&cstate->arenas,
+-		      CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
++	car = corten_arena_test_region_of(child,
++					  CORTEN_ARENA_TEST_BASE);
+ 	if (car) {
+ 		KUNIT_EXPECT_TRUE(test,
+ 				  car->start == CORTEN_ARENA_TEST_BASE &&
+@@ -5159,8 +5157,8 @@ static void corten_arena_test_fork_multipiece(struct kunit *test)
+ 		struct corten_arena *car;
+ 
+ 		rcu_read_lock();
+-		car = xa_load(&corten_arena_state(child)->arenas,
+-			      CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
++		car = corten_arena_test_region_of(child,
++						  CORTEN_ARENA_TEST_BASE);
+ 		if (car)
+ 			KUNIT_EXPECT_PTR_EQ(test, READ_ONCE(car->vma),
+ 					    vma_lookup(child,
+@@ -5316,10 +5314,9 @@ static void corten_arena_test_fork_perm(struct kunit *test)
+ 
+ 	/* The arena upper bounds mirror. */
+ 	rcu_read_lock();
+-	ar = xa_load(&corten_arena_state(mm)->arenas,
+-		     CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
+-	par = xa_load(&corten_arena_state(child)->arenas,
+-		      CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
++	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_BASE);
++	par = corten_arena_test_region_of(child,
++					  CORTEN_ARENA_TEST_BASE);
+ 	if (ar && par)
+ 		KUNIT_EXPECT_EQ(test, READ_ONCE(par->prot),
+ 				READ_ONCE(ar->prot));
+@@ -5362,26 +5359,20 @@ static void corten_arena_test_fork_perm(struct kunit *test)
+ static void corten_arena_test_inv7_walk(struct mm_struct *mm, long *violated,
+ 					long *checked)
+ {
+-	struct corten_mm_state *state = corten_arena_state(mm);
+ 	struct corten_arena *arena;
+-	unsigned long frame = 0, seen_until = 0;
++	unsigned long frame = 0;
++	unsigned int idx = 0;
+ 
+ 	*violated = 0;
+ 	*checked = 0;
+-	if (!state)
++	if (!corten_arena_state(mm))
+ 		return;
+ 
+ 	rcu_read_lock();
+-	xa_for_each(&state->arenas, frame, arena) {
++	/* The R1 walk (W-7): each record once, at its start frame. */
++	while ((arena = corten_arena_test_record_next(mm, &frame, &idx))) {
+ 		unsigned long addr;
+ 
+-		/* M4.T1: reserve markers are not arenas. */
+-		if (arena == &corten_va_reserve_sentinel)
+-			continue;
+-		if (frame < seen_until)
+-			continue;
+-		seen_until = corten_arena_end_frame(arena);
+-
+ 		for (addr = arena->start; addr < arena->end;
+ 		     addr = min((addr | (PMD_SIZE - 1)) + 1, arena->end)) {
+ 			unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1,
+@@ -8759,7 +8750,7 @@ static void corten_arena_test_j2_triggers(struct kunit *test)
+ 	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+ 	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 1);
+ 	/* mm_exit walks the dying registry (the mirrored arena's child).
+-	 */
++	*/
+ 	mmput(child);
+ 	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 2);
+ 
+@@ -9520,7 +9511,7 @@ static void corten_arena_test_inv_mv3(struct kunit *test)
+ 	state = READ_ONCE(mm->corten_state);
+ 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, state);
+ 	rcu_read_lock();
+-	ar = xa_load(&state->arenas, CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
++	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+ 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+ 	if (ar)
+ 		WRITE_ONCE(ar->rclass, CORTEN_REGION_ANON);
+@@ -9529,14 +9520,14 @@ static void corten_arena_test_inv_mv3(struct kunit *test)
+ 	KUNIT_EXPECT_FALSE(test, corten_region_invariants_ok(mm));
+ 	mmap_read_unlock(mm);
+ 	rcu_read_lock();
+-	ar = xa_load(&state->arenas, CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
++	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+ 	if (ar)
+ 		WRITE_ONCE(ar->rclass, CORTEN_REGION_RESERVED);
+ 	rcu_read_unlock();
+ 
+ 	/* Tear the MAY bound: may < prot must be reported. */
+ 	rcu_read_lock();
+-	ar = xa_load(&state->arenas, CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
++	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+ 	if (ar)
+ 		WRITE_ONCE(ar->prot, (u8)(ar->may_prot + 1));
+ 	rcu_read_unlock();
+@@ -9548,7 +9539,7 @@ static void corten_arena_test_inv_mv3(struct kunit *test)
+ 	 * reactivation re-stamps both fields wholesale.
+ 	 */
+ 	rcu_read_lock();
+-	ar = xa_load(&state->arenas, CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
++	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+ 	if (ar)
+ 		WRITE_ONCE(ar->prot, CORTEN_PERM_USER);
+ 	rcu_read_unlock();
+@@ -10210,8 +10201,7 @@ static void corten_arena_test_carrier_vma(struct kunit *test)
+ 	 * carrier (a struct vm_area_struct the old shape allocated).
+ 	 */
+ 	rcu_read_lock();
+-	ar = xa_load(&READ_ONCE(mm->corten_state)->arenas,
+-		     CORTEN_ARENA_TEST_WIN >> PMD_SHIFT);
++	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+ 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+ 	KUNIT_EXPECT_TRUE(test, ar->auto_shape);
+ 	KUNIT_EXPECT_NULL(test, READ_ONCE(ar->vma));
+@@ -10297,8 +10287,7 @@ static void corten_arena_test_fork_punch_novma(struct kunit *test)
+ 	}
+ 	mmap_write_unlock(mm);
+ 	rcu_read_lock();
+-	ar = xa_load(&state->arenas,
+-		     CORTEN_ARENA_TEST_BASE >> PMD_SHIFT);
++	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_BASE);
+ 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
+ 	if (ar)
+ 		WRITE_ONCE(ar->vma, NULL);
+@@ -12485,15 +12474,19 @@ static void corten_arena_test_exit_punchfork(struct kunit *test)
+ 		KUNIT_EXPECT_EQ(test, mm_pgtables_bytes(child), 0);
+ 		mmdrop(child);
+ 
+-		/* The iteration-end munmap over the punched arena answers
+-		 * -ENOENT (the start frame is a hole; the guest's silent
+-		 * munmap failure -- the arena stays live until exit).
++		/* The iteration-end munmap over the punched arena: W-7
++		 * re-anchors the record at the punch end, so the range
++		 * crosses the surviving record's boundary and the route
++		 * answers the documented -EOPNOTSUPP fail-open (the
++		 * pre-W-7 shape answered -ENOENT: the arena was unslotted
++		 * at its punched start frame and invisible).  The arena
++		 * stays live until exit either way.
+ 		 */
+ 		KUNIT_ASSERT_EQ(test,
+ 				corten_arena_test_run_op(test, mm,
+ 							 corten_arena_test_op_munmap_route,
+ 							 w, 4 * PMD_SIZE),
+-				-ENOENT);
++				-EOPNOTSUPP);
+ 	}
+ 
+ 	fput(memfd);
+@@ -14584,6 +14577,418 @@ static void corten_arena_test_sweep_exit_refusal(struct kunit *test)
+ 			refuses + 1);
+ }
+ 
++/* ------------------------------------------------------------------ *
++ * MV2 W-7: the multi-record registry (the D34 closure).  The stock of
++ * every case: three page-granular private-anon VMAs inside ONE PMD
++ * frame at NOWHERE, pairwise page-disjoint -- the ELF load image shape
++ * the single-record registry could not adopt (declare's frame-occupancy
++ * C1 fail-opened every neighbour into the tree: the skip_declare=288/
++ * battery bucket).  After ENTER each of them is its own region record
++ * in one shared frame slot (a corten_frame_bucket).
++ * ------------------------------------------------------------------
++ */
++#define CORTEN_W7_A	(CORTEN_ARENA_TEST_NOWHERE + 8UL * PAGE_SIZE)
++#define CORTEN_W7_B	(CORTEN_ARENA_TEST_NOWHERE + 64UL * PAGE_SIZE)
++#define CORTEN_W7_C	(CORTEN_ARENA_TEST_NOWHERE + 128UL * PAGE_SIZE)
++#define CORTEN_W7_SEG	(2UL * PAGE_SIZE)
++
++/* One W-7 stock mm: the three VMAs, the named ones faulted resident
++ * (@res page count) with one written word each.  Owns the mm (the
++ * anchor-action form).
++ */
++static struct mm_struct *
++corten_arena_test_w7_mm(struct kunit *test, unsigned long res)
++{
++	struct corten_arena_test_op o;
++	struct mm_struct *mm;
++	const unsigned long addrs[] = { CORTEN_W7_A, CORTEN_W7_B,
++					CORTEN_W7_C };
++	unsigned long i;
++
++	mm = mm_alloc();
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, mm);
++	kunit_add_action(test, corten_arena_test_mmput_action, mm);
++
++	for (i = 0; i < ARRAY_SIZE(addrs); i++) {
++		struct vm_area_struct *vma =
++			corten_arena_test_mkvm(mm, addrs[i],
++					       addrs[i] + CORTEN_W7_SEG,
++					       CORTEN_ARENA_TEST_FLAGS_OK);
++
++		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
++		if (i < res) {
++			o = (struct corten_arena_test_op){
++				.mm = mm,
++				.fn = corten_arena_test_op_sweep_fault,
++				.addr = addrs[i],
++				.len = PAGE_SIZE,
++				.flags = 0x1,
++			};
++			KUNIT_ASSERT_EQ(test,
++					corten_arena_test_run_op_full(test,
++								      &o),
++					0);
++		}
++	}
++
++	return mm;
++}
++
++/* Anchor W7-①③⑥: the frame-sharing adoption itself.  All three
++ * segments adopt (the pre-W-7 sweep adopted only the first), the
++ * shared frame's slot decodes page-granular for every consumer family
++ * (lookup / region_of / query / the row stream), the bucket members
++ * pass the record invariants, and the shrinker's frame-keyed count
++ * reads each resident page exactly once.
++ */
++static void corten_arena_test_w7_frame_share_adopt(struct kunit *test)
++{
++	struct mm_struct *mm;
++	struct corten_arena *ra, *rb, *rc;
++	struct corten_region_row row;
++	struct corten_row_iter rit;
++	long adopts, resident, skipd, rpages;
++	u64 pat, back;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "W-7 frame share requires corten=on");
++
++	mm = corten_arena_test_w7_mm(test, 2);
++	adopts = corten_arena_test_sweep(0);
++	resident = corten_arena_test_sweep(7);
++	skipd = corten_arena_test_sweep(13);
++	rpages = corten_arena_test_resident_pages();
++	KUNIT_ASSERT_GE(test, rpages, 0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_page_word(mm, CORTEN_W7_A,
++							  &pat, true), 0);
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
++
++	/* All three adopted; the tree over the frame is empty. */
++	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(0), adopts + 3);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(7), resident + 2);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(13), skipd);
++	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_W7_A));
++	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_W7_B));
++	KUNIT_EXPECT_EQ(test, mm->map_count, 0);
++
++	/* The shared frame decodes page-granular: three distinct
++	 * records, each answering its own pages and none else's.
++	 */
++	rcu_read_lock();
++	ra = corten_arena_lookup(mm, CORTEN_W7_A);
++	rb = corten_arena_lookup(mm, CORTEN_W7_B);
++	rc = corten_arena_lookup(mm, CORTEN_W7_C);
++	KUNIT_ASSERT_NOT_NULL(test, ra);
++	KUNIT_ASSERT_NOT_NULL(test, rb);
++	KUNIT_ASSERT_NOT_NULL(test, rc);
++	KUNIT_EXPECT_FALSE(test, ra == rb);
++	KUNIT_EXPECT_FALSE(test, rb == rc);
++	KUNIT_EXPECT_EQ(test, ra->start, CORTEN_W7_A);
++	KUNIT_EXPECT_EQ(test, ra->end, CORTEN_W7_A + CORTEN_W7_SEG);
++	KUNIT_EXPECT_EQ(test, rb->start, CORTEN_W7_B);
++	/* An unclaimed page of the shared frame is a registry hole
++	 * (INV2' page granularity), not the neighbour's record.
++	 */
++	KUNIT_EXPECT_NULL(test,
++			  corten_arena_lookup(mm, CORTEN_W7_C +
++						   CORTEN_W7_SEG +
++						   PAGE_SIZE));
++	rcu_read_unlock();
++	KUNIT_EXPECT_EQ(test, corten_arena_query(mm, CORTEN_W7_B +
++						 PAGE_SIZE), 1);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_query(mm,
++					   CORTEN_W7_C + CORTEN_W7_SEG +
++					   PAGE_SIZE), 0);
++	KUNIT_EXPECT_PTR_EQ(test,
++			    corten_arena_test_region_of(mm, CORTEN_W7_A +
++							PAGE_SIZE), ra);
++	KUNIT_EXPECT_PTR_EQ(test,
++			    corten_arena_test_region_of(mm, CORTEN_W7_B), rb);
++
++	/* The row stream renders each record in [start) order. */
++	mmap_read_lock(mm);
++	corten_row_iter_init(&rit);
++	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &rit, &row));
++	KUNIT_EXPECT_EQ(test, row.start, CORTEN_W7_A);
++	KUNIT_EXPECT_EQ(test, row.end, CORTEN_W7_A + CORTEN_W7_SEG);
++	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &rit, &row));
++	KUNIT_EXPECT_EQ(test, row.start, CORTEN_W7_B);
++	KUNIT_EXPECT_TRUE(test, corten_row_next(mm, &rit, &row));
++	KUNIT_EXPECT_EQ(test, row.start, CORTEN_W7_C);
++	KUNIT_EXPECT_FALSE(test, corten_row_next(mm, &rit, &row));
++	corten_row_query(mm, CORTEN_W7_A + PAGE_SIZE, &row);
++	KUNIT_EXPECT_EQ(test, row.start, CORTEN_W7_A);
++	mmap_read_unlock(mm);
++
++	/* The content still serves (the adopted residents). */
++	back = 0;
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_page_word(mm, CORTEN_W7_A,
++						    &back, false), 0);
++	KUNIT_EXPECT_EQ(test, back, pat);
++
++	/* The shrinker count: each resident page once (the frame-keyed
++	 * descriptor read, not per bucket member).
++	 */
++	KUNIT_EXPECT_EQ(test, corten_arena_test_resident_pages(),
++			rpages + 2);
++
++	/* INV-MV3 over the bucket: the record pairings and the INV2'
++	 * page-disjointness hold.  Tearing the disjointness by hand
++	 * must report.
++	 */
++	mmap_read_lock(mm);
++	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
++	mmap_read_unlock(mm);
++	rcu_read_lock();
++	WRITE_ONCE(ra->end, READ_ONCE(rb->end));
++	rcu_read_unlock();
++	mmap_read_lock(mm);
++	KUNIT_EXPECT_FALSE(test, corten_region_invariants_ok(mm));
++	mmap_read_unlock(mm);
++	rcu_read_lock();
++	WRITE_ONCE(ra->end, CORTEN_W7_A + CORTEN_W7_SEG);
++	rcu_read_unlock();
++
++	/* C1' (: the frame is shared, the pages are not): a declare
++	 * over A's own range still rejects; so does a sweep re-arm over
++	 * an overlapping VMA (its skip_declare bucket, honest form).
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_declare(mm, CORTEN_W7_A & PMD_MASK,
++					     PMD_SIZE), -EEXIST);
++	{
++		struct vm_area_struct *v = corten_arena_test_mkvm(mm,
++						CORTEN_W7_A + PAGE_SIZE,
++						CORTEN_W7_A + 3 * PAGE_SIZE,
++						CORTEN_ARENA_TEST_FLAGS_OK);
++
++		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, v);
++	}
++	KUNIT_EXPECT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(13), skipd + 1);
++	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_W7_A +
++					       PAGE_SIZE));
++}
++
++/* Anchor W7-④: the fork mirror over a shared frame -- the child
++ * registry buckets its own copies, both records answer, the INV7
++ * checker's R1 walk sees every bucket member and reports no drift.
++ */
++static void corten_arena_test_w7_frame_share_fork(struct kunit *test)
++{
++	struct mm_struct *mm, *child;
++	struct corten_arena *ra, *rca;
++	struct corten_pte_meta m;
++	long faithful;
++	u64 p0, back;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "W-7 frame-share fork requires corten=on");
++
++	mm = corten_arena_test_w7_mm(test, 2);
++	faithful = corten_arena_test_named_counter(test, "fork_faithful");
++	KUNIT_ASSERT_GE(test, faithful, 0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_page_word(mm, CORTEN_W7_A,
++							  &p0, true), 0);
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
++	ra = corten_arena_test_region_of(mm, CORTEN_W7_A);
++	KUNIT_ASSERT_NOT_NULL(test, ra);
++	KUNIT_EXPECT_FALSE(test, READ_ONCE(ra->frozen));
++
++	child = mm_alloc();
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
++	kunit_add_action(test, corten_arena_test_mmput_action, child);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
++	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_named_counter(test,
++							      "fork_faithful"),
++			faithful + 1);
++
++	/* The child's shared-frame records: its own objects, both
++	 * sides' slots MAPPED SHARED, the parent unfrozen.
++	 */
++	rca = corten_arena_test_region_of(child, CORTEN_W7_A);
++	KUNIT_ASSERT_NOT_NULL(test, rca);
++	KUNIT_EXPECT_FALSE(test, rca == ra);
++	KUNIT_ASSERT_NOT_NULL(test,
++			      corten_arena_test_region_of(child,
++							  CORTEN_W7_B));
++	KUNIT_ASSERT_EQ(test, corten_arena_test_meta(child, CORTEN_W7_A, &m),
++			0);
++	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
++	KUNIT_EXPECT_EQ(test, m.flags, CORTEN_PF_SHARED |
++			CORTEN_PF_WRITABLE);
++	KUNIT_EXPECT_FALSE(test, READ_ONCE(ra->frozen));
++
++	/* The INV7 checker's R1 walk over the bucket: no drift, the
++	 * child content mirrors the parent's word.
++	 */
++	{
++		long violated = -1, checked = -1;
++
++		corten_arena_test_inv7_walk(child, &violated, &checked);
++		KUNIT_EXPECT_EQ(test, violated, 0);
++		KUNIT_EXPECT_EQ(test, checked, 2);
++	}
++	back = 0;
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_page_word(child, CORTEN_W7_A,
++						    &back, false), 0);
++	KUNIT_EXPECT_EQ(test, back, p0);
++}
++
++/* Anchor W7-⑤ (the phase-A rework's dedicated anchor): with two
++ * co-frame members resident, zapping member A's clip must leave the
++ * frame's PT page up under member B's live translation -- the
++ * whole-frame retirement at the first member's reach is exactly the
++ * pre-W-7 hazard shape.  B's own zap drops its PTE; the exit's
++ * registry drain then clears the frame's tables and empties the
++ * registry without residue.
++ */
++static void corten_arena_test_w7_frame_share_exit(struct kunit *test)
++{
++	struct mm_struct *mm;
++	struct corten_arena *ra, *rb;
++	long rpages, timeouts;
++	u64 pat, back;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "W-7 frame-share exit requires corten=on");
++
++	mm = corten_arena_test_w7_mm(test, 2);
++	timeouts = corten_arena_test_drain_timeouts();
++	rpages = corten_arena_test_resident_pages();
++	KUNIT_ASSERT_EQ(test, corten_arena_test_page_word(mm, CORTEN_W7_A,
++							  &pat, true), 0);
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
++	ra = corten_arena_test_region_of(mm, CORTEN_W7_A);
++	rb = corten_arena_test_region_of(mm, CORTEN_W7_B);
++	KUNIT_ASSERT_NOT_NULL(test, ra);
++	KUNIT_ASSERT_NOT_NULL(test, rb);
++
++	/* Member A's clip zap: B's translation and content must
++	 * survive it -- a frame retirement here is the red face.
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_unmap_chunk(mm, ra, CORTEN_W7_A,
++						 CORTEN_W7_SEG), 0);
++	KUNIT_EXPECT_TRUE(test, corten_arena_test_pt_present(mm, CORTEN_W7_B));
++	{
++		struct corten_pte_meta m;
++
++		KUNIT_EXPECT_EQ(test,
++				corten_arena_test_meta(mm, CORTEN_W7_B, &m),
++				0);
++		KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
++	}
++	back = 0;
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_page_word(mm, CORTEN_W7_B,
++						    &back, false), 0);
++
++	/* B's own zap drops its PTE; the frame is empty but still
++	 * tracked (retirement is the exit walk's whole-frame job).
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_unmap_chunk(mm, rb, CORTEN_W7_B,
++						 CORTEN_W7_SEG), 0);
++	/* The zaps drop content + metadata (KEEP_PERM), not the frame's
++	 * PT page -- retirement is the exit walk's whole-frame job (the
++	 * pt_present probe is the page-table level).  The metadata is
++	 * the slot truth: both members reset to Invalid.
++	 */
++	{
++		struct corten_pte_meta m;
++
++		KUNIT_EXPECT_EQ(test,
++				corten_arena_test_meta(mm, CORTEN_W7_A, &m),
++				0);
++		KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
++		KUNIT_EXPECT_EQ(test,
++				corten_arena_test_meta(mm, CORTEN_W7_B, &m),
++				0);
++		KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
++	}
++
++	/* The exit: walk + drain over the bucket shape.  The registry
++	 * unpublishes, the resident count returns, the frame's PT page
++	 * retires exactly once, no drain timeout.
++	 */
++	corten_arena_mm_exit(mm);
++	KUNIT_EXPECT_NULL(test, READ_ONCE(mm->corten_state));
++	KUNIT_EXPECT_FALSE(test, corten_arena_test_pt_present(mm,
++							      CORTEN_W7_A));
++	KUNIT_EXPECT_EQ(test, corten_arena_test_resident_pages(), rpages);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_drain_timeouts(), timeouts);
++	kunit_release_action(test, corten_arena_test_mmput_action, mm);
++}
++
++/* Anchor W7-⑦: the punch route over one co-frame member -- only the
++ * punched record leaves the shared frame; the neighbour's membership,
++ * content and lookup path survive (the bare-erase form would have
++ * dropped the whole slot).
++ */
++static void corten_arena_test_w7_frame_share_punch(struct kunit *test)
++{
++	struct corten_arena_test_op o;
++	struct mm_struct *mm;
++	struct file *file;
++	struct corten_arena *ra, *rb;
++	loff_t pos = 0;
++	u64 pat, back;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "W-7 frame-share punch requires corten=on");
++
++	file = shmem_file_setup("corten_w7punch", PAGE_SIZE, 1);
++	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
++	KUNIT_ASSERT_EQ(test,
++			kernel_write(file, &pat, sizeof(pat), &pos),
++			(ssize_t)sizeof(pat));
++
++	mm = corten_arena_test_w7_mm(test, 2);
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
++	rb = corten_arena_test_region_of(mm, CORTEN_W7_B);
++	KUNIT_ASSERT_NOT_NULL(test, rb);
++
++	/* MAP_FIXED over A's head page: the punch route erases the
++	 * punched frame membership and re-anchors the record at the
++	 * punch end (the W-7 head-shrink -- the R1 walks key on the
++	 * start-frame slot); the co-frame record keeps its slot.
++	 */
++	o = (struct corten_arena_test_op){
++		.mm = mm, .fn = corten_arena_test_op_sweep_file_map,
++		.file = file, .addr = CORTEN_W7_A,
++		.len = PAGE_SIZE,
++		.flags = ((MAP_PRIVATE | MAP_FIXED) << 8) | PROT_READ,
++	};
++	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
++
++	ra = corten_arena_test_region_of(mm, CORTEN_W7_A + PAGE_SIZE);
++	KUNIT_ASSERT_NOT_NULL(test, ra);
++	KUNIT_EXPECT_EQ(test, ra->start, CORTEN_W7_A + PAGE_SIZE);
++	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_W7_A + PAGE_SIZE));
++	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_W7_A));
++	KUNIT_EXPECT_PTR_EQ(test,
++			    corten_arena_test_region_of(mm, CORTEN_W7_B),
++			    rb);
++	rcu_read_lock();
++	KUNIT_EXPECT_PTR_EQ(test, corten_arena_lookup(mm, CORTEN_W7_B), rb);
++	rcu_read_unlock();
++	back = 0;
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_page_word(mm, CORTEN_W7_B,
++						    &back, false), 0);
++	mmap_read_lock(mm);
++	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
++	mmap_read_unlock(mm);
++}
++
+ static struct kunit_case corten_arena_test_cases[] = {
+ 	KUNIT_CASE(corten_arena_test_sweep_anon_resident),
+ 	KUNIT_CASE(corten_arena_test_sweep_file_resident),
+@@ -14597,6 +15002,11 @@ static struct kunit_case corten_arena_test_cases[] = {
+ 	KUNIT_CASE(corten_arena_test_sweep_file_exit),
+ 	KUNIT_CASE(corten_arena_test_sweep_mixed_frame_exit),
+ 	KUNIT_CASE(corten_arena_test_sweep_exit_refusal),
++	/* MV2 W-7: the multi-record registry (D34 closure) anchors. */
++	KUNIT_CASE(corten_arena_test_w7_frame_share_adopt),
++	KUNIT_CASE(corten_arena_test_w7_frame_share_fork),
++	KUNIT_CASE(corten_arena_test_w7_frame_share_exit),
++	KUNIT_CASE(corten_arena_test_w7_frame_share_punch),
+ 	KUNIT_CASE(corten_arena_test_declare_reject),
+ 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
+ 	KUNIT_CASE(corten_arena_test_declare_query),
+diff --git a/mm/corten_fault_test.c b/mm/corten_fault_test.c
+index fd1bead70a74..c44a5e73c95b 100644
+--- a/mm/corten_fault_test.c
++++ b/mm/corten_fault_test.c
+@@ -2072,8 +2072,17 @@ static void corten_fault_test_punch_head(struct kunit *test)
+ 	KUNIT_EXPECT_PTR_EQ(test, READ_ONCE(ar->vma),
+ 			    vma_lookup(t->mm, hole + 2 * PAGE_SIZE));
+ 	percpu_ref_put(&ar->active);
+-	KUNIT_EXPECT_NULL(test, xa_load(&corten_arena_state(t->mm)->arenas,
+-					hole >> PMD_SHIFT));
++	/* W-7: the head punch re-anchors the record at the punch end
++	 * (the start-frame slot is what the R1 walks key on), so the
++	 * punched range's registry-truth is the LOOKUP level: the hole
++	 * answers no arena (the record's extent excludes it), which is
++	 * the D-G'' fault-safety contract the raw slot probe used to
++	 * carry.
++	 */
++	KUNIT_EXPECT_NULL(test, corten_arena_lookup(t->mm, hole));
++	ar = corten_arena_test_region_of(t->mm, hole + 2 * PAGE_SIZE);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ar);
++	KUNIT_EXPECT_EQ(test, ar->start, hole + 2 * PAGE_SIZE);
+ 
+ 	/* Emulate the overlap gather's free of the doomed middle through
+ 	 * the regular funnel (the guard only reads VM_CORTEN).

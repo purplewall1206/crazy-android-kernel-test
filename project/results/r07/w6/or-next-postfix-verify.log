@@ -1,0 +1,21 @@
+=== or-next fix verification (kernel 6.18.32-ga9c89f5a8968-dirty #308 = w6b final) ===
+MODE pid maps=17 rows (static j3 workload @ready, setarch -R).
+--- or-next @4f3000 (wound site, past-heap gap; want rw8 window row):
+ioctl@4f3000 -> 100000000000-100000800000 flags=3 off=0 name=[anon:corten_arena]   [HEALED]
+--- or-next @10000 (want exe r--p row):
+ioctl@10000 -> 400000-401000 flags=1 off=0 name=/root/j3d/mvc_j3_workload          [correct]
+--- rowwalk full enumeration: rows=16 (maps 17 - the [vsyscall] gate row, not a
+    tree VMA; all 5 window rows enumerated address-ordered, interleaved above the
+    window; ends at [stack]).  File: rows-w6b-enum.txt.
+
+=== task-3 (C-fix B) wl composition audit, same boot ===
+delta around `echo <pid> > whitelist` (+2 wl walks):
+  wl_special       +6   (= 3/process x 2 walks: vdso+vvar+vclock, was UNCLASSIFIED)
+  wl_unclassified  +0   (bucket empty since the fix; pre-fix +3/walk)
+  wl_file          +8   (= 4/process: the frame-share exe leftovers, unchanged)
+  wl_brk_vmas      +2   (= 1/process [heap], now sweep skip_brk-protected)
+  tree_entries     10   (static shape, unchanged count)
+sweep counters per MODE-enter (n=3 enters this boot):
+  adopt(file)=1  skip_declare=5  skip_special=3  skip_brk=1  skip_stack=1
+  skip_flags=0 skip_uffd=0 skip_filemay=0 skip_ops=0 skip_shared=0 skip_window=0
+  (1 adopt + 10 skips = tree 11 - 1 = 10 entries, consistent)

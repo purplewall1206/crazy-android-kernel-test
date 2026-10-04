@@ -1,0 +1,13 @@
+=== or-next wound, pre-fix face (kernel 6.18.32-ga9c89f5a8968 = C-fix A only, #303) ===
+MODE pid maps=17 rows (static j3 workload @ready). PROCMAP_QUERY probe = tools/rowone.c
+(cmd 0xc0686611 = _IOWR('f',17,104), the kernel struct incl. inode/dev fields).
+--- or-next @4f3000 (wound site, past-heap gap; want rw8 row):
+ioctl@4f3000 flags=10 errno=2 (No such file or directory)
+--- or-next @10000:
+ioctl@10000 flags=10 errno=2 (No such file or directory)
+--- covering @100000000000 (healthy face):
+ioctl@100000000000 -> 100000000000-100000800000 flags=3 off=0 name=[anon:corten_arena]
+--- rowwalk full enumeration: rows=0  (dies at the first row-win inside the walk)
+Note: earlier "rows=30" rowwalk readings were pgrep -f self-match artifacts (a
+non-MODE bash shell; dual_source off -> legacy enumeration) -- the wound needs a
+MODE mm to reproduce. j1_probes +2/run residual = same family.

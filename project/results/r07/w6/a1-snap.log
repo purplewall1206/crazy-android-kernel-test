@@ -1,0 +1,42 @@
+Warning: Permanently added '[127.0.0.1]:10025' (ED25519) to the list of known hosts.
+=== A.1 baseline 2026-10-04 01:25:12 uname=6.18.32-g34f1ae661be3-dirty ===
+Warning: Permanently added '[127.0.0.1]:10025' (ED25519) to the list of known hosts.
+j3w dev=regular file maj:min=0:0 inode=293286 bytes=915272
+=== 1. smoke v2 快验 (预期 form-B 差异, 如实记录) ===
+Warning: Permanently added '[127.0.0.1]:10025' (ED25519) to the list of known hosts.
+37df16d7
+SMOKE_RC=1
+PASS munmap-big
+PASS munmap-shared
+PASS munmap-pop
+PASS munmap-stack
+PASS munmap-fixed
+PASS mode-get-0
+SMOKE FAIL (1)
+[smoke] smoke binary rc=1
+[smoke] debugfs arenas after: 0
+[smoke] SMOKE-DRIVER FAIL (1)
+24
+1
+FAIL mmap-stack-routes-to-window (line 154 errno=0)
+=== 2. J3 oracle 快照 (A.1-compat 变体: 注册件依赖 V-C 的 process_vm_readv 路由, A.1 上 rc=3 不落快照 — 已实证; 变体只跳该腿, maps 面不变, 同名同路径) ===
+Warning: Permanently added '[127.0.0.1]:10025' (ED25519) to the list of known hosts.
+Warning: Permanently added '[127.0.0.1]:10025' (ED25519) to the list of known hosts.
+j3w(a1-variant) inode=293286 bytes=915272
+[j3] ready win_rw=0x100000000000 magic=0x100000c00000 (vmreadv leg skipped)
+641
+Warning: Permanently added '[127.0.0.1]:10025' (ED25519) to the list of known hosts.
+=== 3. A.1 侧 audit_gate (存在与否如实记录) ===
+Warning: Permanently added '[127.0.0.1]:10025' (ED25519) to the list of known hosts.
+audit_gate 不可读
+=== 4. dmesg corten 安静 ===
+Warning: Permanently added '[127.0.0.1]:10025' (ED25519) to the list of known hosts.
+0
+[    7.889470] corten: page descriptors enabled
+[    8.185961] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[   14.731604] systemd-debug-g (111) used greatest stack depth: 12048 bytes left
+[   16.252097] systemd[1]: Mounting sys-kernel-debug.mount - /sys/kernel/debug...
+[   16.744661] systemd[1]: Mounted sys-kernel-debug.mount - /sys/kernel/debug.
+[   40.318067] BUG: non-zero pgtables_bytes on freeing mm: 4096
+[   40.355787] BUG: non-zero pgtables_bytes on freeing mm: 4096
+[  198.364949] BUG: non-zero pgtables_bytes on freeing mm: 4096

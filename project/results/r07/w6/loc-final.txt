@@ -1,0 +1,36 @@
+W-6 J6 · LoC 终账（M-V2 增量后读数, worktree @ 197d654af9a0 + W-6 枚举 diff, 2026-10-04）
+口径 = REPORT-FINAL §三 刷新; "VMA 层四件" = mm/mmap.c + mm/vma.c + mm/mmap_lock.c + lib/maple_tree.c
+（maple_tree 在 lib/, REPORT-FINAL 的"三件"即此四文件口径, 现把路径写全）。
+
+== VMA 层四件 ==
+                vanilla(6f884f1658b1, corten 首件父)   current(#300 树)
+mm/mmap.c                    1909                        2232   (+323 路由钩)
+mm/vma.c                     3279                        3386   (+107)
+mm/mmap_lock.c                499                         522   (+23)
+lib/maple_tree.c             7268                        7268   (0, 未触碰)
+合计                        12955                       13408   (+453)
+
+== corten 侧 ==
+生产（不含 KUnit 测试）:
+  mm/corten_arena.c          18178
+  mm/corten_arena.h           1525
+  mm/corten.c                 1860
+  mm/corten.h                  283
+  include/linux/corten_arena.h 1299
+  include/linux/corten.h       616
+  小计                       23761   (REPORT-FINAL 快照 19676 → +4085, M-V/MV2 增量)
+
+测试（KUnit）:
+  mm/corten_arena_test.c     14692
+  mm/corten_fault_test.c      3768
+  mm/corten_test.c            2113
+  小计                       20573
+
+corten 侧合计               44334
+
+== 终账两列（REPORT M-V2 章口径）==
+  被替代的 VMA 层四件: 13,408 行（vanilla 12,955）
+  corten 侧: 生产 23,761 + 测试 20,573 = 44,334 行
+  净增（生产 vs vanilla 四件）: +10,806 行（23,761 − 12,955）
+  原型"代码更少"主张在该移植口径下仍不成立（与 REPORT-FINAL 结论一致, 数字刷新）;
+  可删性主张延续: 13,408 行对 MODE 进程为零热路径依赖（J1 严格零 + 树归零读数）。

@@ -1,0 +1,45 @@
+W-6 J3 发现的 maps 双源回归 · 修复提案（任务书红线外, 未应用, 待主会话裁定）
+
+root cause: MV2 W-2 (680857104271, "carrier elimination") 把 proc_get_vma 的
+region 行臂返回值从 carrier 指针改成 NULL。seq_file 契约里 start/next 返 NULL
+= EOF——.show 从未被调, 且 corten_row_active 三个渲染臂 (show_map:717 /
+show_smap:1806 / numa_maps:3921) 全部成为死码。W-4 扫入后 MODE mm 的树行
+(vdso/vvar/vvar_vclock/stack) 全部位于窗口之上 (0x7ffc… > 0x1000_0000_0000),
+首次归并必然走行臂 → /proc/<pid>/{maps,smaps,numa_maps} 对 MODE 进程自 W-2
+起恒为空 (W-2~W-3 时代 exec 镜像尚在树内低位时表现为截断, W-4 后全空)。
+被电池的负言断言 (S-4 "maps 无 reservation 段" 等) 空真掩盖至今; J3 oracle
+驱动 (mvc 波注册件, 正言断言 maps 窗口行 ≥4) 是 W-6 首个能看见它的探针。
+attribution: #297 (9f83ab4c, W-5 收口验证件, 零 W-6 改动) 复现同一失败。
+PROCMAP_QUERY / pagemap / audit_gate 不受影响 (不同代码路径)。
+
+提案 (一行 + 注记; .show 从不解引用该 token——corten_row_active 先行分流):
+
+--- a/fs/proc/task_mmu.c
++++ b/fs/proc/task_mmu.c
+@@ -364,11 +364,17 @@
+ 		priv->corten_row_active = true;
+ 		priv->last_pos = *ppos;
+ 		*ppos = priv->corten_row.end;
+ 		vma_iter_set(&priv->iter, priv->corten_row.end);
+-		/* MV2 W-2: NULL -- the row arm of .show renders from the
+-		 * record; the carrier pointer it returned as the render
+-		 * context is retired.
+-		 */
+-		return NULL;
++		/* MV2 W-2 retired the carrier render context, but the
++		 * token must stay non-NULL: seq_file reads NULL as
++		 * end-of-stream, which truncated every MODE mm's
++		 * maps/smaps/numa_maps at the first window row (a swept
++		 * MODE mm's tree rows all sit above the window, so the
++		 * first merge step always takes this arm).  W-6: hand
++		 * back the row storage -- never dereferenced as a vma
++		 * (corten_row_active routes all three .show callbacks
++		 * to the record).
++		 */
++		return (struct vm_area_struct *)&priv->corten_row;
+ 	}
+
+验证路径 (授权后): 应用 → 重编译 → 主 VM 重跑 J3 oracle 驱动 (in-boot 断言
+全绿: 窗口行 ≥4 / S-4 / PROCMAP_QUERY 一致) + 与 A.1 快照 cmp_j3.sh 字节
+对拍 (预期仅 V-B.3 的 file 行地址域 + window 槽位级联差异, 行序/布局披露
+口径) → maps 形状断言 (smoke/mva1_probe S-4) 重跑防回归。
