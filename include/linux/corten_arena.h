@@ -968,6 +968,15 @@ int corten_prctl_arena(unsigned int op, unsigned long addr, unsigned long len,
 int corten_prctl_mode(unsigned int op, unsigned long arg3,
 		      unsigned long arg4, unsigned long arg5);
 
+/**
+ * corten_exec_default_enter - the MV3.a execve default entry, called by
+ * exec_mmap() (fs/exec.c) at the new-mm install point.  On a
+ * corten_mode_default=on boot with corten=on it enters MODE on @mm
+ * without any prctl dependency (suid included, D29); every other
+ * configuration is a no-op.  The bare A5 enter: no sweep, no registry.
+ */
+void corten_exec_default_enter(struct mm_struct *mm);
+
 /*
  * S8 observability renderers, called by the debugfs files in mm/corten.c
  * (mm/corten_arena.c owns the arena data, corten.c owns the directory).
@@ -995,6 +1004,11 @@ void corten_arena_test_fork_fail_arm(int stage);
 bool corten_arena_test_arena_frozen(struct mm_struct *mm, unsigned long addr);
 long corten_arena_test_fork_faithful_count(void);
 long corten_arena_test_fork_skips(void);
+
+/* MV3.a: drive the corten_mode_default boot-parameter switch so the
+ * exec-default on/off anchors share one kernel.
+ */
+void corten_exec_default_test_set(bool on);
 
 /* M4.T1 magazine hooks (mm/corten_arena_test.c): allocate @len
  * (PMD-rounded) from @cpu's segment of @mm's magazine (caller holds the
@@ -1292,6 +1306,10 @@ static inline int corten_prctl_mode(unsigned int op, unsigned long arg3,
 				    unsigned long arg4, unsigned long arg5)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline void corten_exec_default_enter(struct mm_struct *mm)
+{
 }
 
 static inline void corten_arena_arenas_report(struct seq_file *m)
