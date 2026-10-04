@@ -3835,6 +3835,15 @@ long corten_arena_test_gup_probe_rejects(void)
 	return atomic_long_read(&corten_nr_gup_probe_rejects);
 }
 
+/* MV3.b: the remote-face short-answer ledger (the pre-fix journald
+ * shape -- the anchor asserts it stays unmoved on window content
+ * reads and moves exactly once on the parked shape).
+ */
+long corten_arena_test_remote_shorts(void)
+{
+	return atomic_long_read(&corten_nr_remote_access_window_short);
+}
+
 long corten_arena_test_maps_window_rows(void)
 {
 	return atomic_long_read(&corten_nr_maps_window_rows);
@@ -16167,7 +16176,9 @@ static bool corten_arena_window_parked_span(struct mm_struct *mm,
  *				(lazy-free permits dropping the content
  *				at any time; an eager drop is a
  *				compliance superset -- counted)
- *   NORMAL/SEQUENTIAL/RANDOM/COLD	T0: pure hints, no-op success in-arena
+ *   NORMAL/SEQUENTIAL/RANDOM/COLD/WILLNEED	T0: pure hints, no-op
+ *				success in-arena (WILLNEED since MV3.b --
+ *				the stock anon answer is this no-op)
  *   everything else		reject when the range overlaps an arena
  *
  * MODE-targeted arenas (mode=0) keep the S6 behaviour for the new rows:
@@ -16212,6 +16223,7 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 		case MADV_SEQUENTIAL:
 		case MADV_RANDOM:
 		case MADV_COLD:
+		case MADV_WILLNEED:
 			atomic_long_inc(&corten_nr_madvise_parked);
 			return 1;
 		default:
@@ -16251,11 +16263,19 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 	case MADV_SEQUENTIAL:
 	case MADV_RANDOM:
 	case MADV_COLD:
+	case MADV_WILLNEED:
 		/* Pure hints: success is contractual even when the kernel
 		 * ignores them, so an in-arena range is a counted no-op.
 		 * A range that merely touches an arena (boundary
 		 * crossing, two arenas) is rejected like the other
-		 * behaviours; fully outside is legacy.
+		 * behaviours; fully outside is legacy.  WILLNEED joins
+		 * them (MV3.b closure list): the stock anon-mapping
+		 * answer is exactly this no-op success (madvise_willneed()
+		 * does nothing without a vm_file), and the route's old
+		 * default arm turned it into an unregistered
+		 * -EOPNOTSUPP.  A FILE region's readahead is advisory
+		 * ("may be ignored") -- dropped, not a populate
+		 * contract; MADV_POPULATE_* keep their M3 reject.
 		 */
 		if (!READ_ONCE(mm->corten_mode))
 			break;

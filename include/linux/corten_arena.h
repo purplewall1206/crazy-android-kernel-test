@@ -1089,6 +1089,12 @@ long corten_arena_test_gup_probes(void);
 long corten_arena_test_gup_probe_rejects(void);
 long corten_arena_test_maps_window_rows(void);
 
+/* MV3.b: the remote-face short-answer ledger (the V-A.3b observation
+ * counter the access_remote_vm()/copy_remote_vm_str() window arms
+ * still book on parked/perm-denied shapes).
+ */
+long corten_arena_test_remote_shorts(void);
+
 /* V-E brk delegation ledger (spec sec 3.5): the arm counter read
  * (@arm indexes enum corten_brk_arm) and the heap-domain find_vma
  * count (OQ-MV-7 numerator).

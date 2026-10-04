@@ -7002,12 +7002,14 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 
 	/* V-C (j2-audit #7): a MODE mm's window-domain address has no
 	 * tree VMA to look up and no stack to expand (expand_stack()
-	 * would drop the mmap_read on failure) -- the GUP loop's
-	 * corten_gup_window() owns it (MV2 W-2: the carrier answer
+	 * would drop the mmap_read on failure) -- the loop's
+	 * corten_gup_window() arm owns it (MV2 W-2: the carrier answer
 	 * retired with the carrier; an active region pins through the
 	 * corten arm's follow), a parked/hole window short-circuits in
-	 * the loop below.  Implant ranges keep the original check
-	 * (their tree VMA is real).
+	 * the loop below (MV3.b: driven arm-local, never through
+	 * get_user_page_vma_remote() -- see the loop comment).
+	 * Implant ranges keep the original check (their tree VMA is
+	 * real).
 	 */
 	if (!corten_remote_vm_window(mm, addr) &&
 	    !vma_lookup(mm, addr) && !expand_stack(mm, addr)) {
@@ -7025,61 +7027,92 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 		void *maddr;
 		struct folio *folio;
 		struct vm_area_struct *vma = NULL;
-		struct page *page = get_user_page_vma_remote(mm, addr,
-							     gup_flags, &vma);
+		struct page *page = NULL;
 
-		if (IS_ERR(page)) {
-			/* We might need to expand the stack to access it */
-			if (corten_remote_vm_window(mm, addr)) {
-				/* V-C: the probe already ruled (parked or
-				 * perm-denied window page) -- nothing in
-				 * the tree can change the verdict.
-				 */
-				corten_remote_note_window_short(mm, addr);
-				return buf - old_buf;
-			}
-			vma = vma_lookup(mm, addr);
-			if (!vma) {
-				vma = expand_stack(mm, addr);
-
-				/* mmap_lock was dropped on failure */
-				if (!vma)
-					return buf - old_buf;
-
-				/* Try again if stack expansion worked */
-				continue;
-			}
-
-			/*
-			 * Check if this is a VM_IO | VM_PFNMAP VMA, which
-			 * we can access using slightly different code.
-			 */
-			bytes = 0;
-#ifdef CONFIG_HAVE_IOREMAP_PROT
-			if (vma->vm_ops && vma->vm_ops->access)
-				bytes = vma->vm_ops->access(vma, addr, buf,
-							    len, write);
-#endif
-			if (bytes <= 0)
-				break;
-		} else {
-			folio = page_folio(page);
-			bytes = len;
-			offset = addr & (PAGE_SIZE-1);
-			if (bytes > PAGE_SIZE-offset)
-				bytes = PAGE_SIZE-offset;
-
-			maddr = kmap_local_folio(folio, folio_page_idx(folio, page) * PAGE_SIZE);
-			if (write) {
-				copy_to_user_page(vma, page, addr,
-						  maddr + offset, buf, bytes);
-				folio_mark_dirty_lock(folio);
-			} else {
-				copy_from_user_page(vma, page, addr,
-						    buf, maddr + offset, bytes);
-			}
-			folio_release_kmap(folio, maddr);
+		/* MV3.b (MV3.a guest gate red #1, the journald face): a
+		 * MODE mm's window domain is answered in the arm-local
+		 * form -- the same probe/follow the GUP loop drives --
+		 * instead of being handed to
+		 * get_user_page_vma_remote().  That wrapper's post-GUP
+		 * vma_lookup() has no tree VMA to find on a swept window
+		 * page (the mm.h:2648 WARN proc_pid_cmdline_read()
+		 * tripped for journald), and the error arm below it
+		 * short-returned without dropping this mmap_read, so
+		 * the next remote read of the same mm deadlocked on the
+		 * leaked lock (the tmpfiles-setup stall).  The error
+		 * verdict keeps the short-answer form -- with the lock
+		 * dropped.
+		 *
+		 * Follow-only (FOLL_NOFAULT): a remote copy face reads
+		 * what is committed and never faults the target -- the
+		 * arena's slot producers (the exit drain chief among
+		 * them) do not all take this mm's mmap lock
+		 * (corten_arena_mm_exit() runs before exit_mmap()'s
+		 * locks), so a reader-context faultin has no lock
+		 * exclusivity against them; an absent slot keeps the
+		 * short answer (the V-A.3b contract, counted).
+		 */
+		if (corten_gup_window(mm, addr, gup_flags | FOLL_NOFAULT,
+				      &page) < 0) {
+			corten_remote_note_window_short(mm, addr);
+			mmap_read_unlock(mm);
+			return buf - old_buf;
 		}
+		if (!page) {
+			page = get_user_page_vma_remote(mm, addr, gup_flags,
+							&vma);
+
+			if (IS_ERR(page)) {
+				/* We might need to expand the stack to
+				 * access it
+				 */
+				vma = vma_lookup(mm, addr);
+				if (!vma) {
+					vma = expand_stack(mm, addr);
+
+					/* mmap_lock was dropped on failure */
+					if (!vma)
+						return buf - old_buf;
+
+					/* Try again if stack expansion worked */
+					continue;
+				}
+
+				/*
+				 * Check if this is a VM_IO | VM_PFNMAP VMA,
+				 * which we can access using slightly
+				 * different code.
+				 */
+				bytes = 0;
+#ifdef CONFIG_HAVE_IOREMAP_PROT
+				if (vma->vm_ops && vma->vm_ops->access)
+					bytes = vma->vm_ops->access(vma, addr,
+								    buf, len,
+								    write);
+#endif
+				if (bytes <= 0)
+					break;
+				goto advance;
+			}
+		}
+
+		folio = page_folio(page);
+		bytes = len;
+		offset = addr & (PAGE_SIZE-1);
+		if (bytes > PAGE_SIZE-offset)
+			bytes = PAGE_SIZE-offset;
+
+		maddr = kmap_local_folio(folio, folio_page_idx(folio, page) * PAGE_SIZE);
+		if (write) {
+			copy_to_user_page(vma, page, addr,
+					  maddr + offset, buf, bytes);
+			folio_mark_dirty_lock(folio);
+		} else {
+			copy_from_user_page(vma, page, addr,
+					    buf, maddr + offset, bytes);
+		}
+		folio_release_kmap(folio, maddr);
+advance:
 		len -= bytes;
 		buf += bytes;
 		addr += bytes;
@@ -7163,19 +7196,35 @@ static int __copy_remote_vm_str(struct mm_struct *mm, unsigned long addr,
 		int bytes, offset, retval;
 		void *maddr;
 		struct folio *folio;
-		struct page *page;
+		struct page *page = NULL;
 		struct vm_area_struct *vma = NULL;
 
-		page = get_user_page_vma_remote(mm, addr, gup_flags, &vma);
-		if (IS_ERR(page)) {
-			/*
-			 * Treat as a total failure for now until we decide how
-			 * to handle the CONFIG_HAVE_IOREMAP_PROT case and
-			 * stack expansion.
-			 */
+		/* MV3.b: same window arm as __access_remote_vm(),
+		 * follow-only (FOLL_NOFAULT) for the same reason -- the
+		 * VMA-free window page never reaches the wrapper's
+		 * vma_lookup() (the mm.h:2648 WARN face) and the reader
+		 * never faults the target.
+		 */
+		if (corten_gup_window(mm, addr, gup_flags | FOLL_NOFAULT,
+				      &page) < 0) {
 			*(char *)buf = '\0';
 			err = -EFAULT;
 			goto out;
+		}
+		if (!page) {
+			page = get_user_page_vma_remote(mm, addr, gup_flags,
+							&vma);
+			if (IS_ERR(page)) {
+				/*
+				 * Treat as a total failure for now until we
+				 * decide how to handle the
+				 * CONFIG_HAVE_IOREMAP_PROT case and stack
+				 * expansion.
+				 */
+				*(char *)buf = '\0';
+				err = -EFAULT;
+				goto out;
+			}
 		}
 
 		folio = page_folio(page);

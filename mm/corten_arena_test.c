@@ -6797,11 +6797,13 @@ static void corten_arena_test_madvise_route(struct kunit *test)
 						   CORTEN_ARENA_TEST_BASE,
 						   PAGE_SIZE), 1);
 
-	/* WILLNEED stays rejected (sec 3.4 matrix). */
+	/* WILLNEED joins the hints (MV3.b closure list): the stock
+	 * anon-mapping answer is the same counted no-op success.
+	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_madvise_route(mm, MADV_WILLNEED,
 						   CORTEN_ARENA_TEST_BASE,
-						   PAGE_SIZE), -EOPNOTSUPP);
+						   PAGE_SIZE), 1);
 
 	/* A hint fully outside any arena: legacy (0). */
 	KUNIT_EXPECT_EQ(test,
@@ -9114,12 +9116,12 @@ static void corten_arena_test_madvise_parked_terminal(struct kunit *test)
 			corten_arena_test_named_counter(test, "madvise_parked"),
 			c0);
 
-	/* The disclosed residual: WILLNEED on a parked span keeps the
-	 * legacy verdict (the walk's -ENOMEM downstream).
+	/* WILLNEED joins the hint family on a parked span too (MV3.b
+	 * closure list): the same counted no-op success.
 	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_madvise_route(mm, MADV_WILLNEED, win,
-						   PAGE_SIZE), 0);
+						   PAGE_SIZE), 1);
 
 	/* Not a parked span: a window hole (never registered) and an
 	 * active-adjacent span both keep the legacy route verdict -- the
@@ -12869,6 +12871,86 @@ static void corten_arena_test_gup_loop_legacy(struct kunit *test)
 }
 
 /*
+ * MV3.b (MV3.a guest gate red #1): the external remote face -- the
+ * proc_pid_cmdline_read()/environ shape journald drives.  A MODE mm's
+ * window page is read through access_remote_vm() (the proc face's
+ * exact entry, lock shape and FOLL_ANON flags): the read must return
+ * the real content -- the pages exist -- without the mm.h:2648 WARN
+ * face (the window arm answers before get_user_page_vma_remote()'s
+ * post-GUP vma_lookup() can miss) and without short-answer counter
+ * movement.  The parked shape keeps the loud short answer, counted,
+ * still no WARN face.  Pre-fix this read returned 0 bytes, tripped
+ * the WARN and leaked the mmap_read (the journald stall).
+ */
+static void corten_arena_test_remote_access_window(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long a;
+	long shorts0;
+	char buf[64];
+	u64 pat = 0x315f4b4341544144ULL;	/* "DATACK_1"-shaped */
+	struct page *page = NULL;
+	void *kaddr;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "remote access anchors require corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	a = corten_arena_test_mvc_attach(test, mm, 1, PROT_READ | PROT_WRITE);
+	shorts0 = corten_arena_test_remote_shorts();
+
+	/* Seed: fault the page in through the arm (the only legal
+	 * producer) and stamp the payload.  No FOLL_GET: the pages-array
+	 * GUP takes no reference (is_valid_gup_args() never forces it),
+	 * the PTE holds the only one -- so nothing to put (a put here
+	 * drops the PTE-anchored folio to 0 and the next follow's
+	 * try_grab_folio() -ENOMEMs it).
+	 */
+	mmap_read_lock(mm);
+	KUNIT_ASSERT_EQ(test,
+			get_user_pages_remote(mm, a, 1, FOLL_WRITE, &page,
+					      NULL), 1);
+	KUNIT_ASSERT_NOT_NULL(test, page);
+	kaddr = kmap_local_page(page);
+	memcpy(kaddr, &pat, sizeof(pat));
+	kunmap_local(kaddr);
+	mmap_read_unlock(mm);
+
+	/* The cmdline face's read: FOLL_ANON remote, kernel buffer
+	 * (proc_pid_cmdline_read()'s shape).  Content comes back, the
+	 * short ledger stays unmoved.
+	 */
+	ret = access_remote_vm(mm, a, buf, sizeof(buf), FOLL_ANON);
+	KUNIT_EXPECT_EQ(test, ret, (int)sizeof(buf));
+	KUNIT_EXPECT_MEMEQ(test, buf, &pat, sizeof(pat));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0);
+
+	/* The proctitle probe byte (get_mm_cmdline()'s arg_end-1 peek).
+	 */
+	ret = access_remote_vm(mm, a + PAGE_SIZE - 1, buf, 1, FOLL_ANON);
+	KUNIT_EXPECT_EQ(test, ret, 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0);
+
+	/* The parked shape (the munmap route): the short answer (zero
+	 * bytes) is the contract, counted once.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 a, PAGE_SIZE), 1);
+	ret = access_remote_vm(mm, a, buf, sizeof(buf), FOLL_ANON);
+	KUNIT_EXPECT_EQ(test, ret, 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0 + 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/*
  * MV2 W-3, item 1: the heap region migration (V-E.2 resurrection).
  * The sys_brk GROW/SHRINK routes run the heap domain on a region
  * record: the first post-entry grow adopts the PTE-empty brk VMA
@@ -15246,6 +15328,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	 */
 	KUNIT_CASE(corten_arena_test_gup_loop_window),
 	KUNIT_CASE(corten_arena_test_gup_loop_legacy),
+	KUNIT_CASE(corten_arena_test_remote_access_window),
 	KUNIT_CASE(corten_arena_test_mvc_smaps_pagemap),
 	/* V-D: the full-lifecycle ledger anchor (B-2 closure). */
 	KUNIT_CASE(corten_arena_test_exit_lifecycle),
