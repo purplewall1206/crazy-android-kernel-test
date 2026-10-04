@@ -253,3 +253,53 @@ worktree 单树双 slice（裁定: mv3b 先落共享文件, 本片后叠; 联合
 - exit 侧裸洞反向清扫（页表驱动的补漏 pass）: FIX-A 在产生点闭合后属
   冗余防御, 不加。
 - arena_stats 快照修（mv3b §3 登记）: 不在本片。
+
+---
+
+## 8. followup 全电池（82a35da 树, 主会话移交轮）
+
+（裁定: 82a35da 合流态由主会话入库, worktree 归本片; 本节 = commit message
+承诺的 followup 验证记录。运行者: mv3c-battery.sh, 内核 #346 = 82a35da+锚
+delta 的 =y 全量构建。运行事故一轮如实留档: 第一次电池误跑在 =n 内核上
+（restore 构建未完成时拷贝 bzImage 的时序错误——console 无 corten boot 行/
+ENTER EOPNOTSUPP/debugfs 缺失三证）, 判无效重跑; 该轮 metis 基线匹配仍
+成立, 留档 accidental-n-note.txt。）
+
+**数据（内核 #346 = 82a35da + 锚 delta 的 =y 全量构建, 5× =on+journal boot,
+mv3c 命名空间, 电池脚本+全部 console/负载 log 在工件目录）**:
+
+| boot | corruption 签名 (Bad page/WARNING/Oops/2648/segv) | pgres(老残账, house 排除) | PGTABLES_COUNT(dmesg) |
+|---|---|---|---|
+| 1 | **0** | 0 | 0 |
+| 2 | **0** | 1 | 1 |
+| 3 (+workloads) | **0** | 0→2 | 2 |
+| 4 | **0** | 1 | 1 |
+| 5 | **0** | 0 | 0 |
+
+- **corruption ×5 门槛: 5/5 绿**（零签名）。老残账 4 次命中逐 boot 记账
+  （0/1/2/1/0）——其 per-mm stale 计数形态与 §3.2 一致（负载 boot 的 mm
+  churn 多, 命中相应多; workload boot 2 次 = 更多 mm exit）。
+- **smoke v2 双形态: 26 PASS / 0 FAIL 双绿, SMOKE-DRIVER PASS**（hook 形
+  RC=0 + bare 形 RC=0; log 存档 smoke-hook.full/smoke-bare.full）。诚实
+  披露: 电池内嵌的负载轮（boot 后 +40s 即跑）双形态 rc=1——fast boot 下
+  systemd 的 debugfs 挂载晚于 +40s, smoke 的 [ -d ] 前置检查失败（环境
+  时序, 非内核行为）; 全 boot settle 后复跑 = 上行 26/26 双绿 + ledger
+  亦过（SMOKE-DRIVER PASS）。
+- **metis_eq ×2: checksum `2d383eeed4ceb73b` 与基准精确一致, RC=0 ×2**。
+- **dmesg 静默审计**: WARNING/BUG 行（除老残账）= 0（全部 5 boot + formal
+  boot）; `corten.*(warn|bug|timed out)` = 0; formal boot PGTABLES_COUNT=0。
+- **j2/PGTABLES 常规读数（formal boot, audit_gate 节点）**: j2_walks 855,
+  **j2_violations 0, j2_stale 0**, j1_probes 262/j1_hits 0, wl_violations 0,
+  wl_unclassified 0, wl_brk_anomalies 0, wl_implant 0, **tree_entries 0**
+  （树归零终判据保持）。exec_default_enters 读数不可得——见下。
+- **arena_stats 渲染器确认（与 mv3b §3 登记同源, fresh-boot 实证）**:
+  debugfs `arena_stats` 读在 MODE 全系统进场态 fresh boot 上 CPU 自旋
+  >1 分钟（guest 内 grep 进程 99.9% R 态, SIGTERM 不可达——内核态
+  read() 不返回）, 分钟级不完成; exec_default_enters 读数因此不可得。
+  渲染器未被本片或 mv3b 修复触及, 非回归; M6.T4 快照+TTL 修形的
+  独立小片依据再加一票（fresh boot 即症状, 不需 churn）。
+
+**判定: MV3.c-debug 轮 followup 电池全绿**——corruption ×5 + smoke 双形态
++ metis 同基准 + dmesg 静默（corruption 口径）+ j2_stale/tree_entries 读数
+全部达标。commit message 承诺的 followup 验证闭合, MV3.c（exec 镜像收编 +
+批 mark）可以开片。
