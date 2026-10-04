@@ -12888,6 +12888,7 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
 	struct mm_struct *mm = t->mm;
 	unsigned long a;
 	long shorts0;
+	long refs0;
 	char buf[64];
 	u64 pat = 0x315f4b4341544144ULL;	/* "DATACK_1"-shaped */
 	struct page *page = NULL;
@@ -12920,18 +12921,28 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
 
 	/* The cmdline face's read: FOLL_ANON remote, kernel buffer
 	 * (proc_pid_cmdline_read()'s shape).  Content comes back, the
-	 * short ledger stays unmoved.
+	 * short ledger stays unmoved, and the folio refcount is
+	 * UNCHANGED -- the read face's grab (FOLL_GET) must pair with
+	 * folio_release_kmap()'s put.  The pre-fix face skipped the get
+	 * and kept the put: every window read underflowed the live,
+	 * PTE-mapped folio to 0 (the MV3.b guest corruption family) --
+	 * this delta is the anchor's red face, the content asserts
+	 * alone stayed green through that bug.
 	 */
+	refs0 = folio_ref_count(page_folio(page));
 	ret = access_remote_vm(mm, a, buf, sizeof(buf), FOLL_ANON);
 	KUNIT_EXPECT_EQ(test, ret, (int)sizeof(buf));
 	KUNIT_EXPECT_MEMEQ(test, buf, &pat, sizeof(pat));
 	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0);
+	KUNIT_EXPECT_EQ(test, folio_ref_count(page_folio(page)), refs0);
 
-	/* The proctitle probe byte (get_mm_cmdline()'s arg_end-1 peek).
+	/* The proctitle probe byte (get_mm_cmdline()'s arg_end-1 peek):
+	 * same per-read ref pairing.
 	 */
 	ret = access_remote_vm(mm, a + PAGE_SIZE - 1, buf, 1, FOLL_ANON);
 	KUNIT_EXPECT_EQ(test, ret, 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0);
+	KUNIT_EXPECT_EQ(test, folio_ref_count(page_folio(page)), refs0);
 
 	/* The parked shape (the munmap route): the short answer (zero
 	 * bytes) is the contract, counted once.
