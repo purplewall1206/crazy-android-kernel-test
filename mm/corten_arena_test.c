@@ -14989,6 +14989,146 @@ static void corten_arena_test_w7_frame_share_punch(struct kunit *test)
 	mmap_read_unlock(mm);
 }
 
+/* ------------------------------------------------------------------ *
+ * MV3.a: the execve default entry.  The gate is the same function
+ * exec_mmap() calls, driven against a synthetic mm -- the guest-side
+ * "bare smoke on corten_mode_default=on" battery is its end-to-end
+ * counterpart.
+ * ------------------------------------------------------------------
+ */
+
+/* Restore the boot-parameter switch whatever the assertions did (the
+ * switch is global state the other anchors read).
+ */
+static void corten_arena_test_exec_default_off_action(void *ctx)
+{
+	corten_exec_default_test_set(false);
+}
+
+/* default=off (the boot default on every battery): the gate is a no-op
+ * -- no mode bit, no counter.  Boot-independent, runs on =off kernels
+ * too (the static key folds the same early return).
+ */
+static void corten_arena_test_exec_default_off(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	long enters;
+
+	corten_exec_default_test_set(false);
+	enters = corten_arena_test_named_counter(test, "exec_default_enters");
+	KUNIT_ASSERT_GE(test, enters, 0);
+
+	corten_exec_default_enter(mm);
+
+	KUNIT_EXPECT_FALSE(test, READ_ONCE(mm->corten_mode));
+	KUNIT_EXPECT_NULL(test, READ_ONCE(mm->corten_state));
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"exec_default_enters"),
+			enters);
+}
+
+/* default=on: the gate enters MODE with the bare A5 shape (bit set,
+ * no sweep, registry still NULL), the counter advances by one, and the
+ * mm's subsequent anonymous mmap lands in the window through the
+ * existing auto route (the ELF-image shape exec actually produces).
+ */
+static void corten_arena_test_exec_default_enter(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long addr = 0, len = 2 * PAGE_SIZE, flags;
+	struct corten_arena *ar;
+	int ret;
+	long enters;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "exec default entry requires corten=on");
+	if (sysctl_overcommit_memory == OVERCOMMIT_NEVER)
+		kunit_skip(test, "auto takeover degraded (OVERCOMMIT_NEVER)");
+
+	corten_exec_default_test_set(true);
+	kunit_add_action(test, corten_arena_test_exec_default_off_action,
+			 NULL);
+
+	enters = corten_arena_test_named_counter(test, "exec_default_enters");
+	KUNIT_ASSERT_GE(test, enters, 0);
+
+	corten_exec_default_enter(mm);
+
+	KUNIT_EXPECT_TRUE(test, READ_ONCE(mm->corten_mode));
+	/* A5: no sweep, no registry -- the exec mm is nearly empty at
+	 * the gate and the registry is the first arena work's job.
+	 */
+	KUNIT_EXPECT_NULL(test, READ_ONCE(mm->corten_state));
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"exec_default_enters"),
+			enters + 1);
+	/* Re-exec idempotence: the gate runs again on the same mm.  The
+	 * mode bit just re-sets; the counter counts execves, so it
+	 * advances again.
+	 */
+	corten_exec_default_enter(mm);
+	KUNIT_EXPECT_TRUE(test, READ_ONCE(mm->corten_mode));
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"exec_default_enters"),
+			enters + 2);
+
+	/* The stock the ELF loader maps next routes through the
+	 * existing takeover: one whitelisted anon mmap -> window
+	 * placement (the lazy registry built on demand), completed by
+	 * the do_mmap tail body (auto_attach) -- the two halves the
+	 * real mmap_region() call drives in order.
+	 */
+	flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, len,
+							    PROT_READ |
+							    PROT_WRITE,
+							    &addr, &len,
+							    &flags), 1);
+	KUNIT_EXPECT_EQ(test, len, PMD_SIZE);
+	KUNIT_EXPECT_FALSE(test, addr < CORTEN_MODE_WINDOW_START ||
+			   addr >= CORTEN_MODE_WINDOW_END);
+	KUNIT_EXPECT_NOT_NULL(test, READ_ONCE(mm->corten_state));
+	mmap_write_lock(mm);
+	ret = corten_arena_auto_attach(mm, addr, len, PROT_READ | PROT_WRITE);
+	mmap_write_unlock(mm);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	ar = corten_arena_test_region_of(mm, addr);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	KUNIT_EXPECT_EQ(test, ar->start, addr);
+
+	/* The exec loader's own addr==0 shapes decline the window while
+	 * in_execve (the init-boot SIGSEGV guard): same mm, same MODE,
+	 * the route answers legacy for the loader window and lives again
+	 * the moment do_execve clears the bit.
+	 */
+	current->in_execve = 1;
+	addr = 0;
+	len = 2 * PAGE_SIZE;
+	flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, len,
+							    PROT_READ |
+							    PROT_WRITE,
+							    &addr, &len,
+							    &flags), 0);
+	current->in_execve = 0;
+	addr = 0;
+	len = 2 * PAGE_SIZE;
+	flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, len,
+							    PROT_READ |
+							    PROT_WRITE,
+							    &addr, &len,
+							    &flags), 1);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_sweep_anon_resident),
 	KUNIT_CASE(corten_arena_test_sweep_file_resident),
@@ -15007,6 +15147,9 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_w7_frame_share_fork),
 	KUNIT_CASE(corten_arena_test_w7_frame_share_exit),
 	KUNIT_CASE(corten_arena_test_w7_frame_share_punch),
+	/* MV3.a: the execve default entry anchors. */
+	KUNIT_CASE(corten_arena_test_exec_default_off),
+	KUNIT_CASE(corten_arena_test_exec_default_enter),
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
 	KUNIT_CASE(corten_arena_test_declare_query),

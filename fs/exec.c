@@ -28,6 +28,7 @@
 #include <linux/file.h>
 #include <linux/fdtable.h>
 #include <linux/mm.h>
+#include <linux/corten_arena.h>
 #include <linux/stat.h>
 #include <linux/fcntl.h>
 #include <linux/swap.h>
@@ -896,6 +897,10 @@ static int exec_mmap(struct mm_struct *mm)
 	lru_gen_add_mm(mm);
 	task_unlock(tsk);
 	lru_gen_use_mm(mm);
+	/* MV3.a: execve default entry -- MODE on the new mm before any
+	 * load_* mapping lands (no-op unless corten_mode_default=on).
+	 */
+	corten_exec_default_enter(mm);
 	if (old_mm) {
 		mmap_read_unlock(old_mm);
 		BUG_ON(active_mm != old_mm);
