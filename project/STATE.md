@@ -1495,6 +1495,38 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     收窄）→ MV3.d（全系统 MODE 电池, 翻 corten_mode_default）→ MV3.e（删除
     账清单）。
 
+- **[2026-10-05 r09: MV3.b ✓ —— 远程访问面+闭合清单（commit 87220166a815, merge
+  6a53b312b5ad 双分支在线）]**
+  - **journald 面双层根因修复**: ①mm.h:2648 WARN = get_user_page_vma_remote 的
+    post-GUP vma_lookup 在 VMA-free 窗口域必 miss（GUP remote 探针本身通, 缺口在
+    wrapper 契约）; ②**真停摆根因 = __access_remote_vm corten IS_ERR 短答臂漏
+    mmap_read**（读一次漏一把 → 同 mm 二次读自锁 → PID1/tmpfiles/journald 连锁
+    冻结）。修 = 窗口域 arm-local 直驱（corten_gup_window 同形）+ 错误判定正确
+    释锁 + follow-only 硬化（FOLL_NOFAULT——exit drain 不持本 mm 锁, 读侧 faultin
+    无互斥; 代价: remote POKE 破 COW 退化 EFAULT, 登记）。KUnit 锚红→绿
+    （remote_access_window）; =on 带 journal boot: tmpfiles 9.08s（前 6min+ 停摆）、
+    systemd ~16s、WARN 零。
+  - **清单兑现**: madvise WILLNEED 落地（hints+parked 臂）; mseal 维持
+    -EOPNOTSUPP fail-closed（响亮拒绝=无损）; bpf_iter/trace 登记接受（优雅降级）。
+  - **⚠️ corruption 族红件移交裁决（6/6 boot 复现, 8~70s 窗, 三个内核构建）**:
+    Bad page map(mapcount -1)/Bad page cache(shmem still-mapped)/PCP LIST_POISON2
+    → oops → RCU stall wedge + 一次 PID1 segfault。mv3b diff 构造性只读（纯观察者
+    ——follow-only WARN 读到先期 stale PTE）→ 判 **MV3.a 时代 slot 生命周期竞态被
+    默认进场全系统 churn 推到确定性显形**。候选: A=FILE region truncate/invalidate
+    路由漏形状（shmem 栈直指, 首选）/B=fork-copy COW 记账/C=swap 驱动无锁写。
+    **结构发现: exit drain 跑在 mmap 锁外**（mmap.c:1553）——W-7"写者全在
+    mmap_write 下"设计前提对 drain 不成立, follow-only 回避中（POKE 退化已登记）,
+    根治=drain 参锁独立小片。KFENCE 50ms 零命中（帧未采样）。
+  - **arena_stats churn 读**: 无稳定 =on guest 可验, 准予缓交; 结构分析（M6.T4
+    O(N²/16) registry 重扫, N=153+）+ 修形建议（快照+TTL+预算分批, 可 KUnit 锚）
+    在报告 §3。
+  - **MV3.d 前置硬门清单（裁定更新）**: ①corruption 族切片（DEBUG_PAGEALLOC+
+    truncate_routes/fork/evict 三点计数器单 boot 定位, 候选 A 走查先行）②drain
+    参锁片——两件清偿前 corten_mode_default=on 不可翻。MV3.c（exec 镜像收编+批
+    mark）排在两门后或并行（分 worktree）。
+  - w6/w7/w6b 报告+证据已全部入库（18b4acd/82c67b 系）; mv3b 工件
+    results/r07/mv3b/ 22 件 + 报告 next/mv3b-dev-report.md 待随下批入库。
+
 - **[2026-10-04 r09: MV3.a ✓ —— 默认进场头片落地（commit 2e811260e336, merge 在
   主树）]**
   - **实现**: fs/exec.c exec_mmap() 门一行（corten_exec_default_enter, 复用 A5 裸

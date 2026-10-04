@@ -1,0 +1,416 @@
+diff --git a/include/linux/corten_arena.h b/include/linux/corten_arena.h
+index 76be9f0fdd25..94120b98ce1c 100644
+--- a/include/linux/corten_arena.h
++++ b/include/linux/corten_arena.h
+@@ -1089,6 +1089,12 @@ long corten_arena_test_gup_probes(void);
+ long corten_arena_test_gup_probe_rejects(void);
+ long corten_arena_test_maps_window_rows(void);
+ 
++/* MV3.b: the remote-face short-answer ledger (the V-A.3b observation
++ * counter the access_remote_vm()/copy_remote_vm_str() window arms
++ * still book on parked/perm-denied shapes).
++ */
++long corten_arena_test_remote_shorts(void);
++
+ /* V-E brk delegation ledger (spec sec 3.5): the arm counter read
+  * (@arm indexes enum corten_brk_arm) and the heap-domain find_vma
+  * count (OQ-MV-7 numerator).
+diff --git a/mm/corten_arena.c b/mm/corten_arena.c
+index 26777f8f0469..67b71e8f6baf 100644
+--- a/mm/corten_arena.c
++++ b/mm/corten_arena.c
+@@ -3835,6 +3835,15 @@ long corten_arena_test_gup_probe_rejects(void)
+ 	return atomic_long_read(&corten_nr_gup_probe_rejects);
+ }
+ 
++/* MV3.b: the remote-face short-answer ledger (the pre-fix journald
++ * shape -- the anchor asserts it stays unmoved on window content
++ * reads and moves exactly once on the parked shape).
++ */
++long corten_arena_test_remote_shorts(void)
++{
++	return atomic_long_read(&corten_nr_remote_access_window_short);
++}
++
+ long corten_arena_test_maps_window_rows(void)
+ {
+ 	return atomic_long_read(&corten_nr_maps_window_rows);
+@@ -16167,7 +16176,9 @@ static bool corten_arena_window_parked_span(struct mm_struct *mm,
+  *				(lazy-free permits dropping the content
+  *				at any time; an eager drop is a
+  *				compliance superset -- counted)
+- *   NORMAL/SEQUENTIAL/RANDOM/COLD	T0: pure hints, no-op success in-arena
++ *   NORMAL/SEQUENTIAL/RANDOM/COLD/WILLNEED	T0: pure hints, no-op
++ *				success in-arena (WILLNEED since MV3.b --
++ *				the stock anon answer is this no-op)
+  *   everything else		reject when the range overlaps an arena
+  *
+  * MODE-targeted arenas (mode=0) keep the S6 behaviour for the new rows:
+@@ -16212,6 +16223,7 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
+ 		case MADV_SEQUENTIAL:
+ 		case MADV_RANDOM:
+ 		case MADV_COLD:
++		case MADV_WILLNEED:
+ 			atomic_long_inc(&corten_nr_madvise_parked);
+ 			return 1;
+ 		default:
+@@ -16251,11 +16263,19 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
+ 	case MADV_SEQUENTIAL:
+ 	case MADV_RANDOM:
+ 	case MADV_COLD:
++	case MADV_WILLNEED:
+ 		/* Pure hints: success is contractual even when the kernel
+ 		 * ignores them, so an in-arena range is a counted no-op.
+ 		 * A range that merely touches an arena (boundary
+ 		 * crossing, two arenas) is rejected like the other
+-		 * behaviours; fully outside is legacy.
++		 * behaviours; fully outside is legacy.  WILLNEED joins
++		 * them (MV3.b closure list): the stock anon-mapping
++		 * answer is exactly this no-op success (madvise_willneed()
++		 * does nothing without a vm_file), and the route's old
++		 * default arm turned it into an unregistered
++		 * -EOPNOTSUPP.  A FILE region's readahead is advisory
++		 * ("may be ignored") -- dropped, not a populate
++		 * contract; MADV_POPULATE_* keep their M3 reject.
+ 		 */
+ 		if (!READ_ONCE(mm->corten_mode))
+ 			break;
+diff --git a/mm/corten_arena_test.c b/mm/corten_arena_test.c
+index e27b622d3438..812c6017290a 100644
+--- a/mm/corten_arena_test.c
++++ b/mm/corten_arena_test.c
+@@ -6797,11 +6797,13 @@ static void corten_arena_test_madvise_route(struct kunit *test)
+ 						   CORTEN_ARENA_TEST_BASE,
+ 						   PAGE_SIZE), 1);
+ 
+-	/* WILLNEED stays rejected (sec 3.4 matrix). */
++	/* WILLNEED joins the hints (MV3.b closure list): the stock
++	 * anon-mapping answer is the same counted no-op success.
++	 */
+ 	KUNIT_EXPECT_EQ(test,
+ 			corten_arena_madvise_route(mm, MADV_WILLNEED,
+ 						   CORTEN_ARENA_TEST_BASE,
+-						   PAGE_SIZE), -EOPNOTSUPP);
++						   PAGE_SIZE), 1);
+ 
+ 	/* A hint fully outside any arena: legacy (0). */
+ 	KUNIT_EXPECT_EQ(test,
+@@ -9114,12 +9116,12 @@ static void corten_arena_test_madvise_parked_terminal(struct kunit *test)
+ 			corten_arena_test_named_counter(test, "madvise_parked"),
+ 			c0);
+ 
+-	/* The disclosed residual: WILLNEED on a parked span keeps the
+-	 * legacy verdict (the walk's -ENOMEM downstream).
++	/* WILLNEED joins the hint family on a parked span too (MV3.b
++	 * closure list): the same counted no-op success.
+ 	 */
+ 	KUNIT_EXPECT_EQ(test,
+ 			corten_arena_madvise_route(mm, MADV_WILLNEED, win,
+-						   PAGE_SIZE), 0);
++						   PAGE_SIZE), 1);
+ 
+ 	/* Not a parked span: a window hole (never registered) and an
+ 	 * active-adjacent span both keep the legacy route verdict -- the
+@@ -12868,6 +12870,86 @@ static void corten_arena_test_gup_loop_legacy(struct kunit *test)
+ 						 0, 0), 0);
+ }
+ 
++/*
++ * MV3.b (MV3.a guest gate red #1): the external remote face -- the
++ * proc_pid_cmdline_read()/environ shape journald drives.  A MODE mm's
++ * window page is read through access_remote_vm() (the proc face's
++ * exact entry, lock shape and FOLL_ANON flags): the read must return
++ * the real content -- the pages exist -- without the mm.h:2648 WARN
++ * face (the window arm answers before get_user_page_vma_remote()'s
++ * post-GUP vma_lookup() can miss) and without short-answer counter
++ * movement.  The parked shape keeps the loud short answer, counted,
++ * still no WARN face.  Pre-fix this read returned 0 bytes, tripped
++ * the WARN and leaked the mmap_read (the journald stall).
++ */
++static void corten_arena_test_remote_access_window(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	unsigned long a;
++	long shorts0;
++	char buf[64];
++	u64 pat = 0x315f4b4341544144ULL;	/* "DATACK_1"-shaped */
++	struct page *page = NULL;
++	void *kaddr;
++	int ret;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "remote access anchors require corten=on");
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	a = corten_arena_test_mvc_attach(test, mm, 1, PROT_READ | PROT_WRITE);
++	shorts0 = corten_arena_test_remote_shorts();
++
++	/* Seed: fault the page in through the arm (the only legal
++	 * producer) and stamp the payload.  No FOLL_GET: the pages-array
++	 * GUP takes no reference (is_valid_gup_args() never forces it),
++	 * the PTE holds the only one -- so nothing to put (a put here
++	 * drops the PTE-anchored folio to 0 and the next follow's
++	 * try_grab_folio() -ENOMEMs it).
++	 */
++	mmap_read_lock(mm);
++	KUNIT_ASSERT_EQ(test,
++			get_user_pages_remote(mm, a, 1, FOLL_WRITE, &page,
++					      NULL), 1);
++	KUNIT_ASSERT_NOT_NULL(test, page);
++	kaddr = kmap_local_page(page);
++	memcpy(kaddr, &pat, sizeof(pat));
++	kunmap_local(kaddr);
++	mmap_read_unlock(mm);
++
++	/* The cmdline face's read: FOLL_ANON remote, kernel buffer
++	 * (proc_pid_cmdline_read()'s shape).  Content comes back, the
++	 * short ledger stays unmoved.
++	 */
++	ret = access_remote_vm(mm, a, buf, sizeof(buf), FOLL_ANON);
++	KUNIT_EXPECT_EQ(test, ret, (int)sizeof(buf));
++	KUNIT_EXPECT_MEMEQ(test, buf, &pat, sizeof(pat));
++	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0);
++
++	/* The proctitle probe byte (get_mm_cmdline()'s arg_end-1 peek).
++	 */
++	ret = access_remote_vm(mm, a + PAGE_SIZE - 1, buf, 1, FOLL_ANON);
++	KUNIT_EXPECT_EQ(test, ret, 1);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0);
++
++	/* The parked shape (the munmap route): the short answer (zero
++	 * bytes) is the contract, counted once.
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_munmap_route,
++						 a, PAGE_SIZE), 1);
++	ret = access_remote_vm(mm, a, buf, sizeof(buf), FOLL_ANON);
++	KUNIT_EXPECT_EQ(test, ret, 0);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0 + 1);
++
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_mode_exit,
++						 0, 0), 0);
++}
++
+ /*
+  * MV2 W-3, item 1: the heap region migration (V-E.2 resurrection).
+  * The sys_brk GROW/SHRINK routes run the heap domain on a region
+@@ -15246,6 +15328,7 @@ static struct kunit_case corten_arena_test_cases[] = {
+ 	 */
+ 	KUNIT_CASE(corten_arena_test_gup_loop_window),
+ 	KUNIT_CASE(corten_arena_test_gup_loop_legacy),
++	KUNIT_CASE(corten_arena_test_remote_access_window),
+ 	KUNIT_CASE(corten_arena_test_mvc_smaps_pagemap),
+ 	/* V-D: the full-lifecycle ledger anchor (B-2 closure). */
+ 	KUNIT_CASE(corten_arena_test_exit_lifecycle),
+diff --git a/mm/memory.c b/mm/memory.c
+index 7b05fb48fb94..04a21925c478 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -7002,12 +7002,14 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
+ 
+ 	/* V-C (j2-audit #7): a MODE mm's window-domain address has no
+ 	 * tree VMA to look up and no stack to expand (expand_stack()
+-	 * would drop the mmap_read on failure) -- the GUP loop's
+-	 * corten_gup_window() owns it (MV2 W-2: the carrier answer
++	 * would drop the mmap_read on failure) -- the loop's
++	 * corten_gup_window() arm owns it (MV2 W-2: the carrier answer
+ 	 * retired with the carrier; an active region pins through the
+ 	 * corten arm's follow), a parked/hole window short-circuits in
+-	 * the loop below.  Implant ranges keep the original check
+-	 * (their tree VMA is real).
++	 * the loop below (MV3.b: driven arm-local, never through
++	 * get_user_page_vma_remote() -- see the loop comment).
++	 * Implant ranges keep the original check (their tree VMA is
++	 * real).
+ 	 */
+ 	if (!corten_remote_vm_window(mm, addr) &&
+ 	    !vma_lookup(mm, addr) && !expand_stack(mm, addr)) {
+@@ -7025,61 +7027,92 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
+ 		void *maddr;
+ 		struct folio *folio;
+ 		struct vm_area_struct *vma = NULL;
+-		struct page *page = get_user_page_vma_remote(mm, addr,
+-							     gup_flags, &vma);
+-
+-		if (IS_ERR(page)) {
+-			/* We might need to expand the stack to access it */
+-			if (corten_remote_vm_window(mm, addr)) {
+-				/* V-C: the probe already ruled (parked or
+-				 * perm-denied window page) -- nothing in
+-				 * the tree can change the verdict.
++		struct page *page = NULL;
++
++		/* MV3.b (MV3.a guest gate red #1, the journald face): a
++		 * MODE mm's window domain is answered in the arm-local
++		 * form -- the same probe/follow the GUP loop drives --
++		 * instead of being handed to
++		 * get_user_page_vma_remote().  That wrapper's post-GUP
++		 * vma_lookup() has no tree VMA to find on a swept window
++		 * page (the mm.h:2648 WARN proc_pid_cmdline_read()
++		 * tripped for journald), and the error arm below it
++		 * short-returned without dropping this mmap_read, so
++		 * the next remote read of the same mm deadlocked on the
++		 * leaked lock (the tmpfiles-setup stall).  The error
++		 * verdict keeps the short-answer form -- with the lock
++		 * dropped.
++		 *
++		 * Follow-only (FOLL_NOFAULT): a remote copy face reads
++		 * what is committed and never faults the target -- the
++		 * arena's slot producers (the exit drain chief among
++		 * them) do not all take this mm's mmap lock
++		 * (corten_arena_mm_exit() runs before exit_mmap()'s
++		 * locks), so a reader-context faultin has no lock
++		 * exclusivity against them; an absent slot keeps the
++		 * short answer (the V-A.3b contract, counted).
++		 */
++		if (corten_gup_window(mm, addr, gup_flags | FOLL_NOFAULT,
++				      &page) < 0) {
++			corten_remote_note_window_short(mm, addr);
++			mmap_read_unlock(mm);
++			return buf - old_buf;
++		}
++		if (!page) {
++			page = get_user_page_vma_remote(mm, addr, gup_flags,
++							&vma);
++
++			if (IS_ERR(page)) {
++				/* We might need to expand the stack to
++				 * access it
+ 				 */
+-				corten_remote_note_window_short(mm, addr);
+-				return buf - old_buf;
+-			}
+-			vma = vma_lookup(mm, addr);
+-			if (!vma) {
+-				vma = expand_stack(mm, addr);
++				vma = vma_lookup(mm, addr);
++				if (!vma) {
++					vma = expand_stack(mm, addr);
+ 
+-				/* mmap_lock was dropped on failure */
+-				if (!vma)
+-					return buf - old_buf;
++					/* mmap_lock was dropped on failure */
++					if (!vma)
++						return buf - old_buf;
+ 
+-				/* Try again if stack expansion worked */
+-				continue;
+-			}
++					/* Try again if stack expansion worked */
++					continue;
++				}
+ 
+-			/*
+-			 * Check if this is a VM_IO | VM_PFNMAP VMA, which
+-			 * we can access using slightly different code.
+-			 */
+-			bytes = 0;
++				/*
++				 * Check if this is a VM_IO | VM_PFNMAP VMA,
++				 * which we can access using slightly
++				 * different code.
++				 */
++				bytes = 0;
+ #ifdef CONFIG_HAVE_IOREMAP_PROT
+-			if (vma->vm_ops && vma->vm_ops->access)
+-				bytes = vma->vm_ops->access(vma, addr, buf,
+-							    len, write);
++				if (vma->vm_ops && vma->vm_ops->access)
++					bytes = vma->vm_ops->access(vma, addr,
++								    buf, len,
++								    write);
+ #endif
+-			if (bytes <= 0)
+-				break;
+-		} else {
+-			folio = page_folio(page);
+-			bytes = len;
+-			offset = addr & (PAGE_SIZE-1);
+-			if (bytes > PAGE_SIZE-offset)
+-				bytes = PAGE_SIZE-offset;
+-
+-			maddr = kmap_local_folio(folio, folio_page_idx(folio, page) * PAGE_SIZE);
+-			if (write) {
+-				copy_to_user_page(vma, page, addr,
+-						  maddr + offset, buf, bytes);
+-				folio_mark_dirty_lock(folio);
+-			} else {
+-				copy_from_user_page(vma, page, addr,
+-						    buf, maddr + offset, bytes);
++				if (bytes <= 0)
++					break;
++				goto advance;
+ 			}
+-			folio_release_kmap(folio, maddr);
+ 		}
++
++		folio = page_folio(page);
++		bytes = len;
++		offset = addr & (PAGE_SIZE-1);
++		if (bytes > PAGE_SIZE-offset)
++			bytes = PAGE_SIZE-offset;
++
++		maddr = kmap_local_folio(folio, folio_page_idx(folio, page) * PAGE_SIZE);
++		if (write) {
++			copy_to_user_page(vma, page, addr,
++					  maddr + offset, buf, bytes);
++			folio_mark_dirty_lock(folio);
++		} else {
++			copy_from_user_page(vma, page, addr,
++					    buf, maddr + offset, bytes);
++		}
++		folio_release_kmap(folio, maddr);
++advance:
+ 		len -= bytes;
+ 		buf += bytes;
+ 		addr += bytes;
+@@ -7163,20 +7196,36 @@ static int __copy_remote_vm_str(struct mm_struct *mm, unsigned long addr,
+ 		int bytes, offset, retval;
+ 		void *maddr;
+ 		struct folio *folio;
+-		struct page *page;
++		struct page *page = NULL;
+ 		struct vm_area_struct *vma = NULL;
+ 
+-		page = get_user_page_vma_remote(mm, addr, gup_flags, &vma);
+-		if (IS_ERR(page)) {
+-			/*
+-			 * Treat as a total failure for now until we decide how
+-			 * to handle the CONFIG_HAVE_IOREMAP_PROT case and
+-			 * stack expansion.
+-			 */
++		/* MV3.b: same window arm as __access_remote_vm(),
++		 * follow-only (FOLL_NOFAULT) for the same reason -- the
++		 * VMA-free window page never reaches the wrapper's
++		 * vma_lookup() (the mm.h:2648 WARN face) and the reader
++		 * never faults the target.
++		 */
++		if (corten_gup_window(mm, addr, gup_flags | FOLL_NOFAULT,
++				      &page) < 0) {
+ 			*(char *)buf = '\0';
+ 			err = -EFAULT;
+ 			goto out;
+ 		}
++		if (!page) {
++			page = get_user_page_vma_remote(mm, addr, gup_flags,
++							&vma);
++			if (IS_ERR(page)) {
++				/*
++				 * Treat as a total failure for now until we
++				 * decide how to handle the
++				 * CONFIG_HAVE_IOREMAP_PROT case and stack
++				 * expansion.
++				 */
++				*(char *)buf = '\0';
++				err = -EFAULT;
++				goto out;
++			}
++		}
+ 
+ 		folio = page_folio(page);
+ 		bytes = len;

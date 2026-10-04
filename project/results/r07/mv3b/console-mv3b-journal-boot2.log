@@ -1,0 +1,2335 @@
+[    0.000000] Linux version 6.18.32-g2e811260e336-dirty (ppw@vm) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #328 SMP PREEMPT_DYNAMIC Sun Oct  4 16:57:52 CST 2026
+[    0.000000] Command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on corten_mode_default=on mitigations=off kunit.enable=0 log_buf_len=16M
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x00000000bffdcfff] usable
+[    0.000000] BIOS-e820: [mem 0x00000000bffdd000-0x00000000bfffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000feffc000-0x00000000feffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000100000000-0x000000013fffffff] usable
+[    0.000000] NX (Execute Disable) protection: active
+[    0.000000] APIC: Static calls initialized
+[    0.000000] SMBIOS 2.8 present.
+[    0.000000] DMI: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[    0.000000] DMI: Memory slots populated: 1/1
+[    0.000000] Hypervisor detected: KVM
+[    0.000000] last_pfn = 0xbffdd max_arch_pfn = 0x400000000
+[    0.000000] kvm-clock: Using msrs 4b564d01 and 4b564d00
+[    0.000003] kvm-clock: using sched offset of 2090618514 cycles
+[    0.000008] clocksource: kvm-clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+[    0.000121] tsc: Detected 2419.196 MHz processor
+[    0.005071] last_pfn = 0x140000 max_arch_pfn = 0x400000000
+[    0.005921] MTRR map: 4 entries (3 fixed + 1 variable; max 19), built from 8 variable MTRRs
+[    0.005950] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+[    0.006738] last_pfn = 0xbffdd max_arch_pfn = 0x400000000
+[    0.025285] found SMP MP-table at [mem 0x000f5b90-0x000f5b9f]
+[    0.025386] Using GB pages for direct mapping
+[    0.432729] printk: log buffer data + meta data: 16777216 + 58720256 = 75497472 bytes
+[    0.432735] printk: early log buf free: 260024(99%)
+[    0.432870] ACPI: Early table checksum verification disabled
+[    0.433047] ACPI: RSDP 0x00000000000F59B0 000014 (v00 BOCHS )
+[    0.433187] ACPI: RSDT 0x00000000BFFE1BA3 000034 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.433304] ACPI: FACP 0x00000000BFFE1A1F 000074 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.433451] ACPI: DSDT 0x00000000BFFE0040 0019DF (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.433456] ACPI: FACS 0x00000000BFFE0000 000040
+[    0.433458] ACPI: APIC 0x00000000BFFE1A93 0000B0 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.433461] ACPI: HPET 0x00000000BFFE1B43 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.433463] ACPI: WAET 0x00000000BFFE1B7B 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.433465] ACPI: Reserving FACP table memory at [mem 0xbffe1a1f-0xbffe1a92]
+[    0.433467] ACPI: Reserving DSDT table memory at [mem 0xbffe0040-0xbffe1a1e]
+[    0.433468] ACPI: Reserving FACS table memory at [mem 0xbffe0000-0xbffe003f]
+[    0.433469] ACPI: Reserving APIC table memory at [mem 0xbffe1a93-0xbffe1b42]
+[    0.433469] ACPI: Reserving HPET table memory at [mem 0xbffe1b43-0xbffe1b7a]
+[    0.433470] ACPI: Reserving WAET table memory at [mem 0xbffe1b7b-0xbffe1ba2]
+[    0.436463] No NUMA configuration found
+[    0.436467] Faking a node at [mem 0x0000000000000000-0x000000013fffffff]
+[    0.436476] NODE_DATA(0) allocated [mem 0x13b7fa140-0x13b7fdfff]
+[    0.436911] Zone ranges:
+[    0.436913]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+[    0.436918]   DMA32    [mem 0x0000000001000000-0x00000000ffffffff]
+[    0.436921]   Normal   [mem 0x0000000100000000-0x000000013fffffff]
+[    0.436924] Movable zone start for each node
+[    0.436925] Early memory node ranges
+[    0.436926]   node   0: [mem 0x0000000000001000-0x000000000009efff]
+[    0.436949]   node   0: [mem 0x0000000000100000-0x00000000bffdcfff]
+[    0.436952]   node   0: [mem 0x0000000100000000-0x000000013fffffff]
+[    0.436955] Initmem setup node 0 [mem 0x0000000000001000-0x000000013fffffff]
+[    0.437702] On node 0, zone DMA: 1 pages in unavailable ranges
+[    0.438396] On node 0, zone DMA: 97 pages in unavailable ranges
+[    0.788193] On node 0, zone Normal: 35 pages in unavailable ranges
+[    0.795904] ACPI: PM-Timer IO Port: 0x608
+[    0.795995] ACPI: LAPIC_NMI (acpi_id[0xff] dfl dfl lint[0x1])
+[    0.802179] IOAPIC[0]: apic_id 0, version 17, address 0xfec00000, GSI 0-23
+[    0.802197] ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+[    0.802202] ACPI: INT_SRC_OVR (bus 0 bus_irq 5 global_irq 5 high level)
+[    0.802205] ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+[    0.802240] ACPI: INT_SRC_OVR (bus 0 bus_irq 10 global_irq 10 high level)
+[    0.802244] ACPI: INT_SRC_OVR (bus 0 bus_irq 11 global_irq 11 high level)
+[    0.802253] ACPI: Using ACPI (MADT) for SMP configuration information
+[    0.802256] ACPI: HPET id: 0x8086a201 base: 0xfed00000
+[    0.802265] TSC deadline timer available
+[    0.802275] CPU topo: Max. logical packages:   1
+[    0.802277] CPU topo: Max. logical dies:       1
+[    0.802278] CPU topo: Max. dies per package:   1
+[    0.802291] CPU topo: Max. threads per core:   1
+[    0.802318] CPU topo: Num. cores per package:     8
+[    0.802320] CPU topo: Num. threads per package:   8
+[    0.802321] CPU topo: Allowing 8 present CPUs plus 0 hotplug CPUs
+[    0.802430] kvm-guest: APIC: eoi() replaced with kvm_guest_apic_eoi_write()
+[    0.802564] kvm-guest: KVM setup pv remote TLB flush
+[    0.802620] kvm-guest: setup PV sched yield
+[    0.805238] PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+[    0.805246] PM: hibernation: Registered nosave memory: [mem 0x0009f000-0x000fffff]
+[    0.805249] PM: hibernation: Registered nosave memory: [mem 0xbffdd000-0xffffffff]
+[    0.805253] [mem 0xc0000000-0xfeffbfff] available for PCI devices
+[    0.805256] Booting paravirtualized kernel on KVM
+[    0.805297] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1910969940391419 ns
+[    0.832632] setup_percpu: NR_CPUS:64 nr_cpumask_bits:8 nr_cpu_ids:8 nr_node_ids:1
+[    0.843114] percpu: Embedded 54 pages/cpu s182680 r8192 d30312 u262144
+[    0.843455] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on corten_mode_default=on mitigations=off kunit.enable=0 log_buf_len=16M
+[    0.846407] corten: requested on, activating at initcall time
+[    0.846427] corten: execve default entry enabled
+[    0.846814] random: crng init done
+[    0.868782] Dentry cache hash table entries: 524288 (order: 10, 4194304 bytes, linear)
+[    0.879941] Inode-cache hash table entries: 262144 (order: 9, 2097152 bytes, linear)
+[    0.881061] software IO TLB: area num 8.
+[    1.282130] Fallback order for Node 0: 0 
+[    1.282165] Built 1 zonelists, mobility grouping on.  Total pages: 1048443
+[    1.282169] Policy zone: Normal
+[    1.282173] mem auto-init: stack:off, heap alloc:off, heap free:off
+[    1.301496] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=8, Nodes=1
+[    1.318106] Dynamic Preempt: voluntary
+[    1.319713] rcu: Preemptible hierarchical RCU implementation.
+[    1.319717] rcu: 	RCU event tracing is enabled.
+[    1.319718] rcu: 	RCU restricting CPUs from NR_CPUS=64 to nr_cpu_ids=8.
+[    1.319722] 	Trampoline variant of Tasks RCU enabled.
+[    1.319723] 	Tracing variant of Tasks RCU enabled.
+[    1.319724] rcu: RCU calculated value of scheduler-enlistment delay is 100 jiffies.
+[    1.319726] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=8
+[    1.319816] RCU Tasks: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+[    1.319821] RCU Tasks Trace: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+[    1.334671] NR_IRQS: 4352, nr_irqs: 488, preallocated irqs: 16
+[    1.336164] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    1.412219] Console: colour VGA+ 80x25
+[    1.412761] printk: legacy console [ttyS0] enabled
+[    2.074761] ACPI: Core revision 20250807
+[    2.076376] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    2.085349] APIC: Switch to symmetric I/O mode setup
+[    2.099230] x2apic enabled
+[    2.109871] APIC: Switched APIC routing to: physical x2apic
+[    2.117860] kvm-guest: APIC: send_IPI_mask() replaced with kvm_send_ipi_mask()
+[    2.126516] kvm-guest: APIC: send_IPI_mask_allbutself() replaced with kvm_send_ipi_mask_allbutself()
+[    2.136119] kvm-guest: setup PV IPIs
+[    2.159086] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    2.166314] clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x22df0d21928, max_idle_ns: 440795225288 ns
+[    2.177492] Calibrating delay loop (skipped) preset value.. 4838.39 BogoMIPS (lpj=2419196)
+[    2.180498] x86/cpu: User Mode Instruction Prevention (UMIP) activated
+[    2.183484] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    2.183493] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    2.184609] mitigations: Enabled attack vectors: SMT mitigations: off
+[    2.186537] Speculative Store Bypass: Vulnerable
+[    2.187489] Spectre V2 : Vulnerable
+[    2.188493] ITS: Vulnerable
+[    2.189493] Spectre V1 : Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers
+[    2.191517] x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'
+[    2.192495] x86/fpu: Supporting XSAVE feature 0x002: 'SSE registers'
+[    2.193492] x86/fpu: Supporting XSAVE feature 0x004: 'AVX registers'
+[    2.194494] x86/fpu: Supporting XSAVE feature 0x200: 'Protection Keys User registers'
+[    2.195495] x86/fpu: xstate_offset[2]:  576, xstate_sizes[2]:  256
+[    2.196493] x86/fpu: xstate_offset[9]:  832, xstate_sizes[9]:    8
+[    2.197487] x86/fpu: Enabled xstate features 0x207, context size is 840 bytes, using 'compacted' format.
+[    2.284250] Freeing SMP alternatives memory: 64K
+[    2.284497] pid_max: default: 32768 minimum: 301
+[    2.285583] LSM: initializing lsm=capability,selinux
+[    2.286506] SELinux:  Initializing.
+[    2.288538] Mount-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    2.290579] Mountpoint-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    2.294983] smpboot: CPU0: 13th Gen Intel(R) Core(TM) i9-13900HX (family: 0x6, model: 0xb7, stepping: 0x1)
+[    2.295974] Performance Events: Alderlake Hybrid events, core PMU driver.
+[    2.297501] core: CPUID marked event: 'cpu cycles' unavailable
+[    2.298500] core: CPUID marked event: 'instructions' unavailable
+[    2.299499] core: CPUID marked event: 'bus cycles' unavailable
+[    2.300498] core: CPUID marked event: 'cache references' unavailable
+[    2.301525] core: CPUID marked event: 'cache misses' unavailable
+[    2.302530] core: CPUID marked event: 'branch instructions' unavailable
+[    2.303528] core: CPUID marked event: 'branch misses' unavailable
+[    2.305089] core: The event 0x100 is not supported as a normal event.
+[    2.305527] core: The event 0x300 is not supported as a normal event.
+[    2.306529] core: The event 0x400 is not supported as a normal event.
+[    2.307535] core: The event 0x8000 is not supported as a normal event.
+[    2.308523] core: The event 0x8100 is not supported as a normal event.
+[    2.309524] core: The event 0x8200 is not supported as a normal event.
+[    2.310524] core: The event 0x8300 is not supported as a normal event.
+[    2.311527] core: The event 0x8400 is not supported as a normal event.
+[    2.312543] core: The event 0x8500 is not supported as a normal event.
+[    2.313533] core: The event 0x8600 is not supported as a normal event.
+[    2.314532] core: The event 0x8700 is not supported as a normal event.
+[    2.316055] core: cpu_core PMU driver: 
+[    2.316536] ... version:                   1
+[    2.317526] ... bit width:                 48
+[    2.318528] ... generic counters:          6
+[    2.319508] ... generic bitmap:            000000000000003f
+[    2.320528] ... fixed-purpose counters:    0
+[    2.321536] ... fixed-purpose bitmap:      0000000000000000
+[    2.322529] ... value mask:                0000ffffffffffff
+[    2.323528] ... max period:                000000007fffffff
+[    2.324528] ... global_ctrl mask:          000100000000003f
+[    2.326329] signal: max sigframe size: 3632
+[    2.326712] rcu: Hierarchical SRCU implementation.
+[    2.327527] rcu: 	Max phase no-delay instances is 400.
+[    2.329156] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+[    2.331484] corten: page descriptors enabled
+[    2.332285] smp: Bringing up secondary CPUs ...
+[    2.333948] smpboot: x86: Booting SMP configuration:
+[    2.334528] .... node  #0, CPUs:      #1 #2 #3 #4 #5 #6 #7
+[    2.378860] smp: Brought up 1 node, 8 CPUs
+[    2.380563] smpboot: Total of 8 processors activated (38707.13 BogoMIPS)
+[    2.386623] Memory: 3926872K/4193772K available (21722K kernel code, 3204K rwdata, 9184K rodata, 3288K init, 1132K bss, 261316K reserved, 0K cma-reserved)
+[    2.389499] devtmpfs: initialized
+[    2.393660] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+[    2.394524] posixtimers hash table entries: 4096 (order: 4, 65536 bytes, linear)
+[    2.396484] futex hash table entries: 2048 (131072 bytes on 1 NUMA nodes, total 128 KiB, linear).
+[    2.397497] PM: RTC time: 09:22:52, date: 2026-10-04
+[    2.413265] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    2.413910] audit: initializing netlink subsys (disabled)
+[    2.415541] audit: type=2000 audit(1791105772.462:1): state=initialized audit_enabled=0 res=1
+[    2.416140] thermal_sys: Registered thermal governor 'step_wise'
+[    2.416725] cpuidle: using governor menu
+[    2.421484] PCI: Using configuration type 1 for base access
+[    2.422780] kprobes: kprobe jump-optimization is enabled. All kprobes are optimized if possible.
+[    2.429340] HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+[    2.429501] HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+[    2.476680] ACPI: Added _OSI(Module Device)
+[    2.477530] ACPI: Added _OSI(Processor Device)
+[    2.478530] ACPI: Added _OSI(Processor Aggregator Device)
+[    2.481903] ACPI: 1 ACPI AML tables successfully acquired and loaded
+[    2.491889] ACPI: Interpreter enabled
+[    2.492648] ACPI: PM: (supports S0 S3 S4 S5)
+[    2.493531] ACPI: Using IOAPIC for interrupt routing
+[    2.494668] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[    2.495503] PCI: Using E820 reservations for host bridge windows
+[    2.497010] ACPI: Enabled 2 GPEs in block 00 to 0F
+[    2.508099] ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-ff])
+[    2.508542] acpi PNP0A03:00: _OSC: OS supports [ASPM ClockPM Segments MSI HPX-Type3]
+[    2.509543] acpi PNP0A03:00: _OSC: not requesting OS control; OS requires [ExtendedConfig ASPM ClockPM MSI]
+[    2.510651] acpi PNP0A03:00: fail to add MMCONFIG information, can't access extended configuration space under this bridge
+[    2.511893] PCI host bridge to bus 0000:00
+[    2.512539] pci_bus 0000:00: root bus resource [io  0x0000-0x0cf7 window]
+[    2.513530] pci_bus 0000:00: root bus resource [io  0x0d00-0xffff window]
+[    2.514512] pci_bus 0000:00: root bus resource [mem 0x000a0000-0x000bffff window]
+[    2.515502] pci_bus 0000:00: root bus resource [mem 0xc0000000-0xfebfffff window]
+[    2.516536] pci_bus 0000:00: root bus resource [mem 0x140000000-0x1bfffffff window]
+[    2.517501] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    2.518968] pci 0000:00:00.0: [8086:1237] type 00 class 0x060000 conventional PCI endpoint
+[    2.522961] pci 0000:00:01.0: [8086:7000] type 00 class 0x060100 conventional PCI endpoint
+[    2.528484] pci 0000:00:01.1: [8086:7010] type 00 class 0x010180 conventional PCI endpoint
+[    2.531963] pci 0000:00:01.1: BAR 4 [io  0xc0e0-0xc0ef]
+[    2.532611] pci 0000:00:01.1: BAR 0 [io  0x01f0-0x01f7]: legacy IDE quirk
+[    2.533535] pci 0000:00:01.1: BAR 1 [io  0x03f6]: legacy IDE quirk
+[    2.534535] pci 0000:00:01.1: BAR 2 [io  0x0170-0x0177]: legacy IDE quirk
+[    2.535536] pci 0000:00:01.1: BAR 3 [io  0x0376]: legacy IDE quirk
+[    2.537876] pci 0000:00:01.3: [8086:7113] type 00 class 0x068000 conventional PCI endpoint
+[    2.541928] pci 0000:00:01.3: quirk: [io  0x0600-0x063f] claimed by PIIX4 ACPI
+[    2.542623] pci 0000:00:01.3: quirk: [io  0x0700-0x070f] claimed by PIIX4 SMB
+[    2.545286] pci 0000:00:02.0: [1234:1111] type 00 class 0x030000 conventional PCI endpoint
+[    2.550959] pci 0000:00:02.0: BAR 0 [mem 0xfd000000-0xfdffffff pref]
+[    2.552553] pci 0000:00:02.0: BAR 2 [mem 0xfeb90000-0xfeb90fff]
+[    2.553588] pci 0000:00:02.0: ROM [mem 0xfeb80000-0xfeb8ffff pref]
+[    2.555926] pci 0000:00:02.0: Video device with shadowed ROM at [mem 0x000c0000-0x000dffff]
+[    2.564513] pci 0000:00:03.0: [1af4:1000] type 00 class 0x020000 conventional PCI endpoint
+[    2.567635] pci 0000:00:03.0: BAR 0 [io  0xc0c0-0xc0df]
+[    2.568939] pci 0000:00:03.0: BAR 1 [mem 0xfeb91000-0xfeb91fff]
+[    2.569592] pci 0000:00:03.0: BAR 4 [mem 0xfe000000-0xfe003fff 64bit pref]
+[    2.570525] pci 0000:00:03.0: ROM [mem 0xfeb00000-0xfeb7ffff pref]
+[    2.573484] pci 0000:00:04.0: [1af4:1009] type 00 class 0x000200 conventional PCI endpoint
+[    2.575643] pci 0000:00:04.0: BAR 0 [io  0xc080-0xc0bf]
+[    2.576529] pci 0000:00:04.0: BAR 1 [mem 0xfeb92000-0xfeb92fff]
+[    2.577848] pci 0000:00:04.0: BAR 4 [mem 0xfe004000-0xfe007fff 64bit pref]
+[    2.584683] pci 0000:00:05.0: [1af4:1001] type 00 class 0x010000 conventional PCI endpoint
+[    2.589533] pci 0000:00:05.0: BAR 0 [io  0xc000-0xc07f]
+[    2.590817] pci 0000:00:05.0: BAR 1 [mem 0xfeb93000-0xfeb93fff]
+[    2.591872] pci 0000:00:05.0: BAR 4 [mem 0xfe008000-0xfe00bfff 64bit pref]
+[    2.613392] ACPI: PCI: Interrupt link LNKA configured for IRQ 10
+[    2.614302] ACPI: PCI: Interrupt link LNKB configured for IRQ 10
+[    2.615366] ACPI: PCI: Interrupt link LNKC configured for IRQ 11
+[    2.615777] ACPI: PCI: Interrupt link LNKD configured for IRQ 11
+[    2.616841] ACPI: PCI: Interrupt link LNKS configured for IRQ 9
+[    2.629751] iommu: Default domain type: Translated
+[    2.630501] iommu: DMA domain TLB invalidation policy: lazy mode
+[    2.642475] SCSI subsystem initialized
+[    2.647372] ACPI: bus type USB registered
+[    2.648147] usbcore: registered new interface driver usbfs
+[    2.648902] usbcore: registered new interface driver hub
+[    2.649664] usbcore: registered new device driver usb
+[    2.650827] pps_core: LinuxPPS API ver. 1 registered
+[    2.651499] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    2.652567] PTP clock support registered
+[    2.658378] Advanced Linux Sound Architecture Driver Initialized.
+[    2.677065] NetLabel: Initializing
+[    2.677532] NetLabel:  domain hash size = 128
+[    2.678530] NetLabel:  protocols = UNLABELED CIPSOv4 CALIPSO
+[    2.680760] NetLabel:  unlabeled traffic allowed by default
+[    2.684484] PCI: Using ACPI for IRQ routing
+[    2.686728] pci 0000:00:02.0: vgaarb: setting as boot VGA device
+[    2.687484] pci 0000:00:02.0: vgaarb: bridge control possible
+[    2.687484] pci 0000:00:02.0: vgaarb: VGA device added: decodes=io+mem,owns=io+mem,locks=none
+[    2.687535] vgaarb: loaded
+[    2.692024] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+[    2.692607] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+[    2.698993] clocksource: Switched to clocksource kvm-clock
+[    2.719527] VFS: Disk quotas dquot_6.6.0
+[    2.722081] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    2.736862] pnp: PnP ACPI init
+[    2.744682] pnp: PnP ACPI: found 6 devices
+[    2.806619] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+[    2.816182] NET: Registered PF_INET protocol family
+[    2.827041] IP idents hash table entries: 65536 (order: 7, 524288 bytes, linear)
+[    2.841754] tcp_listen_portaddr_hash hash table entries: 2048 (order: 3, 32768 bytes, linear)
+[    2.854383] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    2.864918] TCP established hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[    2.877534] TCP bind hash table entries: 32768 (order: 8, 1048576 bytes, linear)
+[    2.893043] TCP: Hash tables configured (established 32768 bind 32768)
+[    2.902466] UDP hash table entries: 2048 (order: 5, 131072 bytes, linear)
+[    2.912797] UDP-Lite hash table entries: 2048 (order: 5, 131072 bytes, linear)
+[    2.921460] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    2.932128] RPC: Registered named UNIX socket transport module.
+[    2.941453] RPC: Registered udp transport module.
+[    2.948570] RPC: Registered tcp transport module.
+[    2.955032] RPC: Registered tcp-with-tls transport module.
+[    2.961741] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    2.972030] pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+[    2.979596] pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+[    2.986928] pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000bffff window]
+[    2.993975] pci_bus 0000:00: resource 7 [mem 0xc0000000-0xfebfffff window]
+[    3.001259] pci_bus 0000:00: resource 8 [mem 0x140000000-0x1bfffffff window]
+[    3.010802] pci 0000:00:01.0: PIIX3: Enabling Passive Release
+[    3.017815] pci 0000:00:00.0: Limiting direct PCI/PCI transfers
+[    3.024526] PCI: CLS 0 bytes, default 64
+[    3.031119] PCI-DMA: Using software bounce buffering for IO (SWIOTLB)
+[    3.038887] software IO TLB: mapped [mem 0x00000000bbfdd000-0x00000000bffdd000] (64MB)
+[    3.049283] RAPL PMU: API unit is 2^-32 Joules, 0 fixed counters, 10737418240 ms ovfl timer
+[    3.060481] clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x22df0d21928, max_idle_ns: 440795225288 ns
+[    3.092811] Initialise system trusted keyrings
+[    3.098263] workingset: timestamp_bits=40 max_order=20 bucket_order=0
+[    3.110509] NFS: Registering the id_resolver key type
+[    3.115528] Key type id_resolver registered
+[    3.120498] Key type id_legacy registered
+[    3.127738] 9p: Installing v9fs 9p2000 file system support
+[    3.163845] Key type asymmetric registered
+[    3.169466] Asymmetric key parser 'x509' registered
+[    3.172240] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 251)
+[    3.176036] io scheduler mq-deadline registered
+[    3.177807] io scheduler kyber registered
+[    3.186891] input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input0
+[    3.194978] ACPI: button: Power Button [PWRF]
+[    3.224617] ACPI: \_SB_.LNKC: Enabled at IRQ 11
+[    3.258168] ACPI: \_SB_.LNKD: Enabled at IRQ 10
+[    3.295219] ACPI: \_SB_.LNKA: Enabled at IRQ 10
+[    3.313397] Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled
+[    3.323094] 00:04: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+[    3.335713] Non-volatile memory driver v1.3
+[    3.341456] Linux agpgart interface v0.103
+[    3.381647] ACPI: bus type drm_connector registered
+[    3.410190] loop: module loaded
+[    3.413774] virtio_blk virtio2: 8/0/0 default/read/poll queues
+[    3.453675] virtio_blk virtio2: [vda] 20971520 512-byte logical blocks (10.7 GB/10.0 GiB)
+[    3.474192] zram: Added device: zram0
+[    3.491284] scsi host0: ata_piix
+[    3.498784] scsi host1: ata_piix
+[    3.500792] ata1: PATA max MWDMA2 cmd 0x1f0 ctl 0x3f6 bmdma 0xc0e0 irq 14 lpm-pol 0
+[    3.510778] ata2: PATA max MWDMA2 cmd 0x170 ctl 0x376 bmdma 0xc0e8 irq 15 lpm-pol 0
+[    3.517172] tun: Universal TUN/TAP device driver, 1.6
+[    3.542187] e100: Intel(R) PRO/100 Network Driver
+[    3.547849] e100: Copyright(c) 1999-2006 Intel Corporation
+[    3.554360] e1000: Intel(R) PRO/1000 Network Driver
+[    3.561119] e1000: Copyright (c) 1999-2006 Intel Corporation.
+[    3.569409] e1000e: Intel(R) PRO/1000 Network Driver
+[    3.575584] e1000e: Copyright(c) 1999 - 2015 Intel Corporation.
+[    3.582756] sky2: driver version 1.30
+[    3.591002] usbcore: registered new interface driver usblp
+[    3.598520] usbcore: registered new interface driver usb-storage
+[    3.609021] i8042: PNP: PS/2 Controller [PNP0303:KBD,PNP0f13:MOU] at 0x60,0x64 irq 1,12
+[    3.628625] serio: i8042 KBD port at 0x60,0x64 irq 1
+[    3.635510] serio: i8042 AUX port at 0x60,0x64 irq 12
+[    3.644522] rtc_cmos 00:05: RTC can wake from S4
+[    3.661619] input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input1
+[    3.663954] rtc_cmos 00:05: registered as rtc0
+[    3.678066] rtc_cmos 00:05: alarms up to one day, y3k, 242 bytes nvram, hpet irqs
+[    3.678919] ata2: found unknown device (class 0)
+[    3.687692] device-mapper: ioctl: 4.50.0-ioctl (2025-04-28) initialised: dm-devel@lists.linux.dev
+[    3.702407] intel_pstate: CPU model not supported
+[    3.702542] ata2.00: ATAPI: QEMU DVD-ROM, 2.5+, max UDMA/100
+[    3.706804] hid: raw HID events driver (C) Jiri Kosina
+[    3.727107] usbcore: registered new interface driver usbhid
+[    3.728824] scsi 1:0:0:0: CD-ROM            QEMU     QEMU DVD-ROM     2.5+ PQ: 0 ANSI: 5
+[    3.734687] usbhid: USB HID core driver
+[    3.748145] xt_time: kernel timezone is -0000
+[    3.762154] Initializing XFRM netlink socket
+[    3.769233] NET: Registered PF_INET6 protocol family
+[    3.783194] Segment Routing with IPv6
+[    3.788206] In-situ OAM (IOAM) with IPv6
+[    3.795121] sit: IPv6, IPv4 and MPLS over IPv4 tunneling driver
+[    3.805165] NET: Registered PF_PACKET protocol family
+[    3.811549] NET: Registered PF_KEY protocol family
+[    3.818022] 9pnet: Installing 9P2000 support
+[    3.825013] sr 1:0:0:0: [sr0] scsi3-mmc drive: 4x/4x cd/rw xa/form2 tray
+[    3.833153] cdrom: Uniform CD-ROM driver Revision: 3.20
+[    3.836670] Key type dns_resolver registered
+[    3.847050] NET: Registered PF_VSOCK protocol family
+[    3.857896] IPI shorthand broadcast: enabled
+[    3.858018] sr 1:0:0:0: Attached scsi generic sg0 type 5
+[    3.868501] sched_clock: Marking stable (3041019675, 827280781)->(5144455679, -1276155223)
+[    3.886071] registered taskstats version 1
+[    3.892168] Loading compiled-in X.509 certificates
+[    3.903120] Demotion targets for Node 0: null
+[    3.909547] Key type .fscrypt registered
+[    3.914211] Key type fscrypt-provisioning registered
+[    3.922239] PM:   Magic number: 14:101:373
+[    3.927230] vc vcsa1: hash matches
+[    3.931312] netconsole: network logging started
+[    3.937095] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    3.948704] kworker/u32:1 (97) used greatest stack depth: 14272 bytes left
+[    3.955714] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    3.966329] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    3.977993] faux_driver regulatory: Direct firmware load for regulatory.db failed with error -2
+[    3.984897] ALSA device list:
+[    3.987802] cfg80211: failed to load regulatory.db
+[    3.988960]   No soundcards found.
+[    3.999653] kunit: disabled
+[    4.006946] check access for rdinit=/init failed: -2, ignoring
+[    4.204969] input: ImExPS/2 Generic Explorer Mouse as /devices/platform/i8042/serio1/input/input3
+[    4.210025] md: Waiting for all devices to be available before autodetect
+[    4.212631] md: If you don't use raid, use raid=noautodetect
+[    4.214127] md: Autodetecting RAID arrays.
+[    4.216488] md: autorun ...
+[    4.218467] md: ... autorun DONE.
+[    4.247676] EXT4-fs (vda): recovery complete
+[    4.251584] EXT4-fs (vda): mounted filesystem 56b1695a-8891-40bd-bc42-c7c8a70fe76d r/w with ordered data mode. Quota mode: none.
+[    4.257079] VFS: Mounted root (ext4 filesystem) on device 253:0.
+[    4.261008] devtmpfs: mounted
+[    4.280224] Freeing unused kernel image (initmem) memory: 3288K
+[    4.284758] Write protecting the kernel read-only data: 32768k
+[    4.310074] Freeing unused kernel image (text/rodata gap) memory: 804K
+[    4.320914] Freeing unused kernel image (rodata/data gap) memory: 1056K
+[    4.360602] x86/mm: Checked W+X mappings: passed, no W+X pages found.
+[    4.374191] Run /sbin/init as init process
+[    5.048543] SELinux:  Permission firmware_load in class system not defined in policy.
+[    5.054374] SELinux:  Permission kexec_image_load in class system not defined in policy.
+[    5.060394] SELinux:  Permission kexec_initramfs_load in class system not defined in policy.
+[    5.065025] SELinux:  Permission policy_load in class system not defined in policy.
+[    5.070058] SELinux:  Permission x509_certificate_load in class system not defined in policy.
+[    5.076988] SELinux:  Permission watch_mountns in class file not defined in policy.
+[    5.083766] SELinux:  Permission watch_mountns in class dir not defined in policy.
+[    5.089562] SELinux:  Permission watch_mountns in class lnk_file not defined in policy.
+[    5.095695] SELinux:  Permission watch_mountns in class chr_file not defined in policy.
+[    5.102054] SELinux:  Permission watch_mountns in class blk_file not defined in policy.
+[    5.108072] SELinux:  Permission watch_mountns in class sock_file not defined in policy.
+[    5.115403] SELinux:  Permission watch_mountns in class fifo_file not defined in policy.
+[    5.121731] SELinux:  Permission watch_mountns in class anon_inode not defined in policy.
+[    5.127975] SELinux:  Permission allowed in class io_uring not defined in policy.
+[    5.134460] SELinux:  Class memfd_file not defined in policy.
+[    5.139754] SELinux: the above unknown classes and permissions will be allowed
+[    5.176813] SELinux:  policy capability network_peer_controls=1
+[    5.181454] SELinux:  policy capability open_perms=1
+[    5.185202] SELinux:  policy capability extended_socket_class=1
+[    5.188658] SELinux:  policy capability always_check_network=0
+[    5.191452] SELinux:  policy capability cgroup_seclabel=1
+[    5.195805] SELinux:  policy capability nnp_nosuid_transition=1
+[    5.200524] SELinux:  policy capability genfs_seclabel_symlinks=0
+[    5.205676] SELinux:  policy capability ioctl_skip_cloexec=0
+[    5.209966] SELinux:  policy capability userspace_initial_context=0
+[    5.214730] SELinux:  policy capability netlink_xperm=0
+[    5.218679] SELinux:  policy capability netif_wildcard=0
+[    5.221303] SELinux:  policy capability genfs_seclabel_wildcard=0
+[    5.223848] SELinux:  policy capability functionfs_seclabel=0
+[    5.225381] SELinux:  policy capability memfd_class=0
+[    5.233541] audit: type=1403 audit(1791105775.279:2): auid=4294967295 ses=4294967295 lsm=selinux res=1
+[    5.235207] systemd[1]: Successfully loaded SELinux policy in 639.767ms.
+[    6.267240] modprobe (106) used greatest stack depth: 12752 bytes left
+[    6.276627] systemd[1]: Relabeled /dev/, /dev/shm/, /run/ in 8.443ms.
+[!p]104[?7h[    6.296449] systemd[1]: systemd 257.13-1~deb13u1 running in system mode (+PAM +AUDIT +SELINUX +APPARMOR +IMA +IPE +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBCRYPTSETUP_PLUGINS +LIBFDISK +PCRE2 +PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD +BPF_FRAMEWORK +BTF -XKBCOMMON -UTMP +SYSVINIT +LIBARCHIVE)
+[    6.320866] systemd[1]: Detected virtualization kvm.
+[    6.325581] systemd[1]: Detected architecture x86-64.
+
+[0;1;39mWelcome to [0m[1mDebian GNU/Linux 13 (trixie)[0m[0;1;39m![0m
+
+[    6.346957] systemd[1]: Hostname set to <syzkaller>.
+[    6.604105] systemd[1]: bpf-restrict-fs: BPF LSM hook not enabled in the kernel, BPF LSM not supported.
+[    6.668054] systemd-debug-g (110) used greatest stack depth: 12736 bytes left
+[    6.681864] systemd-tpm2-ge (124) used greatest stack depth: 12552 bytes left
+[    6.687050] systemd-ssh-generator[120]: Failed to query local AF_VSOCK CID: Cannot assign requested address
+[    6.710433] (sd-exec-[108]: /usr/lib/systemd/system-generators/systemd-ssh-generator failed with exit status 1.
+[    7.138638] systemd[1]: Queued start job for default target graphical.target.
+[    7.157335] systemd[1]: Created slice system-getty.slice - Slice /system/getty.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-getty.slice[0m - Slice /system/getty.
+[    7.174754] systemd[1]: Created slice system-modprobe.slice - Slice /system/modprobe.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-modprobe.slice[0m - Slice /system/modprobe.
+[    7.188089] systemd[1]: Created slice system-serial\x2dgetty.slice - Slice /system/serial-getty.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-serial\x2dget…slice[0m - Slice /system/serial-getty.
+[    7.203021] systemd[1]: Created slice user.slice - User and Session Slice.
+[[0;32m  OK  [0m] Created slice [0;1;39muser.slice[0m - User and Session Slice.
+[    7.210756] systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-ask-password-conso…[0mequests to Console Directory Watch.
+[    7.231367] systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-ask-password-wall.…[0md Requests to Wall Directory Watch.
+[    7.250802] systemd[1]: Set up automount proc-sys-fs-binfmt_misc.automount - Arbitrary Executable File Formats File System Automount Point.
+[[0;32m  OK  [0m] Set up automount [0;1;39mproc-sys-fs-binfm…[0mormats File System Automount Point.
+[    7.265559] systemd[1]: Expecting device dev-ttyS0.device - /dev/ttyS0...
+         Expecting device [0;1;39mdev-ttyS0.device[0m - /dev/ttyS0...
+[    7.273945] systemd[1]: Reached target paths.target - Path Units.
+[[0;32m  OK  [0m] Reached target [0;1;39mpaths.target[0m - Path Units.
+[    7.280471] systemd[1]: Reached target remote-fs.target - Remote File Systems.
+[[0;32m  OK  [0m] Reached target [0;1;39mremote-fs.target[0m - Remote File Systems.
+[    7.290677] systemd[1]: Reached target slices.target - Slice Units.
+[[0;32m  OK  [0m] Reached target [0;1;39mslices.target[0m - Slice Units.
+[    7.298205] systemd[1]: Reached target swap.target - Swaps.
+[[0;32m  OK  [0m] Reached target [0;1;39mswap.target[0m - Swaps.
+[    7.307556] systemd[1]: Listening on systemd-creds.socket - Credential Encryption/Decryption.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-creds.socket[0m - Credential Encryption/Decryption.
+[    7.312959] systemd[1]: Listening on systemd-initctl.socket - initctl Compatibility Named Pipe.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-initctl.socke…[0m- initctl Compatibility Named Pipe.
+[    7.318670] systemd[1]: Listening on systemd-journald-dev-log.socket - Journal Socket (/dev/log).
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-journald-dev-…socket[0m - Journal Socket (/dev/log).
+[    7.333724] systemd[1]: Listening on systemd-journald.socket - Journal Sockets.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-journald.socket[0m - Journal Sockets.
+[    7.348963] systemd[1]: systemd-pcrextend.socket - TPM PCR Measurements skipped, unmet condition check ConditionSecurity=measured-uki
+[    7.357210] systemd[1]: systemd-pcrlock.socket - Make TPM PCR Policy skipped, unmet condition check ConditionSecurity=measured-uki
+[    7.367764] systemd[1]: Listening on systemd-sysext.socket - System Extension Image Management.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-sysext.socket[0m… System Extension Image Management.
+[    7.399720] systemd[1]: Listening on systemd-udevd-control.socket - udev Control Socket.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-udevd-control.socket[0m - udev Control Socket.
+[    7.421359] systemd[1]: Listening on systemd-udevd-kernel.socket - udev Kernel Socket.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-udevd-kernel.socket[0m - udev Kernel Socket.
+[    7.441559] systemd[1]: Mounting dev-hugepages.mount - Huge Pages File System...
+         Mounting [0;1;39mdev-hugepages.mount[0m - Huge Pages File System...
+[    7.458201] systemd[1]: Mounting dev-mqueue.mount - POSIX Message Queue File System...
+         Mounting [0;1;39mdev-mqueue.mount[0m - POSIX Message Queue File System...
+[    7.473790] systemd[1]: Mounting sys-kernel-debug.mount - /sys/kernel/debug...
+         Mounting [0;1;39msys-kernel-debug.mount[0m - /sys/kernel/debug...
+[    7.488637] systemd[1]: Mounting sys-kernel-tracing.mount - Kernel Trace File System...
+         Mounting [0;1;39msys-kernel-tracing.mount[0m - Kernel Trace File System...
+[    7.505621] systemd[1]: tmp.mount: Directory /tmp to mount over is not empty, mounting anyway.
+[    7.517509] systemd[1]: Mounting tmp.mount - Temporary Directory /tmp...
+         Mounting [0;1;39mtmp.mount[0m - Temporary Directory /tmp...
+[    7.529555] systemd[1]: kmod-static-nodes.service - Create List of Static Device Nodes skipped, unmet condition check ConditionFileNotEmpty=/lib/modules/6.18.32-g2e811260e336-dirty/modules.devname
+[    7.548212] systemd[1]: Starting modprobe@drm.service - Load Kernel Module drm...
+         Starting [0;1;39mmodprobe@drm.service[0m - Load Kernel Module drm...
+[    7.563789] systemd[1]: Starting modprobe@efi_pstore.service - Load Kernel Module efi_pstore...
+         Starting [0;1;39mmodprobe@efi_pstore.servi…[0m - Load Kernel Module efi_pstore...
+[    7.580696] systemd[1]: Starting modprobe@fuse.service - Load Kernel Module fuse...
+         Starting [0;1;39mmodprobe@fuse.service[0m - Load Kernel Module fuse...
+[    7.602315] systemd[1]: Starting systemd-binfmt.service - Set Up Additional Binary Formats...
+         Starting [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats...
+[    7.615558] systemd[1]: systemd-hibernate-clear.service - Clear Stale Hibernate Storage Info skipped, unmet condition check ConditionPathExists=/sys/firmware/efi/efivars/HibernateLocation-8cf2644b-4b0b-428f-9387-6d876050dc67
+[    7.630475] systemd[1]: systemd-hwdb-update.service - Rebuild Hardware Database skipped, unmet condition check ConditionNeedsUpdate=/etc
+[    7.653083] systemd[1]: Starting systemd-journald.service - Journal Service...
+         Starting [0;1;39msystemd-journald.service[0m - Journal Service...
+[    7.674899] systemd[1]: Starting systemd-modules-load.service - Load Kernel Modules...
+         Starting [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules...
+[    7.684390] systemd[1]: systemd-pcrmachine.service - TPM PCR Machine ID Measurement skipped, unmet condition check ConditionSecurity=measured-uki
+[    7.699645] systemd[1]: Starting systemd-random-seed.service - Load/Save OS Random Seed...
+         Starting [0;1;39msystemd-random-seed.service[0m - Load/Save OS Random Seed...
+[    7.717619] systemd[1]: Starting systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully...
+         Starting [0;1;39msystemd-tmpfiles-setup-de…[0m Device Nodes in /dev gracefully...
+[    7.727719] systemd[1]: systemd-tpm2-setup-early.service - Early TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+[    7.737255] systemd[1]: systemd-tpm2-setup.service - TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+[    7.750927] systemd[1]: Starting systemd-udev-load-credentials.service - Load udev Rules from Credentials...
+         Starting [0;1;39msystemd-udev-load-credent…[0mLoad udev Rules from Credentials...
+[    7.769022] systemd[1]: Starting systemd-udev-trigger.service - Coldplug All udev Devices...
+         Starting [0;1;39msystemd-udev-trigger.service[0m - Coldplug All udev Devices...
+[    7.790558] systemd[1]: Mounted dev-hugepages.mount - Huge Pages File System.
+[[0;32m  OK  [0m] Mounted [0;1;39mdev-hugepages.mount[0m - H[    7.801989] systemd-journald[137]: Collecting audit messages is disabled.
+uge Pages File System.
+[    7.811289] systemd[1]: Mounted dev-mqueue.mount - POSIX Message Queue File System.
+[[0;32m  OK  [0m] Mounted [0;1;39mdev-mqueue.mount[0m - POSIX Message Queue File System.
+[    7.824404] systemd[1]: Mounted sys-kernel-debug.mount - /sys/kernel/debug.
+[[0;32m  OK  [0m] Mounted [0;1;39msys-kernel-debug.mount[0m - /sys/kernel/debug.
+[    7.836123] systemd[1]: Mounted sys-kernel-tracing.mount - Kernel Trace File System.
+[[0;32m  OK  [0m] Mounted [0;1;39msys-kernel-tracing.mount[0m - Kernel Trace File System.
+[    7.850920] systemd[1]: Mounted tmp.mount - Temporary Directory /tmp.
+[[0;32m  OK  [0m] Mounted [0;1;39mtmp.mount[0m - Temporary Directory /tmp.
+[    7.865932] systemd[1]: Started systemd-journald.service - Journal Service.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-journald.service[0m - Journal Service.
+[[0;32m  OK  [0m] Finished [0;1;39mmodprobe@drm.service[0m - Load Kernel Module drm.
+[[0;32m  OK  [0m] Finished [0;1;39mmodprobe@efi_pstore.service[0m - Load Kernel Module efi_pstore.
+[[0;32m  OK  [0m] Finished [0;1;39mmodprobe@fuse.service[0m - Load Kernel Module fuse.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-random-seed.service[0m - Load/Save OS Random Seed.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup-de…[0mic Device Nodes in /dev gracefully.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-udev-load-credent…[0m- Load udev Rules from Credentials.
+         Mounting [0;1;39mproc-sys-fs-binfmt_misc.mount[0m - /proc/sys/fs/binfmt_misc...
+         Starting [0;1;39msystemd-journal-flush.ser…[0msh Journal to Persistent Storage...
+         Starting [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables...
+         Starting [0;1;39msystemd-tmpfiles-setup-de…[0meate Static Device Nodes in /dev...
+[[0;32m  OK  [0m] Mounted [0;1;39mproc-sys-fs-binfmt_misc.mount[0m - /proc/sys/fs/binfmt_misc.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-udev-trigger.service[0m - Coldplug All udev Devices.
+[    8.104913] systemd-journald[137]: Received client request to flush runtime journal.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats.
+         Starting [0;1;39mifupdown-pre.service[0m - He…synchronize boot up for ifupdown...
+[    8.163567] systemd-journald[137]: File /var/log/journal/1c821f12757d4c338ffdb020ee1ae6e0/system.journal corrupted or uncleanly shut down, renaming and replacing.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup-de…[0mCreate Static Device Nodes in /dev.
+[[0;32m  OK  [0m] Reached target [0;1;39mlocal-fs-pre.target[0m…Preparation for Local File Systems.
+         Starting [0;1;39msystemd-udevd.service[0m - R…ager for Device Events and Files...
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-journal-flush.ser…[0mlush Journal to Persistent Storage.
+         Starting [0;1;39msystemd-tmpfiles-setup.se…[0mate System Files and Directories...
+[[0;32m  OK  [0m] Started [0;1;39msystemd-udevd.service[0m - Ru…anager for Device Events and Files.
+[    8.603637] ------------[ cut here ]------------
+[    8.604741] WARNING: CPU: 6 PID: 137 at mm/gup.c:144 try_grab_folio+0x6f/0x90
+[    8.608947] Modules linked in:
+[    8.612165] CPU: 6 UID: 0 PID: 137 Comm: systemd-journal Not tainted 6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[    8.618520] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[    8.624119] RIP: 0010:try_grab_folio+0x6f/0x90
+[    8.625371] Code: d6 be 22 00 00 00 48 c1 e8 3a 48 8b 3c c5 a0 17 b5 b1 e8 d4 5f fe ff 31 c0 c3 cc cc cc cc f0 01 77 34 31 c0 c3 cc cc cc cc 90 <0f> 0b 90 b8 f4 ff ff ff c3 cc cc cc cc 89 f0 c1 e0 0a f0 01 47 34
+[    8.625373] RSP: 0018:ffff9e6ac0757d10 EFLAGS: 00010246
+[    8.625375] RAX: 0000000000000000 RBX: 0000000000000080 RCX: ffffea7dc41cd7c0
+[    8.625393] RDX: 0000000000000080 RSI: 0000000000000001 RDI: ffffea7dc41cd7c0
+[[0;32m  OK  [[    8.625394] RBP: ffff9e6ac0757da8 R08: 840000010735f067 R09: fff0000000000fff
+0m] Found device[    8.625395] R10: 0000000000000000 R11: 0000000000000100 R12: 0000000000000000
+ [0;1;39mdev-tt[    8.625395] R13: 0000100040000000 R14: ffff9b48060e4100 R15: 8400000000000067
+yS0.device[0m -[    8.625523] FS:  0000100000c00980(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+ /dev/ttyS0.
+[    8.625540] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[    8.625544] CR2: 0000564cbc23f140 CR3: 0000000106ad7002 CR4: 0000000000770ef0
+[    8.625597] PKRU: 55555554
+[    8.683829] Call Trace:
+[    8.685627]  <TASK>
+[    8.686602]  corten_gup_window+0x34e/0x7a0
+[    8.690664]  __access_remote_vm+0x187/0x530
+[    8.693012]  ? alloc_pages_mpol+0x3f/0xf0
+[    8.696614]  proc_pid_cmdline_read+0x205/0x390
+[    8.699012]  vfs_read+0xbb/0x340
+[    8.701657]  ? __seccomp_filter+0x2f/0x5f0
+[    8.704997]  ksys_read+0x60/0xd0
+[    8.708366]  do_syscall_64+0xa4/0x2f0
+[    8.709774]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[    8.712450] RIP: 0033:0xfffff9dd9ee
+[    8.713911] Code: 08 0f 85 f5 4b ff ff 49 89 fb 48 89 f0 48 89 d7 48 89 ce 4c 89 c2 4d 89 ca 4c 8b 44 24 08 4c 8b 4c 24 10 4c 89 5c 24 08 0f 05 <c3> 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 80 00 00 00 00 48 83 ec 08
+[    8.730207] RSP: 002b:00007ffc42c29648 EFLAGS: 00000246 ORIG_RAX: 0000000000000000
+[    8.738351] RAX: ffffffffffffffda RBX: 0000100000c00980 RCX: 00000fffff9dd9ee
+[    8.743798] RDX: 0000000000001008 RSI: 0000564cbc23e130 RDI: 0000000000000014
+[    8.749243] RBP: 0000000000000014 R08: 0000000000000000 R09: 0000000000000000
+[    8.754429] R10: 0000000000000000 R11: 0000000000000246 R12: 0000000000001007
+[    8.759618] R13: 0000000000001008 R14: ffffffffffffffff R15: 0000000000000001
+[    8.764171]  </TASK>
+[    8.765795] ---[ end trace 0000000000000000 ]---
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup.se…[0mreate System Files and Directories.
+[    8.791738] systemd-journal (137) used greatest stack depth: 12448 bytes left
+[    8.800163] systemd[1]: systemd-journald.service: Scheduled restart job, restart counter is at 1.
+[    8.804629] systemd[1]: ldconfig.service - Rebuild Dynamic Linker Cache skipped, no trigger condition checks were met.
+[    8.809851] systemd[1]: systemd-firstboot.service - First Boot Wizard skipped, unmet condition check ConditionFirstBoot=yes
+[    8.817802] systemd[1]: first-boot-complete.target - First Boot Complete skipped, unmet condition check ConditionFirstBoot=yes
+[    8.828052] systemd[1]: systemd-journal-catalog-update.service - Rebuild Journal Catalog skipped, unmet condition check ConditionNeedsUpdate=/var
+[    8.842825] systemd-sysctl[227]: segfault at 0 ip 00000ffffffec75a sp 00007ffcc59923a8 error 4 in ld-linux-x86-64.so.2[2475a,ffffffc9000+28000] likely on CPU 4 (core 4, socket 0)
+[    8.844707] BUG: kernel NULL pointer dereference, address: 0000000000000008
+[    8.845605] systemd[1]: Starting systemd-journald.service - Journal Service...
+[    8.852758] Code: 85 4b ff ff ff e9 a0 fe ff ff 66 0f 1f 44 00 00 89 f1 89 f8 48 83 e1 3f 48 83 e0 3f 83 f9 30 77 3f 83 f8 30 77 3a 66 0f 12 0f <66> 0f 12 16 66 0f 16 4f 08 66 0f 16 56 08 66 0f ef c0 66 0f 74 c1
+[    8.858035] #PF: supervisor write access in kernel mode
+[    8.858042] #PF: error_code(0x0002) - not-present page
+[    8.858045] PGD 0 P4D 0 
+[    8.858050] Oops: Oops: 0002 [#1] SMP NOPTI
+[    8.858058] CPU: 2 UID: 0 PID: 226 Comm: cdrom_id Tainted: G        W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[    8.858065] Tainted: [W]=WARN
+[    8.858066] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[    8.858069] RIP: 0010:lru_gen_del_folio.constprop.0+0x12e/0x190
+[    8.858180] Code: 03 41 39 c0 74 6a f7 da 44 89 f6 41 89 d5 e8 f9 53 0b 00 49 63 d5 41 8d 76 02 48 89 ef e8 da f5 01 00 48 8b 43 10 48 8b 53 08 <48> 89 42 08 48 89 10 48 b8 00 01 00 00 00 00 ad de 48 89 43 08 48
+[    8.858184] RSP: 0000:ffff9e6ac09f7d18 EFLAGS: 00010012
+[    8.858188] RAX: dead000000000122 RBX: ffffea7dc42e29c0 RCX: ffffffffb1ad6bc3
+[    8.858191] RDX: 0000000000000000 RSI: 0000000000000003 RDI: ffff9b483b7fab40
+[    8.858193] RBP: ffff9b483b7fab40 R08: 0000000000000020 R09: 0000000000000001
+[    8.858196] R10: ffff9b480d29a400 R11: 0000000000000000 R12: ffff9b4806788001
+[    8.858198] R13: 00000000ffffffff R14: 0000000000000001 R15: 0000000000000040
+[    8.858274] FS:  0000100000c00980(0000) GS:ffff9b48859d9000(0000) knlGS:0000000000000000
+[    8.960551] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[    8.960558] CR2: 0000000000000008 CR3: 0000000106392006 CR4: 0000000000770ef0
+[    8.960614] PKRU: 55555554
+[    8.960617] Call Trace:
+    [    8.9 60842]   <TASK>
+[     8. 9 7Star67t38] in __page_cache_release.part.0+0x97/0x1e0
+[    8.981205]  __folio_put+0x75/0xb0
+[    8.982076]  __handle_mm_fault+0x8d6/0xa30
+[    8.985238]  handle_mm_fault+0x125/0x440
+[    8.988198]  do_user_addr_fault+0x194/0x830
+[    8.991508]  exc_page_fault+0x63/0x130
+[    8.994466]  asm_exc_page_fault+0x26/0x30
+[    8.997537] RIP: 0033:0xffffffd6f04
+[    9.000094] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[    9.012717] RSP: 002b:00007ffe2d938920 EFLAGS: 00010206
+[    9.016416] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff69a727
+[    9.021273] RDX: 00000fffff283660 RSI: 00000fffff7e4008 RDI: 00000ffffffff0a0
+[    9.026419] RBP: 00007ffe2d938a30 R08: 00000fffff2f11f0 R09: 00007ffe2d9389c0
+[    9.031310] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[    9.037208] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[    9.043001]  </TASK>
+[    9.044760] Modules linked in:
+[    9.047355] CR2: 0000000000000008
+[    9.051428] ---[ end trace 0000000000000000 ]---
+[    9.054168] RIP: 0010:lru_gen_del_folio.constprop.0+0x12e/0x190
+[    9.058531] Code: 03 41 39 c0 74 6a f7 da 44 89 f6 41 89 d5 e8 f9 53 0b 00 49 63 d5 41 8d 76 02 48 89 ef e8 da f5 01 00 48 8b 43 10 48 8b 53 08 <48> 89 42 08 48 89 10 48 b8 00 01 00 00 00 00 ad de 48 89 43 08 48
+[    9.071458] RSP: 0000:ffff9e6ac09f7d18 EFLAGS: 00010012
+[    9.075235] RAX: dead000000000122 RBX: ffffea7dc42e29c0 RCX: ffffffffb1ad6bc3
+[    9.080986] RDX: 0000000000000000 RSI: 0000000000000003 RDI: ffff9b483b7fab40
+[    9.085522] RBP: ffff9b483b7fab40 R08: 0000000000000020 R09: 0000000000000001
+[    9.090253] R10: ffff9b480d29a400 R11: 0000000000000000 R12: ffff9b4806788001
+[    9.095984] R13: 00000000ffffffff R14: 0000000000000001 R15: 0000000000000040
+[    9.101630] FS:  0000100000c00980(0000) GS:ffff9b48859d9000(0000) knlGS:0000000000000000
+[    9.106954] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[    9.110233] CR2: 0000000000000008 CR3: 0000000106392006 CR4: 0000000000770ef0
+[    9.115248] PKRU: 55555554
+[    9.117403] note: cdrom_id[226] exited with irqs disabled
+[    9.121225] note: cdrom_id[226] exited with preempt_count 1
+[   29.844399] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[   29.848921] rcu: 	3-...!: (1 GPs behind) idle=f8f4/1/0x4000000000000000 softirq=457/458 fqs=0
+[   29.853668] rcu: 	6-...!: (0 ticks this GP) idle=0c9c/1/0x4000000000000000 softirq=513/513 fqs=0
+[   29.860354] rcu: 	(detected by 2, t=21013 jiffies, g=429, q=192 ncpus=8)
+[   29.865495] Sending NMI from CPU 2 to CPUs 3:
+[   29.865768] NMI backtrace for cpu 3
+[   29.865778] CPU: 3 UID: 0 PID: 225 Comm: dmi_memory_id Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[   29.865786] Tainted: [D]=DIE, [W]=WARN
+[   29.865787] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   29.865790] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[   29.865897] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[   29.865900] RSP: 0000:ffff9e6ac0a23c78 EFLAGS: 00000002
+[   29.865905] RAX: 0000000000000001 RBX: ffff9e6ac0a23cc8 RCX: 0000000000000000
+[   29.865908] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[   29.865910] RBP: ffff9b4806788098 R08: ffff9b48374e6d20 R09: 0000000000000011
+[   29.865913] R10: 0000000000000000 R11: ffff9e6ac0a23e20 R12: 0000000000000246
+[   29.865915] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b48066b1b00
+[   29.865991] FS:  0000100000c00980(0000) GS:ffff9b4885a19000(0000) knlGS:0000000000000000
+[   29.866009] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   29.866012] CR2: 00000fffff7ea010 CR3: 000000010d062006 CR4: 0000000000770ef0
+[   29.866070] PKRU: 55555554
+[   29.866072] Call Trace:
+[   29.866287]  <TASK>
+[   29.866293]  ? __pfx_lru_add+0x10/0x10
+[   29.866302]  _raw_spin_lock_irqsave+0x2f/0x40
+[   29.866309]  folio_lruvec_lock_irqsave+0x61/0x90
+[   29.866498]  folio_batch_move_lru+0x85/0x130
+[   29.866506]  __folio_batch_add_and_move+0x48/0x90
+[   29.866512]  set_pte_range+0x1c7/0x1f0
+[   29.866517]  finish_fault+0x210/0x430
+[   29.866521]  __handle_mm_fault+0x877/0xa30
+[   29.866527]  handle_mm_fault+0x125/0x440
+[   29.866531]  do_user_addr_fault+0x194/0x830
+[   29.866539]  exc_page_fault+0x63/0x130
+[   29.866547]  asm_exc_page_fault+0x26/0x30
+[   29.866552] RIP: 0033:0xffffffd6f04
+[   29.866557] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[   29.866560] RSP: 002b:00007ffe46589690 EFLAGS: 00010206
+[   29.866564] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff821460
+[   29.866566] RDX: 00000fffff28c450 RSI: 00000fffff7ea010 RDI: 00000ffffffff0a0
+[   29.866568] RBP: 00007ffe465897a0 R08: 00000fffff2f11f0 R09: 00007ffe46589730
+[   29.866570] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[   29.866572] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[   29.866577]  </TASK>
+[   29.866587] Sending NMI from CPU 2 to CPUs 6:
+[   29.866915] NMI backtrace for cpu 6
+[   29.866924] CPU: 6 UID: 0 PID: 228 Comm: systemd-sysctl Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[   29.866931] Tainted: [D]=DIE, [W]=WARN
+[   29.866933] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   29.866935] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[   29.866947] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[   29.866950] RSP: 0000:ffff9e6ac0a2bc90 EFLAGS: 00000002
+[   29.866955] RAX: 0000000000000001 RBX: ffff9e6ac0a2bce0 RCX: 0000000000000000
+[   29.867010] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[   29.867013] RBP: ffff9b4806788098 R08: ffff9b48375a6d20 R09: 0000000000000011
+[   29.867015] R10: ffff9b4802f44e00 R11: 0000000000000100 R12: 0000000000000246
+[   29.867019] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: 8000000106c81067
+[   29.867143] FS:  0000000000000000(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+[   29.867158] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   29.867161] CR2: 00000fffff975cd8 CR3: 00000001062f5004 CR4: 0000000000770ef0
+[   29.867214] PKRU: 55555554
+[   29.867215] Call Trace:
+[   29.867217]  <TASK>
+[   29.867219]  ? __pfx_lru_add+0x10/0x10
+[   29.867222]  _raw_spin_lock_irqsave+0x2f/0x40
+[   29.867225]  folio_lruvec_lock_irqsave+0x61/0x90
+[   29.867232]  folio_batch_move_lru+0x85/0x130
+[   29.867238]  __folio_batch_add_and_move+0x48/0x90
+[   29.867243]  do_wp_page+0x63b/0xea0
+[   29.867282]  __handle_mm_fault+0x441/0xa30
+[   29.867288]  handle_mm_fault+0x125/0x440
+[   29.867292]  do_user_addr_fault+0x194/0x830
+[   29.867300]  exc_page_fault+0x63/0x130
+[   29.867307]  asm_exc_page_fault+0x26/0x30
+[   29.867312] RIP: 0033:0xffffffd0703
+[   29.867317] Code: 0f 84 0d 04 00 00 41 f6 85 56 03 00 00 20 0f 85 ff 03 00 00 49 8b 45 60 48 85 c0 74 04 48 01 70 08 49 8b 45 58 48 85 c0 74 04 <48> 01 70 08 49 8b 45 68 48 85 c0 74 04 48 01 70 08 49 8b 45 70 48
+[   29.867320] RSP: 002b:00007ffc533c2c40 EFLAGS: 00010202
+[   29.867323] RAX: 00000fffff975cd0 RBX: 0000000000000030 RCX: 0000100000000f90
+[   29.867326] RDX: 00000fffff975dc0 RSI: 00000fffff96c000 RDI: 000000006fffffff
+[   29.867328] RBP: 00007ffc533c2da0 R08: 0000000000000006 R09: 00000000effffef5
+[   29.867330] R10: 0000000070000029 R11: 00007ffc533c2e98 R12: 00007ffc533c2b20
+[   29.867333] R13: 0000100000000f50 R14: 00007ffc533c2e50 R15: 00000fffff976030
+[   29.867337]  </TASK>
+[   29.867660] rcu: rcu_preempt kthread timer wakeup didn't happen for 21020 jiffies! g429 f0x0 RCU_GP_WAIT_FQS(5) ->state=0x402
+[   30.212258] rcu: 	Possible timer handling issue on cpu=0 timer-softirq=129
+[   30.217010] rcu: rcu_preempt kthread starved for 21372 jiffies! g429 f0x0 RCU_GP_WAIT_FQS(5) ->state=0x402 ->cpu=0
+[   30.223984] rcu: 	Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[   30.230241] rcu: RCU grace-period kthread stack dump:
+[   30.234268] task:rcu_preempt     state:I stack:14928 pid:15    tgid:15    ppid:2      task_flags:0x208040 flags:0x00080000
+[   30.242106] Call Trace:
+[   30.243926]  <TASK>
+[   30.245444]  __schedule+0x4e5/0xcc0
+[   30.248051]  ? __pfx_rcu_gp_kthread+0x10/0x10
+[   30.251317]  schedule+0x22/0xd0
+[   30.253791]  schedule_timeout+0x71/0x100
+[   30.256657]  ? __pfx_process_timeout+0x10/0x10
+[   30.259925]  rcu_gp_fqs_loop+0x11f/0x640
+[   30.262907]  rcu_gp_kthread+0x19c/0x240
+[   30.266290]  kthread+0xff/0x1f0
+[   30.268994]  ? __pfx_kthread+0x10/0x10
+[   30.271856]  ? __pfx_kthread+0x10/0x10
+[   30.274709]  ret_from_fork+0x144/0x160
+[   30.277932]  ? __pfx_kthread+0x10/0x10
+[   30.280883]  ret_from_fork_asm+0x1a/0x30
+[   30.284171]  </TASK>
+[   30.286010] rcu: Stack dump where RCU GP kthread last ran:
+[   30.289999] Sending NMI from CPU 2 to CPUs 0:
+[   30.293427] NMI backtrace for cpu 0
+[   30.293436] CPU: 0 UID: 0 PID: 229 Comm: 9 Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[   30.293444] Tainted: [D]=DIE, [W]=WARN
+[   30.293445] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   30.293448] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[   30.293459] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[   30.293463] RSP: 0000:ffff9e6ac0877c78 EFLAGS: 00000002
+[   30.293468] RAX: 0000000000000001 RBX: ffff9e6ac0877cc8 RCX: 0000000000000000
+[   30.293508] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[   30.293510] RBP: ffff9b4806788098 R08: ffff9b4837426d20 R09: 0000000000000011
+[   30.293513] R10: 0000000000000000 R11: ffff9e6ac0877e20 R12: 0000000000000246
+[   30.293515] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b4801589900
+[   30.293596] FS:  0000000000000000(0000) GS:ffff9b4885959000(0000) knlGS:0000000000000000
+[   30.293646] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   30.293652] CR2: 00000fffff87b6c8 CR3: 0000000106518002 CR4: 0000000000770ef0
+[   30.293734] PKRU: 55555554
+[   30.293736] Call Trace:
+[   30.293740]  <TASK>
+[   30.293743]  ? __pfx_lru_add+0x10/0x10
+[   30.293750]  _raw_spin_lock_irqsave+0x2f/0x40
+[   30.293756]  folio_lruvec_lock_irqsave+0x61/0x90
+[   30.293764]  folio_batch_move_lru+0x85/0x130
+[   30.293770]  __folio_batch_add_and_move+0x48/0x90
+[   30.293775]  set_pte_range+0x1c7/0x1f0
+[   30.293781]  finish_fault+0x210/0x430
+[   30.293785]  __handle_mm_fault+0x877/0xa30
+[   30.293791]  handle_mm_fault+0x125/0x440
+[   30.293796]  do_user_addr_fault+0x194/0x830
+[   30.293804]  exc_page_fault+0x63/0x130
+[   30.293811]  asm_exc_page_fault+0x26/0x30
+[   30.293815] RIP: 0033:0xffffffebdd2
+[   30.293821] Code: 0f 60 c0 66 0f 61 c0 66 0f 70 c0 00 48 83 fa 10 72 76 48 83 fa 20 77 12 0f 11 44 17 f0 0f 11 07 c3 0f 11 47 e0 0f 11 47 f0 c3 <0f> 11 07 0f 11 47 10 48 01 d7 48 83 fa 40 76 e7 0f 11 40 20 0f 11
+[   30.293824] RSP: 002b:00007ffdac9c77e8 EFLAGS: 00010206
+[   30.293828] RAX: 00000fffff87b6c8 RBX: 0000000000000004 RCX: 00000fffff888e50
+[   30.293830] RDX: 0000000000000938 RSI: 0000000000000000 RDI: 00000fffff87b6c8
+[   30.293833] RBP: 00007ffdac9c7ff0 R08: 00000fffff87b6c8 R09: 00000fffff87c000
+[   30.293835] R10: 0000000000000003 R11: 00007ffdac9c7b40 R12: 00007ffdac9c7898
+[   30.293837] R13: 0000100000400540 R14: 00007ffdac9c80a0 R15: 00000fffff87c000
+[   30.293842]  </TASK>
+[   38.998097] systemd[1]: systemd-machine-id-commit.service - Save Transient machine-id to Disk skipped, unmet condition check ConditionPathIsMountPoint=/etc/machine-id
+[   39.008188] systemd[1]: systemd-update-done.service - Update is Completed skipped, no trigger condition checks were met.
+[   39.022126] systemd[1]: Listening on systemd-rfkill.socket - Load/Save RF Kill Switch Status /dev/rfkill Watch.
+[   93.463142] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[   93.468090] rcu: 	3-...0: (1 GPs behind) idle=f8f4/1/0x4000000000000000 softirq=457/458 fqs=2018
+[   93.474305] rcu: 	6-...0: (0 ticks this GP) idle=0c9c/1/0x4000000000000000 softirq=513/513 fqs=2018
+[   93.480436] rcu: 	(detected by 2, t=84637 jiffies, g=429, q=232 ncpus=8)
+[   93.485541] Sending NMI from CPU 2 to CPUs 3:
+[   93.485783] NMI backtrace for cpu 3
+[   93.486038] CPU: 3 UID: 0 PID: 225 Comm: dmi_memory_id Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[   93.486047] Tainted: [D]=DIE, [W]=WARN
+[   93.486049] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   93.486051] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[   93.486064] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[   93.486068] RSP: 0000:ffff9e6ac0a23c78 EFLAGS: 00000002
+[   93.486073] RAX: 0000000000000001 RBX: ffff9e6ac0a23cc8 RCX: 0000000000000000
+[   93.486112] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[   93.486115] RBP: ffff9b4806788098 R08: ffff9b48374e6d20 R09: 0000000000000011
+[   93.486117] R10: 0000000000000000 R11: ffff9e6ac0a23e20 R12: 0000000000000246
+[   93.486119] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b48066b1b00
+[   93.486190] FS:  0000100000c00980(0000) GS:ffff9b4885a19000(0000) knlGS:0000000000000000
+[   93.486204] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   93.486207] CR2: 00000fffff7ea010 CR3: 000000010d062006 CR4: 0000000000770ef0
+[   93.486247] PKRU: 55555554
+[   93.486250] Call Trace:
+[   93.486253]  <TASK>
+[   93.486258]  ? __pfx_lru_add+0x10/0x10
+[   93.486267]  _raw_spin_lock_irqsave+0x2f/0x40
+[   93.486273]  folio_lruvec_lock_irqsave+0x61/0x90
+[   93.486282]  folio_batch_move_lru+0x85/0x130
+[   93.486288]  __folio_batch_add_and_move+0x48/0x90
+[   93.486293]  set_pte_range+0x1c7/0x1f0
+[   93.486298]  finish_fault+0x210/0x430
+[   93.486302]  __handle_mm_fault+0x877/0xa30
+[   93.486308]  handle_mm_fault+0x125/0x440
+[   93.486312]  do_user_addr_fault+0x194/0x830
+[   93.486320]  exc_page_fault+0x63/0x130
+[   93.486328]  asm_exc_page_fault+0x26/0x30
+[   93.486333] RIP: 0033:0xffffffd6f04
+[   93.486447] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[   93.486451] RSP: 002b:00007ffe46589690 EFLAGS: 00010206
+[   93.486454] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff821460
+[   93.486456] RDX: 00000fffff28c450 RSI: 00000fffff7ea010 RDI: 00000ffffffff0a0
+[   93.486458] RBP: 00007ffe465897a0 R08: 00000fffff2f11f0 R09: 00007ffe46589730
+[   93.486460] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[   93.486462] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[   93.486468]  </TASK>
+[   93.486710] Sending NMI from CPU 2 to CPUs 6:
+[   93.486869] NMI backtrace for cpu 6
+[   93.486876] CPU: 6 UID: 0 PID: 228 Comm: systemd-sysctl Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[   93.486884] Tainted: [D]=DIE, [W]=WARN
+[   93.486885] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   93.486887] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[   93.486904] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[   93.486908] RSP: 0000:ffff9e6ac0a2bc90 EFLAGS: 00000002
+[   93.486912] RAX: 0000000000000001 RBX: ffff9e6ac0a2bce0 RCX: 0000000000000000
+[   93.486915] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[   93.486917] RBP: ffff9b4806788098 R08: ffff9b48375a6d20 R09: 0000000000000011
+[   93.486920] R10: ffff9b4802f44e00 R11: 0000000000000100 R12: 0000000000000246
+[   93.486922] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: 8000000106c81067
+[   93.487016] FS:  0000000000000000(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+[   93.487031] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   93.487073] CR2: 00000fffff975cd8 CR3: 00000001062f5004 CR4: 0000000000770ef0
+[   93.487112] PKRU: 55555554
+[   93.487115] Call Trace:
+[   93.487117]  <TASK>
+[   93.487120]  ? __pfx_lru_add+0x10/0x10
+[   93.487127]  _raw_spin_lock_irqsave+0x2f/0x40
+[   93.487132]  folio_lruvec_lock_irqsave+0x61/0x90
+[   93.487138]  folio_batch_move_lru+0x85/0x130
+[   93.487144]  __folio_batch_add_and_move+0x48/0x90
+[   93.487148]  do_wp_page+0x63b/0xea0
+[   93.487153]  __handle_mm_fault+0x441/0xa30
+[   93.487159]  handle_mm_fault+0x125/0x440
+[   93.487163]  do_user_addr_fault+0x194/0x830
+[   93.487169]  exc_page_fault+0x63/0x130
+[   93.487176]  asm_exc_page_fault+0x26/0x30
+[   93.487180] RIP: 0033:0xffffffd0703
+[   93.487222] Code: 0f 84 0d 04 00 00 41 f6 85 56 03 00 00 20 0f 85 ff 03 00 00 49 8b 45 60 48 85 c0 74 04 48 01 70 08 49 8b 45 58 48 85 c0 74 04 <48> 01 70 08 49 8b 45 68 48 85 c0 74 04 48 01 70 08 49 8b 45 70 48
+[   93.487225] RSP: 002b:00007ffc533c2c40 EFLAGS: 00010202
+[   93.487229] RAX: 00000fffff975cd0 RBX: 0000000000000030 RCX: 0000100000000f90
+[   93.487231] RDX: 00000fffff975dc0 RSI: 00000fffff96c000 RDI: 000000006fffffff
+[   93.487233] RBP: 00007ffc533c2da0 R08: 0000000000000006 R09: 00000000effffef5
+[   93.487235] R10: 0000000070000029 R11: 00007ffc533c2e98 R12: 00007ffc533c2b20
+[   93.487237] R13: 0000100000000f50 R14: 00007ffc533c2e50 R15: 00000fffff976030
+[   93.487242]  </TASK>
+[   93.487855] rcu: rcu_preempt kthread starved for 54492 jiffies! g429 f0x0 RCU_GP_WAIT_FQS(5) ->state=0x0 ->cpu=1
+[   93.821919] rcu: 	Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[   93.828833] rcu: RCU grace-period kthread stack dump:
+[   93.832526] task:rcu_preempt     state:R  running task     stack:14928 pid:15    tgid:15    ppid:2      task_flags:0x208040 flags:0x00080000
+[   93.838924] Call Trace:
+[   93.840878]  <TASK>
+[   93.842745]  __schedule+0x4e5/0xcc0
+[   93.845424]  ? __pfx_rcu_gp_kthread+0x10/0x10
+[   93.849372]  schedule+0x22/0xd0
+[   93.851933]  schedule_timeout+0x71/0x100
+[   93.853425]  ? __pfx_process_timeout+0x10/0x10
+[   93.856439]  rcu_gp_fqs_loop+0x11f/0x640
+[   93.857749]  rcu_gp_kthread+0x19c/0x240
+[   93.860037]  kthread+0xff/0x1f0
+[   93.862433]  ? __pfx_kthread+0x10/0x10
+[   93.865256]  ? __pfx_kthread+0x10/0x10
+[   93.868008]  ret_from_fork+0x144/0x160
+[   93.869459]  ? __pfx_kthread+0x10/0x10
+[   93.871518]  ret_from_fork_asm+0x1a/0x30
+[   93.874329]  </TASK>
+[   93.876023] rcu: Stack dump where RCU GP kthread last ran:
+[   93.879925] Sending NMI from CPU 2 to CPUs 1:
+[   93.882671] NMI backtrace for cpu 1
+[   93.882702] CPU: 1 UID: 0 PID: 86 Comm: kworker/u32:3 Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[   93.882705] Tainted: [D]=DIE, [W]=WARN
+[   93.882705] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   93.882707] Workqueue: writeback wb_workfn (flush-253:0)
+[   93.882759] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[   93.882769] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[   93.882773] RSP: 0018:ffff9e6ac03a76e8 EFLAGS: 00000002
+[   93.882776] RAX: 0000000000000001 RBX: ffff9e6ac03a7738 RCX: 0000000000000000
+[   93.882779] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[   93.882792] RBP: ffff9b4806788098 R08: 0000000000001000 R09: 0000000000000000
+[   93.882794] R10: 0000000000000000 R11: ffff9e6ac03a7548 R12: 0000000000000246
+[   93.882797] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffffea7dc42c55c0
+[   93.882874] FS:  0000000000000000(0000) GS:ffff9b4885999000(0000) knlGS:0000000000000000
+[   93.882891] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   93.882894] CR2: 00000fffffc938b0 CR3: 000000010640a001 CR4: 0000000000770ef0
+[   93.882953] PKRU: 55555554
+[   93.882967] Call Trace:
+[   93.882971]  <TASK>
+[   93.882974]  ? __pfx_lru_add+0x10/0x10
+[   93.882982]  _raw_spin_lock_irqsave+0x2f/0x40
+[   93.882988]  folio_lruvec_lock_irqsave+0x61/0x90
+[   93.882995]  folio_batch_move_lru+0x85/0x130
+[   93.883001]  lru_add_drain_cpu+0x7b/0x120
+[   93.883052]  __folio_batch_release+0x2c/0x50
+[   93.883059]  mpage_prepare_extent_to_map+0x49f/0x4c0
+[   93.883347]  ext4_do_writepages+0x377/0xee0
+[   93.883378]  ? ext4_writepages+0xc3/0x1a0
+[   93.883384]  ext4_writepages+0xc3/0x1a0
+[   93.883390]  do_writepages+0xc8/0x160
+[   93.883442]  __writeback_single_inode+0x3c/0x330
+[   93.883574]  writeback_sb_inodes+0x213/0x4c0
+[   93.883588]  __writeback_inodes_wb+0x47/0xe0
+[   93.883594]  wb_writeback+0x18d/0x300
+[   93.883602]  wb_workfn+0x262/0x430
+[   93.883609]  process_one_work+0x163/0x390
+[   93.883696]  worker_thread+0x160/0x2d0
+[   93.883703]  ? __pfx_worker_thread+0x10/0x10
+[   93.883747]  kthread+0xff/0x1f0
+[   93.883752]  ? __pfx_kthread+0x10/0x10
+[   93.883756]  ? __pfx_kthread+0x10/0x10
+[   93.883759]  ret_from_fork+0x144/0x160
+[   93.883762]  ? __pfx_kthread+0x10/0x10
+[   93.883765]  ret_from_fork_asm+0x1a/0x30
+[   93.883773]  </TASK>
+[   93.883775] INFO: NMI handler (nmi_cpu_backtrace_handler) took too long to run: 1.105 msecs
+[  131.670983] systemd[1]: systemd-journald.service: start operation timed out. Terminating.
+[  157.037113] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[  157.042003] rcu: 	3-...0: (1 GPs behind) idle=f8f4/1/0x4000000000000000 softirq=457/458 fqs=2018
+[  157.048449] rcu: 	6-...0: (0 ticks this GP) idle=0c9c/1/0x4000000000000000 softirq=513/513 fqs=2018
+[  157.055079] rcu: 	(detected by 2, t=148211 jiffies, g=429, q=232 ncpus=8)
+[  157.060652] Sending NMI from CPU 2 to CPUs 3:
+[  157.060787] NMI backtrace for cpu 3
+[  157.060797] CPU: 3 UID: 0 PID: 225 Comm: dmi_memory_id Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  157.060806] Tainted: [D]=DIE, [W]=WARN
+[  157.060808] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  157.060810] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  157.060824] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  157.060828] RSP: 0000:ffff9e6ac0a23c78 EFLAGS: 00000002
+[  157.060833] RAX: 0000000000000001 RBX: ffff9e6ac0a23cc8 RCX: 0000000000000000
+[  157.060941] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  157.060942] RBP: ffff9b4806788098 R08: ffff9b48374e6d20 R09: 0000000000000011
+[  157.060943] R10: 0000000000000000 R11: ffff9e6ac0a23e20 R12: 0000000000000246
+[  157.060944] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b48066b1b00
+[  157.060972] FS:  0000100000c00980(0000) GS:ffff9b4885a19000(0000) knlGS:0000000000000000
+[  157.060977] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  157.060978] CR2: 00000fffff7ea010 CR3: 000000010d062006 CR4: 0000000000770ef0
+[  157.060995] PKRU: 55555554
+[  157.060995] Call Trace:
+[  157.060998]  <TASK>
+[  157.061002]  ? __pfx_lru_add+0x10/0x10
+[  157.061006]  _raw_spin_lock_irqsave+0x2f/0x40
+[  157.061008]  folio_lruvec_lock_irqsave+0x61/0x90
+[  157.061013]  folio_batch_move_lru+0x85/0x130
+[  157.061015]  __folio_batch_add_and_move+0x48/0x90
+[  157.061017]  set_pte_range+0x1c7/0x1f0
+[  157.061019]  finish_fault+0x210/0x430
+[  157.061021]  __handle_mm_fault+0x877/0xa30
+[  157.061023]  handle_mm_fault+0x125/0x440
+[  157.061024]  do_user_addr_fault+0x194/0x830
+[  157.061029]  exc_page_fault+0x63/0x130
+[  157.061033]  asm_exc_page_fault+0x26/0x30
+[  157.061036] RIP: 0033:0xffffffd6f04
+[  157.061038] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[  157.061039] RSP: 002b:00007ffe46589690 EFLAGS: 00010206
+[  157.061040] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff821460
+[  157.061041] RDX: 00000fffff28c450 RSI: 00000fffff7ea010 RDI: 00000ffffffff0a0
+[  157.061041] RBP: 00007ffe465897a0 R08: 00000fffff2f11f0 R09: 00007ffe46589730
+[  157.061042] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[  157.061042] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[  157.061044]  </TASK>
+[  157.061727] Sending NMI from CPU 2 to CPUs 6:
+[  157.061854] NMI backtrace for cpu 6
+[  157.061862] CPU: 6 UID: 0 PID: 228 Comm: systemd-sysctl Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  157.061990] Tainted: [D]=DIE, [W]=WARN
+[  157.061991] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  157.061994] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  157.062006] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  157.062009] RSP: 0000:ffff9e6ac0a2bc90 EFLAGS: 00000002
+[  157.062014] RAX: 0000000000000001 RBX: ffff9e6ac0a2bce0 RCX: 0000000000000000
+[  157.062017] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  157.062019] RBP: ffff9b4806788098 R08: ffff9b48375a6d20 R09: 0000000000000011
+[  157.062022] R10: ffff9b4802f44e00 R11: 0000000000000100 R12: 0000000000000246
+[  157.062024] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: 8000000106c81067
+[  157.062095] FS:  0000000000000000(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+[  157.062109] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  157.062112] CR2: 00000fffff975cd8 CR3: 00000001062f5004 CR4: 0000000000770ef0
+[  157.062150] PKRU: 55555554
+[  157.062152] Call Trace:
+[  157.062156]  <TASK>
+[  157.062160]  ? __pfx_lru_add+0x10/0x10
+[  157.062167]  _raw_spin_lock_irqsave+0x2f/0x40
+[  157.062173]  folio_lruvec_lock_irqsave+0x61/0x90
+[  157.062180]  folio_batch_move_lru+0x85/0x130
+[  157.062186]  __folio_batch_add_and_move+0x48/0x90
+[  157.062191]  do_wp_page+0x63b/0xea0
+[  157.062196]  __handle_mm_fault+0x441/0xa30
+[  157.062202]  handle_mm_fault+0x125/0x440
+[  157.062206]  do_user_addr_fault+0x194/0x830
+[  157.062214]  exc_page_fault+0x63/0x130
+[  157.062220]  asm_exc_page_fault+0x26/0x30
+[  157.062225] RIP: 0033:0xffffffd0703
+[  157.062230] Code: 0f 84 0d 04 00 00 41 f6 85 56 03 00 00 20 0f 85 ff 03 00 00 49 8b 45 60 48 85 c0 74 04 48 01 70 08 49 8b 45 58 48 85 c0 74 04 <48> 01 70 08 49 8b 45 68 48 85 c0 74 04 48 01 70 08 49 8b 45 70 48
+[  157.062233] RSP: 002b:00007ffc533c2c40 EFLAGS: 00010202
+[  157.062278] RAX: 00000fffff975cd0 RBX: 0000000000000030 RCX: 0000100000000f90
+[  157.062281] RDX: 00000fffff975dc0 RSI: 00000fffff96c000 RDI: 000000006fffffff
+[  157.062283] RBP: 00007ffc533c2da0 R08: 0000000000000006 R09: 00000000effffef5
+[  157.062286] R10: 0000000070000029 R11: 00007ffc533c2e98 R12: 00007ffc533c2b20
+[  157.062288] R13: 0000100000000f50 R14: 00007ffc533c2e50 R15: 00000fffff976030
+[  157.062293]  </TASK>
+[  157.062812] rcu: rcu_preempt kthread starved for 118066 jiffies! g429 f0x2 RCU_GP_WAIT_FQS(5) ->state=0x0 ->cpu=1
+[  157.394058] rcu: 	Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[  157.400442] rcu: RCU grace-period kthread stack dump:
+[  157.404124] task:rcu_preempt     state:R  running task     stack:14928 pid:15    tgid:15    ppid:2      task_flags:0x208040 flags:0x00080000
+[  157.412346] Call Trace:
+[  157.414177]  <TASK>
+[  157.415781]  __schedule+0x4e5/0xcc0
+[  157.418262]  ? __pfx_rcu_gp_kthread+0x10/0x10
+[  157.421744]  schedule+0x22/0xd0
+[  157.424038]  schedule_timeout+0x71/0x100
+[  157.426921]  ? __pfx_process_timeout+0x10/0x10
+[  157.430274]  rcu_gp_fqs_loop+0x11f/0x640
+[  157.433256]  rcu_gp_kthread+0x19c/0x240
+[  157.436021]  kthread+0xff/0x1f0
+[  157.438271]  ? __pfx_kthread+0x10/0x10
+[  157.440898]  ? __pfx_kthread+0x10/0x10
+[  157.443571]  ret_from_fork+0x144/0x160
+[  157.446455]  ? __pfx_kthread+0x10/0x10
+[  157.449062]  ret_from_fork_asm+0x1a/0x30
+[  157.452172]  </TASK>
+[  157.453808] rcu: Stack dump where RCU GP kthread last ran:
+[  157.457577] Sending NMI from CPU 2 to CPUs 1:
+[  157.460937] NMI backtrace for cpu 1
+[  157.460956] CPU: 1 UID: 0 PID: 86 Comm: kworker/u32:3 Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  157.460964] Tainted: [D]=DIE, [W]=WARN
+[  157.460966] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  157.460970] Workqueue: writeback wb_workfn (flush-253:0)
+[  157.460983] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  157.460993] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  157.460996] RSP: 0018:ffff9e6ac03a76e8 EFLAGS: 00000002
+[  157.461000] RAX: 0000000000000001 RBX: ffff9e6ac03a7738 RCX: 0000000000000000
+[  157.461003] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  157.461005] RBP: ffff9b4806788098 R08: 0000000000001000 R09: 0000000000000000
+[  157.461007] R10: 0000000000000000 R11: ffff9e6ac03a7548 R12: 0000000000000246
+[  157.461010] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffffea7dc42c55c0
+[  157.461094] FS:  0000000000000000(0000) GS:ffff9b4885999000(0000) knlGS:0000000000000000
+[  157.461110] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  157.461113] CR2: 00000fffffc938b0 CR3: 000000010640a001 CR4: 0000000000770ef0
+[  157.461166] PKRU: 55555554
+[  157.461168] Call Trace:
+[  157.461172]  <TASK>
+[  157.461176]  ? __pfx_lru_add+0x10/0x10
+[  157.461184]  _raw_spin_lock_irqsave+0x2f/0x40
+[  157.461190]  folio_lruvec_lock_irqsave+0x61/0x90
+[  157.461197]  folio_batch_move_lru+0x85/0x130
+[  157.461203]  lru_add_drain_cpu+0x7b/0x120
+[  157.461208]  __folio_batch_release+0x2c/0x50
+[  157.461213]  mpage_prepare_extent_to_map+0x49f/0x4c0
+[  157.461223]  ext4_do_writepages+0x377/0xee0
+[  157.461231]  ? ext4_writepages+0xc3/0x1a0
+[  157.461235]  ext4_writepages+0xc3/0x1a0
+[  157.461241]  do_writepages+0xc8/0x160
+[  157.461247]  __writeback_single_inode+0x3c/0x330
+[  157.461254]  writeback_sb_inodes+0x213/0x4c0
+[  157.461265]  __writeback_inodes_wb+0x47/0xe0
+[  157.461271]  wb_writeback+0x18d/0x300
+[  157.461279]  wb_workfn+0x262/0x430
+[  157.461338]  process_one_work+0x163/0x390
+[  157.461346]  worker_thread+0x160/0x2d0
+[  157.461352]  ? __pfx_worker_thread+0x10/0x10
+[  157.461357]  kthread+0xff/0x1f0
+[  157.461361]  ? __pfx_kthread+0x10/0x10
+[  157.461364]  ? __pfx_kthread+0x10/0x10
+[  157.461367]  ret_from_fork+0x144/0x160
+[  157.461371]  ? __pfx_kthread+0x10/0x10
+[  157.461374]  ret_from_fork_asm+0x1a/0x30
+[  157.461382]  </TASK>
+[  220.616983] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[  220.620220] rcu: 	3-...0: (1 GPs behind) idle=f8f4/1/0x4000000000000000 softirq=457/458 fqs=2018
+[  220.626623] rcu: 	6-...0: (0 ticks this GP) idle=0c9c/1/0x4000000000000000 softirq=513/513 fqs=2018
+[  220.633318] rcu: 	(detected by 2, t=211790 jiffies, g=429, q=232 ncpus=8)
+[  220.638246] Sending NMI from CPU 2 to CPUs 3:
+[  220.638984] NMI backtrace for cpu 3
+[  220.639473] CPU: 3 UID: 0 PID: 225 Comm: dmi_memory_id Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  220.639564] Tainted: [D]=DIE, [W]=WARN
+[  220.639591] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  220.639777] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  220.640296] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  220.640301] RSP: 0000:ffff9e6ac0a23c78 EFLAGS: 00000002
+[  220.640347] RAX: 0000000000000001 RBX: ffff9e6ac0a23cc8 RCX: 0000000000000000
+[  220.640369] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  220.640371] RBP: ffff9b4806788098 R08: ffff9b48374e6d20 R09: 0000000000000011
+[  220.640374] R10: 0000000000000000 R11: ffff9e6ac0a23e20 R12: 0000000000000246
+[  220.640376] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b48066b1b00
+[  220.640447] FS:  0000100000c00980(0000) GS:ffff9b4885a19000(0000) knlGS:0000000000000000
+[  220.640461] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  220.640465] CR2: 00000fffff7ea010 CR3: 000000010d062006 CR4: 0000000000770ef0
+[  220.640505] PKRU: 55555554
+[  220.640527] Call Trace:
+[  220.640842]  <TASK>
+[  220.641190]  ? __pfx_lru_add+0x10/0x10
+[  220.641417]  _raw_spin_lock_irqsave+0x2f/0x40
+[  220.641424]  folio_lruvec_lock_irqsave+0x61/0x90
+[  220.641656]  folio_batch_move_lru+0x85/0x130
+[  220.641722]  __folio_batch_add_and_move+0x48/0x90
+[  220.641736]  set_pte_range+0x1c7/0x1f0
+[  220.641838]  finish_fault+0x210/0x430
+[  220.641919]  __handle_mm_fault+0x877/0xa30
+[  220.641952]  handle_mm_fault+0x125/0x440
+[  220.641957]  do_user_addr_fault+0x194/0x830
+[  220.642107]  exc_page_fault+0x63/0x130
+[  220.642194]  asm_exc_page_fault+0x26/0x30
+[  220.642277] RIP: 0033:0xffffffd6f04
+[  220.642419] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[  220.642456] RSP: 002b:00007ffe46589690 EFLAGS: 00010206
+[  220.642460] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff821460
+[  220.642462] RDX: 00000fffff28c450 RSI: 00000fffff7ea010 RDI: 00000ffffffff0a0
+[  220.642464] RBP: 00007ffe465897a0 R08: 00000fffff2f11f0 R09: 00007ffe46589730
+[  220.642466] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[  220.642468] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[  220.642474]  </TASK>
+[  220.642477] INFO: NMI handler (nmi_cpu_backtrace_handler) took too long to run: 3.495 msecs
+[  220.643445] Sending NMI from CPU 2 to CPUs 6:
+[  220.643650] NMI backtrace for cpu 6
+[  220.643664] CPU: 6 UID: 0 PID: 228 Comm: systemd-sysctl Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  220.643666] Tainted: [D]=DIE, [W]=WARN
+[  220.643667] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  220.643677] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  220.643681] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  220.643683] RSP: 0000:ffff9e6ac0a2bc90 EFLAGS: 00000002
+[  220.643684] RAX: 0000000000000001 RBX: ffff9e6ac0a2bce0 RCX: 0000000000000000
+[  220.643685] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  220.643685] RBP: ffff9b4806788098 R08: ffff9b48375a6d20 R09: 0000000000000011
+[  220.643686] R10: ffff9b4802f44e00 R11: 0000000000000100 R12: 0000000000000246
+[  220.643687] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: 8000000106c81067
+[  220.643716] FS:  0000000000000000(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+[  220.643720] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  220.643721] CR2: 00000fffff975cd8 CR3: 00000001062f5004 CR4: 0000000000770ef0
+[  220.643732] PKRU: 55555554
+[  220.643733] Call Trace:
+[  220.643743]  <TASK>
+[  220.643745]  ? __pfx_lru_add+0x10/0x10
+[  220.643748]  _raw_spin_lock_irqsave+0x2f/0x40
+[  220.643750]  folio_lruvec_lock_irqsave+0x61/0x90
+[  220.643752]  folio_batch_move_lru+0x85/0x130
+[  220.643754]  __folio_batch_add_and_move+0x48/0x90
+[  220.643755]  do_wp_page+0x63b/0xea0
+[  220.643757]  __handle_mm_fault+0x441/0xa30
+[  220.643759]  handle_mm_fault+0x125/0x440
+[  220.643760]  do_user_addr_fault+0x194/0x830
+[  220.643762]  exc_page_fault+0x63/0x130
+[  220.643765]  asm_exc_page_fault+0x26/0x30
+[  220.643766] RIP: 0033:0xffffffd0703
+[  220.643777] Code: 0f 84 0d 04 00 00 41 f6 85 56 03 00 00 20 0f 85 ff 03 00 00 49 8b 45 60 48 85 c0 74 04 48 01 70 08 49 8b 45 58 48 85 c0 74 04 <48> 01 70 08 49 8b 45 68 48 85 c0 74 04 48 01 70 08 49 8b 45 70 48
+[  220.643778] RSP: 002b:00007ffc533c2c40 EFLAGS: 00010202
+[  220.643779] RAX: 00000fffff975cd0 RBX: 0000000000000030 RCX: 0000100000000f90
+[  220.643780] RDX: 00000fffff975dc0 RSI: 00000fffff96c000 RDI: 000000006fffffff
+[  220.643781] RBP: 00007ffc533c2da0 R08: 0000000000000006 R09: 00000000effffef5
+[  220.643781] R10: 0000000070000029 R11: 00007ffc533c2e98 R12: 00007ffc533c2b20
+[  220.643782] R13: 0000100000000f50 R14: 00007ffc533c2e50 R15: 00000fffff976030
+[  220.643793]  </TASK>
+[  220.644655] rcu: rcu_preempt kthread starved for 181650 jiffies! g429 f0x2 RCU_GP_WAIT_FQS(5) ->state=0x0 ->cpu=1
+[  220.979991] rcu: 	Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[  220.984434] rcu: RCU grace-period kthread stack dump:
+[  220.987924] task:rcu_preempt     state:R  running task     stack:14928 pid:15    tgid:15    ppid:2      task_flags:0x208040 flags:0x00080000
+[  220.997012] Call Trace:
+[  220.998802]  <TASK>
+[  221.000588]  __schedule+0x4e5/0xcc0
+[  221.003253]  ? __pfx_rcu_gp_kthread+0x10/0x10
+[  221.006459]  schedule+0x22/0xd0
+[  221.008696]  schedule_timeout+0x71/0x100
+[  221.012021]  ? __pfx_process_timeout+0x10/0x10
+[  221.015501]  rcu_gp_fqs_loop+0x11f/0x640
+[  221.018355]  rcu_gp_kthread+0x19c/0x240
+[  221.021189]  kthread+0xff/0x1f0
+[  221.023618]  ? __pfx_kthread+0x10/0x10
+[  221.026307]  ? __pfx_kthread+0x10/0x10
+[  221.029121]  ret_from_fork+0x144/0x160
+[  221.031996]  ? __pfx_kthread+0x10/0x10
+[  221.034655]  ret_from_fork_asm+0x1a/0x30
+[  221.037536]  </TASK>
+[  221.039284] rcu: Stack dump where RCU GP kthread last ran:
+[  221.043222] Sending NMI from CPU 2 to CPUs 1:
+[  221.046733] NMI backtrace for cpu 1
+[  221.046763] CPU: 1 UID: 0 PID: 86 Comm: kworker/u32:3 Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  221.046772] Tainted: [D]=DIE, [W]=WARN
+[  221.046774] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  221.046826] Workqueue: writeback wb_workfn (flush-253:0)
+[  221.046915] RIP: 0010:queued_spin_lock_slowpath+0x17/0x2b0
+[  221.046924] Code: 00 00 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 f3 0f 1e fa 41 55 41 54 55 48 89 fd 53 66 90 ba 01 00 00 00 8b 45 00 <85> c0 75 6c f0 0f b1 55 00 75 65 5b 5d 41 5c 41 5d c3 cc cc cc cc
+[  221.046928] RSP: 0018:ffff9e6ac03a76e8 EFLAGS: 00000002
+[  221.046967] RAX: 0000000000000001 RBX: ffff9e6ac03a7738 RCX: 0000000000000000
+[  221.046970] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  221.046972] RBP: ffff9b4806788098 R08: 0000000000001000 R09: 0000000000000000
+[  221.046974] R10: 0000000000000000 R11: ffff9e6ac03a7548 R12: 0000000000000246
+[  221.046976] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffffea7dc42c55c0
+[  221.047027] FS:  0000000000000000(0000) GS:ffff9b4885999000(0000) knlGS:0000000000000000
+[  221.047031] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  221.047031] CR2: 00000fffffc938b0 CR3: 000000010640a001 CR4: 0000000000770ef0
+[  221.047043] PKRU: 55555554
+[  221.047044] Call Trace:
+[  221.047076]  <TASK>
+[  221.047080]  ? __pfx_lru_add+0x10/0x10
+[  221.047118]  _raw_spin_lock_irqsave+0x2f/0x40
+[  221.047125]  folio_lruvec_lock_irqsave+0x61/0x90
+[  221.047132]  folio_batch_move_lru+0x85/0x130
+[  221.047138]  lru_add_drain_cpu+0x7b/0x120
+[  221.047193]  __folio_batch_release+0x2c/0x50
+[  221.047200]  mpage_prepare_extent_to_map+0x49f/0x4c0
+[  221.047342]  ext4_do_writepages+0x377/0xee0
+[  221.047371]  ? ext4_writepages+0xc3/0x1a0
+[  221.047376]  ext4_writepages+0xc3/0x1a0
+[  221.047383]  do_writepages+0xc8/0x160
+[  221.047432]  __writeback_single_inode+0x3c/0x330
+[  221.047531]  writeback_sb_inodes+0x213/0x4c0
+[  221.047545]  __writeback_inodes_wb+0x47/0xe0
+[  221.047551]  wb_writeback+0x18d/0x300
+[  221.047558]  wb_workfn+0x262/0x430
+[  221.047565]  process_one_work+0x163/0x390
+[  221.047652]  worker_thread+0x160/0x2d0
+[  221.047660]  ? __pfx_worker_thread+0x10/0x10
+[  221.047665]  kthread+0xff/0x1f0
+[  221.047669]  ? __pfx_kthread+0x10/0x10
+[  221.047672]  ? __pfx_kthread+0x10/0x10
+[  221.047675]  ret_from_fork+0x144/0x160
+[  221.047679]  ? __pfx_kthread+0x10/0x10
+[  221.047682]  ret_from_fork_asm+0x1a/0x30
+[  221.047690]  </TASK>
+[  222.293754] systemd[1]: ifupdown-pre.service: start operation timed out. Terminating.
+[  284.167360] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[  284.171788] rcu: 	3-...0: (1 GPs behind) idle=f8f4/1/0x4000000000000000 softirq=457/458 fqs=2018
+[  284.175472] rcu: 	6-...0: (0 ticks this GP) idle=0c9c/1/0x4000000000000000 softirq=513/513 fqs=2018
+[  284.181268] rcu: 	(detected by 2, t=275335 jiffies, g=429, q=232 ncpus=8)
+[  284.185730] Sending NMI from CPU 2 to CPUs 3:
+[  284.185956] NMI backtrace for cpu 3
+[  284.185965] CPU: 3 UID: 0 PID: 225 Comm: dmi_memory_id Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  284.185973] Tainted: [D]=DIE, [W]=WARN
+[  284.185975] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  284.185977] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  284.186147] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  284.186152] RSP: 0000:ffff9e6ac0a23c78 EFLAGS: 00000002
+[  284.186157] RAX: 0000000000000001 RBX: ffff9e6ac0a23cc8 RCX: 0000000000000000
+[  284.186160] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  284.186162] RBP: ffff9b4806788098 R08: ffff9b48374e6d20 R09: 0000000000000011
+[  284.186164] R10: 0000000000000000 R11: ffff9e6ac0a23e20 R12: 0000000000000246
+[  284.186167] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b48066b1b00
+[  284.186308] FS:  0000100000c00980(0000) GS:ffff9b4885a19000(0000) knlGS:0000000000000000
+[  284.186371] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  284.186375] CR2: 00000fffff7ea010 CR3: 000000010d062006 CR4: 0000000000770ef0
+[  284.186425] PKRU: 55555554
+[  284.186427] Call Trace:
+[  284.186432]  <TASK>
+[  284.186545]  ? __pfx_lru_add+0x10/0x10
+[  284.186604]  _raw_spin_lock_irqsave+0x2f/0x40
+[  284.186613]  folio_lruvec_lock_irqsave+0x61/0x90
+[  284.186620]  folio_batch_move_lru+0x85/0x130
+[  284.186627]  __folio_batch_add_and_move+0x48/0x90
+[  284.186644]  set_pte_range+0x1c7/0x1f0
+[  284.186649]  finish_fault+0x210/0x430
+[  284.186654]  __handle_mm_fault+0x877/0xa30
+[  284.186659]  handle_mm_fault+0x125/0x440
+[  284.186663]  do_user_addr_fault+0x194/0x830
+[  284.186676]  exc_page_fault+0x63/0x130
+[  284.186683]  asm_exc_page_fault+0x26/0x30
+[  284.186688] RIP: 0033:0xffffffd6f04
+[  284.186719] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[  284.186723] RSP: 002b:00007ffe46589690 EFLAGS: 00010206
+[  284.186727] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff821460
+[  284.186729] RDX: 00000fffff28c450 RSI: 00000fffff7ea010 RDI: 00000ffffffff0a0
+[  284.186731] RBP: 00007ffe465897a0 R08: 00000fffff2f11f0 R09: 00007ffe46589730
+[  284.186733] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[  284.186736] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[  284.186793]  </TASK>
+[  284.186921] Sending NMI from CPU 2 to CPUs 6:
+[  284.187204] NMI backtrace for cpu 6
+[  284.187224] CPU: 6 UID: 0 PID: 228 Comm: systemd-sysctl Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  284.187233] Tainted: [D]=DIE, [W]=WARN
+[  284.187235] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  284.187237] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  284.187249] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  284.187253] RSP: 0000:ffff9e6ac0a2bc90 EFLAGS: 00000002
+[  284.187258] RAX: 0000000000000001 RBX: ffff9e6ac0a2bce0 RCX: 0000000000000000
+[  284.187261] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  284.187263] RBP: ffff9b4806788098 R08: ffff9b48375a6d20 R09: 0000000000000011
+[  284.187266] R10: ffff9b4802f44e00 R11: 0000000000000100 R12: 0000000000000246
+[  284.187270] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: 8000000106c81067
+[  284.187345] FS:  0000000000000000(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+[  284.187360] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  284.187363] CR2: 00000fffff975cd8 CR3: 00000001062f5004 CR4: 0000000000770ef0
+[  284.187512] PKRU: 55555554
+[  284.187519] Call Trace:
+[  284.187523]  <TASK>
+[  284.187527]  ? __pfx_lru_add+0x10/0x10
+[  284.187536]  _raw_spin_lock_irqsave+0x2f/0x40
+[  284.187542]  folio_lruvec_lock_irqsave+0x61/0x90
+[  284.187550]  folio_batch_move_lru+0x85/0x130
+[  284.187558]  __folio_batch_add_and_move+0x48/0x90
+[  284.187563]  do_wp_page+0x63b/0xea0
+[  284.187568]  __handle_mm_fault+0x441/0xa30
+[  284.187574]  handle_mm_fault+0x125/0x440
+[  284.187689]  do_user_addr_fault+0x194/0x830
+[  284.187697]  exc_page_fault+0x63/0x130
+[  284.187704]  asm_exc_page_fault+0x26/0x30
+[  284.187709] RIP: 0033:0xffffffd0703
+[  284.187739] Code: 0f 84 0d 04 00 00 41 f6 85 56 03 00 00 20 0f 85 ff 03 00 00 49 8b 45 60 48 85 c0 74 04 48 01 70 08 49 8b 45 58 48 85 c0 74 04 <48> 01 70 08 49 8b 45 68 48 85 c0 74 04 48 01 70 08 49 8b 45 70 48
+[  284.187744] RSP: 002b:00007ffc533c2c40 EFLAGS: 00010202
+[  284.187748] RAX: 00000fffff975cd0 RBX: 0000000000000030 RCX: 0000100000000f90
+[  284.187751] RDX: 00000fffff975dc0 RSI: 00000fffff96c000 RDI: 000000006fffffff
+[  284.187753] RBP: 00007ffc533c2da0 R08: 0000000000000006 R09: 00000000effffef5
+[  284.187756] R10: 0000000070000029 R11: 00007ffc533c2e98 R12: 00007ffc533c2b20
+[  284.187758] R13: 0000100000000f50 R14: 00007ffc533c2e50 R15: 00000fffff976030
+[  284.187763]  </TASK>
+[  284.188116] rcu: rcu_preempt kthread starved for 245193 jiffies! g429 f0x2 RCU_GP_WAIT_FQS(5) ->state=0x0 ->cpu=1
+[  284.541334] rcu: 	Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[  284.546611] rcu: RCU grace-period kthread stack dump:
+[  284.550066] task:rcu_preempt     state:R  running task     stack:14928 pid:15    tgid:15    ppid:2      task_flags:0x208040 flags:0x00080000
+[  284.558840] Call Trace:
+[  284.560657]  <TASK>
+[  284.562328]  __schedule+0x4e5/0xcc0
+[  284.564886]  ? __pfx_rcu_gp_kthread+0x10/0x10
+[  284.567909]  schedule+0x22/0xd0
+[  284.570172]  schedule_timeout+0x71/0x100
+[  284.573004]  ? __pfx_process_timeout+0x10/0x10
+[  284.576122]  rcu_gp_fqs_loop+0x11f/0x640
+[  284.578976]  rcu_gp_kthread+0x19c/0x240
+[  284.581658]  kthread+0xff/0x1f0
+[  284.583979]  ? __pfx_kthread+0x10/0x10
+[  284.586372]  ? __pfx_kthread+0x10/0x10
+[  284.589096]  ret_from_fork+0x144/0x160
+[  284.591803]  ? __pfx_kthread+0x10/0x10
+[  284.594687]  ret_from_fork_asm+0x1a/0x30
+[  284.597192]  </TASK>
+[  284.598843] rcu: Stack dump where RCU GP kthread last ran:
+[  284.602748] Sending NMI from CPU 2 to CPUs 1:
+[  284.606075] NMI backtrace for cpu 1
+[  284.606084] CPU: 1 UID: 0 PID: 86 Comm: kworker/u32:3 Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  284.606093] Tainted: [D]=DIE, [W]=WARN
+[  284.606095] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  284.606151] Workqueue: writeback wb_workfn (flush-253:0)
+[  284.606164] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  284.606172] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  284.606176] RSP: 0018:ffff9e6ac03a76e8 EFLAGS: 00000002
+[  284.606180] RAX: 0000000000000001 RBX: ffff9e6ac03a7738 RCX: 0000000000000000
+[  284.606183] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  284.606185] RBP: ffff9b4806788098 R08: 0000000000001000 R09: 0000000000000000
+[  284.606188] R10: 0000000000000000 R11: ffff9e6ac03a7548 R12: 0000000000000246
+[  284.606231] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffffea7dc42c55c0
+[  284.606311] FS:  0000000000000000(0000) GS:ffff9b4885999000(0000) knlGS:0000000000000000
+[  284.606329] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  284.606333] CR2: 00000fffffc938b0 CR3: 000000010640a001 CR4: 0000000000770ef0
+[  284.606387] PKRU: 55555554
+[  284.606389] Call Trace:
+[  284.606392]  <TASK>
+[  284.606395]  ? __pfx_lru_add+0x10/0x10
+[  284.606402]  _raw_spin_lock_irqsave+0x2f/0x40
+[  284.606408]  folio_lruvec_lock_irqsave+0x61/0x90
+[  284.606415]  folio_batch_move_lru+0x85/0x130
+[  284.606421]  lru_add_drain_cpu+0x7b/0x120
+[  284.606427]  __folio_batch_release+0x2c/0x50
+[  284.606432]  mpage_prepare_extent_to_map+0x49f/0x4c0
+[  284.606442]  ext4_do_writepages+0x377/0xee0
+[  284.606485]  ? ext4_writepages+0xc3/0x1a0
+[  284.606531]  ext4_writepages+0xc3/0x1a0
+[  284.606538]  do_writepages+0xc8/0x160
+[  284.606545]  __writeback_single_inode+0x3c/0x330
+[  284.606552]  writeback_sb_inodes+0x213/0x4c0
+[  284.606564]  __writeback_inodes_wb+0x47/0xe0
+[  284.606569]  wb_writeback+0x18d/0x300
+[  284.606577]  wb_workfn+0x262/0x430
+[  284.606584]  process_one_work+0x163/0x390
+[  284.606592]  worker_thread+0x160/0x2d0
+[  284.606598]  ? __pfx_worker_thread+0x10/0x10
+[  284.606603]  kthread+0xff/0x1f0
+[  284.606606]  ? __pfx_kthread+0x10/0x10
+[  284.606610]  ? __pfx_kthread+0x10/0x10
+[  284.606613]  ret_from_fork+0x144/0x160
+[  284.606616]  ? __pfx_kthread+0x10/0x10
+[  284.606619]  ret_from_fork_asm+0x1a/0x30
+[  284.606626]  </TASK>
+[  347.768713] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[  347.774662] rcu: 	3-...0: (1 GPs behind) idle=f8f4/1/0x4000000000000000 softirq=457/458 fqs=2018
+[  347.781575] rcu: 	6-...0: (0 ticks this GP) idle=0c9c/1/0x4000000000000000 softirq=513/513 fqs=2018
+[  347.788226] rcu: 	(detected by 2, t=338941 jiffies, g=429, q=232 ncpus=8)
+[  347.793175] Sending NMI from CPU 2 to CPUs 3:
+[  347.793249] NMI backtrace for cpu 3
+[  347.793260] CPU: 3 UID: 0 PID: 225 Comm: dmi_memory_id Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  347.793269] Tainted: [D]=DIE, [W]=WARN
+[  347.793271] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  347.793273] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  347.793286] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  347.793291] RSP: 0000:ffff9e6ac0a23c78 EFLAGS: 00000002
+[  347.793296] RAX: 0000000000000001 RBX: ffff9e6ac0a23cc8 RCX: 0000000000000000
+[  347.793299] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  347.793416] RBP: ffff9b4806788098 R08: ffff9b48374e6d20 R09: 0000000000000011
+[  347.793420] R10: 0000000000000000 R11: ffff9e6ac0a23e20 R12: 0000000000000246
+[  347.793423] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b48066b1b00
+[  347.793497] FS:  0000100000c00980(0000) GS:ffff9b4885a19000(0000) knlGS:0000000000000000
+[  347.793512] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  347.793516] CR2: 00000fffff7ea010 CR3: 000000010d062006 CR4: 0000000000770ef0
+[  347.793555] PKRU: 55555554
+[  347.793558] Call Trace:
+[  347.793562]  <TASK>
+[  347.793567]  ? __pfx_lru_add+0x10/0x10
+[  347.793576]  _raw_spin_lock_irqsave+0x2f/0x40
+[  347.793582]  folio_lruvec_lock_irqsave+0x61/0x90
+[  347.793749]  folio_batch_move_lru+0x85/0x130
+[  347.793758]  __folio_batch_add_and_move+0x48/0x90
+[  347.793764]  set_pte_range+0x1c7/0x1f0
+[  347.793769]  finish_fault+0x210/0x430
+[  347.793774]  __handle_mm_fault+0x877/0xa30
+[  347.793780]  handle_mm_fault+0x125/0x440
+[  347.793784]  do_user_addr_fault+0x194/0x830
+[  347.793793]  exc_page_fault+0x63/0x130
+[  347.793801]  asm_exc_page_fault+0x26/0x30
+[  347.793806] RIP: 0033:0xffffffd6f04
+[  347.793840] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[  347.793845] RSP: 002b:00007ffe46589690 EFLAGS: 00010206
+[  347.793849] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff821460
+[  347.793852] RDX: 00000fffff28c450 RSI: 00000fffff7ea010 RDI: 00000ffffffff0a0
+[  347.793854] RBP: 00007ffe465897a0 R08: 00000fffff2f11f0 R09: 00007ffe46589730
+[  347.793856] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[  347.793859] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[  347.793864]  </TASK>
+[  347.794213] Sending NMI from CPU 2 to CPUs 6:
+[  347.794337] NMI backtrace for cpu 6
+[  347.794346] CPU: 6 UID: 0 PID: 228 Comm: systemd-sysctl Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  347.794354] Tainted: [D]=DIE, [W]=WARN
+[  347.794356] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  347.794358] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  347.794370] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  347.794373] RSP: 0000:ffff9e6ac0a2bc90 EFLAGS: 00000002
+[  347.794378] RAX: 0000000000000001 RBX: ffff9e6ac0a2bce0 RCX: 0000000000000000
+[  347.794380] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  347.794383] RBP: ffff9b4806788098 R08: ffff9b48375a6d20 R09: 0000000000000011
+[  347.794385] R10: ffff9b4802f44e00 R11: 0000000000000100 R12: 0000000000000246
+[  347.794388] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: 8000000106c81067
+[  347.794471] FS:  0000000000000000(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+[  347.794485] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  347.794489] CR2: 00000fffff975cd8 CR3: 00000001062f5004 CR4: 0000000000770ef0
+[  347.794572] PKRU: 55555554
+[  347.794574] Call Trace:
+[  347.794577]  <TASK>
+[  347.794581]  ? __pfx_lru_add+0x10/0x10
+[  347.794588]  _raw_spin_lock_irqsave+0x2f/0x40
+[  347.794596]  folio_lruvec_lock_irqsave+0x61/0x90
+[  347.794602]  folio_batch_move_lru+0x85/0x130
+[  347.794608]  __folio_batch_add_and_move+0x48/0x90
+[  347.794613]  do_wp_page+0x63b/0xea0
+[  347.794618]  __handle_mm_fault+0x441/0xa30
+[  347.794624]  handle_mm_fault+0x125/0x440
+[  347.794628]  do_user_addr_fault+0x194/0x830
+[  347.794635]  exc_page_fault+0x63/0x130
+[  347.794642]  asm_exc_page_fault+0x26/0x30
+[  347.794646] RIP: 0033:0xffffffd0703
+[  347.794677] Code: 0f 84 0d 04 00 00 41 f6 85 56 03 00 00 20 0f 85 ff 03 00 00 49 8b 45 60 48 85 c0 74 04 48 01 70 08 49 8b 45 58 48 85 c0 74 04 <48> 01 70 08 49 8b 45 68 48 85 c0 74 04 48 01 70 08 49 8b 45 70 48
+[  347.794681] RSP: 002b:00007ffc533c2c40 EFLAGS: 00010202
+[  347.794684] RAX: 00000fffff975cd0 RBX: 0000000000000030 RCX: 0000100000000f90
+[  347.794687] RDX: 00000fffff975dc0 RSI: 00000fffff96c000 RDI: 000000006fffffff
+[  347.794689] RBP: 00007ffc533c2da0 R08: 0000000000000006 R09: 00000000effffef5
+[  347.794691] R10: 0000000070000029 R11: 00007ffc533c2e98 R12: 00007ffc533c2b20
+[  347.794693] R13: 0000100000000f50 R14: 00007ffc533c2e50 R15: 00000fffff976030
+[  347.794699]  </TASK>
+[  347.795285] rcu: rcu_preempt kthread starved for 308799 jiffies! g429 f0x2 RCU_GP_WAIT_FQS(5) ->state=0x0 ->cpu=1
+[  348.140525] rcu: 	Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[  348.145951] rcu: RCU grace-period kthread stack dump:
+[  348.149365] task:rcu_preempt     state:R  running task     stack:14928 pid:15    tgid:15    ppid:2      task_flags:0x208040 flags:0x00080000
+[  348.158026] Call Trace:
+[  348.160393]  <TASK>
+[  348.161993]  __schedule+0x4e5/0xcc0
+[  348.164569]  ? __pfx_rcu_gp_kthread+0x10/0x10
+[  348.167095]  schedule+0x22/0xd0
+[  348.168838]  schedule_timeout+0x71/0x100
+[  348.171768]  ? __pfx_process_timeout+0x10/0x10
+[  348.175082]  rcu_gp_fqs_loop+0x11f/0x640
+[  348.177910]  rcu_gp_kthread+0x19c/0x240
+[  348.180571]  kthread+0xff/0x1f0
+[  348.182873]  ? __pfx_kthread+0x10/0x10
+[  348.185474]  ? __pfx_kthread+0x10/0x10
+[  348.188230]  ret_from_fork+0x144/0x160
+[  348.191007]  ? __pfx_kthread+0x10/0x10
+[  348.193823]  ret_from_fork_asm+0x1a/0x30
+[  348.196544]  </TASK>
+[  348.198192] rcu: Stack dump where RCU GP kthread last ran:
+[  348.201978] Sending NMI from CPU 2 to CPUs 1:
+[  348.206887] NMI backtrace for cpu 1
+[  348.206896] CPU: 1 UID: 0 PID: 86 Comm: kworker/u32:3 Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  348.207019] Tainted: [D]=DIE, [W]=WARN
+[  348.207021] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  348.207024] Workqueue: writeback wb_workfn (flush-253:0)
+[  348.207036] RIP: 0010:queued_spin_lock_slowpath+0x14/0x2b0
+[  348.207082] Code: 00 00 00 00 00 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 f3 0f 1e fa 41 55 41 54 55 48 89 fd 53 66 90 ba 01 00 00 00 <8b> 45 00 85 c0 75 6c f0 0f b1 55 00 75 65 5b 5d 41 5c 41 5d c3 cc
+[  348.207086] RSP: 0018:ffff9e6ac03a76e8 EFLAGS: 00000002
+[  348.207090] RAX: 0000000000000001 RBX: ffff9e6ac03a7738 RCX: 0000000000000000
+[  348.207092] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  348.207095] RBP: ffff9b4806788098 R08: 0000000000001000 R09: 0000000000000000
+[  348.207097] R10: 0000000000000000 R11: ffff9e6ac03a7548 R12: 0000000000000246
+[  348.207099] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffffea7dc42c55c0
+[  348.207184] FS:  0000000000000000(0000) GS:ffff9b4885999000(0000) knlGS:0000000000000000
+[  348.207202] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  348.207205] CR2: 00000fffffc938b0 CR3: 000000010640a001 CR4: 0000000000770ef0
+[  348.207258] PKRU: 55555554
+[  348.207260] Call Trace:
+[  348.207263]  <TASK>
+[  348.207267]  ? __pfx_lru_add+0x10/0x10
+[  348.207274]  _raw_spin_lock_irqsave+0x2f/0x40
+[  348.207280]  folio_lruvec_lock_irqsave+0x61/0x90
+[  348.207287]  folio_batch_move_lru+0x85/0x130
+[  348.207293]  lru_add_drain_cpu+0x7b/0x120
+[  348.207298]  __folio_batch_release+0x2c/0x50
+[  348.207303]  mpage_prepare_extent_to_map+0x49f/0x4c0
+[  348.207313]  ext4_do_writepages+0x377/0xee0
+[  348.207321]  ? ext4_writepages+0xc3/0x1a0
+[  348.207325]  ext4_writepages+0xc3/0x1a0
+[  348.207331]  do_writepages+0xc8/0x160
+[  348.207338]  __writeback_single_inode+0x3c/0x330
+[  348.207344]  writeback_sb_inodes+0x213/0x4c0
+[  348.207355]  __writeback_inodes_wb+0x47/0xe0
+[  348.207361]  wb_writeback+0x18d/0x300
+[  348.207369]  wb_workfn+0x262/0x430
+[  348.207376]  process_one_work+0x163/0x390
+[  348.207383]  worker_thread+0x160/0x2d0
+[  348.207389]  ? __pfx_worker_thread+0x10/0x10
+[  348.207394]  kthread+0xff/0x1f0
+[  348.207397]  ? __pfx_kthread+0x10/0x10
+[  348.207400]  ? __pfx_kthread+0x10/0x10
+[  348.207403]  ret_from_fork+0x144/0x160
+[  348.207407]  ? __pfx_kthread+0x10/0x10
+[  348.207410]  ret_from_fork_asm+0x1a/0x30
+[  348.207417]  </TASK>
+[  411.368778] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[  411.373573] rcu: 	3-...0: (1 GPs behind) idle=f8f4/1/0x4000000000000000 softirq=457/458 fqs=2018
+[  411.380037] rcu: 	6-...0: (0 ticks this GP) idle=0c9c/1/0x4000000000000000 softirq=513/513 fqs=2018
+[  411.386731] rcu: 	(detected by 2, t=402543 jiffies, g=429, q=232 ncpus=8)
+[  411.392070] Sending NMI from CPU 2 to CPUs 3:
+[  411.392187] NMI backtrace for cpu 3
+[  411.392198] CPU: 3 UID: 0 PID: 225 Comm: dmi_memory_id Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  411.392208] Tainted: [D]=DIE, [W]=WARN
+[  411.392209] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  411.392212] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  411.392225] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  411.392393] RSP: 0000:ffff9e6ac0a23c78 EFLAGS: 00000002
+[  411.392399] RAX: 0000000000000001 RBX: ffff9e6ac0a23cc8 RCX: 0000000000000000
+[  411.392402] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  411.392405] RBP: ffff9b4806788098 R08: ffff9b48374e6d20 R09: 0000000000000011
+[  411.392407] R10: 0000000000000000 R11: ffff9e6ac0a23e20 R12: 0000000000000246
+[  411.392410] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b48066b1b00
+[  411.392481] FS:  0000100000c00980(0000) GS:ffff9b4885a19000(0000) knlGS:0000000000000000
+[  411.392495] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  411.392499] CR2: 00000fffff7ea010 CR3: 000000010d062006 CR4: 0000000000770ef0
+[  411.392569] PKRU: 55555554
+[  411.392572] Call Trace:
+[  411.392576]  <TASK>
+[  411.392581]  ? __pfx_lru_add+0x10/0x10
+[  411.392594]  _raw_spin_lock_irqsave+0x2f/0x40
+[  411.392601]  folio_lruvec_lock_irqsave+0x61/0x90
+[  411.392609]  folio_batch_move_lru+0x85/0x130
+[  411.392616]  __folio_batch_add_and_move+0x48/0x90
+[  411.392621]  set_pte_range+0x1c7/0x1f0
+[  411.392627]  finish_fault+0x210/0x430
+[  411.392631]  __handle_mm_fault+0x877/0xa30
+[  411.392638]  handle_mm_fault+0x125/0x440
+[  411.392642]  do_user_addr_fault+0x194/0x830
+[  411.392650]  exc_page_fault+0x63/0x130
+[  411.392658]  asm_exc_page_fault+0x26/0x30
+[  411.392662] RIP: 0033:0xffffffd6f04
+[  411.392674] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[  411.392676] RSP: 002b:00007ffe46589690 EFLAGS: 00010206
+[  411.392677] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff821460
+[  411.392677] RDX: 00000fffff28c450 RSI: 00000fffff7ea010 RDI: 00000ffffffff0a0
+[  411.392678] RBP: 00007ffe465897a0 R08: 00000fffff2f11f0 R09: 00007ffe46589730
+[  411.392679] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[  411.392679] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[  411.392681]  </TASK>
+[  411.393145] Sending NMI from CPU 2 to CPUs 6:
+[  411.393288] NMI backtrace for cpu 6
+[  411.393297] CPU: 6 UID: 0 PID: 228 Comm: systemd-sysctl Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  411.393307] Tainted: [D]=DIE, [W]=WARN
+[  411.393308] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  411.393311] RIP: 0010:queued_spin_lock_slowpath+0x14/0x2b0
+[  411.393450] Code: 00 00 00 00 00 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 f3 0f 1e fa 41 55 41 54 55 48 89 fd 53 66 90 ba 01 00 00 00 <8b> 45 00 85 c0 75 6c f0 0f b1 55 00 75 65 5b 5d 41 5c 41 5d c3 cc
+[  411.393454] RSP: 0000:ffff9e6ac0a2bc90 EFLAGS: 00000002
+[  411.393459] RAX: 0000000000000001 RBX: ffff9e6ac0a2bce0 RCX: 0000000000000000
+[  411.393462] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  411.393464] RBP: ffff9b4806788098 R08: ffff9b48375a6d20 R09: 0000000000000011
+[  411.393467] R10: ffff9b4802f44e00 R11: 0000000000000100 R12: 0000000000000246
+[  411.393469] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: 8000000106c81067
+[  411.393547] FS:  0000000000000000(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+[  411.393566] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  411.393569] CR2: 00000fffff975cd8 CR3: 00000001062f5004 CR4: 0000000000770ef0
+[  411.393623] PKRU: 55555554
+[  411.393625] Call Trace:
+[  411.393629]  <TASK>
+[  411.393633]  ? __pfx_lru_add+0x10/0x10
+[  411.393641]  _raw_spin_lock_irqsave+0x2f/0x40
+[  411.393647]  folio_lruvec_lock_irqsave+0x61/0x90
+[  411.393654]  folio_batch_move_lru+0x85/0x130
+[  411.393660]  __folio_batch_add_and_move+0x48/0x90
+[  411.393665]  do_wp_page+0x63b/0xea0
+[  411.393671]  __handle_mm_fault+0x441/0xa30
+[  411.393677]  handle_mm_fault+0x125/0x440
+[  411.393681]  do_user_addr_fault+0x194/0x830
+[  411.393689]  exc_page_fault+0x63/0x130
+[  411.393696]  asm_exc_page_fault+0x26/0x30
+[  411.393701] RIP: 0033:0xffffffd0703
+[  411.393741] Code: 0f 84 0d 04 00 00 41 f6 85 56 03 00 00 20 0f 85 ff 03 00 00 49 8b 45 60 48 85 c0 74 04 48 01 70 08 49 8b 45 58 48 85 c0 74 04 <48> 01 70 08 49 8b 45 68 48 85 c0 74 04 48 01 70 08 49 8b 45 70 48
+[  411.393782] RSP: 002b:00007ffc533c2c40 EFLAGS: 00010202
+[  411.393786] RAX: 00000fffff975cd0 RBX: 0000000000000030 RCX: 0000100000000f90
+[  411.393789] RDX: 00000fffff975dc0 RSI: 00000fffff96c000 RDI: 000000006fffffff
+[  411.393791] RBP: 00007ffc533c2da0 R08: 0000000000000006 R09: 00000000effffef5
+[  411.393794] R10: 0000000070000029 R11: 00007ffc533c2e98 R12: 00007ffc533c2b20
+[  411.393796] R13: 0000100000000f50 R14: 00007ffc533c2e50 R15: 00000fffff976030
+[  411.393803]  </TASK>
+[  411.394215] rcu: rcu_preempt kthread starved for 372398 jiffies! g429 f0x2 RCU_GP_WAIT_FQS(5) ->state=0x0 ->cpu=1
+[  411.741505] rcu: 	Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[  411.748301] rcu: RCU grace-period kthread stack dump:
+[  411.751360] task:rcu_preempt     state:R  running task     stack:14928 pid:15    tgid:15    ppid:2      task_flags:0x208040 flags:0x00080000
+[  411.759575] Call Trace:
+[  411.761458]  <TASK>
+[  411.763207]  __schedule+0x4e5/0xcc0
+[  411.765825]  ? __pfx_rcu_gp_kthread+0x10/0x10
+[  411.768600]  schedule+0x22/0xd0
+[  411.770878]  schedule_timeout+0x71/0x100
+[  411.773588]  ? __pfx_process_timeout+0x10/0x10
+[  411.776802]  rcu_gp_fqs_loop+0x11f/0x640
+[  411.779591]  rcu_gp_kthread+0x19c/0x240
+[  411.782274]  kthread+0xff/0x1f0
+[  411.784734]  ? __pfx_kthread+0x10/0x10
+[  411.787390]  ? __pfx_kthread+0x10/0x10
+[  411.790122]  ret_from_fork+0x144/0x160
+[  411.792263]  ? __pfx_kthread+0x10/0x10
+[  411.794252]  ret_from_fork_asm+0x1a/0x30
+[  411.796440]  </TASK>
+[  411.798113] rcu: Stack dump where RCU GP kthread last ran:
+[  411.801266] Sending NMI from CPU 2 to CPUs 1:
+[  411.804530] NMI backtrace for cpu 1
+[  411.804538] CPU: 1 UID: 0 PID: 86 Comm: kworker/u32:3 Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  411.804546] Tainted: [D]=DIE, [W]=WARN
+[  411.804547] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  411.804551] Workqueue: writeback wb_workfn (flush-253:0)
+[  411.804563] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  411.804573] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  411.804576] RSP: 0018:ffff9e6ac03a76e8 EFLAGS: 00000002
+[  411.804580] RAX: 0000000000000001 RBX: ffff9e6ac03a7738 RCX: 0000000000000000
+[  411.804582] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  411.804584] RBP: ffff9b4806788098 R08: 0000000000001000 R09: 0000000000000000
+[  411.804587] R10: 0000000000000000 R11: ffff9e6ac03a7548 R12: 0000000000000246
+[  411.804589] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffffea7dc42c55c0
+[  411.804673] FS:  0000000000000000(0000) GS:ffff9b4885999000(0000) knlGS:0000000000000000
+[  411.804688] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  411.804691] CR2: 00000fffffc938b0 CR3: 000000010640a001 CR4: 0000000000770ef0
+[  411.804732] PKRU: 55555554
+[  411.804734] Call Trace:
+[  411.804738]  <TASK>
+[  411.804741]  ? __pfx_lru_add+0x10/0x10
+[  411.804749]  _raw_spin_lock_irqsave+0x2f/0x40
+[  411.804755]  folio_lruvec_lock_irqsave+0x61/0x90
+[  411.804762]  folio_batch_move_lru+0x85/0x130
+[  411.804768]  lru_add_drain_cpu+0x7b/0x120
+[  411.804773]  __folio_batch_release+0x2c/0x50
+[  411.804778]  mpage_prepare_extent_to_map+0x49f/0x4c0
+[  411.804788]  ext4_do_writepages+0x377/0xee0
+[  411.804798]  ? ext4_writepages+0xc3/0x1a0
+[  411.804802]  ext4_writepages+0xc3/0x1a0
+[  411.804808]  do_writepages+0xc8/0x160
+[  411.804815]  __writeback_single_inode+0x3c/0x330
+[  411.804822]  writeback_sb_inodes+0x213/0x4c0
+[  411.804833]  __writeback_inodes_wb+0x47/0xe0
+[  411.804839]  wb_writeback+0x18d/0x300
+[  411.804847]  wb_workfn+0x262/0x430
+[  411.804854]  process_one_work+0x163/0x390
+[  411.804861]  worker_thread+0x160/0x2d0
+[  411.804867]  ? __pfx_worker_thread+0x10/0x10
+[  411.804918]  kthread+0xff/0x1f0
+[  411.804923]  ? __pfx_kthread+0x10/0x10
+[  411.805088]  ? __pfx_kthread+0x10/0x10
+[  411.805094]  ret_from_fork+0x144/0x160
+[  411.805098]  ? __pfx_kthread+0x10/0x10
+[  411.805101]  ret_from_fork_asm+0x1a/0x30
+[  411.805108]  </TASK>
+[  474.920537] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[  474.924247] rcu: 	3-...0: (1 GPs behind) idle=f8f4/1/0x4000000000000000 softirq=457/458 fqs=2018
+[  474.929705] rcu: 	6-...0: (0 ticks this GP) idle=0c9c/1/0x4000000000000000 softirq=513/513 fqs=2018
+[  474.936828] rcu: 	(detected by 2, t=466091 jiffies, g=429, q=232 ncpus=8)
+[  474.942118] Sending NMI from CPU 2 to CPUs 3:
+[  474.942202] NMI backtrace for cpu 3
+[  474.942207] CPU: 3 UID: 0 PID: 225 Comm: dmi_memory_id Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  474.942210] Tainted: [D]=DIE, [W]=WARN
+[  474.942210] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  474.942211] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  474.942218] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  474.942221] RSP: 0000:ffff9e6ac0a23c78 EFLAGS: 00000002
+[  474.942226] RAX: 0000000000000001 RBX: ffff9e6ac0a23cc8 RCX: 0000000000000000
+[  474.942229] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  474.942231] RBP: ffff9b4806788098 R08: ffff9b48374e6d20 R09: 0000000000000011
+[  474.942233] R10: 0000000000000000 R11: ffff9e6ac0a23e20 R12: 0000000000000246
+[  474.942236] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b48066b1b00
+[  474.942321] FS:  0000100000c00980(0000) GS:ffff9b4885a19000(0000) knlGS:0000000000000000
+[  474.942336] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  474.942339] CR2: 00000fffff7ea010 CR3: 000000010d062006 CR4: 0000000000770ef0
+[  474.942378] PKRU: 55555554
+[  474.942380] Call Trace:
+[  474.942384]  <TASK>
+[  474.942389]  ? __pfx_lru_add+0x10/0x10
+[  474.942460]  _raw_spin_lock_irqsave+0x2f/0x40
+[  474.942467]  folio_lruvec_lock_irqsave+0x61/0x90
+[  474.942475]  folio_batch_move_lru+0x85/0x130
+[  474.942481]  __folio_batch_add_and_move+0x48/0x90
+[  474.942486]  set_pte_range+0x1c7/0x1f0
+[  474.942491]  finish_fault+0x210/0x430
+[  474.942495]  __handle_mm_fault+0x877/0xa30
+[  474.942501]  handle_mm_fault+0x125/0x440
+[  474.942505]  do_user_addr_fault+0x194/0x830
+[  474.942513]  exc_page_fault+0x63/0x130
+[  474.942520]  asm_exc_page_fault+0x26/0x30
+[  474.942525] RIP: 0033:0xffffffd6f04
+[  474.942530] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[  474.942533] RSP: 002b:00007ffe46589690 EFLAGS: 00010206
+[  474.942537] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff821460
+[  474.942539] RDX: 00000fffff28c450 RSI: 00000fffff7ea010 RDI: 00000ffffffff0a0
+[  474.942644] RBP: 00007ffe465897a0 R08: 00000fffff2f11f0 R09: 00007ffe46589730
+[  474.942647] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[  474.942649] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[  474.942654]  </TASK>
+[  474.943235] Sending NMI from CPU 2 to CPUs 6:
+[  474.943365] NMI backtrace for cpu 6
+[  474.943372] CPU: 6 UID: 0 PID: 228 Comm: systemd-sysctl Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  474.943381] Tainted: [D]=DIE, [W]=WARN
+[  474.943382] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  474.943384] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  474.943396] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  474.943399] RSP: 0000:ffff9e6ac0a2bc90 EFLAGS: 00000002
+[  474.943404] RAX: 0000000000000001 RBX: ffff9e6ac0a2bce0 RCX: 0000000000000000
+[  474.943407] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  474.943409] RBP: ffff9b4806788098 R08: ffff9b48375a6d20 R09: 0000000000000011
+[  474.943522] R10: ffff9b4802f44e00 R11: 0000000000000100 R12: 0000000000000246
+[  474.943525] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: 8000000106c81067
+[  474.943697] FS:  0000000000000000(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+[  474.943762] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  474.943765] CR2: 00000fffff975cd8 CR3: 00000001062f5004 CR4: 0000000000770ef0
+[  474.943805] PKRU: 55555554
+[  474.943808] Call Trace:
+[  474.943811]  <TASK>
+[  474.943815]  ? __pfx_lru_add+0x10/0x10
+[  474.943823]  _raw_spin_lock_irqsave+0x2f/0x40
+[  474.943829]  folio_lruvec_lock_irqsave+0x61/0x90
+[  474.943835]  folio_batch_move_lru+0x85/0x130
+[  474.943841]  __folio_batch_add_and_move+0x48/0x90
+[  474.943846]  do_wp_page+0x63b/0xea0
+[  474.943851]  __handle_mm_fault+0x441/0xa30
+[  474.943857]  handle_mm_fault+0x125/0x440
+[  474.943861]  do_user_addr_fault+0x194/0x830
+[  474.943869]  exc_page_fault+0x63/0x130
+[  474.943875]  asm_exc_page_fault+0x26/0x30
+[  474.943880] RIP: 0033:0xffffffd0703
+[  474.943886] Code: 0f 84 0d 04 00 00 41 f6 85 56 03 00 00 20 0f 85 ff 03 00 00 49 8b 45 60 48 85 c0 74 04 48 01 70 08 49 8b 45 58 48 85 c0 74 04 <48> 01 70 08 49 8b 45 68 48 85 c0 74 04 48 01 70 08 49 8b 45 70 48
+[  474.943889] RSP: 002b:00007ffc533c2c40 EFLAGS: 00010202
+[  474.943892] RAX: 00000fffff975cd0 RBX: 0000000000000030 RCX: 0000100000000f90
+[  474.943895] RDX: 00000fffff975dc0 RSI: 00000fffff96c000 RDI: 000000006fffffff
+[  474.943897] RBP: 00007ffc533c2da0 R08: 0000000000000006 R09: 00000000effffef5
+[  474.943899] R10: 0000000070000029 R11: 00007ffc533c2e98 R12: 00007ffc533c2b20
+[  474.943901] R13: 0000100000000f50 R14: 00007ffc533c2e50 R15: 00000fffff976030
+[  474.943906]  </TASK>
+[  474.944305] rcu: rcu_preempt kthread starved for 435949 jiffies! g429 f0x2 RCU_GP_WAIT_FQS(5) ->state=0x0 ->cpu=1
+[  475.286826] rcu: 	Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[  475.293170] rcu: RCU grace-period kthread stack dump:
+[  475.297308] task:rcu_preempt     state:R  running task     stack:14928 pid:15    tgid:15    ppid:2      task_flags:0x208040 flags:0x00080000
+[  475.306419] Call Trace:
+[  475.308167]  <TASK>
+[  475.309814]  __schedule+0x4e5/0xcc0
+[  475.312678]  ? __pfx_rcu_gp_kthread+0x10/0x10
+[  475.315913]  schedule+0x22/0xd0
+[  475.318209]  schedule_timeout+0x71/0x100
+[  475.321012]  ? __pfx_process_timeout+0x10/0x10
+[  475.324171]  rcu_gp_fqs_loop+0x11f/0x640
+[  475.326992]  rcu_gp_kthread+0x19c/0x240
+[  475.329785]  kthread+0xff/0x1f0
+[  475.332179]  ? __pfx_kthread+0x10/0x10
+[  475.335119]  ? __pfx_kthread+0x10/0x10
+[  475.337736]  ret_from_fork+0x144/0x160
+[  475.340432]  ? __pfx_kthread+0x10/0x10
+[  475.343213]  ret_from_fork_asm+0x1a/0x30
+[  475.345956]  </TASK>
+[  475.347691] rcu: Stack dump where RCU GP kthread last ran:
+[  475.351734] Sending NMI from CPU 2 to CPUs 1:
+[  475.355006] NMI backtrace for cpu 1
+[  475.355014] CPU: 1 UID: 0 PID: 86 Comm: kworker/u32:3 Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  475.355022] Tainted: [D]=DIE, [W]=WARN
+[  475.355023] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  475.355028] Workqueue: writeback wb_workfn (flush-253:0)
+[  475.355039] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  475.355048] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  475.355051] RSP: 0018:ffff9e6ac03a76e8 EFLAGS: 00000002
+[  475.355055] RAX: 0000000000000001 RBX: ffff9e6ac03a7738 RCX: 0000000000000000
+[  475.355058] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  475.355060] RBP: ffff9b4806788098 R08: 0000000000001000 R09: 0000000000000000
+[  475.355063] R10: 0000000000000000 R11: ffff9e6ac03a7548 R12: 0000000000000246
+[  475.355065] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffffea7dc42c55c0
+[  475.355150] FS:  0000000000000000(0000) GS:ffff9b4885999000(0000) knlGS:0000000000000000
+[  475.355165] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  475.355170] CR2: 00000fffffc938b0 CR3: 000000010640a001 CR4: 0000000000770ef0
+[  475.355261] PKRU: 55555554
+[  475.355263] Call Trace:
+[  475.355266]  <TASK>
+[  475.355270]  ? __pfx_lru_add+0x10/0x10
+[  475.355277]  _raw_spin_lock_irqsave+0x2f/0x40
+[  475.355283]  folio_lruvec_lock_irqsave+0x61/0x90
+[  475.355289]  folio_batch_move_lru+0x85/0x130
+[  475.355330]  lru_add_drain_cpu+0x7b/0x120
+[  475.355337]  __folio_batch_release+0x2c/0x50
+[  475.355342]  mpage_prepare_extent_to_map+0x49f/0x4c0
+[  475.355352]  ext4_do_writepages+0x377/0xee0
+[  475.355360]  ? ext4_writepages+0xc3/0x1a0
+[  475.355398]  ext4_writepages+0xc3/0x1a0
+[  475.355405]  do_writepages+0xc8/0x160
+[  475.355415]  __writeback_single_inode+0x3c/0x330
+[  475.355422]  writeback_sb_inodes+0x213/0x4c0
+[  475.355433]  __writeback_inodes_wb+0x47/0xe0
+[  475.355439]  wb_writeback+0x18d/0x300
+[  475.355447]  wb_workfn+0x262/0x430
+[  475.355454]  process_one_work+0x163/0x390
+[  475.355461]  worker_thread+0x160/0x2d0
+[  475.355467]  ? __pfx_worker_thread+0x10/0x10
+[  475.355472]  kthread+0xff/0x1f0
+[  475.355483]  ? __pfx_kthread+0x10/0x10
+[  475.355487]  ? __pfx_kthread+0x10/0x10
+[  475.355490]  ret_from_fork+0x144/0x160
+[  475.355493]  ? __pfx_kthread+0x10/0x10
+[  475.355496]  ret_from_fork_asm+0x1a/0x30
+[  475.355503]  </TASK>
+[  538.502413] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[  538.507183] rcu: 	3-...0: (1 GPs behind) idle=f8f4/1/0x4000000000000000 softirq=457/458 fqs=2018
+[  538.513851] rcu: 	6-...0: (0 ticks this GP) idle=0c9c/1/0x4000000000000000 softirq=513/513 fqs=2018
+[  538.520947] rcu: 	(detected by 2, t=529674 jiffies, g=429, q=232 ncpus=8)
+[  538.525957] Sending NMI from CPU 2 to CPUs 3:
+[  538.526094] NMI backtrace for cpu 3
+[  538.526101] CPU: 3 UID: 0 PID: 225 Comm: dmi_memory_id Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  538.526104] Tainted: [D]=DIE, [W]=WARN
+[  538.526105] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  538.526106] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  538.526115] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  538.526116] RSP: 0000:ffff9e6ac0a23c78 EFLAGS: 00000002
+[  538.526118] RAX: 0000000000000001 RBX: ffff9e6ac0a23cc8 RCX: 0000000000000000
+[  538.526119] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  538.526119] RBP: ffff9b4806788098 R08: ffff9b48374e6d20 R09: 0000000000000011
+[  538.526120] R10: 0000000000000000 R11: ffff9e6ac0a23e20 R12: 0000000000000246
+[  538.526121] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b48066b1b00
+[  538.526154] FS:  0000100000c00980(0000) GS:ffff9b4885a19000(0000) knlGS:0000000000000000
+[  538.526159] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  538.526159] CR2: 00000fffff7ea010 CR3: 000000010d062006 CR4: 0000000000770ef0
+[  538.526170] PKRU: 55555554
+[  538.526171] Call Trace:
+[  538.526174]  <TASK>
+[  538.526177]  ? __pfx_lru_add+0x10/0x10
+[  538.526182]  _raw_spin_lock_irqsave+0x2f/0x40
+[  538.526184]  folio_lruvec_lock_irqsave+0x61/0x90
+[  538.526189]  folio_batch_move_lru+0x85/0x130
+[  538.526191]  __folio_batch_add_and_move+0x48/0x90
+[  538.526193]  set_pte_range+0x1c7/0x1f0
+[  538.526373]  finish_fault+0x210/0x430
+[  538.526375]  __handle_mm_fault+0x877/0xa30
+[  538.526377]  handle_mm_fault+0x125/0x440
+[  538.526378]  do_user_addr_fault+0x194/0x830
+[  538.526383]  exc_page_fault+0x63/0x130
+[  538.526386]  asm_exc_page_fault+0x26/0x30
+[  538.526389] RIP: 0033:0xffffffd6f04
+[  538.526392] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[  538.526393] RSP: 002b:00007ffe46589690 EFLAGS: 00010206
+[  538.526394] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff821460
+[  538.526395] RDX: 00000fffff28c450 RSI: 00000fffff7ea010 RDI: 00000ffffffff0a0
+[  538.526395] RBP: 00007ffe465897a0 R08: 00000fffff2f11f0 R09: 00007ffe46589730
+[  538.526396] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[  538.526415] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[  538.526417]  </TASK>
+[  538.527036] Sending NMI from CPU 2 to CPUs 6:
+[  538.527248] NMI backtrace for cpu 6
+[  538.527255] CPU: 6 UID: 0 PID: 228 Comm: systemd-sysctl Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  538.527264] Tainted: [D]=DIE, [W]=WARN
+[  538.527265] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  538.527267] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  538.527278] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  538.527282] RSP: 0000:ffff9e6ac0a2bc90 EFLAGS: 00000002
+[  538.527286] RAX: 0000000000000001 RBX: ffff9e6ac0a2bce0 RCX: 0000000000000000
+[  538.527289] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  538.527291] RBP: ffff9b4806788098 R08: ffff9b48375a6d20 R09: 0000000000000011
+[  538.527294] R10: ffff9b4802f44e00 R11: 0000000000000100 R12: 0000000000000246
+[  538.527296] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: 8000000106c81067
+[  538.527454] FS:  0000000000000000(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+[  538.527518] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  538.527521] CR2: 00000fffff975cd8 CR3: 00000001062f5004 CR4: 0000000000770ef0
+[  538.527560] PKRU: 55555554
+[  538.527562] Call Trace:
+[  538.527565]  <TASK>
+[  538.527568]  ? __pfx_lru_add+0x10/0x10
+[  538.527575]  _raw_spin_lock_irqsave+0x2f/0x40
+[  538.527582]  folio_lruvec_lock_irqsave+0x61/0x90
+[  538.527588]  folio_batch_move_lru+0x85/0x130
+[  538.527594]  __folio_batch_add_and_move+0x48/0x90
+[  538.527598]  do_wp_page+0x63b/0xea0
+[  538.527604]  __handle_mm_fault+0x441/0xa30
+[  538.527609]  handle_mm_fault+0x125/0x440
+[  538.527613]  do_user_addr_fault+0x194/0x830
+[  538.527620]  exc_page_fault+0x63/0x130
+[  538.527626]  asm_exc_page_fault+0x26/0x30
+[  538.527631] RIP: 0033:0xffffffd0703
+[  538.527636] Code: 0f 84 0d 04 00 00 41 f6 85 56 03 00 00 20 0f 85 ff 03 00 00 49 8b 45 60 48 85 c0 74 04 48 01 70 08 49 8b 45 58 48 85 c0 74 04 <48> 01 70 08 49 8b 45 68 48 85 c0 74 04 48 01 70 08 49 8b 45 70 48
+[  538.527678] RSP: 002b:00007ffc533c2c40 EFLAGS: 00010202
+[  538.527682] RAX: 00000fffff975cd0 RBX: 0000000000000030 RCX: 0000100000000f90
+[  538.527684] RDX: 00000fffff975dc0 RSI: 00000fffff96c000 RDI: 000000006fffffff
+[  538.527687] RBP: 00007ffc533c2da0 R08: 0000000000000006 R09: 00000000effffef5
+[  538.527689] R10: 0000000070000029 R11: 00007ffc533c2e98 R12: 00007ffc533c2b20
+[  538.527691] R13: 0000100000000f50 R14: 00007ffc533c2e50 R15: 00000fffff976030
+[  538.527696]  </TASK>
+[  538.528178] rcu: rcu_preempt kthread starved for 499531 jiffies! g429 f0x2 RCU_GP_WAIT_FQS(5) ->state=0x0 ->cpu=1
+[  538.861666] rcu: 	Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[  538.868068] rcu: RCU grace-period kthread stack dump:
+[  538.871645] task:rcu_preempt     state:R  running task     stack:14928 pid:15    tgid:15    ppid:2      task_flags:0x208040 flags:0x00080000
+[  538.879080] Call Trace:
+[  538.880997]  <TASK>
+[  538.882607]  __schedule+0x4e5/0xcc0
+[  538.885515]  ? __pfx_rcu_gp_kthread+0x10/0x10
+[  538.888992]  schedule+0x22/0xd0
+[  538.891844]  schedule_timeout+0x71/0x100
+[  538.894717]  ? __pfx_process_timeout+0x10/0x10
+[  538.898327]  rcu_gp_fqs_loop+0x11f/0x640
+[  538.901233]  rcu_gp_kthread+0x19c/0x240
+[  538.904348]  kthread+0xff/0x1f0
+[  538.906769]  ? __pfx_kthread+0x10/0x10
+[  538.909660]  ? __pfx_kthread+0x10/0x10
+[  538.912647]  ret_from_fork+0x144/0x160
+[  538.915091]  ? __pfx_kthread+0x10/0x10
+[  538.917703]  ret_from_fork_asm+0x1a/0x30
+[  538.920449]  </TASK>
+[  538.922118] rcu: Stack dump where RCU GP kthread last ran:
+[  538.926015] Sending NMI from CPU 2 to CPUs 1:
+[  538.929098] NMI backtrace for cpu 1
+[  538.929107] CPU: 1 UID: 0 PID: 86 Comm: kworker/u32:3 Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  538.929117] Tainted: [D]=DIE, [W]=WARN
+[  538.929240] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  538.929244] Workqueue: writeback wb_workfn (flush-253:0)
+[  538.929257] RIP: 0010:queued_spin_lock_slowpath+0x17/0x2b0
+[  538.929266] Code: 00 00 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 f3 0f 1e fa 41 55 41 54 55 48 89 fd 53 66 90 ba 01 00 00 00 8b 45 00 <85> c0 75 6c f0 0f b1 55 00 75 65 5b 5d 41 5c 41 5d c3 cc cc cc cc
+[  538.929270] RSP: 0018:ffff9e6ac03a76e8 EFLAGS: 00000002
+[  538.929273] RAX: 0000000000000001 RBX: ffff9e6ac03a7738 RCX: 0000000000000000
+[  538.929276] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  538.929279] RBP: ffff9b4806788098 R08: 0000000000001000 R09: 0000000000000000
+[  538.929281] R10: 0000000000000000 R11: ffff9e6ac03a7548 R12: 0000000000000246
+[  538.929283] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffffea7dc42c55c0
+[  538.929356] FS:  0000000000000000(0000) GS:ffff9b4885999000(0000) knlGS:0000000000000000
+[  538.929370] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  538.929373] CR2: 00000fffffc938b0 CR3: 000000010640a001 CR4: 0000000000770ef0
+[  538.929412] PKRU: 55555554
+[  538.929445] Call Trace:
+[  538.929448]  <TASK>
+[  538.929452]  ? __pfx_lru_add+0x10/0x10
+[  538.929459]  _raw_spin_lock_irqsave+0x2f/0x40
+[  538.929466]  folio_lruvec_lock_irqsave+0x61/0x90
+[  538.929473]  folio_batch_move_lru+0x85/0x130
+[  538.929479]  lru_add_drain_cpu+0x7b/0x120
+[  538.929484]  __folio_batch_release+0x2c/0x50
+[  538.929489]  mpage_prepare_extent_to_map+0x49f/0x4c0
+[  538.929500]  ext4_do_writepages+0x377/0xee0
+[  538.929508]  ? ext4_writepages+0xc3/0x1a0
+[  538.929512]  ext4_writepages+0xc3/0x1a0
+[  538.929518]  do_writepages+0xc8/0x160
+[  538.929528]  __writeback_single_inode+0x3c/0x330
+[  538.929535]  writeback_sb_inodes+0x213/0x4c0
+[  538.929547]  __writeback_inodes_wb+0x47/0xe0
+[  538.929553]  wb_writeback+0x18d/0x300
+[  538.929561]  wb_workfn+0x262/0x430
+[  538.929568]  process_one_work+0x163/0x390
+[  538.929575]  worker_thread+0x160/0x2d0
+[  538.929581]  ? __pfx_worker_thread+0x10/0x10
+[  538.929586]  kthread+0xff/0x1f0
+[  538.929590]  ? __pfx_kthread+0x10/0x10
+[  538.929593]  ? __pfx_kthread+0x10/0x10
+[  538.929596]  ret_from_fork+0x144/0x160
+[  538.929599]  ? __pfx_kthread+0x10/0x10
+[  538.929602]  ret_from_fork_asm+0x1a/0x30
+[  538.929610]  </TASK>
+[  602.071403] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[  602.076806] rcu: 	3-...0: (1 GPs behind) idle=f8f4/1/0x4000000000000000 softirq=457/458 fqs=2018
+[  602.083493] rcu: 	6-...0: (0 ticks this GP) idle=0c9c/1/0x4000000000000000 softirq=513/513 fqs=2018
+[  602.090021] rcu: 	(detected by 2, t=593243 jiffies, g=429, q=232 ncpus=8)
+[  602.095132] Sending NMI from CPU 2 to CPUs 3:
+[  602.096112] NMI backtrace for cpu 3
+[  602.096121] CPU: 3 UID: 0 PID: 225 Comm: dmi_memory_id Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  602.096129] Tainted: [D]=DIE, [W]=WARN
+[  602.096131] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  602.096133] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  602.096145] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  602.096149] RSP: 0000:ffff9e6ac0a23c78 EFLAGS: 00000002
+[  602.096153] RAX: 0000000000000001 RBX: ffff9e6ac0a23cc8 RCX: 0000000000000000
+[  602.096156] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  602.096159] RBP: ffff9b4806788098 R08: ffff9b48374e6d20 R09: 0000000000000011
+[  602.096161] R10: 0000000000000000 R11: ffff9e6ac0a23e20 R12: 0000000000000246
+[  602.096163] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b48066b1b00
+[  602.096249] FS:  0000100000c00980(0000) GS:ffff9b4885a19000(0000) knlGS:0000000000000000
+[  602.096264] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  602.096501] CR2: 00000fffff7ea010 CR3: 000000010d062006 CR4: 0000000000770ef0
+[  602.096608] PKRU: 55555554
+[  602.096612] Call Trace:
+[  602.096617]  <TASK>
+[  602.096622]  ? __pfx_lru_add+0x10/0x10
+[  602.096633]  _raw_spin_lock_irqsave+0x2f/0x40
+[  602.096817]  folio_lruvec_lock_irqsave+0x61/0x90
+[  602.096829]  folio_batch_move_lru+0x85/0x130
+[  602.096836]  __folio_batch_add_and_move+0x48/0x90
+[  602.096842]  set_pte_range+0x1c7/0x1f0
+[  602.096847]  finish_fault+0x210/0x430
+[  602.096851]  __handle_mm_fault+0x877/0xa30
+[  602.096856]  handle_mm_fault+0x125/0x440
+[  602.096860]  do_user_addr_fault+0x194/0x830
+[  602.096868]  exc_page_fault+0x63/0x130
+[  602.096876]  asm_exc_page_fault+0x26/0x30
+[  602.096881] RIP: 0033:0xffffffd6f04
+[  602.096887] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[  602.096890] RSP: 002b:00007ffe46589690 EFLAGS: 00010206
+[  602.096895] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff821460
+[  602.096898] RDX: 00000fffff28c450 RSI: 00000fffff7ea010 RDI: 00000ffffffff0a0
+[  602.096900] RBP: 00007ffe465897a0 R08: 00000fffff2f11f0 R09: 00007ffe46589730
+[  602.096902] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[  602.096904] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[  602.096909]  </TASK>
+[  602.097092] Sending NMI from CPU 2 to CPUs 6:
+[  602.097234] NMI backtrace for cpu 6
+[  602.097244] CPU: 6 UID: 0 PID: 228 Comm: systemd-sysctl Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  602.097252] Tainted: [D]=DIE, [W]=WARN
+[  602.097254] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  602.097256] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  602.097267] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  602.097271] RSP: 0000:ffff9e6ac0a2bc90 EFLAGS: 00000002
+[  602.097275] RAX: 0000000000000001 RBX: ffff9e6ac0a2bce0 RCX: 0000000000000000
+[  602.097278] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  602.097280] RBP: ffff9b4806788098 R08: ffff9b48375a6d20 R09: 0000000000000011
+[  602.097283] R10: ffff9b4802f44e00 R11: 0000000000000100 R12: 0000000000000246
+[  602.097285] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: 8000000106c81067
+[  602.097441] FS:  0000000000000000(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+[  602.097510] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  602.097514] CR2: 00000fffff975cd8 CR3: 00000001062f5004 CR4: 0000000000770ef0
+[  602.097569] PKRU: 55555554
+[  602.097571] Call Trace:
+[  602.097575]  <TASK>
+[  602.097579]  ? __pfx_lru_add+0x10/0x10
+[  602.097586]  _raw_spin_lock_irqsave+0x2f/0x40
+[  602.097647]  folio_lruvec_lock_irqsave+0x61/0x90
+[  602.097691]  folio_batch_move_lru+0x85/0x130
+[  602.097698]  __folio_batch_add_and_move+0x48/0x90
+[  602.097703]  do_wp_page+0x63b/0xea0
+[  602.097708]  __handle_mm_fault+0x441/0xa30
+[  602.097714]  handle_mm_fault+0x125/0x440
+[  602.097718]  do_user_addr_fault+0x194/0x830
+[  602.097725]  exc_page_fault+0x63/0x130
+[  602.097732]  asm_exc_page_fault+0x26/0x30
+[  602.097736] RIP: 0033:0xffffffd0703
+[  602.097741] Code: 0f 84 0d 04 00 00 41 f6 85 56 03 00 00 20 0f 85 ff 03 00 00 49 8b 45 60 48 85 c0 74 04 48 01 70 08 49 8b 45 58 48 85 c0 74 04 <48> 01 70 08 49 8b 45 68 48 85 c0 74 04 48 01 70 08 49 8b 45 70 48
+[  602.097744] RSP: 002b:00007ffc533c2c40 EFLAGS: 00010202
+[  602.097748] RAX: 00000fffff975cd0 RBX: 0000000000000030 RCX: 0000100000000f90
+[  602.097750] RDX: 00000fffff975dc0 RSI: 00000fffff96c000 RDI: 000000006fffffff
+[  602.097752] RBP: 00007ffc533c2da0 R08: 0000000000000006 R09: 00000000effffef5
+[  602.097754] R10: 0000000070000029 R11: 00007ffc533c2e98 R12: 00007ffc533c2b20
+[  602.097756] R13: 0000100000000f50 R14: 00007ffc533c2e50 R15: 00000fffff976030
+[  602.097761]  </TASK>
+[  602.098178] rcu: rcu_preempt kthread starved for 563100 jiffies! g429 f0x2 RCU_GP_WAIT_FQS(5) ->state=0x0 ->cpu=1
+[  602.372385] rcu: 	Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[  602.378707] rcu: RCU grace-period kthread stack dump:
+[  602.382438] task:rcu_preempt     state:R  running task     stack:14928 pid:15    tgid:15    ppid:2      task_flags:0x208040 flags:0x00080000
+[  602.391560] Call Trace:
+[  602.393402]  <TASK>
+[  602.395033]  __schedule+0x4e5/0xcc0
+[  602.397599]  ? __pfx_rcu_gp_kthread+0x10/0x10
+[  602.400768]  schedule+0x22/0xd0
+[  602.403223]  schedule_timeout+0x71/0x100
+[  602.406158]  ? __pfx_process_timeout+0x10/0x10
+[  602.409649]  rcu_gp_fqs_loop+0x11f/0x640
+[  602.412554]  rcu_gp_kthread+0x19c/0x240
+[  602.415537]  kthread+0xff/0x1f0
+[  602.417861]  ? __pfx_kthread+0x10/0x10
+[  602.420655]  ? __pfx_kthread+0x10/0x10
+[  602.423414]  ret_from_fork+0x144/0x160
+[  602.426289]  ? __pfx_kthread+0x10/0x10
+[  602.428952]  ret_from_fork_asm+0x1a/0x30
+[  602.431937]  </TASK>
+[  602.433657] rcu: Stack dump where RCU GP kthread last ran:
+[  602.437916] Sending NMI from CPU 2 to CPUs 1:
+[  602.441727] NMI backtrace for cpu 1
+[  602.441738] CPU: 1 UID: 0 PID: 86 Comm: kworker/u32:3 Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  602.441747] Tainted: [D]=DIE, [W]=WARN
+[  602.441749] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  602.441753] Workqueue: writeback wb_workfn (flush-253:0)
+[  602.441766] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  602.441777] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  602.441893] RSP: 0018:ffff9e6ac03a76e8 EFLAGS: 00000002
+[  602.441898] RAX: 0000000000000001 RBX: ffff9e6ac03a7738 RCX: 0000000000000000
+[  602.441901] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  602.441903] RBP: ffff9b4806788098 R08: 0000000000001000 R09: 0000000000000000
+[  602.441906] R10: 0000000000000000 R11: ffff9e6ac03a7548 R12: 0000000000000246
+[  602.441908] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffffea7dc42c55c0
+[  602.442059] FS:  0000000000000000(0000) GS:ffff9b4885999000(0000) knlGS:0000000000000000
+[  602.442075] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  602.442078] CR2: 00000fffffc938b0 CR3: 000000010640a001 CR4: 0000000000770ef0
+[  602.442117] PKRU: 55555554
+[  602.442119] Call Trace:
+[  602.442123]  <TASK>
+[  602.442128]  ? __pfx_lru_add+0x10/0x10
+[  602.442137]  _raw_spin_lock_irqsave+0x2f/0x40
+[  602.442143]  folio_lruvec_lock_irqsave+0x61/0x90
+[  602.442150]  folio_batch_move_lru+0x85/0x130
+[  602.442156]  lru_add_drain_cpu+0x7b/0x120
+[  602.442162]  __folio_batch_release+0x2c/0x50
+[  602.442167]  mpage_prepare_extent_to_map+0x49f/0x4c0
+[  602.442178]  ext4_do_writepages+0x377/0xee0
+[  602.442186]  ? ext4_writepages+0xc3/0x1a0
+[  602.442190]  ext4_writepages+0xc3/0x1a0
+[  602.442196]  do_writepages+0xc8/0x160
+[  602.442203]  __writeback_single_inode+0x3c/0x330
+[  602.442210]  writeback_sb_inodes+0x213/0x4c0
+[  602.442222]  __writeback_inodes_wb+0x47/0xe0
+[  602.442228]  wb_writeback+0x18d/0x300
+[  602.442236]  wb_workfn+0x262/0x430
+[  602.442243]  process_one_work+0x163/0x390
+[  602.442251]  worker_thread+0x160/0x2d0
+[  602.442257]  ? __pfx_worker_thread+0x10/0x10
+[  602.442262]  kthread+0xff/0x1f0
+[  602.442266]  ? __pfx_kthread+0x10/0x10
+[  602.442269]  ? __pfx_kthread+0x10/0x10
+[  602.442273]  ret_from_fork+0x144/0x160
+[  602.442277]  ? __pfx_kthread+0x10/0x10
+[  602.442280]  ret_from_fork_asm+0x1a/0x30
+[  602.442288]  </TASK>
+[  665.619616] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[  665.624405] rcu: 	3-...0: (1 GPs behind) idle=f8f4/1/0x4000000000000000 softirq=457/458 fqs=2018
+[  665.630945] rcu: 	6-...0: (0 ticks this GP) idle=0c9c/1/0x4000000000000000 softirq=513/513 fqs=2018
+[  665.637501] rcu: 	(detected by 2, t=656792 jiffies, g=429, q=232 ncpus=8)
+[  665.642582] Sending NMI from CPU 2 to CPUs 3:
+[  665.642704] NMI backtrace for cpu 3
+[  665.642712] CPU: 3 UID: 0 PID: 225 Comm: dmi_memory_id Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  665.642720] Tainted: [D]=DIE, [W]=WARN
+[  665.642722] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  665.642835] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  665.642849] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  665.642893] RSP: 0000:ffff9e6ac0a23c78 EFLAGS: 00000002
+[  665.642898] RAX: 0000000000000001 RBX: ffff9e6ac0a23cc8 RCX: 0000000000000000
+[  665.642901] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  665.642903] RBP: ffff9b4806788098 R08: ffff9b48374e6d20 R09: 0000000000000011
+[  665.642905] R10: 0000000000000000 R11: ffff9e6ac0a23e20 R12: 0000000000000246
+[  665.642908] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffff9b48066b1b00
+[  665.643048] FS:  0000100000c00980(0000) GS:ffff9b4885a19000(0000) knlGS:0000000000000000
+[  665.643111] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  665.643115] CR2: 00000fffff7ea010 CR3: 000000010d062006 CR4: 0000000000770ef0
+[  665.643153] PKRU: 55555554
+[  665.643155] Call Trace:
+[  665.643159]  <TASK>
+[  665.643163]  ? __pfx_lru_add+0x10/0x10
+[  665.643172]  _raw_spin_lock_irqsave+0x2f/0x40
+[  665.643178]  folio_lruvec_lock_irqsave+0x61/0x90
+[  665.643185]  folio_batch_move_lru+0x85/0x130
+[  665.643191]  __folio_batch_add_and_move+0x48/0x90
+[  665.643196]  set_pte_range+0x1c7/0x1f0
+[  665.643201]  finish_fault+0x210/0x430
+[  665.643205]  __handle_mm_fault+0x877/0xa30
+[  665.643211]  handle_mm_fault+0x125/0x440
+[  665.643215]  do_user_addr_fault+0x194/0x830
+[  665.643223]  exc_page_fault+0x63/0x130
+[  665.643230]  asm_exc_page_fault+0x26/0x30
+[  665.643235] RIP: 0033:0xffffffd6f04
+[  665.643240] Code: 00 00 0f 1f 40 00 48 8b 32 8b 4a 08 4c 01 e6 48 83 f9 26 74 0a 48 83 f9 08 0f 85 91 27 ff ff 48 8b 4a 10 48 83 c2 18 4c 01 e1 <48> 89 0e 48 39 da 72 d4 4d 8b 9f 08 02 00 00 4d 85 db 0f 84 54 0b
+[  665.643243] RSP: 002b:00007ffe46589690 EFLAGS: 00010206
+[  665.643246] RAX: 00000fffff218e30 RBX: 00000fffff2e9438 RCX: 00000fffff821460
+[  665.643249] RDX: 00000fffff28c450 RSI: 00000fffff7ea010 RDI: 00000ffffffff0a0
+[  665.643250] RBP: 00007ffe465897a0 R08: 00000fffff2f11f0 R09: 00007ffe46589730
+[  665.643252] R10: 00000fffff20e000 R11: 0000000000000206 R12: 00000fffff20e000
+[  665.643255] R13: 00000ffffffff5f0 R14: 0000100000400aa0 R15: 0000100000400aa0
+[  665.643259]  </TASK>
+[  665.643710] Sending NMI from CPU 2 to CPUs 6:
+[  665.643843] NMI backtrace for cpu 6
+[  665.643853] CPU: 6 UID: 0 PID: 228 Comm: systemd-sysctl Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  665.643861] Tainted: [D]=DIE, [W]=WARN
+[  665.643863] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  665.643865] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  665.643877] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  665.643881] RSP: 0000:ffff9e6ac0a2bc90 EFLAGS: 00000002
+[  665.643886] RAX: 0000000000000001 RBX: ffff9e6ac0a2bce0 RCX: 0000000000000000
+[  665.643888] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  665.643891] RBP: ffff9b4806788098 R08: ffff9b48375a6d20 R09: 0000000000000011
+[  665.644037] R10: ffff9b4802f44e00 R11: 0000000000000100 R12: 0000000000000246
+[  665.644040] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: 8000000106c81067
+[  665.644109] FS:  0000000000000000(0000) GS:ffff9b4885ad9000(0000) knlGS:0000000000000000
+[  665.644154] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  665.644158] CR2: 00000fffff975cd8 CR3: 00000001062f5004 CR4: 0000000000770ef0
+[  665.644199] PKRU: 55555554
+[  665.644201] Call Trace:
+[  665.644204]  <TASK>
+[  665.644209]  ? __pfx_lru_add+0x10/0x10
+[  665.644217]  _raw_spin_lock_irqsave+0x2f/0x40
+[  665.644223]  folio_lruvec_lock_irqsave+0x61/0x90
+[  665.644230]  folio_batch_move_lru+0x85/0x130
+[  665.644235]  __folio_batch_add_and_move+0x48/0x90
+[  665.644240]  do_wp_page+0x63b/0xea0
+[  665.644246]  __handle_mm_fault+0x441/0xa30
+[  665.644252]  handle_mm_fault+0x125/0x440
+[  665.644256]  do_user_addr_fault+0x194/0x830
+[  665.644264]  exc_page_fault+0x63/0x130
+[  665.644271]  asm_exc_page_fault+0x26/0x30
+[  665.644322] RIP: 0033:0xffffffd0703
+[  665.644328] Code: 0f 84 0d 04 00 00 41 f6 85 56 03 00 00 20 0f 85 ff 03 00 00 49 8b 45 60 48 85 c0 74 04 48 01 70 08 49 8b 45 58 48 85 c0 74 04 <48> 01 70 08 49 8b 45 68 48 85 c0 74 04 48 01 70 08 49 8b 45 70 48
+[  665.644331] RSP: 002b:00007ffc533c2c40 EFLAGS: 00010202
+[  665.644334] RAX: 00000fffff975cd0 RBX: 0000000000000030 RCX: 0000100000000f90
+[  665.644337] RDX: 00000fffff975dc0 RSI: 00000fffff96c000 RDI: 000000006fffffff
+[  665.644339] RBP: 00007ffc533c2da0 R08: 0000000000000006 R09: 00000000effffef5
+[  665.644341] R10: 0000000070000029 R11: 00007ffc533c2e98 R12: 00007ffc533c2b20
+[  665.644345] R13: 0000100000000f50 R14: 00007ffc533c2e50 R15: 00000fffff976030
+[  665.644357]  </TASK>
+[  665.644796] rcu: rcu_preempt kthread starved for 626650 jiffies! g429 f0x2 RCU_GP_WAIT_FQS(5) ->state=0x0 ->cpu=1
+[  665.972438] rcu: 	Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[  665.978729] rcu: RCU grace-period kthread stack dump:
+[  665.982322] task:rcu_preempt     state:R  running task     stack:14928 pid:15    tgid:15    ppid:2      task_flags:0x208040 flags:0x00080000
+[  665.990749] Call Trace:
+[  665.992571]  <TASK>
+[  665.993939]  __schedule+0x4e5/0xcc0
+[  665.996144]  ? __pfx_rcu_gp_kthread+0x10/0x10
+[  665.999147]  schedule+0x22/0xd0
+[  666.001200]  schedule_timeout+0x71/0x100
+[  666.004023]  ? __pfx_process_timeout+0x10/0x10
+[  666.007101]  rcu_gp_fqs_loop+0x11f/0x640
+[  666.010012]  rcu_gp_kthread+0x19c/0x240
+[  666.012835]  kthread+0xff/0x1f0
+[  666.015032]  ? __pfx_kthread+0x10/0x10
+[  666.017886]  ? __pfx_kthread+0x10/0x10
+[  666.020608]  ret_from_fork+0x144/0x160
+[  666.023223]  ? __pfx_kthread+0x10/0x10
+[  666.025830]  ret_from_fork_asm+0x1a/0x30
+[  666.028717]  </TASK>
+[  666.030353] rcu: Stack dump where RCU GP kthread last ran:
+[  666.034089] Sending NMI from CPU 2 to CPUs 1:
+[  666.037213] NMI backtrace for cpu 1
+[  666.037219] CPU: 1 UID: 0 PID: 86 Comm: kworker/u32:3 Tainted: G      D W           6.18.32-g2e811260e336-dirty #328 PREEMPT(voluntary) 
+[  666.037222] Tainted: [D]=DIE, [W]=WARN
+[  666.037222] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  666.037225] Workqueue: writeback wb_workfn (flush-253:0)
+[  666.037232] RIP: 0010:queued_spin_lock_slowpath+0x89/0x2b0
+[  666.037243] Code: 74 12 0f b6 45 00 84 c0 74 0a f3 90 0f b6 45 00 84 c0 75 f6 b8 01 00 00 00 66 89 45 00 5b 5d 41 5c 41 5d c3 cc cc cc cc f3 90 <eb> 89 8b 37 b8 00 02 00 00 81 fe 00 01 00 00 74 07 eb 99 83 e8 01
+[  666.037245] RSP: 0018:ffff9e6ac03a76e8 EFLAGS: 00000002
+[  666.037246] RAX: 0000000000000001 RBX: ffff9e6ac03a7738 RCX: 0000000000000000
+[  666.037247] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff9b4806788098
+[  666.037247] RBP: ffff9b4806788098 R08: 0000000000001000 R09: 0000000000000000
+[  666.037248] R10: 0000000000000000 R11: ffff9e6ac03a7548 R12: 0000000000000246
+[  666.037249] R13: ffffffffaf2cfa80 R14: 0000000000000000 R15: ffffea7dc42c55c0
+[  666.037280] FS:  0000000000000000(0000) GS:ffff9b4885999000(0000) knlGS:0000000000000000
+[  666.037284] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  666.037285] CR2: 00000fffffc938b0 CR3: 000000010640a001 CR4: 0000000000770ef0
+[  666.037296] PKRU: 55555554
+[  666.037297] Call Trace:
+[  666.037299]  <TASK>
+[  666.037301]  ? __pfx_lru_add+0x10/0x10
+[  666.037305]  _raw_spin_lock_irqsave+0x2f/0x40
+[  666.037306]  folio_lruvec_lock_irqsave+0x61/0x90
+[  666.037311]  folio_batch_move_lru+0x85/0x130
+[  666.037313]  lru_add_drain_cpu+0x7b/0x120
+[  666.037314]  __folio_batch_release+0x2c/0x50
+[  666.037316]  mpage_prepare_extent_to_map+0x49f/0x4c0
+[  666.037320]  ext4_do_writepages+0x377/0xee0
+[  666.037322]  ? ext4_writepages+0xc3/0x1a0
+[  666.037323]  ext4_writepages+0xc3/0x1a0
+[  666.037325]  do_writepages+0xc8/0x160
+[  666.037328]  __writeback_single_inode+0x3c/0x330
+[  666.037330]  writeback_sb_inodes+0x213/0x4c0
+[  666.037333]  __writeback_inodes_wb+0x47/0xe0
+[  666.037335]  wb_writeback+0x18d/0x300
+[  666.037337]  wb_workfn+0x262/0x430
+[  666.037339]  process_one_work+0x163/0x390
+[  666.037343]  worker_thread+0x160/0x2d0
+[  666.037345]  ? __pfx_worker_thread+0x10/0x10
+[  666.037371]  kthread+0xff/0x1f0
+[  666.037373]  ? __pfx_kthread+0x10/0x10
+[  666.037374]  ? __pfx_kthread+0x10/0x10
+[  666.037375]  ret_from_fork+0x144/0x160
+[  666.037377]  ? __pfx_kthread+0x10/0x10
+[  666.037387]  ret_from_fork_asm+0x1a/0x30
+[  666.037390]  </TASK>

@@ -1,0 +1,64 @@
+=== MV3.a gate battery (corten=on corten_mode_default=on, no-journald boot #326) 2026-10-04 16:10:47 ===
+Warning: Permanently added '[127.0.0.1]:10029' (ED25519) to the list of known hosts.
+"System is booting up. Unprivileged users are not permitted to log in yet. Please come back later. For technical details, see pam_nologin(8)."
+=== 0. boot param evidence:
+[    0.606274] corten: requested on, activating at initcall time
+[    0.606295] corten: execve default entry enabled
+[    2.037584] corten: page descriptors enabled
+=== 1. probe (sshd exec chain, bare, no hook):
+mode=1
+PROBE_RC=0
+=== 2. bash self arenas + probe:
+3
+mode=1
+=== 3. systemd family arenas:
+pid=1 comm=systemd arenas=8
+pid=167 comm=systemd-udevd arenas=8
+pid=299 comm=sshd arenas=8
+=== 4. arenas-table cross-ref (sshd first arena):
+pid=299 addr=100000000000
+ffff8f2647ac6180 0000000000000000 [100000000000,100000200000)           0b anon 0000 1   active 0000000000000000 00000000
+=== 5. counters:
+Connection to 127.0.0.1 closed by remote host.
+ED25519) to the list of known hosts.
+"System is booting up. Unprivileged users are not permitted to log in yet. Please come back later. For technical details, see pam_nologin(8)."
+=== 6. smoke v2 hook form (26):
+SMOKE_HOOK_RC=1
+26
+0
+corten_mode_hook: fork-probe OK (threads+arenas alive, child exited 42)
+[smoke] SMOKE-DRIVER FAIL (1)
+corten_mode_hook: fork-probe OK (threads+arenas alive, child exited 42)
+=== 7. smoke v2 bare form (no LD_PRELOAD, default entry):
+SMOKE_BARE_RC=0
+26
+0
+[smoke] smoke binary rc=0
+[smoke] debugfs arenas after: 158
+[smoke] SMOKE-DRIVER PASS
+=== 8. metis_eq bare x2 (no hook):
+metis1 RC=0
+"distinct_words":65073,"checksum":"2d383eeed4ceb73b"
+metis2 RC=0
+"distinct_words":65073,"checksum":"2d383eeed4ceb73b"
+=== 9. counters + dmesg:
+Connection to 127.0.0.1 closed by remote host.
+
+=== 附录: journald 交互缺口证据 (本 boot 的 stderr/串口捕获) ===
+[    9.401876] WARNING: CPU: 6 PID: 137 at ./include/linux/mm.h:2648 __access_remote_vm+0x394/0x4e0
+    (comm=systemd-journal; proc_pid_cmdline_read; R15=0000100000e0000a -- 窗口基址内)
+[  208.629527] WARNING: CPU: 2 PID: 337 at ./include/linux/mm.h:2648 __access_remote_vm+0x394/0x4e0
+    (同一签名; RSI/R12=0000100000c00010)
+mm.h:2648 = get_user_page_vma_remote() 的 WARN_ON_ONCE(!vma): GUP 拿到页但
+vma_lookup 为 NULL -- 目标进程的 argv 页在 arena 窗口 (VMA-free 域), 远端
+cmdline 读判 -EINVAL。
+挂 boot 侧 (console-mv3a-on.log, 带 journald 的 =on boot):
+  systemd-tmpfiles-setup-dev-early start running 6min+ 无进展;
+  [  279.938449] systemd[1]: systemd-journald.service: State 'stop-watchdog' timed out. Killing.
+  (SIGTERM 后 journald 用户态不退出; SIGKILL 后正常 -- mm_exit 路径无
+   drain-timeout WARNING, 无 oops; 判为 journald 用户态停机流程卡死)
+mask journald 四件套后: systemd 全启动 17s 完成, sshd/udevd/tmpfiles/dbus 全绿
+(本日志上方读数)。
+计数器证据 (同 boot, 16:08 读): exec_default_enters 153, arenas 106 (后 158/192,
+背景 churn); 末段 arena_stats 读在高 churn 下变慢 (>60s 未返回, VM 本身存活,
+load 4.29) -- MV3.b 登记项。
