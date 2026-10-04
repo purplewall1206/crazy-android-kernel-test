@@ -4580,7 +4580,32 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 */
 	corten_arena_exit_walk(mm, state);
 
-	/* Unpublish; no reader can be racing (mm_users == 0). */
+	/* MV3.c (the drain takes the lock): the unpublish and the drain
+	 * below run under this mm's mmap_write, restoring the W-7
+	 * registry-writer premise ("every registry writer holds the owner
+	 * mm's mmap_write") for the exit path.  DEV-13's ctl-only spelling
+	 * was deadlock-safe ("the lower lock alone cannot form a cycle")
+	 * but left the premise broken: any reader-side mutation that
+	 * relies on the mmap-lock mutual exclusion -- a remote face's
+	 * faultin leg chief among them -- had no fence against the drain,
+	 * which is why the remote copy face had to go follow-only (the
+	 * POKE COW-break degradation, MV3.b).  The hold is uncontended:
+	 * mm_users is 0, so no GUP/remote face can be inside (every one
+	 * of them enters through an mm reference), the shrinker and the
+	 * oom reaper need mmget_not_zero(), and the file-event route
+	 * never takes this mm's mmap locks (its zap is ptl-serialized,
+	 * fenced from the teardown by the tryget_live/kill ledger).  The
+	 * drain keeps its bounded wait: a leaked transaction reference
+	 * degrades to the counted leak, never to a hung exit.  Lock
+	 * order: mmap_write > ctl_lock (the declared order) and
+	 * mmap_write > i_mmap_write (the arena free's registry unlink),
+	 * both established edges.
+	 */
+	mmap_write_lock(mm);
+
+	/* Unpublish; the write lock fences even a hypothetical reader
+	 * (mm_users == 0 already did).
+	 */
 	smp_store_release(&mm->corten_state, NULL);
 
 	/* A5 (G5-fix): did this registry ever hold arena state?  The
@@ -4599,9 +4624,10 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	INIT_LIST_HEAD(&state->arena_pool);
 	state->nr_pool = 0;
 
-	/* DEV-13: exit drains with mm_users already 0 and takes only the
-	 * lower ctl_lock -- "the lower lock alone" cannot form a cycle.
+	/* The drain runs under the write lock (MV3.c, above); ctl_lock
+	 * nests as everywhere else (mmap > ctl).
 	 */
+	mmap_assert_write_locked(mm);
 	mutex_lock(&state->ctl_lock);
 
 	/* The R1 walk (W-7): drain each record once, at its start frame.
@@ -4622,6 +4648,8 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	}
 
 	mutex_unlock(&state->ctl_lock);
+
+	mmap_write_unlock(mm);
 
 	/* M6.T3: leave the shrinker registry first, then wait out the
 	 * grace period before the state memory is reused -- a shrinker
@@ -12203,9 +12231,25 @@ static int corten_arena_unmap_chunk_flags(struct mm_struct *mm,
 
 		if (ret)
 			return ret;
-		if (tracked)
-			this_cpu_inc(READ_ONCE(mm->corten_state)->stats[
+		/* MV3.c: the state can unpublish mid-chunk -- the file-event
+		 * route reaches a dying mm's chunk past the exit's
+		 * smp_store_release (the route takes no mmap lock, so the
+		 * MV3.c drain hold does not fence it).  One load, NULL
+		 * checked: a lost advisory increment beats a NULL deref.
+		 * A non-NULL load is also safe against the state free:
+		 * tracked means a descriptor answered, so the exit is the
+		 * arena-bearing shape and pays synchronize_rcu() before
+		 * corten_arena_state_free() -- a full grace period after
+		 * this increment.
+		 */
+		if (tracked) {
+			struct corten_mm_state *st =
+					READ_ONCE(mm->corten_state);
+
+			if (st)
+				this_cpu_inc(st->stats[
 					CORTEN_ARENA_STAT_MUNMAP_TXNS]);
+		}
 
 		start = win_end;
 	}
@@ -13703,6 +13747,39 @@ static int corten_arena_mmap_punch(struct mm_struct *mm,
 	ret = corten_arena_unmap_chunk_retry(mm, ar, start, end - start);
 	if (ret)
 		return ret;
+
+	/* MV3.c (the guest 8192 pgtables_bytes residue): the punch erased
+	 * the frames' registry membership above, and the foreign VMA this
+	 * carve was punched FOR may never arrive -- mmap_region() runs
+	 * this route before its own legacy body and can fail at any point
+	 * after it (mlock perms, file_mmap_ok, vma allocation pressure,
+	 * the map_count rlimit), leaving the hole bare.  A bare hole is
+	 * invisible to every teardown: the exit walk is registry-driven
+	 * (no slot to visit), free_pgtables() is VMA-driven (no VMA to
+	 * walk), and pass B1's conservative skip keeps the PMD page above
+	 * the un-retired PT entry -- the PT page plus the PMD page above
+	 * it rode to free_mm as a silent 8192-byte residue (the first
+	 * unmasked-journald boot to survive past 8 minutes disclosed it).
+	 * Retire what the punch left bare -- the park reservation shape
+	 * ("frames + idle descriptor, no PT pages"): a frame the punch
+	 * fully covers, whose slot is now empty (no co-record) and whose
+	 * PTEs are all none, goes through the same whole-frame funnel the
+	 * exit walk's mixed arm and the park use.  The uppers stay warm
+	 * (the live-path contract free_ptes_novma() documents); pass B1
+	 * judges them at mm death.  A punched frame that still carries a
+	 * slot (co-record) or a surviving translation keeps its PT page.
+	 */
+	for (frame = start >> PMD_SHIFT; frame <= last; frame++) {
+		unsigned long win = frame << PMD_SHIFT;
+
+		if (win < start || win + PMD_SIZE > end)
+			continue;	/* boundary frame: the punch clips it */
+		if (xa_load(&state->arenas, frame))
+			continue;	/* a co-record still owns the frame */
+		if (!corten_arena_frame_ptes_empty(mm, win))
+			continue;	/* a translation survived: not bare */
+		corten_arena_free_ptes_novma(mm, win, win + PMD_SIZE);
+	}
 
 	/* W-7: a punch that clips the record's head re-anchors the
 	 * record at the punch end.  The R1 registry walks emit a record

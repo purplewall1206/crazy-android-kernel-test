@@ -12902,11 +12902,10 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
 	shorts0 = corten_arena_test_remote_shorts();
 
 	/* Seed: fault the page in through the arm (the only legal
-	 * producer) and stamp the payload.  No FOLL_GET: the pages-array
-	 * GUP takes no reference (is_valid_gup_args() never forces it),
-	 * the PTE holds the only one -- so nothing to put (a put here
-	 * drops the PTE-anchored folio to 0 and the next follow's
-	 * try_grab_folio() -ENOMEMs it).
+	 * producer) and stamp the payload.  The pages-array GUP takes a
+	 * reference (the real __get_user_pages_locked() forces FOLL_GET
+	 * for a non-NULL pages array), so it must be put back -- the
+	 * PTE-anchored folio keeps its own.
 	 */
 	mmap_read_lock(mm);
 	KUNIT_ASSERT_EQ(test,
@@ -12916,6 +12915,7 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
 	kaddr = kmap_local_page(page);
 	memcpy(kaddr, &pat, sizeof(pat));
 	kunmap_local(kaddr);
+	put_page(page);
 	mmap_read_unlock(mm);
 
 	/* The cmdline face's read: FOLL_ANON remote, kernel buffer
@@ -12948,6 +12948,149 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
 			corten_arena_test_run_op(test, mm,
 						 corten_arena_test_op_mode_exit,
 						 0, 0), 0);
+}
+
+/*
+ * MV3.c: the remote POKE face (ptrace /proc/pid/mem write, FOLL_WRITE |
+ * FOLL_FORCE) on a fork-shared window page.  MV3.b's follow-only arm
+ * degraded the COW break to -EFAULT -- the write face's faultin had no
+ * mutual exclusion against the exit drain (corten_arena_mm_exit() ran
+ * its drain outside every mmap lock).  With the drain under the owner's
+ * mmap_write (MV3.c), the write face faults the COW break exactly like
+ * the user write fault it mirrors: the byte lands in the parent only,
+ * the child keeps the seed, and the child exits through the
+ * drain-under-lock funnel.
+ */
+static void corten_arena_test_remote_poke_cow(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm, *child;
+	unsigned long a;
+	u64 pat = 0x454b4f505f5443ULL;	/* "CT_POKE"-shaped */
+	u64 back = 0, cback = 0;
+	struct page *page = NULL;
+	void *kaddr;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "remote poke anchors require corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	a = corten_arena_test_mvc_attach(test, mm, 1, PROT_READ | PROT_WRITE);
+
+	/* Seed through the arm (the only legal producer); the forced-GET
+	 * reference goes back -- the PTE holds the only one.
+	 */
+	mmap_read_lock(mm);
+	KUNIT_ASSERT_EQ(test,
+			get_user_pages_remote(mm, a, 1, FOLL_WRITE, &page,
+					      NULL), 1);
+	KUNIT_ASSERT_NOT_NULL(test, page);
+	kaddr = kmap_local_page(page);
+	memcpy(kaddr, &pat, sizeof(pat));
+	kunmap_local(kaddr);
+	put_page(page);
+	mmap_read_unlock(mm);
+
+	/* The fork: both sides' PTEs wrprotected, the exclusive mark
+	 * cleared -- the COW-shared shape whose remote write used to
+	 * EFAULT.
+	 */
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+
+	/* The POKE: one byte.  The pre-MV3.c follow-only arm answered
+	 * -EFAULT here (ret 0) -- this anchor's red face.
+	 */
+	back = (u64)'X';
+	ret = access_remote_vm(mm, a, &back, 1, FOLL_WRITE | FOLL_FORCE);
+	KUNIT_EXPECT_EQ(test, ret, 1);
+
+	/* The parent diverged at byte 0 only; the child keeps the seed
+	 * (the COW break took the copy path, never a shared in-place
+	 * write).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_page_word(mm, a, &back, false), 0);
+	KUNIT_EXPECT_EQ(test, back & 0xff, (u64)'X');
+	KUNIT_EXPECT_EQ(test, back >> 8, pat >> 8);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_page_word(child, a, &cback, false),
+			0);
+	KUNIT_EXPECT_EQ(test, cback, pat);
+
+	/* The child's exit rides the drain-under-lock funnel (its mirror
+	 * reference and PTE drop); the parent exits with the harness.
+	 */
+	mmput(child);
+}
+
+/*
+ * MV3.c (the guest 8192 pgtables_bytes residue): a punch that erases a
+ * whole interior frame must retire the frame's now-empty PT page.  The
+ * erased slot is invisible to the registry-driven exit walk,
+ * free_pgtables() is VMA-driven and a hole that never got its foreign
+ * VMA has none (mmap_region() can fail at any point after the carve
+ * route -- mlock perms, file_mmap_ok, vma allocation pressure), and
+ * pass B1's conservative skip keeps the PMD page above the un-retired
+ * PT entry: the pair rode to free_mm as a silent 8192-byte residue.
+ * The driver here is that failure state itself: the carve route, and
+ * no VMA after it (the file+MAP_SHARED shape, the op_punch shape, so
+ * the classify dispatches the punch leg and not the mark).
+ */
+static void corten_arena_test_punch_bare_frame_pte(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long win0, win1;
+	struct file *file;
+	struct page *page = NULL;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "punch bare-frame anchor requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	win0 = corten_arena_test_mvc_attach(test, mm, 2,
+					    PROT_READ | PROT_WRITE);
+	win1 = win0 + PMD_SIZE;
+
+	/* Fault the second frame in: its PT page exists where content is,
+	 * and it is the frame the punch will erase.
+	 */
+	mmap_read_lock(mm);
+	KUNIT_ASSERT_EQ(test,
+			get_user_pages_remote(mm, win1, 1, FOLL_WRITE, &page,
+					      NULL), 1);
+	put_page(page);
+	mmap_read_unlock(mm);
+
+	file = shmem_file_setup("corten_mv3c", PMD_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+
+	/* The carve route alone -- mmap_region()'s post-route body never
+	 * runs, which is exactly what its failure paths leave behind.
+	 */
+	mmap_write_lock(mm);
+	ret = corten_arena_mmap_route(mm, win1, PMD_SIZE,
+				      PROT_READ | PROT_WRITE,
+				      MAP_FIXED | MAP_SHARED, file, 0);
+	mmap_write_unlock(mm);
+	fput(file);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+
+	/* The punched extent is registry-gone, the surviving extent is
+	 * not...
+	 */
+	KUNIT_EXPECT_NULL(test, corten_arena_test_region_of(mm, win1));
+	KUNIT_EXPECT_NOT_NULL(test, corten_arena_test_region_of(mm, win0));
+	/* ...and the bare frame is PT-retired.  The red face: the PT
+	 * entry survived the punch and its PT+PMD pair surfaced at
+	 * free_mm as the 8192 residue.
+	 */
+	KUNIT_EXPECT_NULL(test, corten_arena_test_pmd(mm, win1));
 }
 
 /*
@@ -15329,6 +15472,8 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_gup_loop_window),
 	KUNIT_CASE(corten_arena_test_gup_loop_legacy),
 	KUNIT_CASE(corten_arena_test_remote_access_window),
+	KUNIT_CASE(corten_arena_test_remote_poke_cow),
+	KUNIT_CASE(corten_arena_test_punch_bare_frame_pte),
 	KUNIT_CASE(corten_arena_test_mvc_smaps_pagemap),
 	/* V-D: the full-lifecycle ledger anchor (B-2 closure). */
 	KUNIT_CASE(corten_arena_test_exit_lifecycle),

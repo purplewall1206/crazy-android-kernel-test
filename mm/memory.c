@@ -7043,16 +7043,30 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 		 * verdict keeps the short-answer form -- with the lock
 		 * dropped.
 		 *
-		 * Follow-only (FOLL_NOFAULT): a remote copy face reads
-		 * what is committed and never faults the target -- the
-		 * arena's slot producers (the exit drain chief among
-		 * them) do not all take this mm's mmap lock
-		 * (corten_arena_mm_exit() runs before exit_mmap()'s
-		 * locks), so a reader-context faultin has no lock
-		 * exclusivity against them; an absent slot keeps the
-		 * short answer (the V-A.3b contract, counted).
+		 * Follow-only for READS (FOLL_NOFAULT): a remote read face
+		 * reads what is committed and never faults the target --
+		 * an absent slot keeps the short answer (the V-A.3b
+		 * contract, counted).  The WRITE face faults: with the
+		 * exit drain under the owner's mmap_write (MV3.c,
+		 * corten_arena_mm_exit()), the faultin leg is mutually
+		 * exclusive against every slot producer again, so a
+		 * ptrace/proc-pid-mem POKE breaks COW on a fork-shared
+		 * window page like a user write fault instead of
+		 * degrading to -EFAULT (the MV3.b registered
+		 * degradation, restored).
+		 *
+		 * FOLL_GET is forced, not inherited: the copy below
+		 * releases the page through folio_release_kmap()'s
+		 * folio_put() (the real __get_user_pages_locked() sets
+		 * FOLL_GET for a non-NULL pages array behind the same
+		 * release), so the arm's grab must carry the ref or
+		 * every window read underflows the folio -- the MV3.b
+		 * guest corruption family in full (stale PTEs, aliasing
+		 * mapcounts, PCP poison) was exactly this missing get.
 		 */
-		if (corten_gup_window(mm, addr, gup_flags | FOLL_NOFAULT,
+		if (corten_gup_window(mm, addr,
+				      gup_flags | FOLL_GET |
+				      (write ? 0 : FOLL_NOFAULT),
 				      &page) < 0) {
 			corten_remote_note_window_short(mm, addr);
 			mmap_read_unlock(mm);
@@ -7205,7 +7219,8 @@ static int __copy_remote_vm_str(struct mm_struct *mm, unsigned long addr,
 		 * vma_lookup() (the mm.h:2648 WARN face) and the reader
 		 * never faults the target.
 		 */
-		if (corten_gup_window(mm, addr, gup_flags | FOLL_NOFAULT,
+		if (corten_gup_window(mm, addr,
+				      gup_flags | FOLL_NOFAULT | FOLL_GET,
 				      &page) < 0) {
 			*(char *)buf = '\0';
 			err = -EFAULT;
