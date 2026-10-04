@@ -1472,3 +1472,7 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
   - **r09 会话使命完成**（W-4 入场→W-5→W-6→W-6b→W-7 全链 + r08 遗留两项旧账
     清偿）: 后续 = MV3 系列（D29）新指令轮或收尾。锁 owner=claude-code-glm53flash
     提醒归还 Hermes。
+  - **[2026-10-04 补推收口]** 网络恢复: android17-6.18 与 corten-github 双分支推至
+    18b4acdcff81（含 W-7/STATE 终章/W-6·W-7 报告与证据全集入库）; corten* 全系
+    49 tag 首推远端（D27 留本地惯例由 Hermes 指令覆盖）; run/ 保持 gitignore。
+    MV2 交付 GitHub 侧完整在线。
