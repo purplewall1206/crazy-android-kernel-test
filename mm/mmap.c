@@ -1518,6 +1518,28 @@ int vm_brk_flags(unsigned long addr, unsigned long request, vm_flags_t vm_flags)
 
 	vma = vma_prev(&vmi);
 	ret = do_brk_flags(&vmi, vma, addr, len, vm_flags);
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * MV3.c (the exec image adoption): the ELF loader maps an ET_DYN
+	 * interpreter's bss here (elf_load()'s vm_brk_flags arm), and
+	 * with the exec image adopted the first PT_LOAD sits on an arena
+	 * window frame -- so this VMA lands INSIDE the window domain.
+	 * vm_brk_flags() reaches do_vmi_munmap()/do_brk_flags() directly
+	 * and never passes do_mmap(), so no route sees it: without a
+	 * registry entry the window-fault terminus answers SIGSEGV for
+	 * the bss (the registry+implants being the window's occupancy
+	 * truth) and the J2 whitelist scan reads it as a window-domain
+	 * violation.  Register it as the implant it is -- the same
+	 * producer contract the punch and P1b arms use for the foreign
+	 * VMAs their funnels install.  The window-domain gate keeps every
+	 * other vm_brk_flags caller (the main binary's set_brk bss,
+	 * drivers) at two compares.  mmap_write is held (the implant
+	 * ledger's writer convention).
+	 */
+	if (!ret && addr >= CORTEN_MODE_WINDOW_START &&
+	    addr + len <= CORTEN_MODE_WINDOW_END)
+		corten_implant_mark(mm, addr, len);
+#endif
 	populate = ((mm->def_flags & VM_LOCKED) != 0);
 	mmap_write_unlock(mm);
 	userfaultfd_unmap_complete(mm, &uf);

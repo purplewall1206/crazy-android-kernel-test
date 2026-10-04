@@ -7122,23 +7122,25 @@ static void corten_arena_test_pool_reuse(struct kunit *test)
 				CORTEN_FAULT_FALLBACK);
 	}
 
-	/* The pure reservation (sec 3.1.1): frames + idle descriptor,
-	 * no VMA -- and no PT pages either; the park's VMA removal
-	 * retired the window's tables.
+	/* The pure reservation (sec 3.1.1): frames + idle descriptor, no
+	 * VMA.  MV3.c (the mmap-pf batch mark): the park keeps the PT
+	 * domain warm -- all-none PTEs, the tables stay charged to the
+	 * mm and retire at the deregistering exits -- so the cycle
+	 * stops paying a page-table teardown and rebuild per op.
 	 */
-	KUNIT_EXPECT_FALSE(test,
-			   corten_arena_test_pt_present(mm,
-							CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_test_pt_present(mm,
+						       CORTEN_ARENA_TEST_WIN));
 
-	/* The park zap reset the committed page (perm-0 Invalid) and the
-	 * VMA removal retired the window's PT pages: the metadata slot
-	 * itself is gone, so the read answers -ENOENT.  Pristine by
-	 * absence -- there is nothing left to resurrect a stale contract
-	 * from.
+	/* The park zap reset the committed page (perm-0 Invalid); the
+	 * metadata array now survives the park (the slots are Invalid),
+	 * so the read answers 0 over an all-Invalid array -- pristine
+	 * by content, not by absence.
 	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_meta(mm, CORTEN_ARENA_TEST_WIN,
-					       &m), -ENOENT);
+					       &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_INVALID);
 
 	/* The next auto mmap of the same size is served from the pool:
 	 * ret 2 -- the pure-metadata reactivation IS the mapping, live
@@ -15338,10 +15340,10 @@ static void corten_arena_test_exec_default_enter(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, ar);
 	KUNIT_EXPECT_EQ(test, ar->start, addr);
 
-	/* The exec loader's own addr==0 shapes decline the window while
-	 * in_execve (the init-boot SIGSEGV guard): same mm, same MODE,
-	 * the route answers legacy for the loader window and lives again
-	 * the moment do_execve clears the bit.
+	/* The exec loader's own addr==0 shapes route exactly like the
+	 * runtime's since the MV3.c adoption (the in_execve downgrade
+	 * arm is gone): same mm, same MODE, the interpreter's first
+	 * PT_LOAD takes a window while the bit is still set.
 	 */
 	current->in_execve = 1;
 	addr = 0;
@@ -15352,7 +15354,7 @@ static void corten_arena_test_exec_default_enter(struct kunit *test)
 							    PROT_READ |
 							    PROT_WRITE,
 							    &addr, &len,
-							    &flags), 0);
+							    &flags), 1);
 	current->in_execve = 0;
 	addr = 0;
 	len = 2 * PAGE_SIZE;
@@ -15363,6 +15365,128 @@ static void corten_arena_test_exec_default_enter(struct kunit *test)
 							    PROT_WRITE,
 							    &addr, &len,
 							    &flags), 1);
+}
+
+/* MV3.c axis 1: the ET_DYN interpreter's first PT_LOAD shape --
+ * addr==0, private file, non-fixed -- routes into the window DURING
+ * the exec (in_execve set).  The MV3.a-era red: this shape answered
+ * legacy and left the exec image in the tree; the replacement is the
+ * adoption the brief's routing piece names.
+ */
+static void corten_arena_test_exec_interp_route(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_arena *ar;
+	struct file *file;
+	unsigned long addr = 0, lenp = 2 * PAGE_SIZE, flags;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "exec image adoption requires corten=on");
+	if (sysctl_overcommit_memory == OVERCOMMIT_NEVER)
+		kunit_skip(test, "auto takeover degraded (OVERCOMMIT_NEVER)");
+
+	file = shmem_file_setup("corten_mv3c", PMD_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	current->in_execve = 1;
+	flags = MAP_PRIVATE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_file_route(mm, file, lenp, &addr,
+						     &lenp, &flags), 1);
+	current->in_execve = 0;
+	KUNIT_EXPECT_EQ(test, addr, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_EQ(test, lenp, PMD_SIZE);
+
+	/* The do_mmap completion body: the FILE record carries the
+	 * image's first extent (the total_size map) at pgoff 0.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_file_attach(mm, addr, file, 0), 0);
+	rcu_read_lock();
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	KUNIT_EXPECT_EQ(test, ar->start, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_EQ(test, ar->end,
+			CORTEN_ARENA_TEST_WIN + PMD_SIZE);
+	KUNIT_EXPECT_EQ(test, ar->rclass, CORTEN_REGION_FILE);
+	rcu_read_unlock();
+}
+
+/* MV3.c axis 1: the loader's follower legs over the adopted first
+ * segment.  elf_map() MAP_FIXEDs the text over an interior range of
+ * the first PT_LOAD's PMD-rounded takeover; the admission's punch arm
+ * tears the overlap, the punch re-anchors the record's HEAD piece
+ * (the ELF header page the loader's own AT_PHDR reads still touch),
+ * and the text becomes a second FILE record on the same frame -- the
+ * multi-record registry holding the image's mixed segments.
+ */
+static void corten_arena_test_exec_interp_multiseg(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_arena *ar;
+	struct file *file;
+	unsigned long addr = 0, lenp = 2 * PAGE_SIZE, flags;
+	int ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "exec image adoption requires corten=on");
+	if (sysctl_overcommit_memory == OVERCOMMIT_NEVER)
+		kunit_skip(test, "auto takeover degraded (OVERCOMMIT_NEVER)");
+
+	file = shmem_file_setup("corten_mv3c", PMD_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+
+	/* First PT_LOAD: the addr==0 file takeover claims the frame. */
+	flags = MAP_PRIVATE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_file_route(mm, file, lenp, &addr,
+						     &lenp, &flags), 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_file_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      file, 0), 0);
+
+	/* The text leg: MAP_FIXED at an interior range, the loader's
+	 * load_bias + vaddr shape.  The admission tears the overlap and
+	 * attaches the region (ret 1: no funnel, no implant VMA).
+	 */
+	mmap_write_lock(mm);
+	ret = corten_arena_mmap_route(mm, CORTEN_ARENA_TEST_WIN + PAGE_SIZE,
+				      2 * PAGE_SIZE, PROT_READ | PROT_EXEC,
+				      MAP_PRIVATE | MAP_FIXED, file, 1);
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test, ret, 1);
+
+	/* The head piece survived the punch, re-anchored at the punch
+	 * start; the text is its own record on the same frame.
+	 */
+	rcu_read_lock();
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	KUNIT_EXPECT_EQ(test, ar->start, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_EQ(test, ar->end, CORTEN_ARENA_TEST_WIN + PAGE_SIZE);
+	KUNIT_EXPECT_EQ(test, ar->rpoff, 0);
+
+	ar = corten_arena_test_region_of(mm,
+					 CORTEN_ARENA_TEST_WIN + PAGE_SIZE);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	KUNIT_EXPECT_EQ(test, ar->start,
+			CORTEN_ARENA_TEST_WIN + PAGE_SIZE);
+	KUNIT_EXPECT_EQ(test, ar->end,
+			CORTEN_ARENA_TEST_WIN + 3 * PAGE_SIZE);
+	KUNIT_EXPECT_EQ(test, ar->rclass, CORTEN_REGION_FILE);
+	KUNIT_EXPECT_EQ(test, ar->rpoff, 1);
+	rcu_read_unlock();
+
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
+	mmap_read_unlock(mm);
 }
 
 static struct kunit_case corten_arena_test_cases[] = {
@@ -15386,6 +15510,9 @@ static struct kunit_case corten_arena_test_cases[] = {
 	/* MV3.a: the execve default entry anchors. */
 	KUNIT_CASE(corten_arena_test_exec_default_off),
 	KUNIT_CASE(corten_arena_test_exec_default_enter),
+	/* MV3.c axis 1: the exec image adoption anchors. */
+	KUNIT_CASE(corten_arena_test_exec_interp_route),
+	KUNIT_CASE(corten_arena_test_exec_interp_multiseg),
 	KUNIT_CASE(corten_arena_test_declare_reject),
 	KUNIT_CASE(corten_arena_test_declare_reject_flags),
 	KUNIT_CASE(corten_arena_test_declare_query),
