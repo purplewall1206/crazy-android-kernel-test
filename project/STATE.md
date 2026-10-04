@@ -1494,3 +1494,31 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
   - 顺序: MV3.a → MV3.b（重triage 后余项）→ MV3.c（批 mark 重构, 性能地板
     收窄）→ MV3.d（全系统 MODE 电池, 翻 corten_mode_default）→ MV3.e（删除
     账清单）。
+
+- **[2026-10-04 r09: MV3.a ✓ —— 默认进场头片落地（commit 2e811260e336, merge 在
+  主树）]**
+  - **实现**: fs/exec.c exec_mmap() 门一行（corten_exec_default_enter, 复用 A5 裸
+    enter 不 sweep）; 新参数 `corten_mode_default`（默认 off, 与 corten=on 分离——
+    既有电池零扰动）; exec_default_enters 计数+debugfs 行; KUnit 两锚（131 中
+    套件）。**折入 W-7 后续修**: R1 walk it->last 防重发（默认进场首踩, 旧世界
+    prctl 进场退出时 registry 已清不触发）——mm_exit GPF（systemd-tmpfiles
+    POISON2）根治。
+  - **brief 假设证伪（诚实修正）**: "ELF 段由既有路由承接"不成立——ET_DYN 解释器
+    首段 addr==0 非 MAP_FIXED → in_execve 降级臂: exec 镜像 legacy-stock（收编
+    登记 MV3.c）; 默认 MODE 世界 tree-zero 读数相应回退（披露）。
+  - **验证**: KUnit on×2+off 全绿（skip 对账精确, on1 interlock flake 复跑绿）;
+    =n 13 对象+fs/exec.o 零符号; checkpatch 0E/0W/1C（参数文档 C, corten= 同款）;
+    guest 双 boot: **=on 全 systemd 启动**——裸探针（无 hook）mode=1、
+    systemd/udevd/sshd/bash arenas 行+表对拍、exec_default_enters=153、**裸 smoke
+    26/26 SMOKE-DRIVER PASS**、metis 裸跑 checksum 精确同基准、hook 形 26/26
+    （驱动器账面断言全系统 churn 下失效, 披露非红）; **=off 回归**: 裸探针 mode=0
+    （分离证明）+全套绿+dmesg 静默。bzimg results/r07/mv3a/（#326）。
+  - **⚠️ MV3.d 前置硬门（三红裁定）**: ①**journald 缺口**=唯一拦路面——=on 带写
+    journal 的 boot 在 tmpfiles-setup-dev-early 停摆（journald 读客户端 cmdline 触
+    窗口 VMA-free 域 GUP, mm.h:2648 WARN, 用户态停机卡死非内核 crash）; mask
+    journald 形态 17s 全启动（本片全部 =on 读数来源）→ **MV3.b 头项 = 外部访问面
+    闭合（cmdline/proc 族对窗口域）**; ②arena_stats churn 下读 >60s → MV3.b;
+    ③exec 镜像收编 → MV3.c。**MV3.d 翻 default=on 全系统电池前, MV3.b 的
+    journald 面必须绿**。
+  - **推 pending**: android17-6.18 分支欠 a1bb848（MV3.a brief）起的累积（TLS 瞬断
+    连发）; corten-github 全量在线（b7fe9d2→MV3.a merge 随手推）。
