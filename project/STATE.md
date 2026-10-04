@@ -1495,6 +1495,30 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     收窄）→ MV3.d（全系统 MODE 电池, 翻 corten_mode_default）→ MV3.e（删除
     账清单）。
 
+- **[2026-10-05 r09: MV3.c 特性片 ✓ —— exec 镜像收编 + mmap-pf warm park
+  （commit 5475da44bdc0, merge 双分支 1d3af15bff9d）]**
+  - **轴一 exec 收编绿**: MV3.a init-SEGV 红面三腿合成缺口定界（首段收编 2MB
+    declare punch 抹记录→头页树洞 / bss 走 vm_brk_flags 绕全部路由→S-1 前提
+    失效崩）→ 四件修（in_execve 臂移除/punch 幸存者重锚单帧限/admission 接管
+    file overlap/vm_brk bss implant 登记）。终态: 解释器同帧 4 FILE region+
+    bss implant、rpoff 渲染正、init/裸 smoke/metis 零回归、gate_pass=1。
+    **登记超红线裁决件**: glibc 库非零 hint 装载永不达 addr==0 路由（库收编
+    独立裁决）; static-PIE 对齐探针形登记。
+  - **轴二 warm park**: pool re-parm 每 op 拆 PT 域（二次 flush+下轮重建）→
+    warm park（全 none PT 域过池保温, 注销出口逐帧退役+空槽守卫防混合帧）。
+    配对 mmap-pf: **+134.6%（t4）/ +135%（t8）; MODE 税 -84.3%→-63.2%**。
+    **D35 (性能基线刷新)**: D29 时代"-17~-22% 地板"已过时——t5final 后
+    W-2/W-7/M-V 累计漂移, 本树单进程 MODE 起点实测 **-84%**（未逐轮 bisect,
+    地板演化 bisect 登记独立小片）; 剩余差距归因=park zap 512 槽逐槽走查
+    （脏域 rec_lo/hi 有界化设计在报告 §2.4-1）+ per-fault +1.4µs。
+  - **验证**: KUnit on×2 194/0/6 + off（skip 对账精确+interlock 复跑绿）;
+    checkpatch 0E/0W; =n 竞态作废后 make clean 重做 rc=0; =off 回归绿。
+    工件 results/r07/mv3cfeat/（51 件）; 报告 next/mv3cfeat-dev-report.md;
+    bzImage sha 前缀 a3f2137f77b26c16。
+  - **下一步 = MV3.d**: 全系统 MODE 电池（corruption/drain 两硬门已清,
+    MV3.c-feat 已并）——翻 corten_mode_default=on 全系统启动+gcc 自编译+LTP
+    抽样零回归。
+
 - **[2026-10-05 r09: MV3.b ✓ —— 远程访问面+闭合清单（commit 87220166a815, merge
   6a53b312b5ad 双分支在线）]**
   - **journald 面双层根因修复**: ①mm.h:2648 WARN = get_user_page_vma_remote 的
