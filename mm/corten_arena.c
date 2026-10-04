@@ -6292,24 +6292,6 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 
 	if (!corten_enabled_static() || !mm || !READ_ONCE(mm->corten_mode))
 		return 0;
-	/*
-	 * MV3.a: the exec loader's own addr==0 shapes decline the
-	 * window.  The ET_DYN interpreter's first PT_LOAD is mapped
-	 * non-fixed at addr==0 (fs/binfmt_elf.c load_elf_interp:
-	 * load_addr = -vaddr before the first elf_load), so by class it
-	 * is a window-eligible private file map -- but the loader's
-	 * bias arithmetic and the arena completion disagree about the
-	 * image layout, and init SIGSEGVs in ld.so at the window base
-	 * (the first corten_mode_default=on boot:
-	 * results/r07/mv3a/console-mv3a-on.log).  For the in_execve
-	 * window the exec image stays legacy-stock; the process is
-	 * still default-MODE and every runtime mmap of it routes as
-	 * usual once do_execveat_common() clears the bit.  The exec
-	 * image's own arena adoption is the registered MV3.c-era
-	 * follow-up, not this slice.
-	 */
-	if (current->in_execve)
-		return 0;
 	/* PROT_NONE and every prot combination are arena-able
 	 * (corten_arena_perm_from_prot() mirrors the prot bits); the
 	 * validation gate below decides the shapes the arena cannot
@@ -12319,11 +12301,13 @@ int corten_arena_unmap_chunk(struct mm_struct *mm, struct corten_arena *ar,
  *
  * Called with the owner mm's mmap_write and state->ctl_lock held.
  */
-static void corten_arena_pool_eject_locked(struct corten_mm_state *state,
+static void corten_arena_pool_eject_locked(struct mm_struct *mm,
+					   struct corten_mm_state *state,
 					   struct corten_arena *ar,
 					   bool recycle)
 {
-	unsigned long frame, first, last;
+	unsigned long frame, first, last, run_start = 0;
+	bool have_run = false;
 
 	WRITE_ONCE(ar->idle, false);
 	list_del(&ar->pool);
@@ -12337,6 +12321,38 @@ static void corten_arena_pool_eject_locked(struct corten_mm_state *state,
 		else
 			corten_slot_remove(&state->arenas, frame, ar, false);
 	}
+	/* MV3.c (the mmap-pf batch mark): a warm park leaves the
+	 * window's PT domain in place (all-none PTEs -- the park's own
+	 * zap reset every slot).  The eject hands the frames back to the
+	 * magazine or to the legacy funnel, so the domain must go with
+	 * the deregistration -- per frame, and only where the slot came
+	 * out empty (a co-framed live record owns its own translations:
+	 * freeing the shared PT page under it is the exit walk's
+	 * mixed-frame hazard).  The freed-tables accounting rides the
+	 * funnel's mm_dec; no foreign PTE can appear below the eject
+	 * (the callers hold mmap_write and the park's zap fenced the
+	 * stragglers before idle).
+	 */
+	first = ar->start >> PMD_SHIFT;
+	last = (ar->end - 1) >> PMD_SHIFT;
+	for (frame = first; frame <= last; frame++) {
+		if (xa_load(&state->arenas, frame)) {
+			if (have_run) {
+				have_run = false;
+				corten_arena_free_ptes_novma(mm,
+					run_start, frame << PMD_SHIFT);
+			}
+			continue;
+		}
+		if (!have_run) {
+			have_run = true;
+			run_start = frame << PMD_SHIFT;
+		}
+	}
+	if (have_run)
+		corten_arena_free_ptes_novma(mm, run_start,
+					     (last + 1) << PMD_SHIFT);
+
 	atomic_long_inc(&corten_nr_pool_ejects);
 
 	/* The deregistration must unlink the observability ledger BEFORE
@@ -12400,7 +12416,7 @@ static int corten_arena_pool_reactivate(struct mm_struct *mm,
 		WARN_ONCE(1, "corten: foreign vma in parked window %lx-%lx\n",
 			  ar->start, ar->end);
 		atomic_long_inc(&corten_nr_p4_ejects);
-		corten_arena_pool_eject_locked(state, ar, true);
+		corten_arena_pool_eject_locked(mm, state, ar, true);
 		return -EAGAIN;
 	}
 
@@ -12539,7 +12555,7 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
 		 * empty: the slot cannot serve this reuse.  Return its
 		 * frames to the magazine and let the fresh path rebuild.
 		 */
-		corten_arena_pool_eject_locked(state, ar, true);
+		corten_arena_pool_eject_locked(mm, state, ar, true);
 		return 1;
 	}
 
@@ -12562,8 +12578,8 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
 				 corten_slot_arena(slot);
 
 			if (ar && READ_ONCE(ar->idle))
-				corten_arena_pool_eject_locked(state, ar,
-							       true);
+				corten_arena_pool_eject_locked(mm, state,
+							       ar, true);
 		}
 	}
 
@@ -12772,13 +12788,29 @@ static bool corten_arena_pool_park_locked(struct mm_struct *mm,
 		/* A re-park of a VMA-less (reactivated) window: no VMA
 		 * to remove, so the park does the reservation shape by
 		 * hand -- the take's total_vm charge is unwound (no
-		 * remove_vma() to do it) and the window's PT pages
-		 * retire (sec 3.1.1: the pure reservation is frames +
-		 * idle descriptor, no VMA, no PT pages).
+		 * remove_vma() to do it).  MV3.c (the mmap-pf batch
+		 * mark): the window's PT pages now STAY WARM across the
+		 * pool cycle.  The old shape retired them here through
+		 * free_ptes_novma() -- its own gather and flush round
+		 * per park -- and the next take's first faults rebuilt
+		 * the PT page and the PMD page from scratch, so a
+		 * place-fault-park op paid two shootdown rounds plus a
+		 * page-table rebuild where the legacy munmap pays one
+		 * (the measured mmap-pf coupling gap).  The reservation
+		 * invariant tightens instead: a parked window is frames
+		 * + idle descriptor + its (all-none) PT domain, charged
+		 * to @mm as always and retired at the exits that
+		 * deregister the window -- release_arena_locked()'s
+		 * parked teardown, the pool eviction/flush tail, and
+		 * the eject arms (pool_eject_locked() now retires what
+		 * a warm park left behind, keeping the freed-VA
+		 * handouts PT-clean).  The PTEs are all none (the zap
+		 * above reset every slot), so the reactivated handout
+		 * stays pristine at the PTE level and no walker exists
+		 * for a tree-free parked range.
 		 */
 		vm_stat_account(mm, corten_take_vm_flags(READ_ONCE(ar->prot)),
 				-(long)((ar->end - ar->start) >> PAGE_SHIFT));
-		corten_arena_free_ptes_novma(mm, ar->start, ar->end);
 	}
 
 	/* V-A.3c hot-path sample (j2-audit hook list): the parked window
@@ -12960,7 +12992,7 @@ eject:
 	/* Holed (punched while parked), or the window is not empty:
 	 * deregister and let the caller place fresh window.
 	 */
-	corten_arena_pool_eject_locked(state, ar, true);
+	corten_arena_pool_eject_locked(mm, state, ar, true);
 	mutex_unlock(&state->ctl_lock);
 
 	/* V-A.3c hot-path sample: an ejected slot is the audit-interesting
@@ -13812,6 +13844,62 @@ static int corten_arena_mmap_punch(struct mm_struct *mm,
 			corten_slot_insert(&state->arenas,
 					   ps >> PMD_SHIFT, ar);
 		}
+	} else if (start > READ_ONCE(ar->start) &&
+		   (READ_ONCE(ar->start) >> PMD_SHIFT) ==
+		   ((READ_ONCE(ar->end) - 1) >> PMD_SHIFT)) {
+		/* MV3.c (the exec image adoption): the mirror arm for
+		 * the SINGLE-FRAME record -- a punch that leaves the
+		 * head alive keeps the record on the head piece.  The
+		 * shape is deterministic in the exec loader: the
+		 * interpreter's first PT_LOAD adopts [base, base+2M)
+		 * (the PMD-rounded takeover), elf_map() then MAP_FIXEDs
+		 * the text over an interior range, and the record's
+		 * head piece is the ELF header page the loader's own
+		 * phdr reads (AT_PHDR) still touch.  With the old arm
+		 * set the interior punch unpublished the whole
+		 * membership and the head piece became a tree-free,
+		 * record-free hole -- the window-fault terminus answered
+		 * its faults SIGSEGV.  Re-anchor the end instead: the
+		 * survivor [ar->start, start) keeps the original payload
+		 * offset (the head maps the file's first pages, no
+		 * rpoff shift), the punched range plus the orphaned
+		 * tail is refunded, and the start-frame slot re-inserts
+		 * (same frame as the punch start: ar->start < start
+		 * pins it inside the removed set).  The tail piece
+		 * beyond the punch end is window property again -- the
+		 * loader's own segment attaches re-adopt their extents
+		 * on top of it.
+		 *
+		 * A cross-FRAME interior punch keeps the D-G'' contract
+		 * untouched (the tail frame's slot and extent stay the
+		 * record's; only the punched frames unpublish): the
+		 * re-anchor here would strand that tail -- its frame
+		 * slot would claim a record whose extent no longer
+		 * covers it.
+		 */
+		long pages = (long)((READ_ONCE(ar->end) - start) >>
+				    PAGE_SHIFT);
+
+		if (pages > 0) {
+			if (READ_ONCE(ar->auto_shape)) {
+				vm_flags_t vf;
+
+				vf = corten_take_vm_flags(READ_ONCE(ar->prot));
+				vm_stat_account(mm, vf, -pages);
+			}
+			WRITE_ONCE(ar->end, start);
+			/* The removal loop took the frames of
+			 * [start, end); the head survivor's start frame
+			 * is inside that set exactly when it shares the
+			 * punch's start frame (ar->start < start pins
+			 * every other case below the removed range).
+			 */
+			if ((READ_ONCE(ar->start) >> PMD_SHIFT) ==
+			    (start >> PMD_SHIFT))
+				corten_slot_insert(&state->arenas,
+						   READ_ONCE(ar->start) >>
+						   PMD_SHIFT, ar);
+		}
 	}
 	if (ret)
 		return ret;
@@ -14605,8 +14693,8 @@ static int corten_arena_placement_punch_idle(struct mm_struct *mm,
 				 corten_slot_arena(slot);
 
 			if (ar && READ_ONCE(ar->idle)) {
-				corten_arena_pool_eject_locked(state, ar,
-							       false);
+				corten_arena_pool_eject_locked(mm, state,
+							       ar, false);
 				ejected = true;
 			}
 		}
@@ -14840,10 +14928,17 @@ static int corten_arena_explicit_region_route(struct mm_struct *mm,
 		return 0;
 
 	/* Live arena overlap: the anon shape is the mark transaction's
-	 * (the dispatch below), the file shape the punch route's -- the
-	 * admission only takes tree-and-live-arena-free terrain.
+	 * (the dispatch below).  The file shape's overlap is the
+	 * admission's own business now (MV3.c exec image adoption): the
+	 * loader installs every interpreter segment MAP_FIXED on top of
+	 * the first PT_LOAD's PMD-rounded takeover, and declining the
+	 * admission on the overlap would route the segment through the
+	 * funnel as a punch implant instead of the region the multi-
+	 * record registry exists to hold.  The admitted punch arm below
+	 * tears the overlap (its registry marks stay dead -- the W-5
+	 * criterion) and the FILE record replaces it one for one.
 	 */
-	if (corten_arena_range_overlaps(mm, addr, len))
+	if (!file && corten_arena_range_overlaps(mm, addr, len))
 		return 0;
 
 	/* OVERCOMMIT_NEVER's funnel VMA carries the VM_ACCOUNT committed
