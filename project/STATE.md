@@ -1473,6 +1473,11 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     清偿）: 后续 = MV3 系列（D29）新指令轮或收尾。锁 owner=claude-code-glm53flash
     提醒归还 Hermes。
   - **[2026-10-04 补推收口]** 网络恢复: android17-6.18 与 corten-github 双分支推至
-    18b4acdcff81（含 W-7/STATE 终章/W-6·W-7 报告与证据全集入库）; corten* 全系
-    49 tag 首推远端（D27 留本地惯例由 Hermes 指令覆盖）; run/ 保持 gitignore。
-    MV2 交付 GitHub 侧完整在线。
+    18b4acdcff81（含 W-7/STATE 终章/W-6·W-7 报告与证据全集入库）; run/ 保持
+    gitignore。**tag 终局对账（Hermes 实测 rev-list --not 双基准）**: corten tag
+    共 59, 在线 8（w1-complete/w3/w3fix1-3/w4/w5/mv2-complete = MV2 主链关键
+    tag 全在线）; 其余 51 个（w1a..w1f/w2/mva~mve/r01-r06）悬在与远端不相交的
+    1.4M 提交历史链上, 数 GB 级补传从本机网络不可行——不再重试, 待未来网络
+    条件变化或换通道。运维: 仓库 http.version=HTTP/1.1 已设（修代理下挂死）;
+    SSH 备用 key /tmp/gh_push_key（账号 hermes-tag-sync-20261004）。MV2 交付
+    GitHub 侧: 分支+主链 tag 完整在线。
