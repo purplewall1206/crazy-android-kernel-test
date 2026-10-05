@@ -1,0 +1,52 @@
+===SEC0 INVENTORY===
+6.18.32-gaaa51658ee1e
+console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount corten=on mitigations=off kunit.enable=0 log_buf_len=16M
+ 01:03:32 up 0 min,  1 user,  load average: 0.15, 0.03, 0.01
+8
+               total        used        free      shared  buff/cache   available
+Mem:            3845         204        3539           0         153        3640
+/dev/root       9.8G  3.0G  6.3G  33% /
+tmpfs           1.9G     0  1.9G   0% /tmp
+gcc (Debian 14.2.0-19) 14.2.0
+GNU Make 4.4.1
+openjdk version "21.0.12.1" 2026-08-18
+graphical.target
+===SEC1 BOOT===
+Startup finished in 4.045s (kernel) + 11.999s (userspace) = 16.044s 
+graphical.target reached after 11.992s in userspace.
+degraded
+ISRUN_RC=1
+--- failed units:
+● redis-server.service loaded failed failed Advanced key-value store
+FAILED_RC=0
+--- reached targets:
+Oct 05 01:03:30 syzkaller systemd[1]: Reached target multi-user.target - Multi-User System.
+Oct 05 01:03:30 syzkaller systemd[1]: Reached target graphical.target - Graphical Interface.
+--- journal lines: 766
+===SEC2 LTP-BUILD===
+AUTOTOOLS_RC=0
+CONFIGURE_RC=0
+283
+BUILD_RC=0
+BUILD_SECS=595
+bin count: 0
+   52 | int parse_args(int c, char *v)
+      |                       ~~~~~~^
+CC testcases/realtime/stress/pi-tests/lookup_pi_state
+CC testcases/realtime/stress/pi-tests/testpi-3
+make[1]: Leaving directory '/root/ltp/testcases'
+PRODUCT mmap01 MISSING
+PRODUCT fork01 MISSING
+PRODUCT madvise01 MISSING
+PRODUCT mmapstress01 MISSING
+PRODUCT mtest01 MISSING
+===SEC3 LTP-RUN===
+LTP_SUMMAR PASS=0 FAIL=0 CONF=0 MISSING=115 OTHER=0 TOTAL=115
+--- FAIL/TIMEOUT/BROK/OTHER rows:
+(none)
+--- mmap01 log head:
+===SEC4 FACES===
+SMOKE_BARE_RC=0 PASS=26 FAIL=0
+[smoke] SMOKE-DRIVER PASS
+SMOKE_HOOK_RC=0 PASS=26 FAIL=0
+[smoke] SMOKE-DRIVER PASS
