@@ -1,0 +1,73 @@
+===SEC0 INVENTORY===
+6.18.32-gaaa51658ee1e
+console=ttyS0 root=/dev/vda rw net.ifnames=0 corten=on systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M
+ 04:10:44 up 0 min,  1 user,  load average: 0.00, 0.00, 0.00
+8
+               total        used        free      shared  buff/cache   available
+Mem:            3845         193        3599           0         103        3651
+/dev/root       9.8G  4.8G  4.5G  52% /
+tmpfs           1.9G  4.0K  1.9G   1% /tmp
+gcc (Debian 14.2.0-19) 14.2.0
+GNU Make 4.4.1
+openjdk version "21.0.12.1" 2026-08-18
+graphical.target
+===SEC1 BOOT===
+Startup finished in 3.201s (kernel) + 8.260s (userspace) = 11.462s 
+graphical.target reached after 8.251s in userspace.
+degraded
+ISRUN_RC=1
+--- failed units:
+● redis-server.service loaded failed failed Advanced key-value store
+FAILED_RC=0
+--- reached targets:
+Oct 05 04:10:30 syzkaller systemd[1]: Reached target multi-user.target - Multi-User System.
+Oct 05 04:10:30 syzkaller systemd[1]: Reached target graphical.target - Graphical Interface.
+--- journal lines: 860
+===SEC2 LTP-BUILD===
+AUTOTOOLS_RC=0
+CONFIGURE_RC=0
+283
+BUILD_RC=0
+INSTALL_RC=0
+BUILD_SECS=447
+bin count: 2650
+   52 | int parse_args(int c, char *v)
+      |                       ~~~~~~^
+CC testcases/realtime/stress/pi-tests/lookup_pi_state
+CC testcases/realtime/stress/pi-tests/testpi-3
+make[1]: Leaving directory '/root/ltp/testcases'
+PRODUCT mmap01 OK
+PRODUCT fork01 OK
+PRODUCT madvise01 OK
+PRODUCT mmapstress01 OK
+PRODUCT mtest01 OK
+===SEC3 LTP-RUN===
+LTP_SUMMAR PASS=98 FAIL=11 CONF=0 MISSING=1 OTHER=5 TOTAL=115
+--- FAIL/TIMEOUT/BROK/OTHER rows:
+FAIL madvise06 rc=32
+FAIL madvise07 rc=32
+FAIL madvise09 rc=32
+FAIL madvise11 rc=32
+FAIL sbrk03 rc=32
+FAIL mremap07 rc=32
+FAIL fork05 rc=32
+TIMEOUT fork13 rc=124
+OTHER(1) mmstress rc=1
+TIMEOUT shm_test rc=124
+FAIL mmapstress06 rc=32
+OTHER(5) mmapstress07 rc=5
+OTHER(1) mmapstress09 rc=1
+OTHER(1) mmapstress10 rc=1
+TIMEOUT mmap1 rc=124
+OTHER(255) shmat1 rc=255
+--- mmap01 log head:
+tst_tmpdir.c:308: TINFO: Using /tmp/LTP_mmaYaT3tA as tmpdir (tmpfs filesystem)
+tst_test.c:2067: TINFO: LTP version: 20260930
+tst_test.c:2070: TINFO: Tested kernel: 6.18.32-gaaa51658ee1e #365 SMP PREEMPT_DYNAMIC Mon Oct  5 08:58:51 CST 2026 x86_64
+tst_kconfig.c:90: TINFO: Parsing kernel config '/proc/config.gz'
+===SEC4 FACES===
+SMOKE_BARE_RC=0 PASS=26 FAIL=0
+[smoke] SMOKE-DRIVER PASS
+SMOKE_HOOK_RC=0 PASS=26 FAIL=0
+[smoke] SMOKE-DRIVER PASS
+/root/kit/mv3d/guest-battery.sh: line 133: i_RC: unbound variable
