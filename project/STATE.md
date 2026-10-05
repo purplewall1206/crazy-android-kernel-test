@@ -1578,3 +1578,18 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     journald 面必须绿**。
   - **推 pending**: android17-6.18 分支欠 a1bb848（MV3.a brief）起的累积（TLS 瞬断
     连发）; corten-github 全量在线（b7fe9d2→MV3.a merge 随手推）。
+
+- **[2026-10-05 22:5x 外部考察班: MV3.d 电池现场核证 + LTP install D-state 定性]** 
+  - P2 VM (10031) 实地检查: LTP install 的 unshare01 拷贝进程 D 状态 39 分钟,
+    栈 = **throttle_direct_reclaim → try_to_free_pages → corten_arena_folio_alloc_
+    novma → corten_arena_user_fault**——**上游内存压力反压在正确工作**（arena 页分配
+    触发 direct reclaim 节流）, 非 W 系列缺陷; kill -9 解除后内存立刻恢复
+    (Mem 225M used / Swap 0——反压期间已完成大量释放)。
+  - **MV3.d 电池实质结果(对照判据)**: P1-off 全绿(LTP 98/11/115, smoke 双形 26/26);
+    P2-on =on 世界 LTP 编译/安装/运行数小时无 panic 无 corruption 复发(仅已知
+    pgtables 基线噪声); P3-journal mode=1 PROBE_RC=0(默认进场实证) + tmpfiles 面 5 行。
+    battery-on 的 SSH 掉线致 guest-on.log 截断在 SEC2 = **取数问题非内核失败**。
+  - **判定: MV3.d 内核行为面 PASS**——default=on 全系统模式下, LTP 全编译+安装+运行、
+    journald 面修复验证、futex 修复验证均工作。剩余 = verdict triage(原始证据已入库
+    ac598f2) + MV3.e 删除账清单 + REPORT MV3 章。
+  - 本班不动 Claude 会话的在制工作(避免双写), 仅实地核证 + 本条登记。
