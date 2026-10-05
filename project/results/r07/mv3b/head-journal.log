@@ -1,0 +1,30 @@
+=== MV3.b HEAD 门: =on 带 journal 全启动 2026-10-04 19:31:17 ===
+Warning: Permanently added '[127.0.0.1]:10029' (ED25519) to the list of known hosts.
+6.18.32-g87220166a815-dirty
+=== H1. systemd 全启动判定 (is-system-running + failed 单元) ===
+Warning: Permanently added '[127.0.0.1]:10029' (ED25519) to the list of known hosts.
+degraded
+RC=1
+● redis-server.service loaded failed failed Advanced key-value store
+--- tmpfiles-setup-dev-early:
+ExecMainStatus=0
+ActiveState=active
+Oct 04 11:30:58 syzkaller systemd[1]: Finished systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully.
+=== H2. journald 健康 (active, 无 watchdog kill) ===
+Warning: Permanently added '[127.0.0.1]:10029' (ED25519) to the list of known hosts.
+active
+788
+0
+=== H3. journal 完整性抽验 (启动期内核行 + 服务行在案) ===
+Warning: Permanently added '[127.0.0.1]:10029' (ED25519) to the list of known hosts.
+Oct 04 11:30:58 syzkaller kernel: Linux version 6.18.32-g87220166a815-dirty (ppw@vm) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #335 SMP PREEMPT_DYNAMIC Sun Oct  4 19:27:21 CST 2026
+184
+=== H4. 裸 mode 探针 (journal 形态下) ===
+Warning: Permanently added '[127.0.0.1]:10029' (ED25519) to the list of known hosts.
+PROBE_RC=0
+mode=1
+=== H5. cmdline 读数面正证 (procPs cmdline 非空 + remote_win_short 计数) ===
+Warning: Permanently added '[127.0.0.1]:10029' (ED25519) to the list of known hosts.
+pid=1 cmdline=[/sbin/init ]
+pid=332 cmdline=[sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups ]
+Connection to 127.0.0.1 closed by remote host.
