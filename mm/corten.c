@@ -332,6 +332,9 @@ int corten_ptdesc_install(struct mm_struct *mm, struct page *pte_page)
 	rwlock_init(&desc->lock);
 	refcount_set(&desc->refs, 1);
 	desc->mm = mm;
+	/* Ledger #11: the dirty range starts empty (rec_lo > rec_hi). */
+	desc->rec_lo = 1;
+	desc->rec_hi = 0;
 	corten_ptdesc_set_level(desc, CORTEN_LEVEL_PTE);
 	desc->magic = CORTEN_PTDESC_MAGIC;
 
@@ -1154,6 +1157,30 @@ int corten_query(struct corten_txn *txn, unsigned long addr,
 	return 0;
 }
 
+/* Ledger #11 (mv3cfeat §2.4-1): widen the descriptor's dirty range to
+ * cover the PTE indexes of [lo_addr, hi_addr].  Callers run under the
+ * covering write lock, so the widening is ordered with the zap walks
+ * that read the range; empty (rec_lo > rec_hi) takes the first mark
+ * verbatim.  u16 index: one PT page holds PTRS_PER_PTE entries.
+ */
+static void corten_desc_widen_dirty(struct corten_ptdesc *desc,
+				    unsigned long lo_addr,
+				    unsigned long hi_addr)
+{
+	u16 lo = (u16)pte_index(lo_addr);
+	u16 hi = (u16)pte_index(hi_addr);
+
+	if (desc->rec_lo > desc->rec_hi) {
+		desc->rec_lo = lo;
+		desc->rec_hi = hi;
+		return;
+	}
+	if (lo < desc->rec_lo)
+		desc->rec_lo = lo;
+	if (hi > desc->rec_hi)
+		desc->rec_hi = hi;
+}
+
 /**
  * corten_map - see include/linux/corten.h.
  */
@@ -1206,6 +1233,10 @@ int corten_map(struct corten_txn *txn, unsigned long addr, struct page *page,
 	m->state = CORTEN_MAPPED;
 	m->perm = perm;
 	m->flags = 0;
+	/* Ledger #11: the slot is recorded now -- the dirty range grows
+	 * with it (the park reset's walk bound).
+	 */
+	corten_desc_widen_dirty(txn->covering, addr, addr);
 
 	return 0;
 }
@@ -1268,6 +1299,8 @@ int corten_mark(struct corten_txn *txn, unsigned long start, unsigned long len,
 			return -ENOMEM;
 		*m = *meta;
 	}
+	/* Ledger #11: the whole sub-range is recorded now. */
+	corten_desc_widen_dirty(txn->covering, start, end - PAGE_SIZE);
 
 	return 0;
 }
@@ -1382,6 +1415,8 @@ int corten_swap_replay(struct corten_txn *txn, unsigned long addr,
 
 	txn->covering->nr_swapped++;
 	*m = *meta;
+	/* Ledger #11: the replayed slot is recorded metadata. */
+	corten_desc_widen_dirty(txn->covering, addr, addr);
 	return 0;
 }
 

@@ -22,6 +22,7 @@
 #include <linux/mman.h>
 #include <linux/mmap_lock.h>
 #include <linux/mm_inline.h>
+#include <linux/pgalloc.h>
 #include <linux/pgtable.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
@@ -13446,7 +13447,7 @@ static void corten_arena_test_whitelist_audit(struct kunit *test)
 	unsigned long hist[CORTEN_WL_NR_CLASSES];
 	struct vm_area_struct *heap1, *heap2, *shadow, *impl, *stackv;
 	struct vm_area_struct *foreign;
-	long w0, v0, a0, b0;
+	long w0, v0, a0, b0, m0;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "whitelist audit requires corten=on");
@@ -13492,7 +13493,7 @@ static void corten_arena_test_whitelist_audit(struct kunit *test)
 	v0 = corten_arena_test_wl_violations();
 	a0 = corten_arena_test_wl_brk_anomalies();
 	b0 = corten_arena_test_wl_brk_vmas();
-
+	m0 = corten_arena_test_wl_brk_multi();
 	memset(hist, 0, sizeof(hist));
 	corten_arena_test_wl_histogram(mm, hist);
 	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_SHADOW], 1);
@@ -13503,8 +13504,12 @@ static void corten_arena_test_whitelist_audit(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_VIOLATION], 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_walks(), w0 + 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_violations(), v0);
-	/* The split heap: both halves registered, exactly one anomaly. */
-	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_anomalies(), a0 + 1);
+	/* Ledger #4: the split heap is the measured multi-brk form --
+	 * both halves registered in the wl_brk_multi bucket, the anomaly
+	 * switch silent (structurally zero under the current predicate).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_multi(), m0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_anomalies(), a0);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_vmas(), b0 + 2);
 	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
 
@@ -13536,6 +13541,8 @@ static void corten_arena_test_whitelist_audit(struct kunit *test)
 		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_walks"));
 		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_violations"));
 		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_brk_vmas"));
+		/* Ledger #4: the multi-brk bucket rides the render. */
+		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_brk_multi"));
 		KUNIT_ASSERT_NOT_NULL(test,
 				      strstr(gate, "gate_pass          0"));
 		kfree(gate);
@@ -15489,6 +15496,398 @@ static void corten_arena_test_exec_interp_multiseg(struct kunit *test)
 	mmap_read_unlock(mm);
 }
 
+/* ------------------------------------------------------------------
+ * Ledger #1 (r07 mv3b): the declare-side emptiness probe vs the PT-page
+ * retirement interleave -- the DPA boot's oops shape
+ * (corten_brk_grow_route -> declare_locked -> check_empty_locked walked
+ * a PT page whose descriptor the retirement funnel had already
+ * uninstalled), deterministic form.  A window whose pmd entry still
+ * reads present but whose page resolves to no live same-mm descriptor
+ * is a retired or recycled page: the probe must SKIP it (the M2a
+ * exclusion, the funnel contract makes it content-free), not walk its
+ * memory.  The control arm proves the probe still reads live pages: a
+ * present PTE under a live descriptor is [C1] content (-EBUSY, no skip
+ * counted).  The poisoned-page pre-fix discriminator: the old unlocked
+ * walk read the retired array as present junk and answered the false
+ * -EBUSY (with DEBUG_PAGEALLOC, the oops itself).
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_declare_probe_stale_pt(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long base = CORTEN_ARENA_TEST_BASE;
+	struct page *ptpage;
+	struct corten_ptdesc *desc;
+	pgd_t *pgdp;
+	p4d_t *p4dp;
+	pud_t *pudp;
+	pmd_t *pmdp;
+	pte_t *ptep;
+	spinlock_t *ptl;
+	long stale0;
+
+	/* A live PT page under the declare target with no arena yet: the
+	 * fill_upper chain minus the arena -- the leftover-tables world a
+	 * brk seed's probe walks.  It must come from the real allocator
+	 * (pte_alloc_one, pagetable_pte_ctor included): a bare folio has
+	 * no split PT lock, and both this test's control arm and the mm
+	 * teardown's unmap walk take that lock on this very page.
+	 */
+	ptpage = pte_alloc_one(mm);
+	KUNIT_ASSERT_NOT_NULL(test, ptpage);
+
+	mmap_write_lock(mm);
+	pgdp = pgd_offset(mm, base);
+	p4dp = p4d_alloc(mm, pgdp, base);
+	if (!p4dp) {
+		mmap_write_unlock(mm);
+		KUNIT_FAIL(test, "p4d_alloc failed");
+		return;
+	}
+	pudp = pud_alloc(mm, p4dp, base);
+	if (!pudp) {
+		mmap_write_unlock(mm);
+		KUNIT_FAIL(test, "pud_alloc failed");
+		return;
+	}
+	pmdp = pmd_alloc(mm, pudp, base);
+	if (!pmdp) {
+		mmap_write_unlock(mm);
+		KUNIT_FAIL(test, "pmd_alloc failed");
+		return;
+	}
+	if (!pmd_none(*pmdp)) {
+		mmap_write_unlock(mm);
+		kunit_skip(test, "test window PMD already populated");
+	}
+	pmd_populate(mm, pmdp, ptpage);
+	mmap_write_unlock(mm);
+
+	/* The M2a descriptor, exactly as the alloc hook installs it (the
+	 * hook gates on the corten static branch: on corten=on boots
+	 * pte_alloc_one() already installed one -- keep it; in the off
+	 * world this suite installs explicitly).
+	 */
+	desc = corten_ptdesc_get(page_to_pfn(ptpage));
+	if (desc) {
+		corten_ptdesc_put(desc);
+	} else {
+		KUNIT_ASSERT_EQ(test, 0,
+				corten_ptdesc_install(mm, ptpage));
+	}
+
+	/* Control arm: live descriptor, present PTE -> [C1] -EBUSY, and
+	 * the probe walked (no skip counted).  The targeted declare must
+	 * match the fixture VMA's full extent (no-split contract); W0
+	 * carries the live PT page, W1..3 are the supported never-faulted
+	 * shape (no PT pages at all).
+	 */
+	stale0 = corten_arena_test_probe_stale();
+	ptep = pte_offset_map_lock(mm, pmdp, base, &ptl);
+	KUNIT_ASSERT_NOT_NULL(test, ptep);
+	set_pte(ptep, __pte(_PAGE_PRESENT));
+	pte_unmap_unlock(ptep, ptl);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_declare(mm, base, CORTEN_ARENA_TEST_LEN),
+			-EBUSY);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_probe_stale(), stale0);
+
+	/* Empty the window again: the content-free, descriptor-live form.
+	 */
+	ptep = pte_offset_map_lock(mm, pmdp, base, &ptl);
+	pte_clear(mm, base, ptep);
+	pte_unmap_unlock(ptep, ptl);
+
+	/* The DPA interleave: the retirement's descriptor half ran (the
+	 * xarray entry erased, the stale store published) and the page
+	 * memory is gone -- the poison emulates the freed page's reuse --
+	 * while the pmd entry still reads present (the funnel's
+	 * queue-then-clear gap).
+	 */
+	corten_ptdesc_uninstall(ptpage);
+	KUNIT_EXPECT_NULL(test,
+			  corten_ptdesc_get(page_to_pfn(ptpage)));
+	memset(page_address(ptpage), 0x57, PAGE_SIZE);
+
+	/* The probe must skip the retired window and let the declare
+	 * through; the skip is the counted KUnit-visible proof.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_declare(mm, base, CORTEN_ARENA_TEST_LEN),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_probe_stale(), stale0 + 1);
+
+	/* The declared arena's exit teardown (the fixture's mmput) walks
+	 * the window domain: retire the poisoned PT page here so the walk
+	 * sees the declared-never-touched shape, not our stale stand-in.
+	 * Free through the real funnel: on corten=on boots its hook is a
+	 * no-op here (the test already uninstalled), in the off world it
+	 * never runs -- either way pagetable_dtor_free() releases the
+	 * split PT lock pte_alloc_one() constructed.
+	 */
+	mmap_write_lock(mm);
+	pmd_clear(pmdp);
+	mmap_write_unlock(mm);
+	pte_free(mm, ptpage);
+}
+
+/* ------------------------------------------------------------------
+ * w3fix4: the brk shrink route's boundary-frame bookkeeping.  A trim
+ * keeps the old boundary frame claimed while the new end still
+ * reaches into it (the kept heap pages' tier-1 bounds read the frame
+ * slot); once the end drops below the frame's base the route must
+ * unclaim it.  A stranded record survives the full release (whose
+ * frame loop only reaches [start, end)) and re-emerges at the exit
+ * R1 walk as an already-obs-removed record -- the DPA churn GPF
+ * (double list_del_rcu on the poisoned ->prev,
+ * corten_arena_mm_exit+0x12d).  Round-trip with unaligned boundaries:
+ * the registry must read zero records after each full release, and a
+ * re-grow on the cleaned registry must round-trip again.
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_brk_boundary_strand(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	/* Unaligned base, and the whole churn stays below the fixture's
+	 * test-window domain (CORTEN_ARENA_TEST_BASE = 4*PMD): the
+	 * declare's overlap gate would (correctly) decline the grow.
+	 */
+	const unsigned long heap = PMD_SIZE + PAGE_SIZE;
+	unsigned long brk0, brk1, brk2, brk3;
+	int round;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "brk region migration requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	mmap_write_lock(mm);
+	mm->start_brk = heap;
+	mm->brk = heap + 4 * PAGE_SIZE;
+	mmap_write_unlock(mm);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test,
+				     corten_arena_test_mkvm(mm, heap,
+							    heap + 4 *
+							    PAGE_SIZE,
+							    CORTEN_ARENA_TEST_FLAGS_OK));
+
+	brk0 = heap + 4 * PAGE_SIZE;
+	for (round = 0; round < 2; round++) {
+		/* GROW: two PMD windows up, unaligned top (the boundary
+		 * frame lands at (brk - 1) >> PMD_SHIFT, one past the
+		 * trim loop's fully-covered range).
+		 */
+		brk1 = brk0 + 2 * PMD_SIZE + 5 * PAGE_SIZE;
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_run_op(test, mm,
+							 corten_arena_test_op_brk_grow,
+							 brk0, brk1),
+				0);
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_registry_records(mm), 1);
+
+		/* TRIM 1: back over the boundary; the old boundary frame
+		 * (brk1's) is fully above the new end now -- must be
+		 * unclaimed, the record still exactly one.
+		 */
+		brk2 = brk1 - PMD_SIZE - 3 * PAGE_SIZE;
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_run_op(test, mm,
+							 corten_arena_test_op_brk_shrink,
+							 brk1, brk2),
+				0);
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_registry_records(mm), 1);
+
+		/* TRIM 2: a second boundary strand, then the FULL
+		 * release (newbrk == start_brk).  Post-fix the release
+		 * empties the registry; pre-fix a boundary frame
+		 * stranded above the record's end reads 1 here and the
+		 * fixture exit walk GPFs on the re-emit.
+		 */
+		brk3 = heap + PAGE_SIZE;
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_run_op(test, mm,
+							 corten_arena_test_op_brk_shrink,
+							 brk2, brk3),
+				0);
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_run_op(test, mm,
+							 corten_arena_test_op_brk_shrink,
+							 brk3, heap),
+				0);
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_registry_records(mm), 0);
+
+		/* Round 2 re-grows over the cleaned registry (the
+		 * magazine-serve transition of the released frames).
+		 */
+		brk0 = heap;
+	}
+}
+
+/* ------------------------------------------------------------------
+ * Ledger #11 (mv3cfeat §2.4-1): the dirty-range bounded park reset.
+ * The descriptor's [rec_lo, rec_hi] covers exactly the recorded
+ * indexes (the widen runs under the covering write lock at every
+ * metadata-producing transition), the full-window park zap collapses
+ * it to empty, and the reactivated window's first mark restarts the
+ * range from scratch -- the O(512)->O(dirty) reset's contract, three
+ * states in one case.
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_dirty_range_park(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long win = CORTEN_ARENA_TEST_WIN;
+	unsigned long addr = 0, len, flags;
+	struct corten_ptdesc *desc;
+	pmd_t *pmdp;
+	unsigned int fflags;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "dirty-range anchor requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	mmap_write_lock(mm);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_auto_attach(mm, win, PMD_SIZE,
+						 PROT_READ | PROT_WRITE),
+			0);
+	mmap_write_unlock(mm);
+
+	/* Two recorded slots, indexes 7 and 400: the range is exact.  The
+	 * installs ride the vma-less fault arms (an auto arena has no
+	 * anchor; the fault is what wires the window's PT page).
+	 */
+	fflags = FAULT_FLAG_WRITE;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_user_fault(mm, win + 7 * PAGE_SIZE,
+						fflags, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	fflags = FAULT_FLAG_WRITE;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_user_fault(mm, win + 400 * PAGE_SIZE,
+						fflags, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+
+	pmdp = corten_arena_test_pmd(mm, win);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	rcu_read_lock();
+	desc = corten_ptdesc_get(page_to_pfn(pmd_page(READ_ONCE(*pmdp))));
+	rcu_read_unlock();
+	KUNIT_ASSERT_NOT_NULL(test, desc);
+	KUNIT_EXPECT_EQ(test, desc->rec_lo, 7);
+	KUNIT_EXPECT_EQ(test, desc->rec_hi, 400);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(desc->nr_mapped), 2);
+	corten_ptdesc_put(desc);
+
+	/* The glibc free() shape: full-coverage munmap parks -- and the
+	 * park's full-window zap collapses the range.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 win, PAGE_SIZE),
+			1);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_pool_idle(mm, win));
+
+	pmdp = corten_arena_test_pmd(mm, win);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	rcu_read_lock();
+	desc = corten_ptdesc_get(page_to_pfn(pmd_page(READ_ONCE(*pmdp))));
+	rcu_read_unlock();
+	KUNIT_ASSERT_NOT_NULL(test, desc);
+	KUNIT_EXPECT_TRUE(test, desc->rec_lo > desc->rec_hi);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(desc->nr_mapped), 0);
+	corten_ptdesc_put(desc);
+
+	/* The pool take (the reactivation path -- a fault cannot wake an
+	 * idle window), then the fresh mark at index 250 owns exactly
+	 * (250, 250): the collapse restarted the range from scratch.
+	 */
+	flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	len = PMD_SIZE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, len,
+							    PROT_READ |
+							    PROT_WRITE,
+							    &addr, &len,
+							    &flags),
+			2);
+	KUNIT_EXPECT_EQ(test, addr, win);	fflags = FAULT_FLAG_WRITE;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_user_fault(mm, win + 250 * PAGE_SIZE,
+						fflags, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	rcu_read_lock();
+	desc = corten_ptdesc_get(page_to_pfn(pmd_page(READ_ONCE(*pmdp))));
+	rcu_read_unlock();
+	KUNIT_ASSERT_NOT_NULL(test, desc);
+	KUNIT_EXPECT_EQ(test, desc->rec_lo, 250);
+	KUNIT_EXPECT_EQ(test, desc->rec_hi, 250);
+	corten_ptdesc_put(desc);
+}
+
+/* ------------------------------------------------------------------
+ * Ledger #2 (r07 mv3b): the per-mm registry walk's budget.  The =on
+ * guest boots spun unkillably inside this walk's xa_find loop even
+ * after the ledger #1 probe fix -- the pre-authorized shape change
+ * (mv3b §3 "预算分批 walk") is the bound plus the truncation
+ * disclosure.  The anchor drives the truncation arm deterministically:
+ * a shrunken budget over a declared registry cuts the walk (counter
+ * +1) and the arena_stats render still completes, naming the row.
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_stats_walk_budget(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	char *dbg;
+	long t0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "stats budget anchor requires corten=on");
+
+	/* The registry walk enumerates MODE mms: enter mode (the fixture
+	 * VMA stays tree-resident -- an empty anon, a sweep skip), then
+	 * declare the four-window arena over it.
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+
+	/* Two registry entries: the third xa_find (the terminating miss)
+	 * exceeds a budget of 2 -- the walk truncates with the render
+	 * still completing and the disclosure counting.
+	 */
+	corten_arena_test_stats_budget(2);
+	t0 = corten_arena_test_stats_walk_truncs();
+
+	dbg = corten_test_render_dbg(CORTEN_DBG_ARENA_STATS);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
+	KUNIT_ASSERT_NOT_NULL(test, strstr(dbg, "stats_walk_truncs"));
+	kfree(dbg);
+	/* The budget cut at least this mm's walk (the render enumerates
+	 * every registered mm, so the exact delta names the registry --
+	 * >= 1 is the anchor; the row above proves the disclosure).
+	 */
+	KUNIT_EXPECT_GE(test, corten_arena_test_stats_walk_truncs(), t0 + 1);
+
+	/* Restored budget: the whole registry fits, no further cuts. */
+	t0 = corten_arena_test_stats_walk_truncs();
+	corten_arena_test_stats_budget(65536);
+	dbg = corten_test_render_dbg(CORTEN_DBG_ARENA_STATS);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
+	KUNIT_EXPECT_NOT_NULL(test, strstr(dbg, "stats_walk_truncs"));
+	kfree(dbg);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_stats_walk_truncs(), t0);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_sweep_anon_resident),
 	KUNIT_CASE(corten_arena_test_sweep_file_resident),
@@ -15663,6 +16062,19 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_concurrent_window),
 	KUNIT_CASE(corten_arena_test_obs_ledger),
 	KUNIT_CASE(corten_arena_test_drain_timeout_stat),
+	/* Ledger #1 (r07 mv3b): the declare-side probe vs the PT-page
+	 * retirement interleave -- the M2a probe exclusion's anchor.
+	 */
+	KUNIT_CASE(corten_arena_test_declare_probe_stale_pt),
+	KUNIT_CASE(corten_arena_test_brk_boundary_strand),
+	/* Ledger #11 (mv3cfeat §2.4-1): the dirty-range bounded park
+	 * reset -- exact widen, park collapse, reactive restart.
+	 */
+	KUNIT_CASE(corten_arena_test_dirty_range_park),
+	/* Ledger #2 (r07 mv3b): the per-mm registry walk's budget and
+	 * truncation disclosure (the =on first-read hang's shape change).
+	 */
+	KUNIT_CASE(corten_arena_test_stats_walk_budget),
 	/* W1.a: the vma-free rmap wrappers on synthetic folios (no arena
 	 * state, registered before the V-E pair -- the whitelist anchor
 	 * below stays last for its cumulative gate verdict).

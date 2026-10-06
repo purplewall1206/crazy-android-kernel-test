@@ -333,6 +333,27 @@ struct corten_ptdesc {
 	 */
 	long			nr_mapped;
 	long			nr_swapped;
+	/*
+	 * Ledger #11 (mv3cfeat spec §2.4-1, the dirty range): the closed
+	 * PTE-index interval [rec_lo, rec_hi] that can carry non-INVALID
+	 * metadata; rec_lo > rec_hi is the empty range (the fresh-install
+	 * state).  Widened by every metadata-producing transition
+	 * (corten_map()/corten_mark()/corten_swap_replay()) under the
+	 * covering write lock, so it is ordered; narrowed only wholesale
+	 * -- a completed full-window zap collapses it (the park reset).
+	 * Bounding the zap's slot lookups by this interval relies on the
+	 * INV6 invariant "PTE ⊆ marked range": every PTE write rides a
+	 * transaction, so a slot outside the range is INVALID by
+	 * construction and the reset has nothing to do there.
+	 */
+	u16			rec_lo;
+	u16			rec_hi;
+	/* Ledger #2: the stats walk's generation stamp -- a descriptor is
+	 * counted once per render (written by the render's pinned walk,
+	 * racy with concurrent renders by design: the worst case is a
+	 * double count in one snapshot).
+	 */
+	u32			stats_gen;
 	/* Debug: always CORTEN_PTDESC_MAGIC while alive. */
 	u32			magic;
 	/* Deferred free of the descriptor itself (kfree_rcu). */

@@ -1,0 +1,24 @@
+=== w3fix4 DPA retest (ledger #1 DoD) 2026-10-06 07:33:08 ===
+kernel: 03c5b2eb84b8f3ac (#389, CONFIG_DEBUG_PAGEALLOC=y + ENABLE_DEFAULT + PAGE_OWNER)
+world:  corten=on corten_mode_default=on page_owner=on, overlay of trixie.img, port 10033
+original conviction: r07/mv3b console-mv3b-dpa-fixed.log (journalctl brk -> check_empty_locked
+  read of retired PT page, 86s)
+
+churn:   2 procs x 300 rounds f-mode (grow 16 PMD windows + hole-y trims + full release,
+         /root/brk_churn.c in share/mv3d) -- both processes completed rc=0
+route:   brk_region_grows=11778 shrinks=9766 adopts=913 brk_legacy=0 (100% routed, zero
+         legacy degradation)
+oops:    0 during churn + reads (all 6 dmesg hits are BOOT-phase, pre-existing families:
+         5x pgtables_bytes residue on service exit [mv3c-era known noise], 1x exec-default
+         recursive-class lockdep complaint [MV3.a, different-mm nested acquisition, 1/boot
+         under PROVE_LOCKING, fs/exec.c untouched by w3fix4])
+stats:   arena_stats read rc=0 x2 POST-CHURN (120 lines; ledger #2 render fix holds under
+         DPA; stats_walk_truncs=2 disclosed floors), audit_gate rc=0
+ledger5: the pre-existing exit GPF (corten_arena_mm_exit+0x12d, LIST_POISON2 double
+         list_del_rcu) reproduced on the BASE kernel (76fd8d5f9aaf8f80) with the same
+         churn, root-caused to the brk shrink trim arm's boundary-frame stranding, fixed
+         in this kernel (see w3fix4-dev-report.md sec 3); A/B isolation: modes g/t/c clean,
+         f (trims+release) crashed -- both kernels, deterministic single-round
+snapshots: dpa-arena-stats.txt, dpa-audit-gate.txt, console-dpa.log (fixed kernel),
+  console-dpa-base.log + console-dpa-base-ab.log (base-kernel crash + A/B runs)
+verdict: PASS (ledger #1 DoD: zero oops under full-speed brk + stats read rc=0)

@@ -1,0 +1,1503 @@
+diff --git a/include/linux/corten.h b/include/linux/corten.h
+index 98002e5305e8..0b600a81e58f 100644
+--- a/include/linux/corten.h
++++ b/include/linux/corten.h
+@@ -333,6 +333,27 @@ struct corten_ptdesc {
+ 	 */
+ 	long			nr_mapped;
+ 	long			nr_swapped;
++	/*
++	 * Ledger #11 (mv3cfeat spec §2.4-1, the dirty range): the closed
++	 * PTE-index interval [rec_lo, rec_hi] that can carry non-INVALID
++	 * metadata; rec_lo > rec_hi is the empty range (the fresh-install
++	 * state).  Widened by every metadata-producing transition
++	 * (corten_map()/corten_mark()/corten_swap_replay()) under the
++	 * covering write lock, so it is ordered; narrowed only wholesale
++	 * -- a completed full-window zap collapses it (the park reset).
++	 * Bounding the zap's slot lookups by this interval relies on the
++	 * INV6 invariant "PTE ⊆ marked range": every PTE write rides a
++	 * transaction, so a slot outside the range is INVALID by
++	 * construction and the reset has nothing to do there.
++	 */
++	u16			rec_lo;
++	u16			rec_hi;
++	/* Ledger #2: the stats walk's generation stamp -- a descriptor is
++	 * counted once per render (written by the render's pinned walk,
++	 * racy with concurrent renders by design: the worst case is a
++	 * double count in one snapshot).
++	 */
++	u32			stats_gen;
+ 	/* Debug: always CORTEN_PTDESC_MAGIC while alive. */
+ 	u32			magic;
+ 	/* Deferred free of the descriptor itself (kfree_rcu). */
+diff --git a/include/linux/corten_arena.h b/include/linux/corten_arena.h
+index 94120b98ce1c..e8507fc81b9e 100644
+--- a/include/linux/corten_arena.h
++++ b/include/linux/corten_arena.h
+@@ -45,6 +45,7 @@
+ #include <linux/refcount.h>
+ #include <linux/seq_file.h>
+ #include <linux/types.h>
++#include <linux/workqueue.h>
+ #include <linux/xarray.h>
+ 
+ struct file;
+@@ -547,6 +548,16 @@ struct corten_mm_state {
+ 	struct xarray		shrink_aged;
+ 	unsigned long __percpu	*stats;
+ 	struct rcu_head		rcu;
++	/* w3fix4: the deferred free's second hop -- the RCU callback only
++	 * schedules this work, and the actual teardown (xa_destroy et
++	 * al) runs in kworker task context.  Running the teardown in the
++	 * RCU softirq acquired the state xarrays' (shared dynamic-xarray)
++	 * lock class in softirq while the declare paths hold the same
++	 * class in task context with softirqs enabled -- a usage
++	 * inversion lockdep flags (the two lock objects are distinct,
++	 * but the class is shared by every xa_init()ed xarray).
++	 */
++	struct work_struct	free_work;
+ };
+ 
+ /* T1c resident-pool capacity.  The guest benchmark shapes (8 vCPU: the
+@@ -996,6 +1007,13 @@ void corten_arena_audit_gate_report(struct seq_file *m);
+ void corten_arena_test_inject_drain_timeout(void);
+ long corten_arena_test_drain_timeouts(void);
+ 
++/* Ledger #2 hooks: shrink the per-mm registry-walk budget (the KUnit
++ * anchor drives the truncation arm deterministically) and read the
++ * truncation disclosure counter back.
++ */
++void corten_arena_test_stats_budget(unsigned long budget);
++long corten_arena_test_stats_walk_truncs(void);
++
+ /* Test hooks for the M5 fork unwinds (R-A): arm a forced fork_commit
+  * failure at @stage (1 = commit entry, 2 = after the first arena was
+  * mirrored; 0 disarms) and read back an arena's frozen bit.
+@@ -1067,6 +1085,17 @@ long corten_arena_test_j2_violations(void);
+ long corten_arena_test_j2_stale(void);
+ long corten_arena_test_j2_first_violation(void);
+ 
++/* Ledger #1 (r07 mv3b): the declare-side emptiness probes' retired-window
++ * skips -- the KUnit anchor for the M2a probe exclusion.
++ */
++long corten_arena_test_probe_stale(void);
++
++/* w3fix4: a fresh R1 pass over @mm's registry, counting the records the
++ * walk emits -- the KUnit anchor for the brk shrink route's boundary
++ * frame stranding (a full release must leave zero records).
++ */
++long corten_arena_test_registry_records(struct mm_struct *mm);
++
+ /* V-D (B-2 closure ledger): the exit walk's per-level upper-table
+  * retirement counts, and the S-3 swapoff-blindness disclosure counter.
+  */
+@@ -1122,6 +1151,11 @@ long corten_arena_test_sweep(int which);
+ long corten_arena_test_wl_walks(void);
+ long corten_arena_test_wl_violations(void);
+ long corten_arena_test_wl_brk_anomalies(void);
++/* Ledger #4: the multi-brk form's own bucket (the expected split
++ * shape; wl_brk_anomalies stays the structurally-zero dead-man's
++ * switch).
++ */
++long corten_arena_test_wl_brk_multi(void);
+ long corten_arena_test_wl_brk_vmas(void);
+ void corten_arena_test_wl_histogram(struct mm_struct *mm,
+ 				    unsigned long *counts);
+diff --git a/mm/corten.c b/mm/corten.c
+index f1d4d9a98b39..636a5077a0d5 100644
+--- a/mm/corten.c
++++ b/mm/corten.c
+@@ -332,6 +332,9 @@ int corten_ptdesc_install(struct mm_struct *mm, struct page *pte_page)
+ 	rwlock_init(&desc->lock);
+ 	refcount_set(&desc->refs, 1);
+ 	desc->mm = mm;
++	/* Ledger #11: the dirty range starts empty (rec_lo > rec_hi). */
++	desc->rec_lo = 1;
++	desc->rec_hi = 0;
+ 	corten_ptdesc_set_level(desc, CORTEN_LEVEL_PTE);
+ 	desc->magic = CORTEN_PTDESC_MAGIC;
+ 
+@@ -1154,6 +1157,30 @@ int corten_query(struct corten_txn *txn, unsigned long addr,
+ 	return 0;
+ }
+ 
++/* Ledger #11 (mv3cfeat §2.4-1): widen the descriptor's dirty range to
++ * cover the PTE indexes of [lo_addr, hi_addr].  Callers run under the
++ * covering write lock, so the widening is ordered with the zap walks
++ * that read the range; empty (rec_lo > rec_hi) takes the first mark
++ * verbatim.  u16 index: one PT page holds PTRS_PER_PTE entries.
++ */
++static void corten_desc_widen_dirty(struct corten_ptdesc *desc,
++				    unsigned long lo_addr,
++				    unsigned long hi_addr)
++{
++	u16 lo = (u16)pte_index(lo_addr);
++	u16 hi = (u16)pte_index(hi_addr);
++
++	if (desc->rec_lo > desc->rec_hi) {
++		desc->rec_lo = lo;
++		desc->rec_hi = hi;
++		return;
++	}
++	if (lo < desc->rec_lo)
++		desc->rec_lo = lo;
++	if (hi > desc->rec_hi)
++		desc->rec_hi = hi;
++}
++
+ /**
+  * corten_map - see include/linux/corten.h.
+  */
+@@ -1206,6 +1233,10 @@ int corten_map(struct corten_txn *txn, unsigned long addr, struct page *page,
+ 	m->state = CORTEN_MAPPED;
+ 	m->perm = perm;
+ 	m->flags = 0;
++	/* Ledger #11: the slot is recorded now -- the dirty range grows
++	 * with it (the park reset's walk bound).
++	 */
++	corten_desc_widen_dirty(txn->covering, addr, addr);
+ 
+ 	return 0;
+ }
+@@ -1268,6 +1299,8 @@ int corten_mark(struct corten_txn *txn, unsigned long start, unsigned long len,
+ 			return -ENOMEM;
+ 		*m = *meta;
+ 	}
++	/* Ledger #11: the whole sub-range is recorded now. */
++	corten_desc_widen_dirty(txn->covering, start, end - PAGE_SIZE);
+ 
+ 	return 0;
+ }
+@@ -1382,6 +1415,8 @@ int corten_swap_replay(struct corten_txn *txn, unsigned long addr,
+ 
+ 	txn->covering->nr_swapped++;
+ 	*m = *meta;
++	/* Ledger #11: the replayed slot is recorded metadata. */
++	corten_desc_widen_dirty(txn->covering, addr, addr);
+ 	return 0;
+ }
+ 
+diff --git a/mm/corten_arena.c b/mm/corten_arena.c
+index 339dc6dc6710..358f311ec3ad 100644
+--- a/mm/corten_arena.c
++++ b/mm/corten_arena.c
+@@ -231,6 +231,11 @@ static atomic_long_t corten_arena_nr_drain_timeouts;
+ static atomic_long_t corten_nr_auto_mmaps;	/* auto arenas attached */
+ static atomic_long_t corten_nr_auto_attach_fails; /* DECLARE in attach failed */
+ static atomic_long_t corten_nr_exec_default_enters; /* MV3.a execve default MODEs */
++/* Ledger #2: the arena_stats per-mm registry walks' truncation count
++ * (declared here for the stats render; the walker lives at the shrinker
++ * section where the budget and the disclosure live).
++ */
++static atomic_long_t corten_nr_stats_walk_truncs;
+ static atomic_long_t corten_nr_auto_fallbacks;	/* total legacy degradations */
+ static atomic_long_t corten_nr_auto_exhausted;	/* window exhausted */
+ static atomic_long_t corten_nr_mprotect_routes;	/* routed mprotect txns */
+@@ -280,9 +285,24 @@ static atomic_long_t corten_nr_ttu_routes;	/* ttu file demotions */
+  * dlopen-shaped guest gate reads next to fork_faithful.
+  */
+ static atomic_long_t corten_nr_file_mmaps;	/* FILE regions attached */
+-static atomic_long_t corten_nr_file_read_faults;/* read-arm installs */
+ static atomic_long_t corten_nr_file_cow_copies;	/* private copies off file */
+ static atomic_long_t corten_nr_file_fork_mirrors;/* fork child mirrors */
++/* Ledger #12 (mv3cfeat §2.4-2, the stats merge): the two per-fault
++ * install counters left the global-atomic form -- one contended
++ * cacheline written on every S5 fault arm -- for the per-cpu form; the
++ * debugfs/KUnit readers sum the slots (observation-only counters, exact
++ * at every read that matters: the renders).
++ */
++static DEFINE_PER_CPU(long, corten_nr_file_read_faults_cpu);
++static long corten_nr_file_read_faults(void)
++{
++	int cpu;
++	long v = 0;
++
++	for_each_possible_cpu(cpu)
++		v += per_cpu(corten_nr_file_read_faults_cpu, cpu);
++	return v;
++}
+ /* M5.T3 (M5_FORK_SPEC.md sec 4.3): zap_window() released a PTE whose
+  * folio is FOLL_PIN/DMA-pinned.  The release itself is refcount-native
+  * (the pin reference carries the folio until unpin, exactly like the
+@@ -321,7 +341,19 @@ static atomic_long_t corten_nr_rmap_rejects;	/* ttu walker refusals (V2) */
+  * reclaim-path counters: the walker's mm may die at any moment.
+  */
+ static atomic_long_t corten_nr_swapped_out;
+-static atomic_long_t corten_nr_swapins;
++/* Ledger #12: the swap-in counter joined the stats merge (the S5
++ * swap-in arm writes it per fault); per-cpu, summed by the readers.
++ */
++static DEFINE_PER_CPU(long, corten_nr_swapins_cpu);
++static long corten_nr_swapins_total(void)
++{
++	int cpu;
++	long v = 0;
++
++	for_each_possible_cpu(cpu)
++		v += per_cpu(corten_nr_swapins_cpu, cpu);
++	return v;
++}
+ static atomic_long_t corten_nr_swapin_retries;
+ static atomic_long_t corten_nr_swapin_heals;
+ static atomic_long_t corten_nr_zap_swap_frees;
+@@ -512,6 +544,14 @@ static atomic_long_t corten_nr_brk_region_grows;
+ static atomic_long_t corten_nr_brk_region_shrinks;
+ static atomic_long_t corten_nr_brk_legacy;
+ 
++/* Ledger #1 (r07 mv3b): the declare-side emptiness probes skipped the PT
++ * windows whose descriptor was already retired under them -- the funnel
++ * contract guarantees such windows are content-free, and the skip is the
++ * KUnit-visible proof the probe took the M2a exclusion instead of walking
++ * a retired page.
++ */
++static atomic_long_t corten_nr_probe_stale_skips;
++
+ /* MV2 W-4 (the entry sweep): resident-legacy -> region migration
+  * accounting.  The two adopt counters name the arms (anonymous and
+  * private-file VMA -> region); the skip buckets are the structural
+@@ -546,10 +586,16 @@ static atomic_long_t corten_nr_sweep_skip_declare;
+  * same invariant as j2_violations, asserted over the full tree), heap
+  * VMAs classified (the sec 3.5 "brk VMA explicitly registered"
+  * observable), delegated VMAs classified, the disclosure bucket for
+- * delegated VMAs no predicate matched, and the anomaly count for an mm
+- * whose tree carries more than one heap VMA (a split heap cannot be
+- * produced by sys_brk; a positive count is a classification smell to
+- * read alongside j2_stale, never a WARN).
++ * delegated VMAs no predicate matched, and the multi-brk ledger: ledger
++ * #4 (r07 mv3d) corrected the old expectation -- a split heap (more than
++ * one heap VMA in one walk) is a *measured* legitimate form (the
++ * full-system battery's heap-with-holes shape: 2 walks in 55027, zero
++ * violations, every member in-span private anonymous), so it counts in
++ * the wl_brk_multi bucket.  wl_brk_anomalies stays as the dead-man's
++ * switch for a form the predicate does not admit today; under the
++ * current predicate no walk can reach it (every brk-bucket VMA is
++ * in-span, private and file-less by construction), which is exactly the
++ * corrected whitelist expectation.
+  */
+ static atomic_long_t corten_nr_wl_walks;
+ static atomic_long_t corten_nr_wl_violations;
+@@ -557,6 +603,7 @@ static atomic_long_t corten_nr_wl_brk_vmas;
+ static atomic_long_t corten_nr_wl_delegated_vmas;
+ static atomic_long_t corten_nr_wl_unclassified;
+ static atomic_long_t corten_nr_wl_brk_anomalies;
++static atomic_long_t corten_nr_wl_brk_multi;
+ /* W-6: the per-class split of the delegated composition (the guest
+  * battery reads FILE and ANON at zero -- the "anonymous/file-private
+  * leftover = FAIL" line needs the buckets apart, the merged
+@@ -1126,17 +1173,33 @@ static void corten_arena_state_free(struct corten_mm_state *state)
+ 	kfree(state);
+ }
+ 
+-/* A5 (G5-fix) deferred shape of the state teardown: the callback body
+- * is the same free (xa_destroy/free_percpu are atomic-safe), it just
+- * runs after the grace period the registry unlink owes the shrinker
+- * readers instead of making the dying process wait for it.
++/* A5 (G5-fix) deferred shape of the state teardown: the grace period the
++ * registry unlink owes the shrinker readers is waited out by call_rcu(),
++ * so the dying process never parks in synchronize_rcu().
++ *
++ * w3fix4: the callback no longer frees in place.  The RCU softirq is a
++ * softirq context, and corten_arena_state_free()'s xa_destroy() takes
++ * the (shared, dynamic-xarray) xa_lock class IN-SOFTIRQ while the
++ * declare paths take the same class in task context with softirqs
++ * enabled -- the exact usage inversion lockdep flags (two distinct
++ * lock objects, one class).  The callback therefore only schedules
++ * @free_work and the teardown runs in kworker task context, where its
++ * acquisitions register the same usage the declare paths do.
+  */
++static void corten_arena_state_free_work(struct work_struct *work)
++{
++	struct corten_mm_state *state;
++
++	state = container_of(work, struct corten_mm_state, free_work);
++	corten_arena_state_free(state);
++}
++
+ static void corten_arena_state_free_rcu(struct rcu_head *rcu)
+ {
+ 	struct corten_mm_state *state;
+ 
+ 	state = container_of(rcu, struct corten_mm_state, rcu);
+-	corten_arena_state_free(state);
++	schedule_work(&state->free_work);
+ }
+ 
+ /*
+@@ -1157,6 +1220,10 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
+ 	xa_init(&state->arenas);
+ 	refcount_set(&state->nr, 0);
+ 	mutex_init(&state->ctl_lock);
++	/* w3fix4: the deferred teardown's task-context hop (see
++	 * corten_arena_state_free_rcu()).
++	 */
++	INIT_WORK(&state->free_work, corten_arena_state_free_work);
+ 	/* The MODE global cursor starts at the window base regardless of
+ 	 * which entry point created the registry (M4T0_SPEC.md 1.3); the
+ 	 * T1 magazine layers its per-cpu segments and recycle list on top
+@@ -2161,7 +2228,10 @@ static bool corten_arena_overlaps(struct corten_mm_state *state,
+  * Called with mmap_write_lock held (no legacy fault can enter a
+  * write-locked VMA), but the walk still takes the PTE lock per window:
+  * before publication this range is not yet arena-managed, so ptl makes
+- * the check airtight.
++ * the check airtight.  Ledger #1: the walk also pins the window's M2a
++ * descriptor under its read lock for the array read (the comment inside)
++ * -- ptl alone does not keep a concurrently retired PT page's memory
++ * mapped.
+  */
+ static int corten_arena_check_empty_locked(struct mm_struct *mm,
+ 					   unsigned long start,
+@@ -2173,28 +2243,73 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
+ 	     addr = min((addr | (PMD_SIZE - 1)) + 1, end)) {
+ 		unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1, end);
+ 		unsigned long a;
+-		pmd_t *pmdp;
++		pmd_t *pmdp, pmd;
+ 		pte_t *ptep;
+ 		spinlock_t *ptl;
++		struct corten_ptdesc *desc;
++		bool empty = true;
+ 
+ 		pmdp = corten_arena_pmd(mm, addr);
+ 		if (!pmdp)
+ 			continue;		/* upper levels absent: empty */
+-		if (!pmd_present(READ_ONCE(*pmdp)))
++		pmd = READ_ONCE(*pmdp);
++		if (!pmd_present(pmd))
+ 			continue;		/* no PT page: empty */
+-		if (pmd_leaf(READ_ONCE(*pmdp)))
++		if (pmd_leaf(pmd))
+ 			return -EBUSY;		/* THP content */
+ 
++		/* Ledger #1 (r07 mv3b, the DPA oops): the probe is the one
++		 * PT-page reader that held no descriptor lock -- the
++		 * transaction layer walks under the write side, so the
++		 * M3a interlock ("mark stale, retire only after
++		 * exclusion") never covered this walk.  Pin the window's
++		 * descriptor and hold the read side across the array walk:
++		 * the retirement funnel publishes stale under the same
++		 * lock before the page can be queued or freed, so a walk
++		 * that passed the check cannot observe the PT-page memory
++		 * going away (paper Fig.7's pinned-reader arm).
++		 *
++		 * A present pmd entry whose page resolves to no live
++		 * descriptor (uninstalled -- the erase precedes the stale
++		 * store -- or never installed) is a retired or recycled
++		 * page: on a corten=on boot every user PT page is tracked
++		 * (the alloc/free hooks are unconditional under the static
++		 * branch from initcall), so there is no legitimate
++		 * untracked resident to miss.  The retirement arms zap the
++		 * content before they retire the page, so the window is
++		 * content-free by the funnel contract: skip it, counted.
++		 * A descriptor that resolves to another mm (pfn reused by a
++		 * foreign page table) is the same verdict.
++		 */
++		desc = corten_ptdesc_get(page_to_pfn(pmd_page(pmd)));
++		if (!desc) {
++			atomic_long_inc(&corten_nr_probe_stale_skips);
++			continue;		/* retired/recycled: empty */
++		}
++		read_lock_bh(&desc->lock);
++		if (READ_ONCE(desc->stale) || desc->mm != mm) {
++			read_unlock_bh(&desc->lock);
++			corten_ptdesc_put(desc);
++			atomic_long_inc(&corten_nr_probe_stale_skips);
++			continue;	/* retired under us: empty */
++		}
+ 		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+-		if (!ptep)
++		if (!ptep) {
++			read_unlock_bh(&desc->lock);
++			corten_ptdesc_put(desc);
+ 			continue;
++		}
+ 		for (a = addr; a < win_end; a += PAGE_SIZE) {
+ 			if (pte_present(ptep[pte_index(a)])) {
+-				pte_unmap_unlock(ptep, ptl);
+-				return -EBUSY;
++				empty = false;
++				break;
+ 			}
+ 		}
+ 		pte_unmap_unlock(ptep, ptl);
++		read_unlock_bh(&desc->lock);
++		corten_ptdesc_put(desc);
++		if (!empty)
++			return -EBUSY;
+ 	}
+ 
+ 	return 0;
+@@ -3292,17 +3407,38 @@ static long corten_mm_state_pages(struct mm_struct *mm, long *swapped_out);
+ 
+ void corten_arena_stats_report(struct seq_file *m)
+ {
+-	struct corten_arena *ar;
++	struct corten_arena *pos;
++	struct list_head *lh;
+ 	int nr = 0;
+ 
++	/* Ledger #2: the ledger walk is budgeted (manual RCU iteration --
++	 * a bounded form of list_for_each_entry_rcu), so a corrupted or
++	 * cyclic observability list can never hang the reader; the
++	 * truncation lands in the same disclosure counter as the per-mm
++	 * window walks.
++	 */
+ 	rcu_read_lock();
+-	list_for_each_entry_rcu(ar, &corten_arena_list, obs)
++	lh = rcu_dereference(corten_arena_list.next);
++	pos = list_entry_rcu(lh, struct corten_arena, obs);
++	while (&pos->obs != &corten_arena_list && nr < 1048576) {
+ 		nr++;
++		lh = rcu_dereference(pos->obs.next);
++		pos = list_entry_rcu(lh, struct corten_arena, obs);
++	}
+ 	rcu_read_unlock();
++	if (&pos->obs != &corten_arena_list)
++		atomic_long_inc(&corten_nr_stats_walk_truncs);
+ 
+ 	seq_printf(m, "arenas              %d\n", nr);
+ 	seq_printf(m, "drain_timeout       %ld\n",
+ 		   atomic_long_read(&corten_arena_nr_drain_timeouts));
++	/* Ledger #2: the per-mm registry walks' truncation disclosure --
++	 * zero means every arena_stats read counted its mms whole; a
++	 * positive count names the reads where the budget cut the walk
++	 * short (the totals are floors then, disclosed).
++	 */
++	seq_printf(m, "stats_walk_truncs   %ld\n",
++		   atomic_long_read(&corten_nr_stats_walk_truncs));
+ 	/* T0b named route counters (M4T0_SPEC.md sec 7 DoD evidence). */
+ 	seq_printf(m, "auto_mmaps          %ld\n",
+ 		   atomic_long_read(&corten_nr_auto_mmaps));
+@@ -3377,7 +3513,7 @@ void corten_arena_stats_report(struct seq_file *m)
+ 	seq_printf(m, "file_mmaps          %ld\n",
+ 		   atomic_long_read(&corten_nr_file_mmaps));
+ 	seq_printf(m, "file_read_faults    %ld\n",
+-		   atomic_long_read(&corten_nr_file_read_faults));
++		   corten_nr_file_read_faults());
+ 	seq_printf(m, "file_cow_copies     %ld\n",
+ 		   atomic_long_read(&corten_nr_file_cow_copies));
+ 	seq_printf(m, "file_fork_mirrors   %ld\n",
+@@ -3478,6 +3614,13 @@ void corten_arena_stats_report(struct seq_file *m)
+ 		   atomic_long_read(&corten_nr_brk_region_shrinks));
+ 	seq_printf(m, "brk_legacy          %ld\n",
+ 		   atomic_long_read(&corten_nr_brk_legacy));
++	/* Ledger #1: the declare-side probes' retired-window skips (the
++	 * M2a exclusion took over a window whose descriptor was already
++	 * stale -- the DPA oops's interleave, now counted instead of
++	 * walked).
++	 */
++	seq_printf(m, "probe_stale_skips   %ld\n",
++		   atomic_long_read(&corten_nr_probe_stale_skips));
+ 	/* MV2 W-4: the entry sweep -- the two adopt arms, the five skip
+ 	 * buckets (the structural survivors the wl walk will keep
+ 	 * classifying) and the resident pages the sweep recorded metadata
+@@ -3524,7 +3667,7 @@ void corten_arena_stats_report(struct seq_file *m)
+ 	seq_printf(m, "swapped_out         %ld\n",
+ 		   atomic_long_read(&corten_nr_swapped_out));
+ 	seq_printf(m, "swapins             %ld\n",
+-		   atomic_long_read(&corten_nr_swapins));
++		   corten_nr_swapins_total());
+ 	seq_printf(m, "swapin_retries      %ld\n",
+ 		   atomic_long_read(&corten_nr_swapin_retries));
+ 	seq_printf(m, "swapin_heals        %ld\n",
+@@ -3572,8 +3715,13 @@ void corten_arena_stats_report(struct seq_file *m)
+ 	 */
+ 	{
+ 		long skip = 0, resident = 0, swapped = 0;
++		int rounds;
+ 
+-		for (;;) {
++		/* Ledger #2: the pin rounds are bounded too -- a corrupted
++		 * (cyclic) shrink registry would otherwise keep handing the
++		 * render fresh pins forever; 64 rounds covers 1024 mms.
++		 */
++		for (rounds = 0; rounds < 64; rounds++) {
+ 			struct mm_struct *mms[16];
+ 			int i, found;
+ 
+@@ -3591,6 +3739,8 @@ void corten_arena_stats_report(struct seq_file *m)
+ 			}
+ 			skip += found;
+ 		}
++		if (rounds == 64)
++			atomic_long_inc(&corten_nr_stats_walk_truncs);
+ 		seq_printf(m, "resident_pages      %ld\n", resident);
+ 		seq_printf(m, "swapped_pages       %ld\n", swapped);
+ 
+@@ -3598,7 +3748,7 @@ void corten_arena_stats_report(struct seq_file *m)
+ 		{
+ 			ktime_t now = ktime_get();
+ 			long out = atomic_long_read(&corten_nr_swapped_out);
+-			long in = atomic_long_read(&corten_nr_swapins);
++			long in = corten_nr_swapins_total();
+ 			long rate_out = 0, rate_in = 0;
+ 			s64 ms = ktime_to_ms(ktime_sub(now, corten_rate_ts));
+ 
+@@ -4066,6 +4216,41 @@ long corten_arena_test_brk_region(int which)
+ 	}
+ }
+ 
++/* Ledger #1 (r07 mv3b): the probe-side stale skips (KUnit anchor). */
++long corten_arena_test_probe_stale(void)
++{
++	return atomic_long_read(&corten_nr_probe_stale_skips);
++}
++
++/* w3fix4: a fresh R1 pass over @mm's registry, counting the records it
++ * would emit.  The KUnit anchor for the brk shrink route's boundary
++ * frame stranding: a full release must leave the registry with zero
++ * records (a stranded record re-emerges at the exit walk as an
++ * already-obs-removed record -- the DPA churn GPF).  Call with no
++ * concurrent mutation (the fixture's serial ops); a record kfree_rcu'd
++ * by a just-finished release is still allocated at this point, so the
++ * walk reads live memory.
++ */
++long corten_arena_test_registry_records(struct mm_struct *mm)
++{
++	struct corten_mm_state *state;
++	struct corten_region_iter it;
++	struct corten_arena *ar;
++	long n = 0;
++
++	/* Pairs with the smp_store_release() publisher in
++	 * corten_arena_state_create() (the registry readers' acquire).
++	 */
++	state = smp_load_acquire(&mm->corten_state);
++	if (!state)
++		return 0;
++
++	corten_region_iter_init(&it);
++	while ((ar = corten_registry_next(state, &it)) != NULL)
++		n++;
++	return n;
++}
++
+ /* MV2 W-4: the entry sweep's counters (KUnit anchors, the same shape
+  * as the brk family above).
+  */
+@@ -4120,6 +4305,13 @@ long corten_arena_test_wl_brk_anomalies(void)
+ 	return atomic_long_read(&corten_nr_wl_brk_anomalies);
+ }
+ 
++/* Ledger #4: the multi-brk form's own bucket (the expected split shape).
++ */
++long corten_arena_test_wl_brk_multi(void)
++{
++	return atomic_long_read(&corten_nr_wl_brk_multi);
++}
++
+ long corten_arena_test_wl_brk_vmas(void)
+ {
+ 	return atomic_long_read(&corten_nr_wl_brk_vmas);
+@@ -4242,20 +4434,46 @@ static void corten_arena_exit_run(struct mm_struct *mm,
+ static bool corten_arena_frame_ptes_empty(struct mm_struct *mm,
+ 					  unsigned long addr)
+ {
+-	pmd_t *pmdp = corten_arena_pmd(mm, addr);
++	pmd_t *pmdp, pmd;
+ 	pte_t *ptep;
+ 	spinlock_t *ptl;	/* the frame scan's read-side ptl */
++	struct corten_ptdesc *desc;
+ 	bool empty = true;
+ 	int i;
+ 
++	pmdp = corten_arena_pmd(mm, addr);
+ 	if (!pmdp)
+ 		return true;
+-	if (!pmd_present(READ_ONCE(*pmdp)) || pmd_leaf(READ_ONCE(*pmdp)))
++	pmd = READ_ONCE(*pmdp);
++	if (!pmd_present(pmd) || pmd_leaf(pmd))
+ 		return true;
+ 
++	/* Ledger #1: the same M2a probe exclusion the declare-side
++	 * emptiness check takes -- this scan decides whole-frame PT-page
++	 * retirements, so walking a retired page is exactly the shape the
++	 * DPA boot convicted there.  A present pmd with no live (same-mm,
++	 * non-stale) descriptor is a retired or recycled page: skip it,
++	 * the retirement arms zap the content first.
++	 */
++	desc = corten_ptdesc_get(page_to_pfn(pmd_page(pmd)));
++	if (!desc) {
++		atomic_long_inc(&corten_nr_probe_stale_skips);
++		return true;	/* retired/recycled: empty */
++	}
++	read_lock_bh(&desc->lock);
++	if (READ_ONCE(desc->stale) || desc->mm != mm) {
++		read_unlock_bh(&desc->lock);
++		corten_ptdesc_put(desc);
++		atomic_long_inc(&corten_nr_probe_stale_skips);
++		return true;	/* retired under us: empty */
++	}
++
+ 	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+-	if (!ptep)
++	if (!ptep) {
++		read_unlock_bh(&desc->lock);
++		corten_ptdesc_put(desc);
+ 		return false;
++	}
+ 	for (i = 0; i < PTRS_PER_PTE; i++) {
+ 		if (!pte_none(ptep_get(ptep + i))) {
+ 			empty = false;
+@@ -4263,6 +4481,8 @@ static bool corten_arena_frame_ptes_empty(struct mm_struct *mm,
+ 		}
+ 	}
+ 	pte_unmap_unlock(ptep, ptl);
++	read_unlock_bh(&desc->lock);
++	corten_ptdesc_put(desc);
+ 
+ 	return empty;
+ }
+@@ -10382,7 +10602,7 @@ static int corten_arena_swap_in(struct corten_fault_ctx *ctx,
+ 	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
+ 				CORTEN_ARENA_STAT_MAPPED);
+ 	corten_unlock(&txn);
+-	atomic_long_inc(&corten_nr_swapins);
++	this_cpu_inc(corten_nr_swapins_cpu);
+ 
+ 	folio_unlock(folio);
+ 	/* The PTE's reference on the entry (upstream frees it under the
+@@ -10701,7 +10921,7 @@ static int corten_arena_file_read(struct corten_fault_ctx *ctx,
+ 
+ 	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
+ 				CORTEN_ARENA_STAT_MAPPED);
+-	atomic_long_inc(&corten_nr_file_read_faults);
++	this_cpu_inc(corten_nr_file_read_faults_cpu);
+ 
+ 	/* No folio_put: the fetch reference IS the PTE reference now
+ 	 * (do_read_fault()'s accounting).
+@@ -11577,6 +11797,12 @@ struct corten_zap_win {
+ 	bool have_tlb;
+ 	unsigned long addr;	/* in: walk resume point; out: stop on force */
+ 	bool force;		/* out: batch overflowed -- flush, then resume */
++	/* Ledger #11: the walk entered at the window base and covers the
++	 * whole window -- the completed zap collapses the covering
++	 * descriptor's dirty range (computed on the first round, so a
++	 * force-resumed walk still resets at its last round).
++	 */
++	bool fullwin;
+ };
+ 
+ /*
+@@ -11691,6 +11917,7 @@ static int corten_arena_zap_window(struct mm_struct *mm,
+ 	unsigned long addr = zw->addr;
+ 	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+ 	struct mmu_gather *g = tlb;
++	u16 dirty_lo, dirty_hi;
+ 	pmd_t *pmdp;
+ 	int ret = 0;
+ 
+@@ -11698,6 +11925,27 @@ static int corten_arena_zap_window(struct mm_struct *mm,
+ 	if (WARN_ON_ONCE(!pmdp))
+ 		return -EAGAIN;
+ 
++	/* Ledger #11 (mv3cfeat §2.4-1): the reset's slot reads are bounded
++	 * by the covering descriptor's dirty range.  The zap holds the
++	 * covering write lock, so no transaction can widen the range
++	 * underneath; a slot outside [dirty_lo, dirty_hi] is INVALID by
++	 * the INV6 invariant (every PTE write rides a transaction and the
++	 * transactions widen the range), so both metadata consumers below
++	 * (the FILE-event spare and the reset) have nothing to see there.
++	 * The PTE-level scan itself stays full-window: PTEs can exist
++	 * without metadata behind them (the legacy fallback writer -- the
++	 * r03 defect C discipline), so the walk decides by PTE content.
++	 */
++	dirty_lo = txn->covering->rec_lo;
++	dirty_hi = txn->covering->rec_hi;
++	/* Full-window completion collapses the range (the park reset).
++	 * Computed on the first round so a force-resumed walk still
++	 * collapses at its last round.
++	 */
++	if (!zw->force)
++		zw->fullwin = addr == (addr & PMD_MASK) &&
++			      end - addr == PMD_SIZE;
++
+ 	/*
+ 	 * [perf1] Lazy per-window gather.  The walk now decides under the
+ 	 * PTE lock whether the window holds any translation at all before
+@@ -11798,6 +12046,7 @@ static int corten_arena_zap_window(struct mm_struct *mm,
+ 			struct page *page;
+ 			pte_t oldpte;
+ 			bool recorded;
++			bool indirty;
+ 
+ 			/* [perf2a] One pointer read per slot finds the
+ 			 * recorded minority (a NULL array is the pristine
+@@ -11812,10 +12061,24 @@ static int corten_arena_zap_window(struct mm_struct *mm,
+ 			 * here Invalid/perm-0, and slots outside an arena's
+ 			 * own range were never recorded (arenas are
+ 			 * PMD-aligned: exclusive owners of their PT pages).
++			 *
++			 * Ledger #11: the pointer read itself is bounded by
++			 * the descriptor's dirty range -- a slot outside
++			 * [dirty_lo, dirty_hi] was never recorded (the INV6
++			 * invariant: every PTE write rides a transaction and
++			 * the transactions widen the range), so the walk
++			 * skips the lookup there and pays it only on the
++			 * recorded minority.
+ 			 */
+-			slot = corten_txn_slot(txn, addr);
+-			recorded = !IS_ERR(slot) && slot &&
+-				   slot->state != CORTEN_INVALID;
++			indirty = (u16)pte_index(addr) >= dirty_lo &&
++				  (u16)pte_index(addr) <= dirty_hi;
++			slot = NULL;
++			if (indirty) {
++				slot = corten_txn_slot(txn, addr);
++				if (IS_ERR(slot))
++					slot = NULL;
++			}
++			recorded = slot && slot->state != CORTEN_INVALID;
+ 
+ 			/* V-B.3 (H7 follow-through): the file-event
+ 			 * invalidation family (!even_cows) spares the
+@@ -11969,6 +12232,18 @@ static int corten_arena_zap_window(struct mm_struct *mm,
+ 		goto out;
+ 	}
+ 
++	/* Ledger #11: a completed full-window zap left every recorded slot
++	 * Invalid -- the covering descriptor's dirty range collapses with
++	 * the park reset, so the next incarnation's reset walk starts at
++	 * O(dirty)=O(0).  A force-resumed walk lands here only on its last
++	 * round (force exits above); a failed walk keeps the range (the
++	 * caller's error path tears the window down whole, see below).
++	 */
++	if (zw->fullwin && !ret) {
++		txn->covering->rec_lo = 1;
++		txn->covering->rec_hi = 0;
++	}
++
+ out:
+ 	/* [atomic-sleep fix] No tlb_finish_mmu() here: the lazy gather stays
+ 	 * open across rounds and the driver finishes it -- outside the desc
+@@ -13304,7 +13579,8 @@ static int corten_brk_shrink_route1(struct mm_struct *mm, unsigned long oldbrk,
+ {
+ 	struct corten_mm_state *state;
+ 	struct corten_arena *ar;
+-	unsigned long frame, first, last;
++	unsigned long frame, first, last, bf;
++	bool drop_bf;
+ 	long pages;
+ 	int ret;
+ 
+@@ -13343,14 +13619,31 @@ static int corten_brk_shrink_route1(struct mm_struct *mm, unsigned long oldbrk,
+ 	 * PT pages of the retired frames follow -- free_ptes_span's
+ 	 * boundary guard skips every frame the range does not fully
+ 	 * cover, so the kept pages' tables survive.
++	 *
++	 * w3fix4 (the DPA churn GPF): the OLD boundary frame stays
++	 * claimed only while the new end still reaches into it.  Once
++	 * newbrk has dropped below its base the frame holds no kept
++	 * page -- leaving it claimed strands the record above ar->end,
++	 * where this route's release (and the generic release's
++	 * [start, end) frame loop) never unclaims it, and the exit R1
++	 * walk then re-emits an already-obs-removed record: the second
++	 * list_del_rcu() faults on the poisoned ->prev
++	 * (0xdead000000000122, corten_arena_mm_exit+0x12d).  An
++	 * unaligned oldbrk parks that frame at (oldbrk - 1) >>
++	 * PMD_SHIFT == last + 1, one past the loop above.
+ 	 */
+ 	first = (newbrk + PMD_SIZE - 1) >> PMD_SHIFT;
+ 	last = (oldbrk >> PMD_SHIFT) - 1;
+ 
+-	if (first <= last) {
++	bf = (oldbrk - 1) >> PMD_SHIFT;
++	drop_bf = bf > last && ((newbrk - 1) >> PMD_SHIFT) < bf;
++
++	if (first <= last || drop_bf) {
+ 		mutex_lock(&state->ctl_lock);
+ 		for (frame = first; frame <= last; frame++)
+ 			corten_slot_remove(&state->arenas, frame, ar, false);
++		if (drop_bf)
++			corten_slot_remove(&state->arenas, bf, ar, false);
+ 		WRITE_ONCE(ar->end, newbrk);
+ 		mutex_unlock(&state->ctl_lock);
+ 	} else {
+@@ -14485,8 +14778,16 @@ static int corten_whitelist_scan(struct mm_struct *mm,
+ 			  "corten: whitelist violated: %d window vma(s) unclassified as shadow/implant\n",
+ 			  violations);
+ 	}
++	/* Ledger #4 (r07 mv3d): a walk carrying more than one heap VMA is
++	 * the measured multi-brk form (in-span private anonymous split --
++	 * the battery's heap-with-holes shape), a named observation, not
++	 * an anomaly.  wl_brk_anomalies is the dead-man's switch: the
++	 * current predicate cannot produce a walk that reaches it (see the
++	 * counter block comment); a future predicate relaxation must
++	 * decide what the residual anomaly class is before it fires.
++	 */
+ 	if (brk_vmas > 1)
+-		atomic_long_inc(&corten_nr_wl_brk_anomalies);
++		atomic_long_inc(&corten_nr_wl_brk_multi);
+ 
+ 	return violations;
+ }
+@@ -14575,10 +14876,12 @@ int corten_arena_wl_audit_pid(pid_t pid)
+  * a pure-MODE workload should read zero too -- any residual belongs to
+  * the V-C families (#3/#7) or a disclosed N-low row; stale is the
+  * benign classification by design).  V-E extends gate_pass with the
+- * whitelist ledger's two zeros (wl_violations, wl_brk_anomalies) and
+- * prints the composition raw: wl_brk_vmas/wl_delegated_vmas are
+- * workload-bound disclosure, wl_unclassified is the same shape as
+- * j2_stale (a bucket, not a verdict).
++ * whitelist ledger's two zeros (wl_violations, wl_brk_anomalies -- the
++ * latter structurally zero since ledger #4 renamed the split-heap form
++ * into wl_brk_multi) and prints the composition raw:
++ * wl_brk_vmas/wl_delegated_vmas are workload-bound disclosure,
++ * wl_unclassified is the same shape as j2_stale (a bucket, not a
++ * verdict).
+  */
+ void corten_arena_audit_gate_report(struct seq_file *m)
+ {
+@@ -14608,6 +14911,12 @@ void corten_arena_audit_gate_report(struct seq_file *m)
+ 	seq_printf(m, "wl_unclassified    %ld\n",
+ 		   atomic_long_read(&corten_nr_wl_unclassified));
+ 	seq_printf(m, "wl_brk_anomalies   %ld\n", wl_anom);
++	/* Ledger #4: the multi-brk form's own bucket (the expected split
++	 * shape; wl_brk_anomalies above stays the structurally-zero
++	 * dead-man's switch).
++	 */
++	seq_printf(m, "wl_brk_multi       %ld\n",
++		   atomic_long_read(&corten_nr_wl_brk_multi));
+ 	/* W-6: the delegated composition split (the guest battery reads
+ 	 * FILE and ANON at zero) and the last audit's tree entry count
+ 	 * (the tree-zeroing live assertion's debugfs carrier, read next
+@@ -17589,7 +17898,7 @@ static int corten_arena_unuse_cache_pull(struct mm_struct *mm,
+ 	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
+ 				CORTEN_ARENA_STAT_MAPPED);
+ 	corten_unlock(&txn);
+-	atomic_long_inc(&corten_nr_swapins);
++	this_cpu_inc(corten_nr_swapins_cpu);
+ 
+ 	/* The PTE's reference on the entry, held past the metadata
+ 	 * commit -- the strictly-stronger shape swap_in() uses.  The
+@@ -18303,50 +18612,86 @@ static struct corten_ptdesc *corten_arena_window_desc(struct mm_struct *mm,
+  * count_objects basis and the M6.T4 swapped-page accounting).  One
+  * short RCU section per window -- the T2 lesson: no long preempt-off
+  * spans over a whole arena.
+- */
++ *
++ * Ledger #2 (r07 mv3b, the =on first-read hang): the original walk
++ * enumerated the registry frames with xa_find(&state->arenas, ...) --
++ * and on the =on guest boots the readers spun unkillably INSIDE
++ * xas_find (sysrq stacks, one call never returning), a node-level
++ * shape the reader cannot bound and that survived the ledger #1 probe
++ * fix.  The pre-authorized shape change (mv3b §3) is applied here in
++ * its decisive form: the walk no longer touches the registry xarray at
++ * all.  It iterates the arena observation ledger instead (the exact
++ * source the arenas file renders -- that file reads cleanly on the
++ * same boots), sums each window's covering descriptor once per walk
++ * generation, and keeps a hard window budget whose exhaustion
++ * publishes the truncation (counted; the render shows the row -- the
++ * totals are floors, disclosed as such).  Same-frame co-records (the
++ * W-7 page-disjoint buckets) stay exact: the generation stamp counts a
++ * descriptor once.
++ */
++static u32 corten_stats_walk_gen;
++static unsigned long corten_stats_walk_budget = 65536;
++
++#ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
++void corten_arena_test_stats_budget(unsigned long budget)
++{
++	corten_stats_walk_budget = budget;
++}
++
++long corten_arena_test_stats_walk_truncs(void)
++{
++	return atomic_long_read(&corten_nr_stats_walk_truncs);
++}
++#endif /* CONFIG_CORTEN_MM_ARENA_KUNIT_TEST */
++
+ static long corten_mm_state_pages(struct mm_struct *mm, long *swapped_out)
+ {
+-	struct corten_mm_state *state;
+-	unsigned long idx = 0;
++	u32 gen = ++corten_stats_walk_gen;
++	struct corten_arena *ar;
++	struct list_head *lh;
++	unsigned long budget;
+ 	long resident = 0, swapped = 0;
++	long walked = 0;
+ 
+-	/* Pairs with the smp_store_release() publisher in
+-	 * corten_arena_state_create() (the same acquire every reader of
+-	 * the published registry uses).
+-	 */
+-	state = smp_load_acquire(&mm->corten_state);
+-	if (!state)
+-		goto out;
++	budget = READ_ONCE(corten_stats_walk_budget);
+ 
+-	for (;;) {
+-		struct corten_ptdesc *desc;
+-		void *slot;
+-
+-		rcu_read_lock();
+-		slot = xa_find(&state->arenas, &idx, ULONG_MAX, XA_PRESENT);
+-		if (!slot) {
+-			rcu_read_unlock();
+-			break;
+-		}
+-		/* The frame-keyed count (W-7): one descriptor per frame
+-		 * exactly once, bucket members included -- the bucket
+-		 * shape itself never names a descriptor.
+-		 */
+-		if (slot != &corten_va_reserve_sentinel) {
+-			desc = corten_arena_window_desc(mm,
+-							idx << PMD_SHIFT);
+-			if (desc) {
+-				resident += READ_ONCE(desc->nr_mapped);
+-				swapped += READ_ONCE(desc->nr_swapped);
++	rcu_read_lock();
++	/* Budgeted manual RCU iteration: see the render-side comment --
++	 * a cyclic observability ledger bounds out instead of hanging.
++	 */
++	lh = rcu_dereference(corten_arena_list.next);
++	ar = list_entry_rcu(lh, struct corten_arena, obs);
++	while (&ar->obs != &corten_arena_list && walked < 1048576) {
++		unsigned long a, end;
++
++		walked++;
++		if (READ_ONCE(ar->mm) == mm) {
++			a = READ_ONCE(ar->start);
++			end = READ_ONCE(ar->end);
++			for (; a < end && budget; a += PMD_SIZE, budget--) {
++				struct corten_ptdesc *desc;
++
++				desc = corten_arena_window_desc(mm, a);
++				if (!desc)
++					continue;
++				if (desc->stats_gen != gen) {
++					resident += READ_ONCE(desc->nr_mapped);
++					swapped += READ_ONCE(desc->nr_swapped);
++					desc->stats_gen = gen;
++				}
+ 				corten_ptdesc_put(desc);
+ 			}
++			if (!budget)
++				break;
+ 		}
+-		rcu_read_unlock();
+-		idx++;
+-		cond_resched();
++		lh = rcu_dereference(ar->obs.next);
++		ar = list_entry_rcu(lh, struct corten_arena, obs);
+ 	}
++	rcu_read_unlock();
++
++	if (!budget || &ar->obs != &corten_arena_list)
++		atomic_long_inc(&corten_nr_stats_walk_truncs);
+ 
+-out:
+ 	if (swapped_out)
+ 		*swapped_out = swapped;
+ 	return resident;
+@@ -18752,21 +19097,30 @@ static unsigned long corten_shrink_mm(struct mm_struct *mm,
+ static int corten_registry_pin(struct mm_struct **mms, int max, long *skip)
+ {
+ 	struct corten_mm_state *state;
++	struct list_head *lh;
++	long walked = 0;
+ 	int found = 0;
+ 
+ 	rcu_read_lock();
+-	list_for_each_entry_rcu(state, &corten_mm_registry, shrink_reg) {
++	/* Ledger #2: bounded manual RCU iteration -- a cyclic registry
++	 * (a state freed while still linked) bounds out here instead of
++	 * spinning the pin loop forever.
++	 */
++	lh = rcu_dereference(corten_mm_registry.next);
++	state = list_entry_rcu(lh, struct corten_mm_state, shrink_reg);
++	while (&state->shrink_reg != &corten_mm_registry && walked < 1048576) {
+ 		struct mm_struct *mm = READ_ONCE(state->owner_mm);
+ 
++		walked++;
+ 		if (*skip > 0) {
+ 			(*skip)--;
+-			continue;
++		} else if (mm && mmget_not_zero(mm)) {
++			mms[found++] = mm;
++			if (found == max)
++				break;
+ 		}
+-		if (!mm || !mmget_not_zero(mm))
+-			continue;
+-		mms[found++] = mm;
+-		if (found == max)
+-			break;
++		lh = rcu_dereference(state->shrink_reg.next);
++		state = list_entry_rcu(lh, struct corten_mm_state, shrink_reg);
+ 	}
+ 	rcu_read_unlock();
+ 
+diff --git a/mm/corten_arena_test.c b/mm/corten_arena_test.c
+index 6cae91b340da..6b963cdf2675 100644
+--- a/mm/corten_arena_test.c
++++ b/mm/corten_arena_test.c
+@@ -22,6 +22,7 @@
+ #include <linux/mman.h>
+ #include <linux/mmap_lock.h>
+ #include <linux/mm_inline.h>
++#include <linux/pgalloc.h>
+ #include <linux/pgtable.h>
+ #include <linux/rcupdate.h>
+ #include <linux/sched.h>
+@@ -13446,7 +13447,7 @@ static void corten_arena_test_whitelist_audit(struct kunit *test)
+ 	unsigned long hist[CORTEN_WL_NR_CLASSES];
+ 	struct vm_area_struct *heap1, *heap2, *shadow, *impl, *stackv;
+ 	struct vm_area_struct *foreign;
+-	long w0, v0, a0, b0;
++	long w0, v0, a0, b0, m0;
+ 
+ 	if (!corten_enabled_static())
+ 		kunit_skip(test, "whitelist audit requires corten=on");
+@@ -13492,7 +13493,7 @@ static void corten_arena_test_whitelist_audit(struct kunit *test)
+ 	v0 = corten_arena_test_wl_violations();
+ 	a0 = corten_arena_test_wl_brk_anomalies();
+ 	b0 = corten_arena_test_wl_brk_vmas();
+-
++	m0 = corten_arena_test_wl_brk_multi();
+ 	memset(hist, 0, sizeof(hist));
+ 	corten_arena_test_wl_histogram(mm, hist);
+ 	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_SHADOW], 1);
+@@ -13503,8 +13504,12 @@ static void corten_arena_test_whitelist_audit(struct kunit *test)
+ 	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_VIOLATION], 0);
+ 	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_walks(), w0 + 1);
+ 	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_violations(), v0);
+-	/* The split heap: both halves registered, exactly one anomaly. */
+-	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_anomalies(), a0 + 1);
++	/* Ledger #4: the split heap is the measured multi-brk form --
++	 * both halves registered in the wl_brk_multi bucket, the anomaly
++	 * switch silent (structurally zero under the current predicate).
++	 */
++	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_multi(), m0 + 1);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_anomalies(), a0);
+ 	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_vmas(), b0 + 2);
+ 	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
+ 
+@@ -13536,6 +13541,8 @@ static void corten_arena_test_whitelist_audit(struct kunit *test)
+ 		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_walks"));
+ 		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_violations"));
+ 		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_brk_vmas"));
++		/* Ledger #4: the multi-brk bucket rides the render. */
++		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_brk_multi"));
+ 		KUNIT_ASSERT_NOT_NULL(test,
+ 				      strstr(gate, "gate_pass          0"));
+ 		kfree(gate);
+@@ -15489,6 +15496,398 @@ static void corten_arena_test_exec_interp_multiseg(struct kunit *test)
+ 	mmap_read_unlock(mm);
+ }
+ 
++/* ------------------------------------------------------------------
++ * Ledger #1 (r07 mv3b): the declare-side emptiness probe vs the PT-page
++ * retirement interleave -- the DPA boot's oops shape
++ * (corten_brk_grow_route -> declare_locked -> check_empty_locked walked
++ * a PT page whose descriptor the retirement funnel had already
++ * uninstalled), deterministic form.  A window whose pmd entry still
++ * reads present but whose page resolves to no live same-mm descriptor
++ * is a retired or recycled page: the probe must SKIP it (the M2a
++ * exclusion, the funnel contract makes it content-free), not walk its
++ * memory.  The control arm proves the probe still reads live pages: a
++ * present PTE under a live descriptor is [C1] content (-EBUSY, no skip
++ * counted).  The poisoned-page pre-fix discriminator: the old unlocked
++ * walk read the retired array as present junk and answered the false
++ * -EBUSY (with DEBUG_PAGEALLOC, the oops itself).
++ * ------------------------------------------------------------------
++ */
++static void corten_arena_test_declare_probe_stale_pt(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	unsigned long base = CORTEN_ARENA_TEST_BASE;
++	struct page *ptpage;
++	struct corten_ptdesc *desc;
++	pgd_t *pgdp;
++	p4d_t *p4dp;
++	pud_t *pudp;
++	pmd_t *pmdp;
++	pte_t *ptep;
++	spinlock_t *ptl;
++	long stale0;
++
++	/* A live PT page under the declare target with no arena yet: the
++	 * fill_upper chain minus the arena -- the leftover-tables world a
++	 * brk seed's probe walks.  It must come from the real allocator
++	 * (pte_alloc_one, pagetable_pte_ctor included): a bare folio has
++	 * no split PT lock, and both this test's control arm and the mm
++	 * teardown's unmap walk take that lock on this very page.
++	 */
++	ptpage = pte_alloc_one(mm);
++	KUNIT_ASSERT_NOT_NULL(test, ptpage);
++
++	mmap_write_lock(mm);
++	pgdp = pgd_offset(mm, base);
++	p4dp = p4d_alloc(mm, pgdp, base);
++	if (!p4dp) {
++		mmap_write_unlock(mm);
++		KUNIT_FAIL(test, "p4d_alloc failed");
++		return;
++	}
++	pudp = pud_alloc(mm, p4dp, base);
++	if (!pudp) {
++		mmap_write_unlock(mm);
++		KUNIT_FAIL(test, "pud_alloc failed");
++		return;
++	}
++	pmdp = pmd_alloc(mm, pudp, base);
++	if (!pmdp) {
++		mmap_write_unlock(mm);
++		KUNIT_FAIL(test, "pmd_alloc failed");
++		return;
++	}
++	if (!pmd_none(*pmdp)) {
++		mmap_write_unlock(mm);
++		kunit_skip(test, "test window PMD already populated");
++	}
++	pmd_populate(mm, pmdp, ptpage);
++	mmap_write_unlock(mm);
++
++	/* The M2a descriptor, exactly as the alloc hook installs it (the
++	 * hook gates on the corten static branch: on corten=on boots
++	 * pte_alloc_one() already installed one -- keep it; in the off
++	 * world this suite installs explicitly).
++	 */
++	desc = corten_ptdesc_get(page_to_pfn(ptpage));
++	if (desc) {
++		corten_ptdesc_put(desc);
++	} else {
++		KUNIT_ASSERT_EQ(test, 0,
++				corten_ptdesc_install(mm, ptpage));
++	}
++
++	/* Control arm: live descriptor, present PTE -> [C1] -EBUSY, and
++	 * the probe walked (no skip counted).  The targeted declare must
++	 * match the fixture VMA's full extent (no-split contract); W0
++	 * carries the live PT page, W1..3 are the supported never-faulted
++	 * shape (no PT pages at all).
++	 */
++	stale0 = corten_arena_test_probe_stale();
++	ptep = pte_offset_map_lock(mm, pmdp, base, &ptl);
++	KUNIT_ASSERT_NOT_NULL(test, ptep);
++	set_pte(ptep, __pte(_PAGE_PRESENT));
++	pte_unmap_unlock(ptep, ptl);
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_declare(mm, base, CORTEN_ARENA_TEST_LEN),
++			-EBUSY);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_probe_stale(), stale0);
++
++	/* Empty the window again: the content-free, descriptor-live form.
++	 */
++	ptep = pte_offset_map_lock(mm, pmdp, base, &ptl);
++	pte_clear(mm, base, ptep);
++	pte_unmap_unlock(ptep, ptl);
++
++	/* The DPA interleave: the retirement's descriptor half ran (the
++	 * xarray entry erased, the stale store published) and the page
++	 * memory is gone -- the poison emulates the freed page's reuse --
++	 * while the pmd entry still reads present (the funnel's
++	 * queue-then-clear gap).
++	 */
++	corten_ptdesc_uninstall(ptpage);
++	KUNIT_EXPECT_NULL(test,
++			  corten_ptdesc_get(page_to_pfn(ptpage)));
++	memset(page_address(ptpage), 0x57, PAGE_SIZE);
++
++	/* The probe must skip the retired window and let the declare
++	 * through; the skip is the counted KUnit-visible proof.
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_declare(mm, base, CORTEN_ARENA_TEST_LEN),
++			0);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_probe_stale(), stale0 + 1);
++
++	/* The declared arena's exit teardown (the fixture's mmput) walks
++	 * the window domain: retire the poisoned PT page here so the walk
++	 * sees the declared-never-touched shape, not our stale stand-in.
++	 * Free through the real funnel: on corten=on boots its hook is a
++	 * no-op here (the test already uninstalled), in the off world it
++	 * never runs -- either way pagetable_dtor_free() releases the
++	 * split PT lock pte_alloc_one() constructed.
++	 */
++	mmap_write_lock(mm);
++	pmd_clear(pmdp);
++	mmap_write_unlock(mm);
++	pte_free(mm, ptpage);
++}
++
++/* ------------------------------------------------------------------
++ * w3fix4: the brk shrink route's boundary-frame bookkeeping.  A trim
++ * keeps the old boundary frame claimed while the new end still
++ * reaches into it (the kept heap pages' tier-1 bounds read the frame
++ * slot); once the end drops below the frame's base the route must
++ * unclaim it.  A stranded record survives the full release (whose
++ * frame loop only reaches [start, end)) and re-emerges at the exit
++ * R1 walk as an already-obs-removed record -- the DPA churn GPF
++ * (double list_del_rcu on the poisoned ->prev,
++ * corten_arena_mm_exit+0x12d).  Round-trip with unaligned boundaries:
++ * the registry must read zero records after each full release, and a
++ * re-grow on the cleaned registry must round-trip again.
++ * ------------------------------------------------------------------
++ */
++static void corten_arena_test_brk_boundary_strand(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	/* Unaligned base, and the whole churn stays below the fixture's
++	 * test-window domain (CORTEN_ARENA_TEST_BASE = 4*PMD): the
++	 * declare's overlap gate would (correctly) decline the grow.
++	 */
++	const unsigned long heap = PMD_SIZE + PAGE_SIZE;
++	unsigned long brk0, brk1, brk2, brk3;
++	int round;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "brk region migration requires corten=on");
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	mmap_write_lock(mm);
++	mm->start_brk = heap;
++	mm->brk = heap + 4 * PAGE_SIZE;
++	mmap_write_unlock(mm);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test,
++				     corten_arena_test_mkvm(mm, heap,
++							    heap + 4 *
++							    PAGE_SIZE,
++							    CORTEN_ARENA_TEST_FLAGS_OK));
++
++	brk0 = heap + 4 * PAGE_SIZE;
++	for (round = 0; round < 2; round++) {
++		/* GROW: two PMD windows up, unaligned top (the boundary
++		 * frame lands at (brk - 1) >> PMD_SHIFT, one past the
++		 * trim loop's fully-covered range).
++		 */
++		brk1 = brk0 + 2 * PMD_SIZE + 5 * PAGE_SIZE;
++		KUNIT_EXPECT_EQ(test,
++				corten_arena_test_run_op(test, mm,
++							 corten_arena_test_op_brk_grow,
++							 brk0, brk1),
++				0);
++		KUNIT_EXPECT_EQ(test,
++				corten_arena_test_registry_records(mm), 1);
++
++		/* TRIM 1: back over the boundary; the old boundary frame
++		 * (brk1's) is fully above the new end now -- must be
++		 * unclaimed, the record still exactly one.
++		 */
++		brk2 = brk1 - PMD_SIZE - 3 * PAGE_SIZE;
++		KUNIT_EXPECT_EQ(test,
++				corten_arena_test_run_op(test, mm,
++							 corten_arena_test_op_brk_shrink,
++							 brk1, brk2),
++				0);
++		KUNIT_EXPECT_EQ(test,
++				corten_arena_test_registry_records(mm), 1);
++
++		/* TRIM 2: a second boundary strand, then the FULL
++		 * release (newbrk == start_brk).  Post-fix the release
++		 * empties the registry; pre-fix a boundary frame
++		 * stranded above the record's end reads 1 here and the
++		 * fixture exit walk GPFs on the re-emit.
++		 */
++		brk3 = heap + PAGE_SIZE;
++		KUNIT_EXPECT_EQ(test,
++				corten_arena_test_run_op(test, mm,
++							 corten_arena_test_op_brk_shrink,
++							 brk2, brk3),
++				0);
++		KUNIT_EXPECT_EQ(test,
++				corten_arena_test_run_op(test, mm,
++							 corten_arena_test_op_brk_shrink,
++							 brk3, heap),
++				0);
++		KUNIT_EXPECT_EQ(test,
++				corten_arena_test_registry_records(mm), 0);
++
++		/* Round 2 re-grows over the cleaned registry (the
++		 * magazine-serve transition of the released frames).
++		 */
++		brk0 = heap;
++	}
++}
++
++/* ------------------------------------------------------------------
++ * Ledger #11 (mv3cfeat §2.4-1): the dirty-range bounded park reset.
++ * The descriptor's [rec_lo, rec_hi] covers exactly the recorded
++ * indexes (the widen runs under the covering write lock at every
++ * metadata-producing transition), the full-window park zap collapses
++ * it to empty, and the reactivated window's first mark restarts the
++ * range from scratch -- the O(512)->O(dirty) reset's contract, three
++ * states in one case.
++ * ------------------------------------------------------------------
++ */
++static void corten_arena_test_dirty_range_park(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	unsigned long win = CORTEN_ARENA_TEST_WIN;
++	unsigned long addr = 0, len, flags;
++	struct corten_ptdesc *desc;
++	pmd_t *pmdp;
++	unsigned int fflags;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "dirty-range anchor requires corten=on");
++
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	mmap_write_lock(mm);
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_auto_attach(mm, win, PMD_SIZE,
++						 PROT_READ | PROT_WRITE),
++			0);
++	mmap_write_unlock(mm);
++
++	/* Two recorded slots, indexes 7 and 400: the range is exact.  The
++	 * installs ride the vma-less fault arms (an auto arena has no
++	 * anchor; the fault is what wires the window's PT page).
++	 */
++	fflags = FAULT_FLAG_WRITE;
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_user_fault(mm, win + 7 * PAGE_SIZE,
++						fflags, NULL, &fflags),
++			CORTEN_FAULT_HANDLED);
++	fflags = FAULT_FLAG_WRITE;
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_user_fault(mm, win + 400 * PAGE_SIZE,
++						fflags, NULL, &fflags),
++			CORTEN_FAULT_HANDLED);
++
++	pmdp = corten_arena_test_pmd(mm, win);
++	KUNIT_ASSERT_NOT_NULL(test, pmdp);
++	rcu_read_lock();
++	desc = corten_ptdesc_get(page_to_pfn(pmd_page(READ_ONCE(*pmdp))));
++	rcu_read_unlock();
++	KUNIT_ASSERT_NOT_NULL(test, desc);
++	KUNIT_EXPECT_EQ(test, desc->rec_lo, 7);
++	KUNIT_EXPECT_EQ(test, desc->rec_hi, 400);
++	KUNIT_EXPECT_EQ(test, READ_ONCE(desc->nr_mapped), 2);
++	corten_ptdesc_put(desc);
++
++	/* The glibc free() shape: full-coverage munmap parks -- and the
++	 * park's full-window zap collapses the range.
++	 */
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_run_op(test, mm,
++						 corten_arena_test_op_munmap_route,
++						 win, PAGE_SIZE),
++			1);
++	KUNIT_EXPECT_TRUE(test, corten_arena_test_pool_idle(mm, win));
++
++	pmdp = corten_arena_test_pmd(mm, win);
++	KUNIT_ASSERT_NOT_NULL(test, pmdp);
++	rcu_read_lock();
++	desc = corten_ptdesc_get(page_to_pfn(pmd_page(READ_ONCE(*pmdp))));
++	rcu_read_unlock();
++	KUNIT_ASSERT_NOT_NULL(test, desc);
++	KUNIT_EXPECT_TRUE(test, desc->rec_lo > desc->rec_hi);
++	KUNIT_EXPECT_EQ(test, READ_ONCE(desc->nr_mapped), 0);
++	corten_ptdesc_put(desc);
++
++	/* The pool take (the reactivation path -- a fault cannot wake an
++	 * idle window), then the fresh mark at index 250 owns exactly
++	 * (250, 250): the collapse restarted the range from scratch.
++	 */
++	flags = MAP_PRIVATE | MAP_ANONYMOUS;
++	len = PMD_SIZE;
++	KUNIT_EXPECT_EQ(test,
++			corten_arena_test_auto_route_locked(mm, len,
++							    PROT_READ |
++							    PROT_WRITE,
++							    &addr, &len,
++							    &flags),
++			2);
++	KUNIT_EXPECT_EQ(test, addr, win);	fflags = FAULT_FLAG_WRITE;
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_user_fault(mm, win + 250 * PAGE_SIZE,
++						fflags, NULL, &fflags),
++			CORTEN_FAULT_HANDLED);
++	rcu_read_lock();
++	desc = corten_ptdesc_get(page_to_pfn(pmd_page(READ_ONCE(*pmdp))));
++	rcu_read_unlock();
++	KUNIT_ASSERT_NOT_NULL(test, desc);
++	KUNIT_EXPECT_EQ(test, desc->rec_lo, 250);
++	KUNIT_EXPECT_EQ(test, desc->rec_hi, 250);
++	corten_ptdesc_put(desc);
++}
++
++/* ------------------------------------------------------------------
++ * Ledger #2 (r07 mv3b): the per-mm registry walk's budget.  The =on
++ * guest boots spun unkillably inside this walk's xa_find loop even
++ * after the ledger #1 probe fix -- the pre-authorized shape change
++ * (mv3b §3 "预算分批 walk") is the bound plus the truncation
++ * disclosure.  The anchor drives the truncation arm deterministically:
++ * a shrunken budget over a declared registry cuts the walk (counter
++ * +1) and the arena_stats render still completes, naming the row.
++ * ------------------------------------------------------------------
++ */
++static void corten_arena_test_stats_walk_budget(struct kunit *test)
++{
++	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
++	struct mm_struct *mm = t->mm;
++	char *dbg;
++	long t0;
++
++	if (!corten_enabled_static())
++		kunit_skip(test, "stats budget anchor requires corten=on");
++
++	/* The registry walk enumerates MODE mms: enter mode (the fixture
++	 * VMA stays tree-resident -- an empty anon, a sweep skip), then
++	 * declare the four-window arena over it.
++	 */
++	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
++	KUNIT_ASSERT_EQ(test,
++			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
++					     CORTEN_ARENA_TEST_LEN),
++			0);
++
++	/* Two registry entries: the third xa_find (the terminating miss)
++	 * exceeds a budget of 2 -- the walk truncates with the render
++	 * still completing and the disclosure counting.
++	 */
++	corten_arena_test_stats_budget(2);
++	t0 = corten_arena_test_stats_walk_truncs();
++
++	dbg = corten_test_render_dbg(CORTEN_DBG_ARENA_STATS);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
++	KUNIT_ASSERT_NOT_NULL(test, strstr(dbg, "stats_walk_truncs"));
++	kfree(dbg);
++	/* The budget cut at least this mm's walk (the render enumerates
++	 * every registered mm, so the exact delta names the registry --
++	 * >= 1 is the anchor; the row above proves the disclosure).
++	 */
++	KUNIT_EXPECT_GE(test, corten_arena_test_stats_walk_truncs(), t0 + 1);
++
++	/* Restored budget: the whole registry fits, no further cuts. */
++	t0 = corten_arena_test_stats_walk_truncs();
++	corten_arena_test_stats_budget(65536);
++	dbg = corten_test_render_dbg(CORTEN_DBG_ARENA_STATS);
++	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
++	KUNIT_EXPECT_NOT_NULL(test, strstr(dbg, "stats_walk_truncs"));
++	kfree(dbg);
++	KUNIT_EXPECT_EQ(test, corten_arena_test_stats_walk_truncs(), t0);
++}
++
+ static struct kunit_case corten_arena_test_cases[] = {
+ 	KUNIT_CASE(corten_arena_test_sweep_anon_resident),
+ 	KUNIT_CASE(corten_arena_test_sweep_file_resident),
+@@ -15663,6 +16062,19 @@ static struct kunit_case corten_arena_test_cases[] = {
+ 	KUNIT_CASE(corten_arena_test_concurrent_window),
+ 	KUNIT_CASE(corten_arena_test_obs_ledger),
+ 	KUNIT_CASE(corten_arena_test_drain_timeout_stat),
++	/* Ledger #1 (r07 mv3b): the declare-side probe vs the PT-page
++	 * retirement interleave -- the M2a probe exclusion's anchor.
++	 */
++	KUNIT_CASE(corten_arena_test_declare_probe_stale_pt),
++	KUNIT_CASE(corten_arena_test_brk_boundary_strand),
++	/* Ledger #11 (mv3cfeat §2.4-1): the dirty-range bounded park
++	 * reset -- exact widen, park collapse, reactive restart.
++	 */
++	KUNIT_CASE(corten_arena_test_dirty_range_park),
++	/* Ledger #2 (r07 mv3b): the per-mm registry walk's budget and
++	 * truncation disclosure (the =on first-read hang's shape change).
++	 */
++	KUNIT_CASE(corten_arena_test_stats_walk_budget),
+ 	/* W1.a: the vma-free rmap wrappers on synthetic folios (no arena
+ 	 * state, registered before the V-E pair -- the whitelist anchor
+ 	 * below stays last for its cumulative gate verdict).
