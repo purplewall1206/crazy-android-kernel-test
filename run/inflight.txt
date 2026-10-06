@@ -1,0 +1,552 @@
+# in-flight @ 2026-09-16 02:05 CST (r03 night; maintainer+qemu-exec 会话收尾)
+# 已入库: M3a.F1 e911b31 / M3b.S1-S3 d040b61 / **M3b.S4-S7 7bba3b9f7390** (tag corten-r02-m3b-s46,
+#   patches/r02-m3b-s46.patch, checkpatch 0E/2W 既有豁免, 见 results/r02/checkpatch-s46.txt)
+# M3 DoD 冒烟: **VERDICT=FAIL**（results/r03/m3-dod-verdict.md）
+#   - 判定表: 压测器 FAIL / maps PASS / kselftests PASS(附注) / perf 符号 PASS
+#   - 缺陷 A: arena 新鲜页 fault 确定性 SEGV_MAPERR（fault_once 缺 INVALID→PrivateAnon 合成;
+#     churn 的 mark 路径正常 → 事务引擎其余部分被反证 OK）; 4 boot × 100% 复现
+#   - 缺陷 B: RELEASE/exit drain 挂死 D 状态（wait_for_completion(&arena->drained),
+#     churn 事务路径疑泄漏 arena->active percpu_ref; SIGKILL 不可终止 = 不可杀僵尸）
+#   - 绿面: KUnit on 24/0/1 + arena 9/0/0 + **fault 10/0/0 真链路全绿**; maps_check PASS
+#     ([anon:corten_arena] 恰一条); perf cycles:k 213K 样本零 VMA/mmap_lock 符号命中;
+#     ksmoke on 无确定性新 fail（mremap flake 3/3 复跑过; va_high=基线既有已对照）
+#   - KUnit off 25/25（interlock 首跑 flake=M3a §5 签名A, 复跑全绿闭环）
+# bzImage: bzimg/r02-m3b-s46 sha256=9351100b...（终版 ANON_VMA_NAME=y; 首版 cf5c4e80 因主树
+#   .config 漏该配置作废重验; off 不变式在新镜像上重验绿）; VM 留运行（tmux vm, corten=on,
+#   内有 2 个 D 状态 arena 僵尸属缺陷 B 现场, 复现需先 reboot 清场）
+# 下班移交（dev 班次, 不修码判据已固化）:
+#  1. 缺陷 A 修复 + 新增「query INVALID 新鲜页」真链路 KUnit 用例
+#  2. 缺陷 B percpu_ref 泄漏定位 + drain 可诊断超时告警
+#  3. r04 其余: S8 (debugfs arenas 计数闭合 + ksmoke 收口) → M4.T0a (锁序重构 P0)
+# 恢复命令: 勿重做 M3a.F1/S1-S3/S4-S7/M9 Round A/syzkaller; S4-S7 勿重复提交
+
+# ============ r04 fix2 班次 (2026-09-16 02:00-03:4x) ============
+# 缺陷 A (新鲜页 MAPERR): **已修** — dispatch FRESH + fault_once INVALID→perm gate
+#   (ar->prot)→corten_mark 合成 PRIVATE_ANON; 新盲区 KUnit 用例 fresh_fault
+#   (不预播种页, 写/读/写升级; 教训入注释)。touch 4t/30s exit 0 errors:0 RELEASE ok。
+# 缺陷 B (RELEASE/exit drain 挂死): **已修** — munmap_route 双 lookup 双 get 单 put
+#   泄漏 (ar_end != ar_start 守卫, EXACT+公共出口两处); 配对表在 results/r03/s46-fix2.md;
+#   drain 10s 超时 + WARN + DRAIN_TIMEOUTS 计数 + 泄漏 descriptor 不 free 防UAF。
+# 缺陷 C (**新定性, 未修, churn/mixed 仍 FAIL**): PT 页描述符安装失败→窗口永久
+#   untracked (r03 现场 free_untracked=5 恒定为证)→fault -ENOENT fallback legacy
+#   写 PTE 无 metadata→unmap_chunk -ENOENT"必空"假设破→zap 跳过→陈旧 PTE/内容穿越
+#   munmap。取证: results/r03/smoke-fix2/probe3.c (ZFAIL=旧 magic 穿越, INPLACE=0)。
+#   修复方向: fill_upper 对既有 PT 页补装 desc (幂等 re-arm) + unmap_chunk -ENOENT
+#   不再假定空 + 漂移计数。估 1-2h。
+# 状态: 增量 = patches/r02-m3b-s46-increment.diff (基座 7bba3b9f7390, 0E0W);
+#   =n 回归过; KUnit on 11/0/0 + off×2 绿; 报告 results/r03/s46-fix2.md;
+#   内核快照 bzimg/r02-m3b-s46-fix2; VM=tmux vm (nokaslr 修复内核, corten=on, 无僵尸)。
+# 未做: C 修复、churn/mixed 复跑、maps_check 复跑、commit (maintainer)。
+
+# ============ r04 fix3 班次 (2026-09-16 03:45-05:2x) ============
+# 缺陷 C (churn/mixed 内容错误): **已修, 三模式全绿**。真根因 ≠ fix2 报告的
+#   "untracked 漂移"主因论, 而是 zap_window 绕过 mmu_gather range 跟踪
+#   (tlb_gather_mmu 双参=非 fullmm, 从不调 tlb_start_vma/tlb_remove_tlb_entry)
+#   → tlb_finish_mmu flush range 空 → PTE 清了 TLB 没刷 → 陈旧翻译穿越 munmap。
+# 修复: ①zap_window PTE 内容驱动 + 尾部 flush_tlb_range (根因);
+#   ②unmap_chunk -ENOENT 按内容 zap (zap_untracked_window, 防御);
+#   ③fill_upper 幂等补装 corten_ptdesc_rearm (根修, 不触碰已 tracked 页);
+#   ④debugfs stats 新增 reinstalled/legacy_drift (本轮 0, 防线未触发=互证)。
+# 验证: KUnit on fault 12/12 (churn_repro 改 kmap store 后转正) + off×2 绿;
+#   guest probe3 fails=0/0 (修复前 96/31625); touch/churn/mixed 30s 全部
+#   exit0+errors:0+RELEASE ok; maps_check PASS ([anon:corten_arena] 恰一条);
+#   dmesg 零 panic; =n 五对象零符号; checkpatch 0E0W。
+# 报告: results/r03/s46-fix3.md; 证据: results/r03/smoke-fix3/ (含 fix2 的
+#   pgrep 误中说明); 补丁: patches/r02-m3b-s46-increment.diff (基座 7bba3b9f7390)。
+# VM: tmux vm = 修复后内核 corten=on, 无僵尸。bzImage 快照见 bzimg/r02-m3b-s46-fix2
+#   (fix2 版, 已被工作树新构建取代)。
+# 未做/移交: commit (maintainer); 终判冒烟 (kselftests/perf 符号/多参数扫描);
+#   A/B/C 全量 review。
+# ============ r04 fix3r 增量 review 班次 (~04:3x-05:4x) ============
+# review 三发现全处置: ①tlb_remove_tlb_entry 接回 gather range + 两 zap 早退路径
+#   统一 out_flush (DEBUG_VM VM_BUG_ON / 批满 9200 页中途空 range flush 消除);
+#   ②corten.h:182 child tab 还原; ③新用例 untracked_drift (inject_alloc_fail(2)
+#   → -EOPNOTSUPP 语义修正 + 内容 zap 释放 + reinstalled/legacy_drift 非零断言),
+#   rearm install 失败不计数, unmap_chunk -EOPNOTSUPP 与 -ENOENT 同路由内容 zap。
+# 验证: KUnit on fault 13/13 (全套绿) + off×1 绿; guest probe3 0/0 + touch/churn
+#   15s exit0 errors:0; =n 零符号; checkpatch 0E0W; =y 往返重建 exit 0 (两条上游
+#   既有警告)。补丁重导出: patches/r02-m3b-s46-increment.diff (基座 7bba3b9f7390);
+#   s46-fix3.md 补记 review 节; VM=tmux vm (bzimg/r02-m3b-s46-fix3, corten=on)。
+# 未做: commit (maintainer); 终判冒烟全量复跑由主 agent 派。
+
+# ============ r04 maintainer 班次 (2026-09-16 05:22-05:2x) ============
+# M3b fix 轮已入库: **commit 96466df24387** "mm: CortenMM arena: fresh-fault
+#   dispatch, ref pairing, TLB-correct zap" (基座 7bba3b9f7390), tag
+#   corten-r02-m3b-s46-fix1; patches/0001-mm-CortenMM-arena-fresh-fault-...patch
+#   (997 行); checkpatch 0E/1W/8C (W=中文正文 UTF-8 字节计 75-char 伪影;
+#   C=对齐/spinlock 注释/u64 既有豁免类) → results/r03/checkpatch-s46fix.txt。
+# 内容=缺陷 A/B/C 修复 + fix3r review 三发现, 应用后与 m3b46 worktree 6 文件
+#   字节级全等 (cmp 全 SAME)。
+# 未做/移交 qemu-exec 班: 终判冒烟全量 (构建归档/off 臂/on 臂/verdict)。
+# ============ r04 qemu-exec 终判班次 (2026-09-16 05:26-06:1x) ============
+# 构建: 主树 make -j12 exit 0 (仅上游既有 objtool 警告); bzImage 归档
+#   bzimg/r02-m3b-s46-fix1 sha256=1f0cb1b6...7038; olddefconfig 后四 Corten
+#   配置 + ANON_VMA_NAME + KUNIT 全 =y。
+# off 臂 GREEN: boot clean; KUnit 25/0/0+8/0/1+3/0/10; zram lz4 2G/lru_gen
+#   0x0007/9p OK; mmbench 3 配置 JSON 有效; 2 条 WARNING=txn_path_overflow
+#   KUnit 注入设计路径, r03 基线 dmesg 同在; ksmoke off 10p+1skip+1fail(va_high)。
+# on 臂 **M3 终判 PASS**: 双 on-boot KUnit 24/0/1+9/0/0+13/0/0; 压测 5+1 项
+#   全判据过; maps_check PASS; perf 367K 样本六符号宽口径 0 命中 +
+#   corten_arena_lookup_get 1.87% 在榜 (touch 模式 cpu-clock 采样 99% idle 为
+#   KVM 采样偏差, 判定按 r03 同口径 churn 执行); ksmoke 同核 fail-set 一致;
+#   debugfs reinstalled=1/legacy_drift=1 自愈, drain_timeout 零触发
+#   (per-mm 计数 debugfs 接线留 S8)。A/B/C 三缺陷零复现。
+# 终判文档: results/r03/final-smoke/m3-verdict-final.md (含 DoD 四条逐项 +
+#   r03 对照表 + 非阻塞遗留 5 项); 产物全套同目录。
+# VM 终态: tmux vm = bzimg/r02-m3b-s46-fix1 corten=on, 无僵尸, 留运行。
+# 未做: S8; green.txt/STATE 已更新本班次部分; STATE.md 夜末汇总留主 agent。
+
+# ============ r04 maintainer S8 收口班次 (2026-09-16 07:20-07:2x) ============
+# M3b.S8 已入库: **commit ae236ee077ac** "mm: CortenMM arena: debugfs
+#   observability (arenas ledger, arena_stats)" (基座 96466df24387), tag
+#   corten-r02-m3b-s8; patches/0001-mm-CortenMM-arena-debugfs-observability-
+#   arenas-ledge.patch (5 文件 +302/-7); checkpatch 0E/0W/0C →
+#   results/r03/checkpatch-s8.txt。
+# 折入式 review (夜末压缩, maintainer 逐 hunk): ①RCU 纪律过 — 登记在 DECLARE
+#   全部失败路径之后 (无半注册项), RELEASE 注销在 xa_erase 后/mm_exit 在
+#   corten_state unpub 后, kfree_rcu 专用 rcu_head 与 RCU walk 配对正确;
+#   ②读侧过 — 渲染器仅 rcu_read_lock, 不碰 ctl_lock/list_lock/mmap_lock,
+#   写侧冷路径短暂持 list lock, 零新争用; ③渲染过 — corten_stats_lines()
+#   抽出共用, 协议 9 行 stats/arena_stats 同源零漂移。2 处注释失准已随 commit
+#   修正 (obs_remove 的 ctl_lock 声称未覆盖 mm_exit 调用点; "dying" 状态因
+#   注销先于 kill 实际不可观测), 非功能缺陷。
+# 验证 (作者验证矩阵 s8-verify.md + 本班次复核): KUnit off 25+10+3 / on
+#   24+11+13 全绿; =n 五对象零符号; bzImage 归档 bzimg/r03-m3b-s8-final
+#   sha256=efa69799...88e30; off 臂冒烟 GREEN (uname/zram lz4/mmbench
+#   mmap-pf low t2 JSON 有效/debugfs arenas+arena_stats 渲染正常/
+#   drain_timeout=1=boot KUnit 注入; 证据 results/r03/s8-final-smoke-off.txt)。
+# VM 终态: **已关** (kill-session + pkill qemu, 夜末收尾, 无残留)。
+# 未做/移交: 不 push (按指示); STATE.md 夜末汇总留主 agent; green.txt 已登记。
+
+# ============ r05 maintainer T0a 收口班次 (2026-09-17 04:08-05:1x) ============
+# M4.T0a 已入库: **commit 5aef23c4aee9** "mm: CortenMM arena: MODE-process
+#   transparent takeover (lock-order refactor, auto-attach, fork demote)"
+#   (基座 ae236ee077ac), tag corten-r05-m4t0a;
+#   patches/0001-mm-CortenMM-arena-MODE-process-transparent-takeover-.patch
+#   (9 文件, diff=patches/r05-m4t0a.diff +publish 镜像); checkpatch --strict
+#   0E/0W/0C → results/r05/checkpatch-t0a.txt。应用后与 m4t0a worktree 9 文件
+#   cmp 字节级全等。
+# review 条件项处置: **C2 以"或等价"形态闭合** —— include/linux/corten_arena.h
+#   桩守卫本就挂 !CONFIG_CORTEN_MM_ARENA (r04 导出已如此), =y+ARENA=n 处方回归
+#   (olddefconfig -d ARENA -d KUNIT_TEST → sys.o/mmap.o/fork.o/corten.o +
+#   全量 make) **RC=0 链接通过, 断链不复现**; 继承洞的实残留 = 两处桩 doc 注释
+#   把守卫错标为 CONFIG_CORTEN_MM → 已修正 (误导 review 的根源), 锁序注释加
+#   "registered as STATE.md D13" (DESIGN §7 文字更新仍留规划者)。
+#   **C3 已修**: corten_arena_auto_mmap_route() OVERCOMMIT_NEVER 分支
+#   fallback(NULL) → smp_load_acquire 取注册表计数 (MODE 蕴含注册表存在,
+#   mode_enter() 先建后置位; 与其余 fallback 同一 per-mm FALLBACKS 桶)。
+# 验证: =y 全量 RC=0 零新增警告 (仅 objtool cpuidle + modpost memblock 基线);
+#   KUnit on×1 worktree 20/0/5+19/0/0+13/0/0; =n 回归过; 冒烟 bzImage
+#   bzimg/r05-m4t0a sha256=8f33abd8...52abe: boot 自跑 KUnit 24/0/1+19/0/0+
+#   13/0/0 全绿, run_mode_smoke 26/26 + SMOKE-DRIVER PASS ledger 0→0
+#   (kunit.enable=0 口径; KUNIT-on boot 亦可达 login, 26/26 过但 driver dmesg
+#   检查撞 boot KUnit 探针=伪阳性, 未改 driver), 4 条 WARNING=既有设计探针,
+#   零 panic/Oops。证据 results/r05/ + results/r04/t0a/*-r05c.log。
+# VM: 本班冒烟 VM (tmux vm-t0a-smoke, 端口 10023, 盘=trixie-r05t0a.img 时点拷贝)
+#   **已关**; tmux vm (端口 10022, m4t0b 内核) 属 T0b agent, 未触碰。
+# 未做/移交: T0b commit (等其班次收口); run_t0_dod.sh 全量判定; STATE.md r05
+#   汇总留主 agent。未 push (按指示)。
+
+# [r05 夜班修复 agent 2026-09-17 07:10] M4.T0b 复验收口（t0b-verify.md v4）:
+# D-E/D-F/D-G/D-G' 四处实现修复 + 2 个新 KUnit 用例（mprotect_fresh/untracked_rearm）
+# + rearm_recovered/rearm_failed named 计数器; KUnit 全绿 on×2(20/0+22/0+16/0)/off×1;
+# =n 七对象 RC=0; checkpatch increment/full 0E0W0C; 补丁 r05-m4t0b-{increment,full}.diff
+# (+publish 镜像); run_t0_dod 8P/4F——残余: ① JVM CDS relocate ACCERR(0x100086000010,
+# hs_err_pid524.log, 第三种形状, 与 D-G 系无关) ② metis_eq fork 后 ACCERR(DEV-11 边界,
+# 已记 OQ 归规划者)。T0a 未动(5aef23c4aee9 已提交)。未 push。
+
+# ============ r05 maintainer T0b 收口班次 (2026-09-17 06:55-07:5x) ============
+# review 条件 C1-C4 全处置（worktree m4t0b 修复, 主树同内容入库）:
+#   C1 三处 -EAGAIN 泄漏点（mprotect route protect_range 透传 / mremap 收缩腿 /
+#     MADV_DONTNEED route）→ 单次重试 + named 计数 eagain_retries/eagain_leaked
+#     （注释写明: 不落 legacy 漏斗, desc 陈旧窗口的 legacy zap = r03 缺陷 C 形状）;
+#   C2 mremap grow 旧区 RELEASE 失败 → 回滚 release 新窗口 + mremap_release_fail
+#     计数（调用方只见错误, 回到内容完好的旧块; 不能走 out_reject=refs 已 put）;
+#   C3 run_t0_dod.sh trace_pair: on/off 腿 rc!=0 → soft-skip 等价判定（不把死跑
+#     误报成语义差异; trace/err-multiset artifacts 留 forensic）, 已同步 bench share;
+#   C4 M4T0_SPEC.md 勘误: §3.5 mremap 行=已路由（收缩原地+增长 kernel-copy+RELEASE,
+#     FIXED/DONTUNMAP/跨界维持计数拒绝）, §9 OQ-A 标注关闭; T0b 范围行 migrate 钩子
+#     实随 S4-S7 7bba3b9f7390 落地（早于 T0a, 按实锚勘误）; KUnit 增量实落 6 用例
+#     （初记 4; D-G/D-G' 修复轮追加 mprotect_fresh/untracked_rearm）; 加"已知遗留"
+#     两行: D-G''（JVM CDS, si_addr 0x100086000010 形状, dg_probe2 可复现）与
+#     fork 边界（DEV-11, OQ 归规划者）。
+# 验证: =y 全量 make -j6 RC=0 零新增警告（objtool cpuidle + modpost memblock = 基线
+#   2 条）; KUnit on×1 首跑 corten 套件 interlock flake（M3a §5 签名A: worker A 20s
+#   超时, 已知首跑签名）→ 复跑 on×1 三套件全绿 63 pass/0 fail/1 skip（4 WARNING=
+#   既有设计探针, 与 r03/T0a 口径一致）; =n 七对象（sys/mmap/memory/migrate/mempolicy/
+#   mremap/madvise）RC=0 零 corten 符号, .config 已复原; guest 冒烟以修复态新构建
+#   （bzImage #18, 07:27, 含 C1-C3）重启 tmux vm 后执行: run_mode_smoke SMOKE-DRIVER
+#   PASS ledger 0→0; run_t0_dod **7P/3F/2S** vs run6 8P/4F——C3 后 java/metis_eq 两条
+#   strace 腿转 SKIP（rc=134/139 检出）, **无新 FAIL**, 3F 全部=两遗留（java on-run
+#   CDS D-G''+fork-probe 派生 / metis_eq on-run fork DEV-11）; 计数器与 run6 同型
+#   （mprotect_routes 0→110, rearm_recovered=16, rearm_failed=0, 新计数全 0）;
+#   checkpatch --strict 终版 patch 0E/0W/0C。
+# 入库: **commit 9d74b22a1348** "mm: CortenMM arena: MODE spatial routing
+#   (mprotect/madvise/mremap) and counters"（基座 5aef23c4aee9）, tag
+#   **corten-r05-m4t0b**; patches/0001-mm-CortenMM-arena-MODE-spatial-routing-
+#   mprotect-madv.patch（8 文件 +1750/-115）; increment/full 重导出 + publish 镜像;
+#   主树 8 文件与 worktree cmp 字节级全等; checkpatch → results/r05/checkpatch-t0b.txt。
+# 证据: results/r05/t0b/（kunit-on{1,2}.log / build-n-seven-objects.log /
+#   mode-smoke.log / t0dod-run7.log）; guest 侧 /mnt/t0dod-results-r05close/。
+# 口径: 按指示未重打主树 bzImage、未做主树终判冒烟——冒烟证据以 worktree 修复态
+#   构建（bzImage #18）为准, 主树 commit 与该构建 8 文件字节全等, 等价性由此锚定。
+# VM 终态: tmux vm = bzImage #18, corten=on, kunit.enable=0, 无僵尸, 留运行。
+# 未做/移交: D-G''（JVM CDS）根因与 DEV-11 fork 边界 → 后续切片（OQ 归规划者）;
+#   STATE.md r05 汇总留主 agent; 未 push（按指示）。
+
+# ============ r06 reviewer+maintainer D-G'' 收口班次 (2026-09-18 04:57) ============
+# 复审 (最后增量 ~200 行, 只读): **PASS**。
+#   ① B1 punch_split: __split_vma 去 static 仅 mm-internal (mm/vma.h 声明, 无
+#     EXPORT_SYMBOL, 既有 3 调用点 vma.c:646/1443/1464 未动); 拆分语义核对
+#     (new_below=0 → 新片在上, 原始留下半), 头 punch=原始必死 → ar->vma 重指尾片
+#     或 NULL (既定安全降级: F-A tier-1 NULL 不命中 → tier-2 RCU walk + VM_CORTEN
+#     兜底), 中段 doom 留 gather; vma_lookup(ps/pe) 精确命中新片; __split_vma 的
+#     WARN_ON 边界由 ps>vma_start / pe<doomed->vm_end 守卫; 失败路径成立 — 手术
+#     失败 → route 返 -errno → mmap 先败 → gather 不跑 → 零 free, 树一致,
+#     RELEASE 分片清理兜底。
+#   ② P1 vma_end_read: 契约核对过 — x86 fault.c:1376 与 arm64 fault.c:681 在
+#     RETRY|COMPLETED 跳过 vma_end_read (释放责任在被调方), memory.c
+#     vmf_can_call_fault 同款先释再 RETRY; FAULT_FLAG_VMA_LOCK 仅 per-VMA 锁
+#     路径产生 (x86:1375/arm64:680); in_atomic() 行逐字节未动; 分支门控
+#     (corten_enabled_static && VM_CORTEN) → 非 arena 路径零影响。
+#   ③ KUnit 增量: punch_head 指针恒等断言 (PTR_NE doomed / PTR_EQ 尾片 vma_lookup)
+#     + 真实 free (do_munmap worker, KASAN 敏感) + 尾片续 fault (owned/meta/PTE
+#     断言); punch_classify 分类表 + fault_covered tier 表完备。
+# 入库: **commit 452ad7b9d91e** "mm: CortenMM arena: shadow-VMA hole punching
+#   and vma-lock fix (D-G'')" (基座 9d74b22a1348), tag **corten-r06-m4dg2**;
+#   patches/0001-mm-CortenMM-arena-shadow-VMA-hole-punching-and-vma-l.patch
+#   (7 文件 +921/-26); 主树应用 patches/r06-m4dg2.diff 后与 worktree 7 文件
+#   cmp 字节级全等; checkpatch --strict 0E/0W/0C (1122 行) →
+#   results/r06/checkpatch-dg2.txt。
+# bzImage: 归档 bzimg/r06-m4dg2 sha256=e5b93cb2...07e0 (=worktree 验证构建
+#   6.18.32-g9d74b22a1348-dirty #10, 复核矩阵最终二进制; 主树未重编—时间预算,
+#   等价性由 7 文件 cmp 全等锚定); green.txt 已登记 (off 臂证据=夜班冒烟 26/26
+#   + 本夜矩阵)。
+# 遗留登记核对 (不阻塞, 均已写入 commit 正文 Known boundaries):
+#   ① T0b 下游 java/mmetis on-leg ACCERR (独立根因, probe2 复现, r05 夜班移交
+#     #2, 待新立任务); e4 rc=3 与 EEXIST~3% (ASLR 伪影, setarch -R 25/25) 口径
+#     见 dg2-fix2.md §4;
+#   ② fork 边界 DEV-11 (OQ-D 归规划者)。
+# VM 终态: 盒=修复后内核 #9 (corten=on), 复现物 share 原样 (dg2-fix2.md §6)。
+# 未做/移交: 未 push (按指示); STATE.md r06 汇总留主 agent; KUnit 判据固化
+#   -smp 4 (≥3 CPU 用例) 建议留规划者。
+
+# ============ r06 m9-p1 收尾班次 (2026-09-18 04:48-05:3x) ============
+# M9-P1 最后两步收口 (承接前班: config-grep 双绿 + 两对象零错误 two-objects.log;
+#   Image 构建曾于 23:32 Terminated 中断):
+# ① Image 增量续传: make ARCH=arm64 -j6 Image RC=0 (05:03-05:17, ~14min),
+#   零错误零新增警告; arch/arm64/boot/Image 42232320 B,
+#   sha256=f9b0e0c6...a59add (基线 Round A 24f8f716...f6204 42031616 B,
+#   **增量 +200704B ~196KiB**, 与测试对象链接量级相符)。
+# ② **CortenMM KUnit arm64 首跑 (M9 里程碑)**: qemu-system-aarch64 -M virt
+#   (TCG), kunit.filter_glob=corten* → 首跑单CPU 21/0/4 (4 skip=需3+CPU
+#   worker placement, 设计性) ; -smp 4 复跑 **25/0/0 全绿** (ok14/15/18/19
+#   转正)。WARNING 恰 2 条=txn_path_overflow 设计注入 (r03/r05 既有口径),
+#   零 Oops/BUG。root panic=无根fs 预期终止, 非缺陷。
+# 判定: **M9-P1 PASS** (§11.4-1 两对象双绿闭环 + §11.4-2 前半 P4 Image+virt
+#   smoke); 文档 results/r06/m9-p1/{m9-p1-verify.md,image-sha256.txt,
+#   kunit-arm64.log,kunit-arm64-smp4.log,image-build.log}。
+# 未做: 不 commit (主 agent 决策, 独立小提交可留明日); 未 push; P2/P3 钩子与
+#   contpte 语义适配 = §11.4 后续切片。
+
+# ============ r06 rogue-fix 班次 (2026-09-18 09:50-15:0x, D14 自由窗) ============
+# "present-RO PTE" 缺陷族闭环: **commit e219920b0923** "mm: CortenMM arena: carry routed
+# permissions across content drops and fork demotion (D16)", tag **corten-r06-rogue**。
+# 根因=两个同源缺陷: ①zap(chunk munmap/MADV_DONTNEED 路由)整槽擦 perm → FRESH 门跌回
+#   DECLARE ar->prot → commit mprotect(RW)+DONTNEED+写=ACCERR(strace 三连+探针
+#   FRESH-GATE-ACCERR m.state=0 m.perm=0 arprot=8 实证); ②fork_demote 还原 plain VMA 只带
+#   DECLARE flags → routed 提交双侧蒸发 → glibc 退出期清理写 ACCERR 于 demoted PROT_NONE
+#   reserve(=T5 三 app rc=139 本尊, 与 OQ-D 同根一并闭环)。修法: CORTEN_UNMAP_KEEP_PERM +
+#   FRESH 门 perm 优先 + demote 前 metadata perm 物化进 VMA(split 手术, punch 同款)。
+# 判据全绿: dedup 5/5, metis 3/3, psearchy 3/3(修复前各 3/3 rc=139), java -version rc=0,
+#   smoke 26/26, KUnit on 24/0/1+24/0/0+21/0/0(含 3 新用例; txn_mutex_disjoint 首跑 flake
+#   1 次=既登记签名, 复跑绿), KUnit off 25/0/0+17/0/7+4/0/17, =n 零符号, =y+ARENA=n 零错,
+#   checkpatch 0E/0W/0C。bzimg/r06-rogue sha256=c767ab30…c061b。
+# 假设池裁决: ①窗口漏页/③flush 缺失 证伪(探针零命中); ②部分成立(zap 擦 perm 为真因);
+#   ④⑤替换——真第二根因是 demote 语义缺口。探针残留零; 取证工具 rogue_dump.so 归档。
+# 残留登记: ① JThreadBench MODE ClassFormatError(类页零字节, HEAD 1:1 复现=既有,
+#   java -version 判据不受影响, 下一切片); ② fault_owned tier-2 的
+#   find_vma_intersection RCU-WARN 噪音(java 高频, 无害); ③ T5 两性能信号(tcmalloc/
+#   JVM spawn)应在本修复后按 t5-diagnosis §4 口径重测。VM=最终内核 corten=on 留运行。
+# 未 push (按指示)。
+
+# ============ r07 maintainer M5.T1a 收口班次 (2026-09-19 02:0x-03:0x) ============
+# M5.T1a 忠实 fork 已入库: **commit 68697442097e** "mm: CortenMM arena: faithful
+#   fork (frozen window, metadata mirroring, COW)" (基座 0719bc6ae74e gupfix, 主树
+#   第 17 个项目提交), tag **corten-r07-m5t1a**;
+#   patches/0001-mm-CortenMM-arena-faithful-fork-frozen-window-metada.patch
+#   (7 文件 +2003/-439); 全量 diff=patches/r06-m5t1a.diff (终态重导出, 含 23:03
+#   folio 所有权修复); checkpatch --strict 0E/0W/0C (2780 行) →
+#   results/r07/checkpatch-m5t1a.txt。
+# 终态补跑 (评审 PASS-with-conditions 证据链, results/r06/m5t1a-final-verify.md):
+#   23:03 修复后源码零改动核实 (git status/+2003/-439/mtime); KUnit on×1+off×1 双绿
+#   (普通 =y bzImage #18, 无盘 qemu); guest 重启进 #18: fork_isolation 双臂同校验和
+#   e1c81840e4123903 / metis_eq MODE 全量 rc=0 checksum 8a8db99075665220 三方同值 +
+#   fork-probe OK (OQ-D 闭环落在终态代码) / fork_roundtrip 1000 轮 PASS checksum
+#   076534f9ba241483 + MemFree 平稳 (23:03 COW-reuse 泄漏修法闭合——上轮 OOM 即死
+#   于此) / JThreadBench 2000×3 rc=0 零 CFE + fork-probe OK / run_mode_smoke 26/26;
+#   对账 fork_faithful 0→1005, demotes/skips/drain 全 0; 前班 §3c 原始日志缺档由
+#   results/r06/m5t1a/guest-final/ 回填。lockdep 变体证据 (全套绿零 splat) 由前班
+#   §3d/§5b 在档。
+# 登记: STATE **D17=DEV-14** (fork=copy_page_range 照常+fork_begin/commit 事务 meta
+#   镜像; "不走 copy_page_range"作废) / **D18=DEV-15** (fork 冻结窗自造语义) +
+#   DEVIATION×2 (CORTEN_INVALID+perm 子侧重表达 / 镜像循环不持父 ctl_lock) +
+#   **DEV-11 废止生效** (fork_demote 全删) + **D16 补登记** (=rogue e219920b0923
+#   已用此号, 补记防编号重占——任务原拟 D16/D17 编号已避让顺延); DESIGN §3 白名单
+#   表 copy_page_range wrprotect=第 1 处 (≤3 已用 1, r07 标注)。
+# 遗留跟踪 (T1b/T2, 本轮不修): **F2 过度 SHARED 角落 / F3 fork drain 注入 /
+#   F4 OQ-5** (commit 正文 Known boundaries 同步披露); tier-2
+#   find_vma_intersection WARN 噪声 (主树既有); JThreadBench/metis 时延受 syzkaller
+#   M7 预热同宿负载 (判据不涉时延, 正式数归 T4/T5)。
+# bzImage: bzimg/r07-m5t1a sha256=2985384577e6bb7b...be5ac (14,771,200 B);
+#   green.txt 已登记 (off+on 证据)。
+# VM 终态: tmux m5t1a-vm = #18 corten=on 留运行 (旧 #16 lockdep boot 已下线)。
+# 未做/移交: 未 push (按指示); M5.T1b (fork_arena_test v2 / debugfs 计数收口 /
+#   kselftests mm 8 件套 / INV7 checker SHARED⇒PTE-RO 豁免条目 + F2/F3) 与 M5.T2;
+#   syzkaller M7 预热 (r07 另一会话) 未触碰。
+
+# ============ r07 reviewer+maintainer M4.T1/T2 收口班次 (2026-09-19 13:2x-14:0x) ============
+# 复审 (r07-m4t12 全量 1713 行 diff 只读精读 + 上下文核对, ~60min): **PASS**。
+#   ① 杂志并发: 全部写方持本 mm mmap_write (percpu=局部性+xarray 子树不相交,
+#     非并发原语——注释与实现一致); claim 严格前进 (VMA jump/哨兵 frame jump/
+#     arena extent jump 三类障碍均保序, round_up 溢出有守卫), 标记失败逐帧回卷;
+#     哨兵语义穷举核对: state->arenas 全部 15 处 xa_load/xa_for_each/xa_find
+#     访问点逐一核对 (lookup/overlaps/mm_exit/mode_exit 单调扫描/fork 四走查/
+#     txn_owned/release/claim/bump/recycle/punch) 语义闭合, 无泄漏点; fork 子
+#     状态=全新 create (仅复制 next_va——magazine/va_free/seg_list 不继承, 核对)。
+#   ② T2: 同帧单查找 ar_end==NULL 仅作记账 (分类全用 ar->start/end+指针相等性,
+#     逐分支核对: 同帧/跨帧同 arena=双 pin 双 put/跨 arena/半跨 OUTSIDE);
+#     zap 单 ptl 锁段 (≤1PMD 既有不变量), corten_unmap/rmap 全在 ptl 内=
+#     zap_pte_range 同款 (DEV-13 序不破坏: mmap_write>desc>ptl); 显式 flush 删除
+#     后 unmap_chunk 全出口 (含 !ptep -EAGAIN 与 force 路径) tlb_finish_mmu 兜底,
+#     force_flush 中断在 for 自增前 break → 重试自同页补 metadata 复位 (逐字核对);
+#   ③ 4 修复逐个落实: recycle 整块丢弃含 VMA 块 (T0 契约闭合) / va_nrfree 部分
+#     消费递减 / punch 洞帧 (xa_load==NULL) 不回 marker / pinned_end 删除;
+#   ④ 红线: M4.T0 白名单/分类器/migrate 未触碰; =n 守卫嵌套核对 (KUNIT_TEST⊂ARENA);
+#     checkpatch --strict 独立复跑 0E/0W/0C; KUnit 新用例 mag_recycle/mag_marker
+#     语义与实现一致 (release_classify 前缀+<2M 尾=RELEASE 规则核对过)。
+#   ⑤ D1 口径更正论证扎实 (四步证据链), 已登记 STATE "G1 口径更正" 条目;
+#     publish/t5-run2 的 mmbench 臂结论按此更正读, apps 臂不受影响。
+# 入库: **commit de8a685370bb** tag **corten-r07-m4t12** "mm: CortenMM arena:
+#   per-cpu VA magazine and munmap fast path (M4.T1/T2)" (基座 68697442097e,
+#   主树第 18 个项目提交; 3 文件 +1122/-221——brief 所记 "7 文件" 实为 3,
+#   行数 +1122/-221 与 brief 一致); patches/0001-...per-cpu-VA-magazine-...patch;
+#   快照 patches/r07-m4t12.diff; 主树应用后与 worktree cmp 字节级全等;
+#   checkpatch → results/r07/checkpatch-m4t12.txt (0E/0W/0C)。
+# bzImage: 主树重编 **#81** 6.18.32-gde8a685370bb (增量, 零新增警告), 归档
+#   bzimg/r07-m4t12 sha256=937bbd55...3dacd; green.txt 已登记 (on 臂 26/26+
+#   DRIVER PASS / off 臂 18/26+8×EOPNOTSUPP 设计性拒绝=gupfix 同形轮廓, 双 GREEN)。
+# STATE 登记: **D19** (T1c 常驻 arena 池提案——G1 closure 杠杆, 待主 agent 决策
+#   实施) + **G1 口径更正** (mmbench 静态链接, 旧 mmbench-T0 臂全部作废; apps 臂
+#   不受影响) + r07 收口班次块 (含两处非阻塞备注: 回收列表注释 "LIFO" 实为
+#   FIFO+尾扩展; auto_route addrs[8] 在 >8 CPU 机器 ASSERT——均测试/注释级)。
+# 判定: G1 NOT MET (0/4 动态口径) + 机制级归因; T1/T2 机制生效 (99% 回收/
+#   仪式税 -65%/CHUNK 3×); 动态 ABAB 数字随 commit 正文入库。
+# VM 终态: tmux vm-m4t12 (port 10026) = bzimg/r07-m4t12 corten=on 留运行。
+# 未做: 未 push (按指示); D19 实施待主 agent; T1b/T2 跟踪项与 M4.T0 矩阵复核
+#   归后续班次。
+
+# ============ r07 reviewer+maintainer M5.T3 收口班次 (2026-09-19 日班) ============
+# 复审 (r07-m5t3 增量 +528/-285 5 文件 998 行 diff 只读精读, ~40min): **PASS**。
+#   ① force 移除完备: FORCE_COPY 枚举/corten_arena_force_write()/ctx.force/
+#     FORCE_WRITES 统计 + fault_once 重定向 + handle_mm_fault force 采样零残码
+#     (仅注释级留痕); foll_force 重写双形状锚=真断言 (RO 契约外部写 SIGSEGV 且
+#     PTE/pfn/meta SHARED/perm/PageAnonExclusive 逐项不动; VMA-writable 边界仍
+#     SIGSEGV=perm 规则而非 VMA 位); UNWRITE→ACCERR 对齐 can_follow_write_common:
+#     不再有"仅 FOLL_FORCE 可 re-follow 的 RO 存活页"=自旋死循环根因铲除。
+#   ② UNSHARE 落回: ctx.unshare 记源, F_ACCERR 时 CORTEN_FAULT_FALLBACK_BIT|
+#     VM_FAULT_FALLBACK → memory.c 钩子既有消费点进 legacy (VMA_LOCK/in_atomic
+#     已前置 RETRY, mmap_lock 保持, arena txn 锁先释放无嵌套); wp_page_copy
+#     unshare 分支 BUG_ON(unshare && pte_write)=永不 mkwrite, perm-RO 硬件契约
+#     不可废止; shadow-VMA vm_page_prot=PAGE_COPY 私有 COW 惯例同形; 落回仅
+#     F_ACCERR(MAPPED+perm 拒绝) 触发, INVALID/FRESH 走 MAPERR/FRESH 无 legacy
+#     安装旁路; meta SHARED 残留自愈=cow_write reuse 分支既有残码清除 (3735)。
+#   ③ zap_pinned: zap_window 清 PTE 处 folio_maybe_dma_pinned 命中→全局 atomic
+#     (T0b named-counter 惯例) → arena_stats "zap_pinned" 行; 语义=观测不拒绝
+#     (pin 引用 refcount-native 携带 folio 至 unpin); state4 锚 +1; guest churn
+#     delta=5289 = M6.T2 迁移/回收 skip-gate 频度证据。
+#   ④ KUnit 5 新锚 ok35-39 多轮真跑 (on×3+lockdep), state2/3 断 PTE 形状
+#     (present+pte_write+exclusive+单引用)/state3b 断降权拒绝+回升 RESTORE 同
+#     folio 无拷贝/state4 断 pin 保活+计数; =n 构建过; checkpatch 0E/0W/0C。
+#   ⑤ D12: 变更面=外部 FOLL_FORCE 写 routed-RO 页 T2' 成功→T3 响亮 EFAULT;
+#     ptrace=调试场景非"已编译程序正常"运行场景; 普通 read/write pin 对 RW 契约
+#     全不变 (state2/3 + guest pread/io_uring/process_vm_readv/vmsplice 实测);
+#     VMA-writable 形状 legacy 本就无声 wp_page_copy = 被 T2' 残余②裁决禁止。
+# 入库: **commit 5c545359e856** tag **corten-r07-m5t3** "mm: CortenMM arena: GUP
+#   interop fixes and pin accounting (M5.T3)" (基座 1f8dfc78ae9f; 主树应用
+#   patches/r07-m5t3.diff 后与 worktree cmp 字节全等; format-patch →
+#   patches/0001-...GUP-interop-fixes-...patch; checkpatch →
+#   results/r07/checkpatch-m5t3.txt 0E/0W/0C 957 行)。
+# bzImage: 归档 bzimg/r07-m5t3 (worktree 验证构建 6.18.32-g1f8dfc78ae9f-dirty
+#   #11 = 全套证据最终二进制) sha256=8b7e658d...90648 + green.txt; registry 行入
+#   run/green.txt。
+# STATE 登记: M5.T3 完成 + T2' 残余② 关闭; 遗留 ①ptrace 分叉 (upstream 级接口,
+#   独立切片) ②T2' 残余① 窗粒度 ③T2' 残余③ fork_battery --kdir。
+# 非阻塞备注: gup_state4 尾部 folio_put ×2 多放一次 (atomic_t+!DEBUG_VM 静默,
+#   断言全真零内核影响, 下片 1 行修); memory.c:6579 注释例子陈旧;
+#   folio_maybe_dma_pinned order-0 真单 pin 探测不到 (BIAS 启发式), zap_pinned
+#   order-0 低估 (M6 设计输入注意)。
+# 未 push; 密码未落盘。worktree m5t3 未触碰 (增量保持未提交态, 留作者处置)。
+
+# ============ r07 reviewer+maintainer M6.T1 收口班次 (2026-09-20 凌晨班复核, ~19:45 CST 起) ============
+# 复审 (r07-m6t1 增量 +461/-7 7 文件 585 行只读精读 + 上游锚核对): **PASS**。
+#   ①V1 skip=上游 HUGETLB|PFNMAP 掩码同位后一位, mmap_read_trylock 同锁上下文
+#     (无新竞态), skip-all 返回形状=hugetlb-only mm 同构, arena 释放=exit_mmap
+#     事务序 drain (mmap.c:1407 先于 unmap_vmas); 逐 VMA 严格优于 mm 级。
+#   ②V2 两 _one() 门在 notifier range 前, 拒绝零写零 notifier 流量; ttu void +
+#     .done=folio_not_mapped → 拒绝经 folio_mapped() 上报 (vmscan nr_unmap_fail/
+#     keep, migrate restore, hwpoison -EBUSY+kill), 无重试风暴 (无 LRU 锚无再
+#     隔离), rmap_rejects=R6-3 绊线; 新发现: TTU_HWPOISON 经 memory-failure.c
+#     今日即可达 arena folio → 守卫关的是在用的门 (KUnit 四形状锚含此形状)。
+#   ③语义: 拒绝+留驻 ≡ 不进 LRU 的 kswapd 可观察行为; D12/DEV-10 诚实留 T2。
+#   ④KUnit ok27 真 try_to_unmap 端到端+四形状+负对照 / ok28 谓词+无损 restore;
+#     =n 折叠结构复核; checkpatch 独立复跑 0E/0W/0C ×2 (快照+format-patch)。
+# 入库: **commit 0e469cd9d055** tag **corten-r07-m6t1** "mm: CortenMM arena:
+#   reclaim guards for oom_reaper and rmap (M6.T1)" (基座 5c545359e856, 主树
+#   第 22 个项目提交); 主树应用快照后与 worktree cmp 字节全等; format-patch →
+#   patches/0001-mm-CortenMM-arena-reclaim-guards-for-oom_reaper-and-.patch;
+#   checkpatch → results/r07/checkpatch-m6t1.txt; bzimg/r07-m6t1 +
+#   sha256=e004f78f...76f092 + green.txt (worktree 验证构建 #4, 主树未重编);
+#   run/green.txt registry 行; STATE.md M6.T1 收口条目 (含 T2 移交面)。
+# 非阻塞移交: =n 逐对象 log 未归档 (结构已复核); V1 复现需 >2s 退出 victim
+#   形态 (thaw+DELAY 事实, T2 回填 SPEC §1.2 P5); T2 true 臂须移入 invalidate 窗。
+# 未 push; 密码未落盘。worktree m6t1 未触碰。
+
+# ============ r07 reviewer+maintainer M6.T2 收口班次 (2026-09-20 日班, ~07:40 CST 起) ============
+# 复审 (r07-m6t2 增量 +1817/-93 8 文件, 快照==worktree cmp 一致; 只读精读 +
+#   上游 rmap.c:2120-2201 / memory.c:4686-4910 / swap_state.c:498 / vmscan.c
+#   __reclaim_pages 逐一对照): **PASS**。
+#   ①swap-out 镜像逐位成立(含三异常臂 swap_free+restore+计数=上游 walk_abort
+#     同型; uffd/mlock_drain/swapbacked-WARN 三省略各有锚); notifier 窗与上游
+#     init 同位; defer 登记后置=R6-1 happens-after 强化采纳。
+#   ②swap-in SYNCHRONOUS 直读形态锚实: cache/readahead 拒绝论证核实为真
+#     (swap_state.c:498 + 上游 sync 分支自身 folio_add_lru → DEV-10 冲突,
+#     corten 双省略=换入真不进 LRU); exclusive 恒真=上游 fresh-page 规则逐字;
+#     swap_free 持有越过 metadata 提交=严格强; 锁窗外行全由 re-query 关闭。
+#     新发现(非阻塞, 登记 P12 深化): heal 臂判别式 pfn==本方回读页在真实
+#     unuse 竞态不可达(unuse 装自家 folio); 双重竞态(sync_meta 返回被忽略+
+#     unuse 装他页)→有界重试→MAPERR 假阳性 SIGSEGV(保守, 无数据损坏)。
+#   ③entry 生命周期闭合: zap free_swap_and_cache ptl 下游同型; fork 整槽拷
+#     __resv 已核实+计数归上游 copy_nonpresent_pte; swapoff 钩 ptl 前 DEV-13。
+#   ④驱动修复回归面: frame 切片钳制消成环 / 每帧短 RCU 消 GP 饥饿 /
+#     swap-in folio_put 修复=do_swap_page 记账核实; __reclaim_pages private
+#     契约(存活 folio 回 list 已解锁)核实。
+#   ⑤KUnit 5 新锚质量过; 终版 24/0/1+44/0/0+30/0/2+lockdep 全绿复核属实
+#     (on3 1 fail=既有 interlock flake 披露一致); =n 八对象; checkpatch 独立
+#     复跑 0E/0W/5C ×2 (快照+format-patch)。
+#   ⑥遗留口径采信: interlock 3/6 vs 基线 1/4 (维持 M7 登记); evict 慢=T3
+#     shrinker; P12 swapoff 真盘未跑(heal 发现加重该移交面); smoke 2 例=T1 面。
+# 入库: **commit b51754002f2f** tag **corten-r07-m6t2** "mm: CortenMM arena:
+#   swap out/in transactions (M6.T2)" (基座 0e469cd9d055, 主树第 23 个项目
+#   提交; 主树应用快照后 8 文件 cmp 字节全等); format-patch →
+#   patches/0001-mm-CortenMM-arena-swap-out-in-transactions-M6.T2.patch;
+#   checkpatch → results/r07/checkpatch-m6t2.txt; bzimg/r07-m6t2 +
+#   sha256=0125443a...bdf2f1d0 + green.txt (worktree #24 终版重建, 主树未重编,
+#   guest/KUnit 终判跑于重建前同源件—口径在 green.txt); STATE.md 收口条目。
+# **glue 白名单额度满 (3/3: ①fork wrprotect ②ttu 换出 ③unuse_pte)** —— 后续
+#   任何 shadow-VMA legacy PTE 写者=设计错误, 须规划者路由扩展先行 (commit
+#   正文已登记)。
+# 遗留移交: T3 shrinker (mm registry/批量/压力通道) + T4 观测 + T5 矩阵
+#   (swapoff 真盘注入 / swapin_retries-heals 并发激发 / interlock 静默宿主
+#   10x 对照); OQ-M6-2/3 维持。
+# 未 push; 密码未落盘。worktree m6t2 未触碰 (增量保持未提交态, 留作者处置)。
+
+# ============ r07 reviewer+maintainer M6.T3/T4+zapfix 终审收口班次 (2026-09-21 凌晨, ~02:35 CST 起) ============
+# 终审 (r07-m6t34 增量 +1838/-223 5 文件, 快照==worktree cmp 一致; 只看上轮 NO-GO 未覆盖增量): **PASS**。
+#   ① B1 evict_mm: for(;;) 每条退出路径均已解锁 (break 在 spin_unlock 后; busy 重取=trylock 失败记 evict_busy break,
+#     首轮 busy 维持 -EBUSY); 各片已收 swap delta 照报 (swapped_before 差分在循环后); 与 corten_shrink_mm 同形核对属实。
+#   ② zapfix 轮循环: zap_window 溢出页续走=force_flush 约定 (zw->addr 停溢出页, PTE 已清 ref 已入批, 续轮只补元数据);
+#     两 driver (unmap_chunk_flags / mmap_route MAP_FIXED) 每条错误出口都过 tlb_finish_mmu (finish 在轮循环后/return 前,
+#     park caller-owned gather 的 post-downgrade finish 保留); FRESH 补填与 post-op 补填轮间同形 (事务性 PTE+metadata 成对,
+#     无 r03-C 裸 PTE 形状; wholesale meta drop 门加 !zw->force); 常态 gather 容量>>2M 窗=单轮零新增锁往返, 性能判据由
+#     run13 fails=0 覆盖 (swapout ~14k 页/s 压窗内, JTB rc=0×3)。
+#   ③ B2 xa_destroy(&state->shrink_aged) 落码 state_free; B3 登记: DESIGN §6 r07 勘误 + STATE R6-6 偏差 ①-⑤ 在档。
+#   ④ M5.T3 一行: gup_state4_pin_zap 删多余 folio_put + ref_count==1 断言+注记, 属实。
+#   ⑤ =n 八对象 RC=0; checkpatch --strict 于 format-patch 复跑 0E/0W/9C (arena.c:3976 braces=基线 1W 未触,
+#     zapfix file 模式 8877 行同值); M4.T0 mprotect 路由零触碰 (diff 无 protect_window hunk)。
+# 入库: **commit 2639d3294b9d** tag **corten-r07-m6t34** "mm: CortenMM arena: reclaim shrinker, observability and
+#   sleep-correct zap (M6.T3/T4)" (基座 b51754002f2f, 主树第 24 个项目提交; 主树应用快照后 5 文件 cmp 字节全等);
+#   format-patch → patches/0001-mm-CortenMM-arena-reclaim-shrinker-observability-and.patch;
+#   checkpatch → results/r07/checkpatch-m6t34.txt (覆盖 zapfix 前旧件); bzimg/r07-m6t34 + sha256=7dd8c3e2...039f
+#   + green.txt (=zapfix 终态件, 复验矩阵证据在档); run/green.txt registry 行; STATE.md M6.T3/T4 收口条目。
+# **M6 收口**: T1 0e469cd / T2 b5175400 / T3+T4 2639d32 全提交; T5 判据已由 run13/run5c 前置达成 (shrinker 自然
+#   压力通道换出换回账目闭合+三方口径+数据完整读回; run5c = M4.T5 run3-5 固化通道同件); M4.T1/T2 (corten-r07-m4t12)
+#   + T1c (corten-r07-t1c) 均已提交。
+# 余项: M4.T5 五次加测固化 (run5 五次重复) + M8 终稿 + M7 周期 (interlock flake 时间窗加宽等登记项)。
+# 非阻塞移交: zapfix 轮间放锁窗 error 臂"已清 PTE+未重置 metadata"残留形状=既往错误路径同形 (非本修引入, caller
+#   返错即暴露, guest/KUnit 全绿); 宿主过载 interlock flake 2 例=M7 登记; run_mode_smoke 2 例+二进制退出
+#   stack-smash=既有登记。
+# 未 push; 密码未落盘。worktree m6t34 未触碰 (增量保持未提交态, 留作者处置)。
+# ============ r07 m9p2 arm64 生命周期钩子班次 (2026-09-21 上午, ~11:15 CST 起) ============
+# 基座同步: m9 worktree (m9-arm64) rebase --autostash 至 2639d3294b9d (M3b全量+M4.T0+M5+M6+M9-P1 025756094542;
+#   P1 未提交改动与入树版内容一致, autostash 零残差)。本班=该 M6 基座 arm64 首次构建/运行验证。
+# 补丁 (worktree 未 commit, patches/r07-m9p2.diff, 3 文件 +29/-13, checkpatch --strict 0E/0W/0C):
+#   ① asm-generic __pte_alloc_one_noprof 加 corten_on_pte_alloc (OQ4-(a) 定案, pgalloc.h:94);
+#   ② x86 pte_alloc_one 删除 M2a 重复钩子调用 (配对改动: 否则 x86 每次用户 PTE 分配双重 install 触发
+#     replace-WARN_ON_ONCE mm/corten.c:356; x86 侧净 diff=纯删除);
+#   ③ arm64 __pte_free_tlb 加 corten_on_pte_free 一行 (asm/tlb.h:93) + linux/corten.h include (:12)。
+# 覆盖判定: arm64 batch free 路径 __pte_free_tlb→tlb_remove_ptdesc→__tlb_remove_table→pagetable_dtor_free
+#   不经过已钩 pte_free()→一行钩子必要; 同步 free 天然覆盖 (pgalloc.h:136)。
+# 验证: arm64 双对象 0E/0W + CORTEN_MM=y Image 0E/0W (42,232,320B sha 1aa6b167…, =P1 口径字节) + qemu -M virt
+#   -cpu max -smp 4 KUnit corten* 7 boot: 4×25/0/0 全绿 + 3×24/1=interlock 时钟伪影 (M7 既有登记"宿主过载
+#   interlock flake"的跨架构再现, 两种签名=deadline 先到期正常放锁 / ktime 跳变 phase=5 begin_ret=0, 卸装/
+#   持锁路径与测试代码 e911b31..2639d3294b9d 字节不变, 钩子不在测试路径); x86 回归 KVM 25/0/0 全绿 (含 ok 19
+#   interlock, 对照 x86 25/25 成立)。附基座发现: x86_64 defconfig 下 corten_arena.c 两处编译失败 (:3323
+#   shrinker->id 缺 SHRINKER_DEBUG, :8530 mem_cgroup_is_descendant 缺 MEMCG)=M6 memcg-shrinker 代码缺 Kconfig
+#   守护, 留 maintainer 评估; 本班验证配置补开 -e MEMCG -e SHRINKER_DEBUG 不动 arena 代码。
+# 文档: ARM64_PORTING.md r3 (§6 r3 状态段/§8 P2 行/§10 OQ4 final/§11.4-3/新 §11.5); 报告 publish/results/r07/m9p2-verify.md。
+# 余项: debugfs corten=on 计数器 sanity→P4; interlock 加固 (go-信号替代 deadline / TCG 多数决)→测试 owner;
+#   P3 contpte 未动。未 commit 未 push; 主树/其它 worktree 未触碰; 密码未落盘; worktree 残留 x86 defconfig
+#   (MEMCG/SHRINKER_DEBUG/KUNIT/CORTEN_MM=y) 供复跑。
+
+# ============ r07 M-V A.0 班次 (2026-09-22 凌晨验证 + 06:5x maintainer 收口) ============
+# M-V A.0 (corten_region 区域记录落位, D20-a 后首片) **已提交**:
+#   worktree mva0 (分支 mv-a0) commit 34f1ae661be3 → 主树 ff-merge, HEAD=34f1ae661be3,
+#   tag corten-r07-mva0; 3 文件 +712/−7; checkpatch 0E/0W/0C (results/r07/checkpatch-mva0.txt);
+#   patches/0001-mm-CortenMM-arena-land-the-region-record-MV-V-A.0.patch (=r07-mva0.patch)。
+# 验证: results/r07/mva0-verify.md (=y x3 / =n 八对象 / KUnit on x2+off 48→52 / lockdep 三套件
+#   全绿 splat=基线既有 xa_destroy pristine 对照 / guest 十门 PASS=10); bzimg/r07-mva0 +
+#   green.txt (maintainer 快验: 同构件 VM run_mode_smoke 复跑 rc=0 26/26, dmesg 静默)。
+# 维护者复审六焦点全过 (结构/may⊇prot/5 写点锁上下文/查询一致性/=n+KUnit/零行为红线),
+#   细目在 STATE.md r07 maintainer 条目。
+# A.0 遗留 (非阻塞): INV-MV3 debug checker 随 A.1+ 落位; J2 walker 定位 A.3;
+#   lockdep 基线既有 xa_destroy splat 建议 A.1+ 顺手 __xa_destroy。
+# **下班移交 → A.1** (park 去残留: PROT_NONE 预约 VMA 消失, SPEC §3.1.1):
+#   1. corten_arena_park_unmap_vma: park 复用 RELEASE 拆除下半场 (unshadow+do_munmap,
+#      不擦帧不 free 描述符); do_munmap 失败臂退化为真 RELEASE (计数)。
+#   2. pool_parkable/pool_take/reactivate/pool_prepare 删 VMA 手术臂 ([C1] 纯 PT 判空);
+#      消费面 S-1/S-3/S-4 生效 (fault→MAPERR, oom_reaper 天然不见, unuse 盲区登记)。
+#   3. KUnit: maple 树无该区间 VMA/帧槽存活/MAPERR 臂/pool_prepare 判空; guest:
+#      ds_dontneed churn + debugfs pool_parks==pool_hits + maps parked 消失形状。
+#   查询面已收敛: 消费者只经 corten_region_lookup/next (A.0 就位)。
+# 未 push; 密码未落盘; VM mva0 (port 10033) 留运行供复核。
+
+# ============ r07 M-V A.1 班次 (2026-09-22 上午验证收口 + 10:4x maintainer 终审+提交) ============
+# M-V A.1 (park 去 VMA 手术, SPEC §3.1.1) **已提交**:
+#   worktree mva (分支 mv-a0) commit d40eae59ba76 → 主树 ff-merge, HEAD=d40eae59ba76,
+#   tag corten-r07-mva1; 4 文件 +1852/−337 (2945 行 diff); checkpatch 0E/0W/9C
+#   (results/r07/checkpatch-mva1.txt); patches/0001-mm-CortenMM-arena-de-VMA-parked-windows-M-V-A.1.patch。
+# 终审四焦点全过 (B1 每迭代恰一次 unlock + !vma=计数+裸 continue 与 pinned-refusal 同构,
+#   eval/force 共门; B2 span_has_vma 树覆盖门, arena 级旧门零残留; 2 KUnit 真断言;
+#   cascade_skips 死计数器全树零引用), 细目在 STATE.md r07 maintainer 条目。
+# 验证: results/r07/mva1-verify.md §7 终验矩阵全绿 (KUnit on 57 用例 + off + DAS + lockdep;
+#   lockdep 活体: VMA-less 窗 evict shrink_skipped +2048 内容存活 / force 35872 页 checksum 完好;
+#   punch+punch+fork ×8 零泄漏; guest 十门; smoke 契约件 6d20288d S-4 判据);
+#   bzimg/r07-mva1 + green.txt (maintainer 快验: 同构件 VM 复跑 smoke 26/26, dmesg 静默)。
+# **移交 → A.2a** (rmap carrier 恢复):
+#   1. B-1 收口: VMA-less 窗 rmap 锚 (carrier) → reclaim 可 pick (摘 shrink_skipped 拒绝臂) /
+#      GUP-slow 可走 / fork 回归常规路径。
+#   2. A.2b 前置: carrier detached 形态与 Dominion 窗口域判定 (D20-a ①) 对表。
+#   3. V-D: exit walk 接管 PUD/PMD 上级表回收 (B-2, 每窗 2 页); S-3 swapoff 盲区复测。
+#   4. 顺手项 (maintainer 决策): 基线 xa_destroy splat → __xa_destroy (1 行)。
+# 未 push; 密码未落盘; VM 10033 (trixie-mva0.img, A.1 构件 #39 引导) 留运行供复核;
+#   worktree mva 与主树 HEAD 重合。
+
+# ============ r08 收官班 (2026-09-22 14:2x, 用户指令唤醒) ============
+# M7 第二轮终判 = T2 DoD PASS (results/r08/m7-final.md): 有效 22.4h / 3,114,125 exec /
+#   coverage 17,859 / 零 KASAN/BUG/WARNING / 6 崩溃目录全环境类。syz-manager 06:28 卡死
+#   (lost-connection reproducer 挂起, 工具面) 已于 14:20 TERM 收数停机。
+# 停摆修复: 08:10 自动化未触发 -> 手动收数; mva2-night.sh 12:41 死亡 -> 14:22 setsid 重启
+#   (23:00 自动跑 A.2a/A.2b 矩阵); 09-23 08:10 自动收数已另排。
+# 文档校准 v1.5: REPORT/STATE 速览/ROADMAP §1/MV spec 进度块, 对齐论文目标与实际进度。
+# push origin master 本班收口。内核树/worktree mva 未触碰。

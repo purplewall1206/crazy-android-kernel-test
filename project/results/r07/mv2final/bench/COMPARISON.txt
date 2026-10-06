@@ -1,0 +1,27 @@
+MV2-final dyn bench, paired boots, D35-refreshed cells (mmbench_dyn, min_seconds=2,
+runs k1..k3, median, =on default-entry world, seed formula 20260913+b*1009+c*97+t*7+k)
+
+before = mv-a0 673ba95521de (kernel 8653bd036c11b661, console-before.log)
+after  = + work1 UAF-fix + work2 knives 885/886 (kernel 7b12e2d9ae2be020, console-after.log)
+ops_per_us medians (3 runs each, ONE paired boot per arm -- noise band ~ +-3-5%):
+
+cell                before      after     delta
+mmap-pf low t1      0.019556    0.024879  +27.2%
+mmap-pf low t4      0.001041    0.001175  +12.9%
+mmap-pf low t8      0.000370    0.000384   +3.8%
+pf low t1           0.041657    0.045308   +8.8%
+pf low t4           0.042922    0.045056   +5.0%
+pf low t8           0.041892    0.042881   +2.4%
+unmap low t1        0.132980    0.139493   +4.9%
+unmap low t4        0.004739    0.004858   +2.5%
+unmap low t8        0.003321    0.003438   +3.5%
+unmap-virt low t1   0.783280    0.837493   +6.9%
+unmap-virt low t4   0.736697    0.709452   -3.7%   (within the 3-run noise band)
+unmap-virt low t8   0.683160    0.670909   -1.8%   (within the 3-run noise band)
+
+Reading: the park-reset bounding (knife #11) pays on the park-churn cells
+(mmap-pf family: the per-op pool park/take lifecycle) and the per-fault stats
+merge (knife #12) on the pf/unmap families. unmap-virt parks untouched windows
+(empty dirty range) where the pre-knife walk was already the cheap
+NULL-array shape -- the delta there reads as run noise. Single paired boot
+disclosed; the D35 floor cells (mmap-pf t4/t8) move +12.9%/+3.8%.

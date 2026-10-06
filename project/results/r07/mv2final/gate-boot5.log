@@ -1,0 +1,30 @@
+=== mv2final gate tag=boot5 2026-10-06 04:12:47 ===
+6.18.32-g673ba95521de-dirty
+degraded
+IS_RUNNING_RC=1
+● redis-server.service loaded failed failed Advanced key-value store
+=== leg1: brk 路由接管 (journalctl + heap churn 后读计数) ===
+JOURNALCTL_RC=0
+exec_default_enters 220
+brk_grow            2636
+brk_shrink          120
+brk_noop            0
+brk_region_adopts   220
+brk_region_grows    2416
+brk_region_shrinks  120
+brk_legacy          0
+=== leg2: arena_stats 首读计时 (无 churn) ===
+FIRST_READ_RC=0
+FIRST_READ_SECONDS=0.04
+120 /tmp/mv2f/stats-boot5.out
+=== leg3: smoke 26/26 ===
+SMOKE_RC=1
+PASS=26
+FAIL=0
+=== leg4: metis x2 checksum 同基准 (2d383eeed4ceb73b) ===
+metisboot51 RC=0
+"distinct_words":65073,"checksum":"2d383eeed4ceb73b"
+metisboot52 RC=0
+"distinct_words":65073,"checksum":"2d383eeed4ceb73b"
+=== leg5: dmesg 静默 (WARN/BUG/oops 扫描) ===
+1

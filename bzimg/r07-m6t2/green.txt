@@ -1,0 +1,28 @@
+r07-m6t2 快验登记 (worktree 验证构建物为基准, 2026-09-20 早上班复审维护者)
+bzImage sha256=0125443adceda0995ac459896dbb6a738b7363ed73987e611eaadee3bdf2f1d0
+  = m6t2 worktree 构建件 6.18.32-g0e469cd9d055-dirty #24 SMP PREEMPT_DYNAMIC
+  (mt 11:58:31 CST), = lockdep 往返后恢复配置的 =y 终版重建 (verify §2);
+  guest 终判 (t2run-final 11:28) 与 KUnit on/off 终锚 (11:37) 跑于重建前
+  同源同配置件, lockdep-final (11:59) 跑于 PROVE_LOCKING 件; 主树 commit
+  b51754002f2f (tag corten-r07-m6t2) 8 文件与 worktree cmp 字节全等
+  (构建等价锚定)。
+on 臂 GREEN: guest zram 换出换回账目闭合 -- swapped_out=69164 (RSS
+  276860kB -> 1.8MB, smaps Swap=276656kB), SIGCONT 后 90s mixed 压测
+  errors=0 op_errors=0 arena_ok=true, swapins=69164 与换出精确相等,
+  退出账目 69164 = 69164 + 0 (zap_swap_frees=0, 更早一轮 63133=63122+11
+  同闭合), zram used 回基线 20480 页 (t2run-final.log fails=0);
+  非 arena 对照: legacy anon hog 700MB rc=0 / dedup_eq / psearchy_eq
+  checksum 一致 / JThreadBench rc=0; OOM 回归 memory.max=256M 干净
+  SIGKILL audit=0 rmap_rejects=0 reap_skips=0。
+  KUnit corten=on 终版内核 24/0/1 + 44/0/0 + 30/0/2 全绿 (on4-final;
+  on3 同内核出现 interlock flake 1 次 = 既有 M7 登记项, 报告 §2/§5 已
+  披露), 新锚 ok: swap_encode / swap_zap_free / swap_mprotect_pending /
+  inv7_swapped (swap_roundtrip 无盘 SKIP, guest 真盘覆盖)。
+off 臂 GREEN: corten=off 25/0/0 + 18/0/26 + 6/0/26, 新用例按设计 SKIP
+  (off2-final.log)。
+lockdep 变体 GREEN: 24/0/1 + 44/0/0 + 30/0/2, 零 lockdep/oops 签名
+  (lockdep-final.log)。
+=n GREEN: CORTEN_MM=n 八对象 (memory/mmap/migrate/rmap/swapfile/gup/
+  oom_kill/arch(x86)fault) 零错误零警告 (verify §2)。
+checkpatch --strict 0E/0W/5C (results/r07/checkpatch-m6t2.txt, 于
+  format-patch 复跑一致; 5C 为 CHECK 级咨询项, 非 ERROR/WARNING)。

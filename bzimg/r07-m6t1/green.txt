@@ -1,0 +1,20 @@
+r07-m6t1 快验登记 (worktree 验证构建物为基准, 2026-09-20 凌晨班)
+bzImage sha256=e004f78f3a5b7468be3ddb9636575810e0df10436a32aadb06b9c329a576f092
+  = m6t1 worktree 构建件 6.18.32-g5c545359e856-dirty #4 (mt 04:25:04),
+  = 全套验证证据的最终二进制 (lockdep 往返后的 =y 终版重建; KUnit on3 复锚
+  与 guest 钉桩击杀均在该件上); 主树 commit 0e469cd9d055 (tag
+  corten-r07-m6t1) 7 文件与 worktree cmp 字节全等 (构建等价锚定)。
+on 臂 GREEN: guest memory.max=256M 压 arena_stress 7 次跨形态 OOM 击杀
+  零撕裂零 INV7 漂移零 panic, rmap_rejects 全程=0, B1 文件页/B2 legacy
+  anon hog 对照组正常 (share: m6t1-oom-test.sh / m6t1-oom-v2.sh);
+  KUnit corten=on ×3 (24/0/1 + 43/0/0 + 28/0/0, 含 2 新锚 ok27
+  corten_fault_test_rmap_guard / ok28 corten_fault_test_reap_skip;
+  m6t1-kunit-on{1,2,3-final}.log)。
+off 臂 GREEN: KUnit corten=off 设计性 skip 轮廓 (m6t1-kunit-off1.log,
+  新用例 # SKIP requires corten=on)。
+lockdep 变体 GREEN (m6t1-lockdep-kunit.log 零 lockdep 签名)。
+=n GREEN (m6t1-verify.md §2: 13 对象 RC=0 + nm 四大对象零 corten 符号;
+  注: =n 对象集逐条 log 未单独归档, 折叠结构经评审复核 = 头内联桩 +
+  corten_enabled_static 静态键, 与 gup.c/memory.c 先例同形)。
+checkpatch --strict 0E/0W/0C 585 行 (results/r07/checkpatch-m6t1.txt,
+  于 format-patch 复跑一致)。

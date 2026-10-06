@@ -1,0 +1,19 @@
+r07-mva0 快验登记 (worktree 验证构建物为基准, 2026-09-22 06:5x CST 终审维护者)
+bzImage sha256=74c1aba25019a685b93a8d69e9c557d86d0e500946674c49b98ab7cdeab74b8b
+  (results/r07/mva0/bzImage-mva0 == bzimg/r07-mva0/bzImage-mva0 字节一致,
+  6.18.32-g4ca6ef1048f0-dirty = 基座 4ca6ef1048f0 + A.0 未提交增量;
+  该增量已由维护者原样提交 = 主树 HEAD 34f1ae661be3, tag corten-r07-mva0,
+  git diff mv-a0 HEAD 为空 = 提交与验证源逐字节等价, 构建等价锚定)。
+boot GREEN: 留运行 VM (trixie-mva0.img, port 10033, corten=on mitigations=off,
+  qemu pid 1003857, 上电 48min) 即本构件引导; guest uname 6.18.32-g4ca6ef1048f0-dirty;
+  ssh 通道复核存活。
+run_mode_smoke 快验 GREEN (maintainer 复跑, /tmp/mva0/smoke-maint.log):
+  rc=0, PASS=26 FAIL=0, "[smoke] SMOKE-DRIVER PASS" —— T1c 契约件
+  share/t1c/corten_mode_smoke 26/26 与验证班次读数一致。
+dmesg 安静: corten WARN/BUG/oops 计数 0 (宽 grep 命中 4 行均为
+  PCI ACPI 文案 "report a bug" 与 systemd *debug* 字样误报, 非 corten)。
+debugfs arenas 表头含 cls/rflg/pcs 新列 (复跑时点区域表为空 = smoke 已退出
+  释放, live region 行实测样例见 results/r07/mva0-verify.md §2 与验证班次
+  guest 门⑩: anon/rsvd 类、rflags、pcs=1 齐备, 含 park 期 rsvd 行)。
+全套门 (=y x3 / =n 八对象 / KUnit on x2 + off / lockdep / guest 十门) 见
+  results/r07/mva0-verify.md; 本文件只登记维护者入库快验, 不重复全量。

@@ -1,0 +1,20 @@
+r07-t5final 快验登记 (M4.T5 五次加测固化 / G1 正式判定测量件, 2026-09-21 通宵班)
+bzImage sha256=97e90f34c1666f20cecff21b6b2fb89e47dac080f563939867acaa788cf68f78
+  = 主树 HEAD 2639d3294b9d (tag corten-r07-m6t34) 主树直编 #90
+  6.18.32-g2639d3294b9d SMP PREEMPT_DYNAMIC (02:37:53 CST), 增量构建
+  (基线 = Sep 19 #89 t5d 件, 5 commits: M5.T1b/T2' + M5.T3 + M6.T1/T2/T3T4)。
+  olddefconfig: No change to .config [四配置核对: CORTEN_MM=y + CORTEN_MM_ARENA=y
+  + KUNIT 测试项 x3 (MM/ARENA/ARENA_FAULT, M6 演进) / ZRAM=y+BACKEND_LZ4=y+
+  DEF_COMP=lz4 / KUNIT=y / LOCALVERSION_AUTO=y]; 零新增告警 [仅 objtool cpuidle +
+  modpost memblock 两条登记基线, 与 r06 t5d/m5t3 build 同形]。
+off 臂 GREEN (corten 参数缺省, 02:40 boot): 登录 ssh-key OK (uname=
+  6.18.32-g2639d3294b9d), zram lz4 2G prio100 [+swapfile -2 次级, setup_zram.sh],
+  9p hostshare=/mnt/hostshare OK, dmesg oops/bug/WARNING/lockdep = 0 且 corten 行
+  = 0 [legacy 一致性面过], console 登录横幅正常 (Debian 13 syzkaller,
+  trixie-m4t12.img 8 vCPU/4G KVM)。
+证据: /tmp/t5final-off-console.log + results/r07/t5final/, 2026-09-21 02:4x CST。
+on 臂 GREEN (corten=on, 02:41 boot): arena_stats enabled=1, 单发 hook STRICT 断言
+  "MODE on (pid 494)" + fork-probe OK + munmap_releases 0→7487; 加测窗 109/109 腿
+  rc=0, hookassert 0/54, seed 配对 50/50, dmesg corten warn=0, pool 99.999% 命中。
+  G1 正式判定 = MET (2/4) [unmap +45.38/+141.99, unmap-virt +1142.34/+2583.03]。
+  证据 results/r07/g1-final.md + t5final/, 2026-09-21 03:0x CST。

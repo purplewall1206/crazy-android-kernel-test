@@ -1,0 +1,20 @@
+r07-mva1 快验登记 (worktree 验证构建物为基准, 2026-09-22 ~10:4x CST 终审维护者)
+bzImage sha256=184bd2502861b4547d058b088dab72d31c4c02c4b190d88d2dad0f0866afb52e
+  (results/r07/mva1/bzImage-mva1-final-y == bzimg/r07-mva1/bzImage-mva1 字节一致,
+  6.18.32-g34f1ae661be3-dirty 构建号 #39 = 基座 34f1ae661be3 (A.0) + A.1 未提交增量;
+  该增量已由维护者原样提交 = 主树 HEAD d40eae59ba76, tag corten-r07-mva1,
+  git diff mv-a0 HEAD 为空 = 提交与验证源逐字节等价, 构建等价锚定;
+  含复审 B1/B2 修复 + 2 新 KUnit + cascade_skips 死计数器清理的终版)。
+boot GREEN: 终验班留运行 VM (trixie-mva0.img, port 10033, corten=on mitigations=off,
+  qemu pid 1657320) 即本构件引导; guest uname 6.18.32-g34f1ae661be3-dirty。
+run_mode_smoke 快验 GREEN (maintainer 复跑, /tmp/mva1-smoke-maint.log):
+  rc=0, PASS=26 FAIL=0, "[smoke] SMOKE-DRIVER PASS", arena ledger before/after=0
+  —— 契约件 t1c/corten_mode_smoke sha 6d20288d (S-4 mincore 判据更新版) 26/26
+  与验证班次读数一致。
+dmesg 安静: corten WARN/BUG/oops 计数 0 (宽 grep)。
+debugfs arena_stats: pool_parks=2 (本 boot smoke 实跑), park_unmap_fails=0,
+  shrink_skipped=0 (快验未驱动 evict; B1 活体 +2048 拒绝臂见
+  mva1-verify.md §7.2 lk-live Part A, 同一构件)。
+全套门 (=y x3 / =n 十三对象 / KUnit on x2 + off + DAS + lockdep / lockdep 下
+  shrinker eval+force 活体 / guest 十门 / punch+punch+fork 零泄漏) 见
+  results/r07/mva1-verify.md §7; 本文件只登记维护者入库快验, 不重复全量。

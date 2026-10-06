@@ -1,0 +1,26 @@
+# green gate log - bzimg/r07-t5run5 (M4.T5 run5 终验件)
+# build #93, 6.18.32-gb9541335a554 (main tree HEAD b9541335a554 = tag corten-r07-a5, clean tree)
+# sha256 24a33880f6ea984615c0cffb05b0e727a5438a891f0d8a04a3f406a44a55ab33
+# off-arm green gate (t5final 同形 append: mitigations=off kunit.enable=0, 无 corten 参数):
+#   boot clean -> login OK (uname=6.18.32-gb9541335a554)
+#   zram lz4 2G prio100 [SWAP] OK
+#   gssh OK; 9p hostshare OK
+#   mmbench_dyn mmap-pf low t2 1s seed=20261951 rc=0 JSON 有效 ops_per_us=0.00378719
+#     (内核串内嵌 6.18.32-gb9541335a554; mmbench_dyn sha 38304f062d43 = run3/run4/t5final 动态口径同件)
+#   dmesg: corten 行=0, corten warn/bug/oops=0, Oops/BUG/WARNING/lockdep=0
+#     (唯一 oops 模式命中 = ACPI "report a bug" 文本, run3 起登记误中)
+# 证据: results/r07/t5-run5/off-smoke/ (dmesg-off.log + green_mmbench.json + boot-console-off.log)
+# 2026-09-21 07:0x CST
+#
+# on 臂 (corten=on mitigations=off kunit.enable=0 log_buf_len=64M) M4.T5 run5 终验:
+#   boot clean, arena enabled=1, ptdescs==meta_arrays==329 (boot 台账平)
+#   QUICK 冒烟 469s: 35 配置 0 失败腿, G1 预判定 MET, t0 marker 70/70
+#   全矩阵 1244s/5400s: 0 失败腿, 330/330 同参, t0 marker 110/110, strace 零新错误类
+#   台账: munmap_releases +11.22M / pool_parks +11.22M (99.998%) / drain_timeout 0 / ejects 0 / meta_arrays 331→305 负增长
+#   G1 MET (2/4): unmap +61.18/+138.67, unmap-virt +1156.14/+2326.53
+#   G4 MET: apps 四正 (metis +8.85 / dedup +3.11/+8.73 / psearchy +2.10), jvm -4.57% 线内
+#   G5 MET (同 boot 复核, 真 no-probe hook 5c38a02c): fork -10.65% / exec +3.77% / shell +0.52%
+#   回归: JTB MODE rc=0 零 CFE + fork-probe OK; metis_eq 双臂 checksum 8a8db99075665220 同值
+#   dmesg/console: corten warn=0, Oops/BUG/WARNING/lockdep=0
+#   判定表与数字: results/r07/t5-run5/t5-run5-report.md
+#   2026-09-21 07:5x CST, VM tmux vm-t5run5 (port 10026) = #93 corten=on 留运行

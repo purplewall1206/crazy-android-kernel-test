@@ -1,0 +1,37 @@
+r07-m6t34 快验登记 (worktree 验证构建物为基准, 2026-09-21 通宵班终审维护者)
+bzImage sha256=7dd8c3e2f27926a780a46afc119469ae8d0d31a8567b216cb5473014d5a1039f
+  = zapfix 终态 =y 件 6.18.32-gb51754002f2f-dirty #19 SMP PREEMPT_DYNAMIC
+  (02:03:00 CST, 基座 b51754002f2f + 未提交增量; 与 bzimg/r07-m6t34-zapfix
+  字节一致), 终态全部验证 (run13/ds/KUnit 各臂) 跑于本件及同源 stage1/3 判
+  跑件 (results/r07/m6t34-zapfix/); 主树 commit 2639d3294b9d
+  (tag corten-r07-m6t34) 5 文件与 worktree cmp 字节全等 (构建等价锚定)。
+on 臂 GREEN: guest 判据 run13 fails=0 (results/r07/m6t34-zapfix/run13.log,
+  终版代码) -- memory.max 压窗下 shrinker 自然换出 swapped_out=70077,
+  5s 内 shrink_scans=954 / aging_passes=1069, RSS 281532kB -> 3592kB;
+  压力释放后读回 verdict PASS errors=0 op_errors=0, swapins=70077 与
+  swapped_out 精确相等; 退出账目 70077 = 70077 + 0 (zap_swap_frees=0),
+  zram used 回基线 20480; 三方口径核对 memory.swap.current == smaps
+  Swap == ledger swapped_out (容差 1657 页 = 采样瞬间在飞事务);
+  非 arena 对照 hog rc=0; JThreadBench 2000x3 rc=0 x3 JVM (中位
+  3840/3933/4119ms, 宿主多 VM 并行); 终版 dmesg 静默 (count=0)。
+  既往轮同判据: m6t34-rev run13 fails=0 (59333 页) / 首轮 run13
+  fails=0 (59356 页) -- 数字随宿主负载/采样窗浮动, 判据同闭合。
+  KUnit corten=on x2 (on1/on2-rerun): 24/0/1 + 48/0/0 + 30/0/2 =
+  102 ok / 0 fail 两跑皆然。
+off 臂 GREEN: corten=off (off1-rerun) 25/0/0 + 18/0/30 + 6/0/26 = 49
+  ok / 0 fail, 新用例按设计 SKIP。
+lockdep 变体 GREEN (PROVE_LOCKING + DEBUG_ATOMIC_SLEEP):
+  - KUnit (lockdep-fix2, 严格零签名判据): 102 ok / 0 fail, 零
+    lockdep/oops 签名; 既往 2 例 zap 签名 (gup_state4_pin_zap /
+    zap_keep_perm) 绝迹。
+  - zapfix A/B 对照 (guest 同驱动同负载, ds 15s x3 形状): 修复前
+    sleeping splat=47 (ds-prefix, 全部 mm/mmu_gather.c:141) -> 修复后
+    0 (ds-fix), 其它告警两臂均 0。
+  - evict 实跑 (m6t34-rev 轮, evict 200000000): rc=0, 67565 页多轮
+    reclaim 全路径, evict 窗口本片 shrink/evict 路径零 splat, 零
+    D 状态, 数据完整读回 verdict PASS (ops=1162125)。
+=n GREEN: CORTEN_MM=n 八对象 (memory/mmap/migrate/rmap/swapfile/gup/
+  oom_kill/arch(x86)fault) RC=0 零错误零警告 (m6t34-zapfix/build-n.log)。
+checkpatch --strict 0E/0W/9C (results/r07/checkpatch-m6t34.txt, 于
+  format-patch 复跑; 与 zapfix file 模式 5 文件 0E/0W 一致, 9C 为
+  CHECK 级咨询项, 非 ERROR/WARNING)。
