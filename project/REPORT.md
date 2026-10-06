@@ -1253,6 +1253,118 @@ results/r07/w3fix4/（零 oops + arena_stats 读 rc=0）。
 
 ---
 
+## 11. MV3 章: D29 路线收官（默认进场·无损闭合·性能三刀·全系统电池·删除账, 2026-10-04 ~ 10-06）
+
+### 11.1 目标与路线
+
+D29 把 MV2 的"prctl 显式进场"推进为三轴终点: **①机制面**——默认进场
+（execve 即 MODE, 无需用户态配合）、外部访问面无损闭合、性能地板收窄;
+**②安全面**——corten_mode_default=on 全系统世界过完整电池（LTP 全编译+
+安装+运行）零 panic 零 corruption, 未就绪面显式降级或响亮拒绝（无损口径）;
+**③交付面**——删除账清单（什么可以删、什么必须留、以什么为验收门）+
+残留台账（全项目开项唯一权威清单）。五步: MV3.a → b → c → d → e,
+外加 MV2 收尾修复轮（W-3fix4/5/6）与删除账 PR-0。
+
+### 11.2 切片史与提交
+
+| 片 | commit | 内容 | 关键读数 |
+|---|---|---|---|
+| MV3.a 默认进场 | 2e811260e336 | fs/exec.c exec_mmap() 门一行（复用 A5 裸 enter）; 新参数 `corten_mode_default`（默认 off, 与 corten=on 分离——既有电池零扰动）; W-7 R1 walk it->last 防重发折入（默认进场首踩 mm_exit GPF 根治） | =on 全 systemd 启动; exec_default_enters=153; smoke 26/26 双形; metis checksum 精确同基准; 折臂诚实修正: "ELF 由既有路由承接"证伪（ET_DYN 解释器首段 addr==0 非 MAP_FIXED）→ exec 镜像收编登记 MV3.c |
+| MV3.b 访问面+闭合清单 | 87220166a815 | journald 停摆双层根因: get_user_page_vma_remote post-GUP vma_lookup 窗口域必 miss + **真停摆 = __access_remote_vm corten IS_ERR 短答臂漏 mmap_read**（读一次漏一把 → 同 mm 二次读自锁 → PID1/tmpfiles/journald 连锁冻结）; 修 = 窗口域 arm-local 直驱 + 错误判定正确释锁 + FOLL_NOFAULT follow-only 硬化; madvise WILLNEED 落地, mseal 维持 -EOPNOTSUPP fail-closed, bpf_iter/trace 登记接受 | tmpfiles 9.08s（修复前 6min+ 停摆）; systemd ~16s; WARN 零; KUnit 锚红→绿 |
+| MV3.c 特性片 | 5475da44bdc0 | 轴一 exec 镜像收编（MV3.a 红面三腿定界 → 四件修: in_execve 臂移除/punch 幸存者重锚单帧限/admission 接管 file overlap/vm_brk bss implant 登记）——解释器同帧 4 FILE region + bss implant; 轴二 **warm park**（全 none PT 域过池保温, 注销出口逐帧退役+空槽守卫） | **mmap-pf +134.6%（t4）/ +135%（t8）; MODE 税 −84.3%→−63.2%**; D35 判定: "-17~−22% 地板"作废, 地板演化 bisect 登记独立小片 |
+| MV3.d 全系统电池 | （无码片, 判定轮） | corten_mode_default=on 全系统启动 + LTP 全编译/安装/运行 + metis + smoke + journal 面; 三腿 verdict 表 = 本报告 §10 | **P2 =on 腿 7216s 零 panic 零 corruption**; P1-off 全绿; P3 journal 面全绿 |
+| MV3.e 删除账+台账 | 344a7aedf764 | 删除账清单: 诚实修正——VMA 层未整体死, **死的是窗口域臂**（J1 617 探针/0 命中 + J2 69001 walk/0 违例实证）; 五组 24 项逐项 file:line+判据+风险; 裁剪 PR 序列 PR-0..4; 残留台账 16 开项（全项目唯一权威清单） | D29 级开项 = 零, 路线收官 |
+| W-3fix4 修复轮 | 88ec127b | 台账 #1/#2/#3/#4 全清偿: 探针 pin 协议（UAF 定罪面）/ arena_stats 渲染离 registry xarray+预算 / gfetch SSH 韧性（scp×3+16M 分段+md5）/ wl_brk_multi 桶 | DPA 复测零 oops + stats 读 rc=0; 归档原件见 §11.6 |
+| W-3fix5 刀 2 | 47cc6cfba90f | corten_unmap() 脏域夹取（meta 层 O(dirty) 收口, 台账 #11）; park PTE 级全幅走查裁决=保持（INV6 论证入码） | 5 文件 +335/−4; KUnit on×2+off 绿 |
+| PR-0（删除账首枚） | 2d3febc401e1 | bss implant adoption（implant 树内退役为使能件）+ MAP_SHARED punch D33 ruling 落码 | j1/j2/wl delta 恒零验收门维持 |
+| W-3fix6 | 6fd01509d33a | 台账 **#5/#6 双清偿**: pgtables stale per-mm 三桶归属（stale_skips/gone/foreign）+ exit walk C1/C2/C3 三分 + free_pmd/pud/p4d_range 上层页几何半门 | 4 文件 +587/−4; KUnit on×3（26/0/1+144/0/0+34/0/5）+off skip 对账精确; 报告 next/w3fix6-dev-report.md |
+
+### 11.3 D29 闭环判定（mv3e-dev-report.md 原文口径）
+
+- **目标①机制面: 全达成**——事务化热路径 + 窗口域零 VMA（J1/J2 归档原件
+  见 §11.6）+ 原生 rmap + warm park（+134.6%）+ 默认进场（execve 即 MODE,
+  全系统 153+ 进程实证）。性能面余三刀未达个位数（如实, §11.8）。
+- **目标②: 达成于显式降级/响亮拒绝的无损口径**——mseal/bpf_iter/
+  process_madvise 族 fail-closed; =on 世界 7216s 电池零 panic 零 corruption。
+- **D29 级开项 = 零, 路线收官。**后续工作全部归入残留台账
+  （P2/P3, §11.5）, 等新一轮指令。
+
+### 11.4 删除账与 PR 序列
+
+删除账回答"MV2/MV3 之后 VMA 层还剩什么": 五组 24 项逐项 file:line——
+**A 窗口域树走查臂（死码, 可删）/ B merge 窗口臂（死码）/ C legacy 生产
+与 bulk 拆除（活, 服务白名单域）/ D 渲染面（活, 双源）/ E 勿删边界 5 项**。
+裁剪 PR-0..4, 每枚验收门 = j1/j2/wl delta 恒零 + 全套电池。
+**PR-0 已落地**（2d3febc401e1, bss implant adoption + D33 ruling）; PR-1..4
+待主会话裁决排期（台账 #16）。
+
+### 11.5 残留台账现状（mv3e 16 开项 → 现 9 开项）
+
+| 状态 | 项 |
+|---|---|
+| 已清偿 | P1 #1（pin 协议）#2（stats 渲染）#3（gfetch）#4（wl_brk_multi）——w3fix4; #5/#6（归属计数器+几何门）——w3fix6; #11（脏域夹取）——w3fix5 |
+| 开放 P2×5 | #7 单套件 flake（判据面外）#8 MADV_PAGEOUT 一行对齐 #9 MADV_POPULATE 片 #10 地板演化 bisect #12 per-fault 簿记批化（w3fix7 温快路径片在制） |
+| 开放 P3×4 | #13 glibc 库非零 hint 收编（**主会话裁决件, 裁决前不动码**）#14 static-PIE 对齐探针 #15 bpf_iter/task_vma 窗口段（D28 明禁双源化的登记缺口）#16 裁剪 PR-1..4 排期（PR-0 已落） |
+
+### 11.6 采证归档原件落库（mv3e 诚实披露的清偿）
+
+mv3e 判定表当时的 live 读数（617/69001）无归档原件（p2-audit-gate.txt 曾为
+SSH 失败空壳, 66B 破损件）——mv3e 以"归档同形读数+结构论证"为主判据并
+如实披露。**w3fix4 现场补读原件已落库**:
+
+- `results/r07/mv3d/p2-audit-gate.txt`（21 行, rc=0）: **j1_probes=310 /
+  j1_hits=0, j2_walks=3456 / j2_violations=0 / j2_stale=0, tree_entries=0,
+  gate_pass=1**, wl 八桶（unclassified/anomalies/shadow/violations）全零,
+  wl_brk_vmas=1 + wl_delegated_vmas=105919（白名单委托域口径正常工作）。
+- `results/r07/w3fix4/dpa-arena-stats.txt`（120 行, DPA boot rc=0）:
+  ptdescs=564 / meta_arrays=564 / meta_bytes=2310144, desc_alloc_fail=0,
+  meta_alloc_fail=0, free_untracked=0, legacy_drift=0, drain_timeout=0,
+  stats_walk_truncs=2（预算分批按设计截断）。
+
+两个口径并存如实呈现: 617/69001 = P2 全程累计（lead 转述 live）; 310/3456
+= w3fix4 内核单轮 gate 归档读数。方向一致（双零）, 数字不可比（采样窗不同）。
+
+### 11.7 MV2 判定表的收尾更新
+
+§10.3 J7 的"C2 小片承接"与 §10.4 C2 残值族登记由 **W-3fix6 兑现**
+（归属计数器 + 几何门, next/w3fix6-dev-report.md）; §10.4 "MV3 路线…
+全部前置已就绪"由本章 §11.1-11.4 兑现。MV2 五判据（J1-J5）+J7 终态不变。
+
+### 11.8 性能三刀现状与 D35 刷新口径
+
+三刀 = ①地板演化 bisect（台账 #10, 未动——需 b9541335 + 中间点回放）、
+②脏域有界化（#11, **W-3fix5 已落地**）、③per-fault 簿记批化（#12,
+desc 锁粒度+stats 合并; **w3fix7 arena fill 温快路径片在制**——lockless
+membership test 免热路径 mutex+re-arm, 首轮 KUnit 两锚红, 修复迭代中）。
+
+**D35 刷新（w3fix6 树实测, mmpf stock vs mode, ×3 median, 2s 窗）**:
+
+| 形态 | stock ops/µs | mode ops/µs | MODE 税 |
+|---|---|---|---|
+| t4 | 0.001254 | 0.000836 | **−33.3%** |
+| t8 | 0.000604 | 0.000232 | **−61.5%** |
+
+较 mv3cfeat 时代 t4 −63.2% 显著收窄; 逐刀归因**不做预支**（#10 bisect
+未跑, 不排除参数敏感性成分）; 工件 results/r07/w3fix7/bench-base/。
+t8 尾部差距的机制归因维持 mv3cfeat 判定: park PTE 级全幅走查（有意保留,
+W-3fix5 §3 裁决）+ per-fault ~+1.4µs（mv3cfeat §2.4-2 归因在案）。
+
+## 12. 终报最终成绩单（2026-10-06, D35 口径）
+
+**一句话: Linux 6.18 上 VMA-窗口域移除目标机制面全达成并过全系统电池;
+正确性面零内存安全事件; 性能面单线程税收窄至 −33%, 多线程 −62%, 三刀
+已落一刀、一刀在制; 全项目开项 9 枚（P2×5 + P3×4）, 无拦路面。**
+
+| 账面 | 终态 | 证据 |
+|---|---|---|
+| VMA 移除 | MODE 进程窗口域 maple 树条目 **0**（P2 gate 归档 tree_entries=0; MV2 世代 prctl 世界 5 条全白名单豁免桶）; find_vma 严格零命中 | §10 verdict 表 + §11.6 原件 |
+| 窗口域审计 | 累计 j1 617 探针/0 非法命中; j2 69001 walk/0 违例; 归档单轮 310/0 + 3456/0; j2_stale=0 | mv3e + §11.6 |
+| 正确性 | LTP =off 98/11/115 与 =on 世界全编译+安装+运行 7216s **零 panic 零 corruption**; syzkaller 4.53M exec 零内存安全; smoke 26/26 双形; metis checksum `2d383eeed4ceb73b` 精确同基准; KUnit 三套件 204 pass/0 fail | §10 + mv3d/r07 工件 |
+| 兼容性 | 零改动已编译程序 MODE 下跑通（D12 六件套 rc=0）; =on 全 systemd 启动 153+ 进程默认进场 | §6 + mv3a |
+| 性能 | warm park **+134.6%（t4）/+135%（t8）**; MODE 税演化 −84.3%→−63.2%（mv3cfeat D35）→ **w3fix6 树 t4 −33.3% / t8 −61.5%**; mmap_lock 竞争面在窗口域**结构性消失**（无锁无树, 事务接口替代） | mv3cfeat §2 + w3fix7 bench-base |
+| 代码账 | VMA 层四件 13,408 LoC（vanilla 12,955, 路由钩净 +453——**窗口域臂已死, 删除账 PR-1..4 待裁**）; corten 生产 23,761 + 测试 20,573 | §10.3 J6 |
+| 开项账 | 9 开项（P2×5 + P3×4, §11.5）; D29 级 = 零; 无拦路面 | mv3e 台账 |
+
 ## 附: 本报告自检状态（v1.3 终稿, 2026-09-21）
 
 - 全部 §引用的 results/publish/docs/log 路径已核对存在（终稿时点 2026-09-21；v1.1 附录对

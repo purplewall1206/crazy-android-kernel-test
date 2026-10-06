@@ -1614,3 +1614,50 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     journald 面修复验证、futex 修复验证均工作。剩余 = verdict triage(原始证据已入库
     ac598f2) + MV3.e 删除账清单 + REPORT MV3 章。
   - 本班不动 Claude 会话的在制工作(避免双写), 仅实地核证 + 本条登记。
+
+---
+
+- **[2026-10-06 主会话: W-3fix4 补偿采证入库 + MV3.d verdict 表落 REPORT §10]**
+  - p2-audit-gate.txt 归档原件（21 行, rc=0）落库 results/r07/mv3d/: **j1_probes=310
+    / j1_hits=0, j2_walks=3456 / violations=0, j2_stale=0, tree_entries=0,
+    gate_pass=1**, wl 八桶全零违例（wl_unclassified=0, wl_brk_anomalies=0）——
+    mv3e 诚实披露的「live 读数无归档原件」缺口清偿; dpa-arena-stats.txt
+    （120 行, DPA boot rc=0）= 台账 #2 补偿读数。REPORT.md §10 三腿 verdict
+    表落笔（P1 全绿 / P2 核心面绿+登记缺口 / P3 全绿）。
+
+- **[2026-10-06 主会话: MV2 收尾修复轮 + 删除账 PR-0 入库（统一链三连）]**
+  - **W-3fix5** 47cc6cfba90f（tag corten-r07-w3fix5）: corten_unmap() 脏域
+    夹取（meta 层 O(dirty) 收口, 台账 #11 = 性能刀 2）, 5 文件 +335/−4;
+    park 路径 PTE 级全幅走查裁决=保持（不能夹的证明与解锁条件在案,
+    next/w3fix5-dev-report.md §3）; KUnit on×2+off 绿 / checkpatch 0E/0W。
+  - **PR-0** 2d3febc401e1（tag corten-r07-pr0）: 删除账裁剪序列首枚——bss
+    implant adoption（implant 树内退役为使能件）+ MAP_SHARED punch D33
+    ruling 落码; 验收门 j1/j2/wl delta 恒零维持。
+  - **W-3fix6** 6fd01509d33a（tag corten-r07-w3fix6）: 残留台账 **#5/#6
+    双清偿**——pgtables stale per-mm 三桶归属计数器
+    （stale_skips/gone/foreign + stale_skip_last）+ exit walk C1/C2/C3
+    三分（按页表存在性）+ free_pmd/pud/p4d_range 上层页几何半门; 4 文件
+    +587/−4; KUnit on×3（26/0/1 + 144/0/0 + 34/0/5）+ off（skip +3 对账精确）
+    全绿, =n 16 对象零符号, checkpatch 0E/0W, bzImage sha256 前缀
+    cd8a70d3; 报告 next/w3fix6-dev-report.md。
+  - **台账现状**: P1×4 全清（w3fix4）, #5/#6 清（w3fix6）, #11 清
+    （w3fix5）; 余 #7/#8/#9/#10/#12（P2）+ #13..#16（P3）。
+  - **D35 性能口径刷新（w3fix6 树实测, mmpf stock vs mode ×3 median）**:
+    **t4 税 −33.3%（0.000836 vs 0.001254 ops/µs）/ t8 税 −61.5%（0.000232
+    vs 0.000604）**——较 mv3cfeat 时代 t4 −63.2% 显著收窄; 逐刀归因待
+    #10 bisect（不预支归因, 如实登记读数）。工件 results/r07/w3fix7/
+    bench-base/（w3fix7 片的 base 腿, 内核 = w3fix6 bzImage）。
+  - **在制**: w3fix7（arena fill 温快路径, lockless corten_ptdesc_tracked
+    免 mutex/re-arm）由 r09 接力会话实施中——KUnit 首轮两锚红
+    （untracked_drift/untracked_rearm + pgtables_bytes 12288 +
+    MM_SWAPENTS −1）, 修复迭代中, 主会话不干预。
+
+- **[2026-10-06 主会话: 发布仓谱系和解 + 三线/tag 全同步]**
+  - cortenmm 本地 master 与远端分叉根因 = 接力会话在临时克隆 filter-branch
+    重写（剥 3 枚 >100MB pftrace + mosbench 嵌入仓 gitlink 修复 3b133d223）
+    后强推; 本地旧谱系树与远端**逐字节一致**（diff 空）。处置: 旧谱系存
+    backup-local-lineage, 本地 master 硬重置到 3b133d223 谱系, push =
+    Everything up-to-date。
+  - 内核仓 github 三线核对: **android17-6.18 = 6fd01509 ✓（W-3fix6 在线）,
+    corten-github = 708c329 ✓**, 与本地一致; 「51 tag 补传」遗留项扩为
+    55（+w3fix4/5/6/pr0/perf2a）, 网络慢链路下分批后台补推中。
