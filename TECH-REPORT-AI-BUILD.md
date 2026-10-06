@@ -110,7 +110,7 @@ retrofit 的约束是树还在、锁还在、每个消费者一个都不能死�
 
 | harness | 测什么 | 在哪/怎么跑 | 判据 | 最近实测 |
 |---|---|---|---|---|
-| mmbench 微基准 | mmap/unmap/unmap-virt/mmap-pf/pf 各格吞吐 | bench/mmbench；guest 端必须用动态口径 mmbench_dyn（sha256 38304f06…，meta 记档——静态链接吃不进 LD_PRELOAD 的教训见 RQ1） | G1：低竞争 t4&t8 两格同时 ≥+10% × ≥2 项；同 boot ABAB 双臂三遍中位 | unmap-virt +1142/+2583%（五轮固化）；mmap-pf 税 -84.3%→-63.2%（D35 后口径） |
+| mmbench 微基准 | mmap/unmap/unmap-virt/mmap-pf/pf 各格吞吐 | bench/mmbench；guest 端必须用动态口径 mmbench_dyn（sha256 38304f06…，meta 记档——静态链接吃不进 LD_PRELOAD 的教训见 RQ1） | G1：低竞争 t4&t8 两格同时 ≥+10% × ≥2 项；同 boot ABAB 双臂三遍中位 | unmap-virt +1142/+2583%（五轮固化）；mmap-pf 税 -84.3%→-63.2%（D35 后口径）→ **w3fix6 树刷新 t4 -33.3% / t8 -61.5%**（10-06, ×3 median） |
 | lmbench lat_proc | fork/fork+exec/shell 进程生命周期微秒 | guest 系统自带 lat_proc，同 boot 双臂 ×3 中位 | G5：MODE ≤+30% | fork -10.65% / +3.77% / +0.52%（修复前 +516/+172/+354） |
 | JThreadBench | JVM 2000 线程生命周期与 GUP 面 | bench/apps，guest ×3 | rc=0 且零 ClassFormatError | 全代 rc=0（run5 及以后各班独立复证） |
 | metis/dedup/psearchy 等价件 | map-reduce 词频 / malloc churn 流水线 / 倒排索引 | bench/apps（checksum 跨机一致）；metis 带 fork-probe | rc=0 + checksum 双臂同值 | metis 65073 词 checksum 2d383eeed4ceb73b 与无 hook 跑同值；dedup tcmalloc 六 boot +8.7~+19.2% |
@@ -138,7 +138,7 @@ retrofit 的约束是树还在、锁还在、每个消费者一个都不能死�
 
 #### RQ4：性能地板在哪里
 
-mmap-pf（映射区缺页）是全项目唯一持续负向的格子，它的读数史值得完整交代。t5final 时代固化在 -17.3/-22.3%（五轮全负，非方差），机制归因为论文 per-fault 事务语义的裸成本（每 fault 一事务 ≤11% + take/park 簿记 3-5%，profile 两臂同形）。D35 判定这组基线数字已过时：W-2/W-7/M-V 各轮累计把这条通道成本推高，本树单进程起点实测 -84.3%（逐轮 bisect 未做，登记独立小片）。批 mark 第一刀（warm park：re-park 不再退役 PT 域，消掉每 op 第二次 flush 与下轮重建）把税收到 -63.2%，配对中位改善 +134.6%（t4）/ +135.4%（t8）（`project/next/mv3cfeat-dev-report.md` §2.3）。距离个位数目标还剩三刀：脏域有界的 park reset 走查（O(512)→O(dirty)，设计节在案）、per-fault 簿记批化（+~1.4µs/页归因）、地板演化 bisect——全部登记未动工。
+mmap-pf（映射区缺页）是全项目唯一持续负向的格子，它的读数史值得完整交代。t5final 时代固化在 -17.3/-22.3%（五轮全负，非方差），机制归因为论文 per-fault 事务语义的裸成本（每 fault 一事务 ≤11% + take/park 簿记 3-5%，profile 两臂同形）。D35 判定这组基线数字已过时：W-2/W-7/M-V 各轮累计把这条通道成本推高，本树单进程起点实测 -84.3%（逐轮 bisect 未做，登记独立小片）。批 mark 第一刀（warm park：re-park 不再退役 PT 域，消掉每 op 第二次 flush 与下轮重建）把税收到 -63.2%，配对中位改善 +134.6%（t4）/ +135.4%（t8）（`project/next/mv3cfeat-dev-report.md` §2.3）。**10-06 刷新**：脏域有界化已落地（W-3fix5，`corten_unmap()` 两循环 O(1) 未覆盖拒绝；park PTE 级全幅走查经裁决有意保留）；W-3fix6 树实测税 **t4 -33.3% / t8 -61.5%**（mmpf stock vs mode ×3 median，`project/results/r07/w3fix7/bench-base/`）——t4 较 -63.2% 显著收窄，逐刀归因不预支（bisect 未跑）。余两刀：per-fault 簿记批化（+~1.4µs/页归因；w3fix7 arena fill 温快路径片在制）、地板演化 bisect（台账 #10）。
 
 ## 4. AI 是怎么一步步实现的
 
@@ -195,7 +195,7 @@ branch 拓扑错位。D27 重放时 rebase 误传主分支名导致主分支哈�
 | mmap 全族 | 固化 +141.3%/+251.4% | 同上 |
 | fork/fork+exec/shell | 修复前 +516/+172/+354 → A5 后 -10.65/+3.77/+0.52 | results/r07/g5-gate/、a5-fix.md |
 | dedup（tcmalloc 档） | 六个独立 boot 全正，+8.7~+19.2%，幅度不定 | t5 各轮谱系 |
-| mmap-pf | D35 刷新起点 -84.3% → warm park 后 -63.2%（改善中位 +134.6%/+135.4%） | next/mv3cfeat-dev-report.md §2.3 |
+| mmap-pf | D35 刷新起点 -84.3% → warm park 后 -63.2%（改善中位 +134.6%/+135.4%）→ w3fix6 树 t4 **-33.3%** / t8 **-61.5%** | next/mv3cfeat-dev-report.md §2.3；results/r07/w3fix7/bench-base/ |
 | arena 生命周期税 | 17.4µs→1.3µs（13 倍），池命中 99.999% | results/r07/t1c-verify.md |
 | journald/tmpfiles 面 | 停摆 6min+ → 9.08s | next/mv3b-dev-report.md §1.3 |
 | 内存开销（G7） | 8288B/2M 窗 = 映射内存 0.3952%（legacy 0.195%，页表侧 ×2.02） | results/r07/g7-mem.md |
@@ -227,13 +227,13 @@ branch 拓扑错位。D27 重放时 rebase 误传主分支名导致主分支哈�
 
 J2/J4 的判定史必须保留：W-6 中期首测 4 PASS / 3 FAIL——J3 是 W-2 起的 /proc/maps 恒空真回归（空真断言掩盖两代），J2 的 special 桶分类器失明（arch_vma_name 不认 special_mapping，vdso 全落 UNCLASSIFIED），J4 的 sweep fail-open 面宽（skip_declare=288/电池，收编率不足）。三者分别在 W-6b（vma_is_special_mapping_family + 逐因计数器）与 W-7（multi-record registry，skip_declare 288→0，tree_entries=5）修复后转 PASS，FAIL 判定原文在案不改。
 
-其余边界照登：性能三刀未完（§3.2 RQ4）；brk 接管有 [C1] 红线——入场前已驻留的堆不收（resident PTE 无元数据 = MAPERR 自家数据），glibc 电池 brk_legacy=2882 披露，初始 heap VMA 至今留树（wl_brk 桶，V-E.1 verdict 维持 legacy 漏斗应答）；P2 采证缺口（617/69001 无归档原件、LTP =on verdict 腿缺）；51 tag 未补传；G3 的字面门（真实应用单项稳定 ≥10%）没过，按"六 boot 方向恒正 + 机制归因"定案；mmap-pf 地板 -63~-77% 未达个位数；bpf_iter/task_vma 窗口段整段缺失（#39，双源化的唯一机械是给 BPF 铸 VMA 形对象，D28 明禁），trace 符号化三处降级接受，mseal 维持 fail-closed；suid 未单测（立场：不特判，系统电池隐式覆盖）；库 hint 收编是超红线裁决件；残留台账 16 开项中 P1 首项是 brk 路由 PT 生命周期 UAF（DPA boot 86 秒 oops 定罪，未修）。
+其余边界照登：性能三刀落一（W-3fix5 脏域夹取）余二（簿记批化在制、bisect 未动，§3.2 RQ4）；brk 接管有 [C1] 红线——入场前已驻留的堆不收（resident PTE 无元数据 = MAPERR 自家数据），glibc 电池 brk_legacy=2882 披露，初始 heap VMA 至今留树（wl_brk 桶，V-E.1 verdict 维持 legacy 漏斗应答）；~~P2 采证缺口~~ 已清偿（w3fix4 补读归档原件落库：p2-audit-gate.txt 21 行 j1 310/0 + j2 3456/0 + tree_entries=0 + gate_pass=1，dpa-arena-stats.txt 120 行；LTP =on verdict 腿级仍为登记缺口）；55 tag 未补传（旧 tag 指向重写前历史，补传需传整棵老树，登记不阻塞）；G3 的字面门（真实应用单项稳定 ≥10%）没过，按"六 boot 方向恒正 + 机制归因"定案；mmap-pf 地板 w3fix6 树 t4 -33.3% / t8 -61.5% 未达个位数；bpf_iter/task_vma 窗口段整段缺失（#39，双源化的唯一机械是给 BPF 铸 VMA 形对象，D28 明禁），trace 符号化三处降级接受，mseal 维持 fail-closed；suid 未单测（立场：不特判，系统电池隐式覆盖）；库 hint 收编是超红线裁决件；残留台账 9 开项（P2×5、P3×4；P1×4 全清偿——含 brk 路由 PT 生命周期 UAF，w3fix4 pin 协议修复 + DPA 复测零 oops）。
 
 ## 6. 结论与观察
 
 ### 6.1 D29 两目标的判定
 
-目标①（完整实现论文的优化思路）机制面全达成：事务化热路径七路由在产线、窗口域零 VMA 有 J1/J2 实证封口、原生 rmap 与匿名换出直驱落地、warm park 拿到 +134.6% 的重构首刀；性能面余三刀，地板 -63~-77% 距论文个位数目标未达，如实登记。目标②（对所有应用无损完整接管）达成于显式降级与响亮拒绝的口径：execve 即 MODE 覆盖全部进程（exec_default_enters=153），bpf_iter 窗口段整段缺失登记为降级，mseal/madvise 若干臂响亮拒绝，7216 秒全系统电池零 panic 零 corruption。D29 级开项为零，全部余项降级为残留台账的独立小片（16 项：P1×4、P2×8、P3×4，`project/next/mv3e-dev-report.md` §2）。
+目标①（完整实现论文的优化思路）机制面全达成：事务化热路径七路由在产线、窗口域零 VMA 有 J1/J2 实证封口（归档原件在库）、原生 rmap 与匿名换出直驱落地、warm park 拿到 +134.6% 的重构首刀；性能面三刀已落一（脏域夹取），w3fix6 树地板 t4 -33.3% / t8 -61.5%，距论文个位数目标未达，如实登记。目标②（对所有应用无损完整接管）达成于显式降级与响亮拒绝的口径：execve 即 MODE 覆盖全部进程（exec_default_enters=153），bpf_iter 窗口段整段缺失登记为降级，mseal/madvise 若干臂响亮拒绝，7216 秒全系统电池零 panic 零 corruption。D29 级开项为零，全部余项降级为残留台账的独立小片（现 9 项：P2×5、P3×4，`project/next/mv3e-dev-report.md` §2 起算、W-3fix4/5/6 清偿七项，REPORT.md §11.5）。
 
 ### 6.2 对"AI 多会话长跑开发系统软件"的观察
 
