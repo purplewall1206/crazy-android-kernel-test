@@ -1516,25 +1516,43 @@ int vm_brk_flags(unsigned long addr, unsigned long request, vm_flags_t vm_flags)
 	if (ret)
 		goto munmap_failed;
 
+	ret = do_vmi_munmap(&vmi, mm, addr, len, &uf, 0);
+	if (ret)
+		goto munmap_failed;
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * MV2 PR-0 (mv3e deletion ledger sec 1.3): the bss implant's
+	 * tree retirement.  MV3.c's exec image adoption makes this leg
+	 * (elf_load()'s bss) the window domain's in-tree producer: the
+	 * window-contained shape now routes to the declare first -- the
+	 * region form (the W-3 heap seed's machinery; the W-7 co-frame
+	 * bucket takes the page overlap with the FILE records below), no
+	 * VMA, no registry write.  0 = the region answered: complete on
+	 * the region form (the declare's guards degraded every
+	 * populating mm, so there is nothing to populate).  1 = counted
+	 * degradation, the legacy arms below run and the funnel VMA
+	 * registers as the implant it is -- a shape now reduced to the
+	 * guards' continuation (an mlock-flavoured mm, OVERCOMMIT_NEVER,
+	 * allocation failure), not the production exec image.  The
+	 * window gate keeps every other vm_brk_flags caller (drivers) at
+	 * two compares.  mmap_write is held (the route's writer
+	 * convention).
+	 */
+	if (addr >= CORTEN_MODE_WINDOW_START &&
+	    addr + len <= CORTEN_MODE_WINDOW_END &&
+	    corten_bss_declare_route(mm, addr, len, vm_flags) == 0) {
+		mmap_write_unlock(mm);
+		userfaultfd_unmap_complete(mm, &uf);
+		return 0;
+	}
+#endif
 	vma = vma_prev(&vmi);
 	ret = do_brk_flags(&vmi, vma, addr, len, vm_flags);
 #ifdef CONFIG_CORTEN_MM_ARENA
-	/*
-	 * MV3.c (the exec image adoption): the ELF loader maps an ET_DYN
-	 * interpreter's bss here (elf_load()'s vm_brk_flags arm), and
-	 * with the exec image adopted the first PT_LOAD sits on an arena
-	 * window frame -- so this VMA lands INSIDE the window domain.
-	 * vm_brk_flags() reaches do_vmi_munmap()/do_brk_flags() directly
-	 * and never passes do_mmap(), so no route sees it: without a
-	 * registry entry the window-fault terminus answers SIGSEGV for
-	 * the bss (the registry+implants being the window's occupancy
-	 * truth) and the J2 whitelist scan reads it as a window-domain
-	 * violation.  Register it as the implant it is -- the same
-	 * producer contract the punch and P1b arms use for the foreign
-	 * VMAs their funnels install.  The window-domain gate keeps every
-	 * other vm_brk_flags caller (the main binary's set_brk bss,
-	 * drivers) at two compares.  mmap_write is held (the implant
-	 * ledger's writer convention).
+	/* MV2 PR-0: the degraded continuation only -- the funnel VMA is
+	 * still the window's occupancy truth for this shape, so the
+	 * registry entry stays its J1/J2 exemption.
 	 */
 	if (!ret && addr >= CORTEN_MODE_WINDOW_START &&
 	    addr + len <= CORTEN_MODE_WINDOW_END)

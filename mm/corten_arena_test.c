@@ -7494,6 +7494,23 @@ static void corten_arena_test_op_file_mmap(struct corten_arena_test_op *o)
 		o->ret = 0;
 }
 
+/* MV2 PR-0: one vm_brk_flags leg on the attached worker -- the real
+ * producer (current->mm is the mm under test, as in the loader).
+ */
+static void corten_arena_test_op_vm_brk(struct corten_arena_test_op *o)
+{
+	o->ret = vm_brk_flags(o->addr, o->len, o->flags);
+}
+
+/* MV2 PR-0: one vma-less region fault on the attached worker -- the
+ * W-2 GUP arm's entry (a region has no VMA to hand the funnel), the
+ * bss content roundtrip's driver.  @addr is the region address.
+ */
+static void corten_arena_test_op_region_fault(struct corten_arena_test_op *o)
+{
+	o->ret = corten_arena_test_region_fault(o->mm, o->addr);
+}
+
 static long corten_arena_test_punch(struct kunit *test, struct mm_struct *mm,
 				    struct file *file, unsigned long addr,
 				    unsigned long len)
@@ -15235,6 +15252,293 @@ static void corten_arena_test_w7_frame_share_punch(struct kunit *test)
 }
 
 /* ------------------------------------------------------------------ *
+ * MV2 PR-0 (mv3e deletion ledger sec 1.3): the bss implant's tree
+ * retirement.  The real producer (vm_brk_flags on the attached worker)
+ * runs the window leg: the window-contained shape declares (no VMA, no
+ * implant entry, the W-7 co-frame bucket for a second leg in the same
+ * frame), every degradation keeps the funnel+implant pair (counted),
+ * and the MAP_SHARED punch tenant's registry entry stays as the D33
+ * verdict's structural whitelist (the rmap anchor its pagecache pages
+ * need).
+ * ------------------------------------------------------------------
+ */
+
+/* Anchor PR0-①: the adoption roundtrip.  The interpreter-bss shape
+ * (window-contained, fresh VA, RW -- then an exec-flagged second leg
+ * sharing the boundary frame) answers on the region form: the tree
+ * never sees a VMA, the registry stays empty, the charge mirrors the
+ * funnel's, the perms carry, and the content faults and reads back
+ * through the region (the arena fault entry's vma-less form).
+ */
+static void corten_arena_test_pr0_bss_adopt(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_arena *ra, *rb;
+	unsigned long tv, bss2 = CORTEN_ARENA_TEST_WIN + 3 * PAGE_SIZE;
+	long d0, l0, map_count;
+	u64 pat = 0x9e3779b97f4a7c15, back;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "PR-0 bss adoption requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	d0 = corten_arena_test_bss_route(0);
+	l0 = corten_arena_test_bss_route(1);
+	mmap_write_lock(mm);
+	tv = mm->total_vm;
+	map_count = mm->map_count;
+	mmap_write_unlock(mm);
+
+	/* Leg 1: the interpreter's bss (RW, no exec).  The route
+	 * declares; the funnel never runs.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_vm_brk,
+						 CORTEN_ARENA_TEST_WIN,
+						 3 * PAGE_SIZE),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_bss_route(0), d0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_bss_route(1), l0);
+	ra = corten_arena_test_region_of(mm,
+					 CORTEN_ARENA_TEST_WIN + PAGE_SIZE);
+	KUNIT_ASSERT_NOT_NULL(test, ra);
+	KUNIT_EXPECT_EQ(test, ra->start, CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_EQ(test, ra->end,
+			CORTEN_ARENA_TEST_WIN + 3 * PAGE_SIZE);
+	KUNIT_EXPECT_EQ(test, ra->auto_shape, true);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(ra->prot),
+			CORTEN_PERM_USER | CORTEN_PERM_READ |
+			CORTEN_PERM_WRITE);
+	/* 树上无 VMA: the window leg's whole point. */
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), 0);
+	KUNIT_EXPECT_FALSE(test,
+			   corten_implant_covers(mm, CORTEN_ARENA_TEST_WIN,
+						 3 * PAGE_SIZE));
+	mmap_write_lock(mm);
+	KUNIT_EXPECT_EQ(test, mm->total_vm, tv + 3);
+	KUNIT_EXPECT_EQ(test, mm->map_count, map_count);
+	mmap_write_unlock(mm);
+
+	/* Content fidelity: the region's own fault path installs the
+	 * translation (the vma-less entry, the W-2 GUP arm's form --
+	 * the region has no VMA to hand the funnel), then the word
+	 * roundtrips.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_region_fault,
+						 CORTEN_ARENA_TEST_WIN +
+						 PAGE_SIZE, 0),
+			0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_page_word(mm,
+						    CORTEN_ARENA_TEST_WIN +
+						    PAGE_SIZE, &pat, true),
+			0);
+	back = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_page_word(mm,
+						    CORTEN_ARENA_TEST_WIN +
+						    PAGE_SIZE, &back, false),
+			0);
+	KUNIT_EXPECT_EQ(test, back, pat);
+
+	/* Leg 2: the W-7 co-frame reuse -- an exec-flagged bss leg whose
+	 * pages share leg 1's boundary frame (page-disjoint records, one
+	 * frame slot).  Its own region, exec perm carried, the tree
+	 * still empty.
+	 */
+	{
+		struct corten_arena_test_op o = {
+			.mm = mm,
+			.fn = corten_arena_test_op_vm_brk,
+			.addr = bss2,
+			.len = 2 * PAGE_SIZE,
+			.flags = VM_EXEC,
+		};
+
+		KUNIT_EXPECT_EQ(test, corten_arena_test_run_op_full(test, &o),
+				0);
+	}
+	KUNIT_EXPECT_EQ(test, corten_arena_test_bss_route(0), d0 + 2);
+	rb = corten_arena_test_region_of(mm, bss2 + PAGE_SIZE);
+	KUNIT_ASSERT_NOT_NULL(test, rb);
+	KUNIT_EXPECT_FALSE(test, ra == rb);
+	KUNIT_EXPECT_EQ(test, rb->start, bss2);
+	KUNIT_EXPECT_EQ(test, rb->end, bss2 + 2 * PAGE_SIZE);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(rb->prot),
+			CORTEN_PERM_USER | CORTEN_PERM_READ |
+			CORTEN_PERM_WRITE | CORTEN_PERM_EXEC);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, bss2));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), 0);
+	KUNIT_EXPECT_NOT_NULL(test,
+			      corten_arena_test_region_of(mm,
+							  CORTEN_ARENA_TEST_WIN +
+							  PAGE_SIZE));
+	mmap_write_lock(mm);
+	KUNIT_EXPECT_EQ(test, mm->total_vm, tv + 5);
+	KUNIT_EXPECT_EQ(test, mm->map_count, map_count);
+	mmap_write_unlock(mm);
+
+	/* The record invariants over the shared frame and the J2-complete
+	 * face: no window VMA exists to classify, zero violations.
+	 */
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
+	mmap_read_unlock(mm);
+	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* Anchor PR0-②: the degradation contract.  An mlock-flavoured mm (the
+ * legacy arm populates; a region cannot) runs the funnel: the VMA is
+ * installed, the registry entry is its J1/J2 exemption (the pre-PR-0
+ * shape, now the guards' continuation only), the J2 walk stays clean.
+ */
+static void corten_arena_test_pr0_bss_degrade(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	long d0, l0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "PR-0 bss degradation requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	mmap_write_lock(mm);
+	mm->def_flags |= VM_LOCKED;
+	mmap_write_unlock(mm);
+
+	d0 = corten_arena_test_bss_route(0);
+	l0 = corten_arena_test_bss_route(1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_vm_brk,
+						 CORTEN_ARENA_TEST_WIN,
+						 2 * PAGE_SIZE),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_bss_route(0), d0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_bss_route(1), l0 + 1);
+
+	/* The legacy shape: VMA in the tree, implant in the registry,
+	 * the whitelist self-proof (the J2-complete classifier reads
+	 * the window VMA as an implant, zero violations).
+	 */
+	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_NULL(test,
+			  corten_arena_test_region_of(mm,
+						      CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), 1);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_implant_covers(mm, CORTEN_ARENA_TEST_WIN,
+						2 * PAGE_SIZE));
+	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
+
+	mmap_write_lock(mm);
+	mm->def_flags &= ~VM_LOCKED;
+	mmap_write_unlock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* Anchor PR0-③: the MAP_SHARED punch verdict (D33, 留守).  The punch
+ * hole's tenant VMA stays a tree VMA -- it is the rmap anchor its
+ * pagecache pages need and the arena has no shared write-through arm
+ * to serve the hole with -- and the registry entry IS its J1/J2
+ * exemption: the J2-complete walk classifies it IMPLANT with zero
+ * violations, and the tenant is funnel-served end to end.
+ */
+static void corten_arena_test_pr0_shared_punch_whitelist(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct vm_area_struct *vma;
+	struct file *memfd;
+	long punches;
+	u64 w = 0x1337c0de, back;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "PR-0 SHARED verdict requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	/* The living body's arena: one live window at the test base. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_pool_attach(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PMD_SIZE), 0);
+
+	memfd = shmem_file_setup("corten-pr0-shared", PMD_SIZE, 0);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, memfd);
+
+	punches = corten_arena_test_named_counter(test, "mmap_punches");
+	KUNIT_ASSERT_GE(test, punches, 0);
+	/* The punch: memfd MAP_SHARED MAP_FIXED over the live window --
+	 * the arena tears the overlap (RELEASE), the funnel installs
+	 * the tenant, the registry records it.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_punch(test, mm, memfd,
+						CORTEN_ARENA_TEST_WIN,
+						PMD_SIZE),
+			CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_named_counter(test,
+							      "mmap_punches"),
+			punches + 1);
+
+	/* 留守, asserted in tree terms: the tenant VMA exists and is
+	 * pagecache-backed -- the i_mmap/rmap anchor the SHARED pages'
+	 * writeback/truncate/reclaim walks need.
+	 */
+	vma = vma_lookup(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, vma);
+	KUNIT_EXPECT_FALSE(test, vma_is_anonymous(vma));
+	KUNIT_EXPECT_NOT_NULL(test, vma->vm_file);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_implant_nr(mm), 1);
+	KUNIT_EXPECT_TRUE(test,
+			  corten_implant_covers(mm, CORTEN_ARENA_TEST_WIN,
+						PMD_SIZE));
+
+	/* The J2-complete face: the registered tenant is whitelisted --
+	 * zero violations, the exemption doing its job.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
+
+	/* The tenant is funnel-served (the semantic reason the region
+	 * form cannot take it): the content faults and roundtrips
+	 * through the legacy VMA's own pagecache path.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_sweep_fault,
+						 CORTEN_ARENA_TEST_WIN +
+						 PAGE_SIZE, PAGE_SIZE),
+			0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_page_word(mm,
+						    CORTEN_ARENA_TEST_WIN +
+						    PAGE_SIZE, &w, true),
+			0);
+	back = 0;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_page_word(mm,
+						    CORTEN_ARENA_TEST_WIN +
+						    PAGE_SIZE, &back, false),
+			0);
+	KUNIT_EXPECT_EQ(test, back, w);
+
+	fput(memfd);
+}
+
+/* ------------------------------------------------------------------ *
  * MV3.a: the execve default entry.  The gate is the same function
  * exec_mmap() calls, driven against a synthetic mm -- the guest-side
  * "bare smoke on corten_mode_default=on" battery is its end-to-end
@@ -16020,6 +16324,10 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_w7_frame_share_fork),
 	KUNIT_CASE(corten_arena_test_w7_frame_share_exit),
 	KUNIT_CASE(corten_arena_test_w7_frame_share_punch),
+	/* MV2 PR-0: the bss implant's tree retirement anchors. */
+	KUNIT_CASE(corten_arena_test_pr0_bss_adopt),
+	KUNIT_CASE(corten_arena_test_pr0_bss_degrade),
+	KUNIT_CASE(corten_arena_test_pr0_shared_punch_whitelist),
 	/* MV3.a: the execve default entry anchors. */
 	KUNIT_CASE(corten_arena_test_exec_default_off),
 	KUNIT_CASE(corten_arena_test_exec_default_enter),

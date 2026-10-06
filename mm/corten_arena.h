@@ -533,6 +533,12 @@ bool corten_arena_placement_backstop(struct mm_struct *mm,
  * punch route's success arms and the P1b idle-eject, both under mmap_write;
  * @ctl_lock is taken inside.  Allocation failure degrades to an unmarked
  * implant (counted) -- a false J2 candidate, never a false clearance.
+ * MV2 PR-0 producer census: the bss producer (the vm_brk_flags window
+ * leg) retired onto the declare route; what stays is the D33 verdict's
+ * SHARED punch whitelist (the tenant VMA is the rmap anchor its
+ * pagecache pages need, and the arena has no shared write-through arm)
+ * plus the fail-open backstops.  The registered entry IS the tenant's
+ * J1/J2 exemption.
  * corten_implant_covers(): is [start, start+len) fully inside the union of
  * registered ranges?  Read under mmap_read or better.
  * corten_implant_covers_lockless(): the same predicate for RCU-section
@@ -657,6 +663,20 @@ int corten_brk_grow_route(struct mm_struct *mm, unsigned long oldbrk,
 			  unsigned long newbrk, struct list_head *uf);
 int corten_brk_shrink_route(struct mm_struct *mm, unsigned long oldbrk,
 			    unsigned long newbrk);
+
+/*
+ * MV2 PR-0 (mv3e deletion ledger sec 1.3): the bss implant's tree
+ * retirement.  vm_brk_flags' window-domain leg (the exec image's bss
+ * producer) routes here before the legacy do_brk_flags shape: the
+ * range is declared an anon region -- no VMA, no implant registry
+ * write, the W-7 frame bucket taking the co-frame overlap with the
+ * FILE records below.  Runs with mmap_write held, after the leg's own
+ * do_vmi_munmap() cleared the tree.  Return: 0 = the region answered
+ * (the caller skips do_brk_flags), 1 = run the legacy arm (counted
+ * degradation; the funnel VMA registers as the implant it is).
+ */
+int corten_bss_declare_route(struct mm_struct *mm, unsigned long addr,
+			     unsigned long len, vm_flags_t vm_flags);
 
 /*
  * V-A.2a J1 prelude (MV_VMA_FREE_SPEC.md sec 1.3): the find_vma-family
@@ -1422,6 +1442,17 @@ static inline int corten_brk_grow_route(struct mm_struct *mm,
 static inline int corten_brk_shrink_route(struct mm_struct *mm,
 					  unsigned long oldbrk,
 					  unsigned long newbrk)
+{
+	return 1;
+}
+
+/* MV2 PR-0 bss declare route: the same =n fold -- the window gate in
+ * vm_brk_flags folds to false and the route answers "run legacy".
+ */
+static inline int corten_bss_declare_route(struct mm_struct *mm,
+					   unsigned long addr,
+					   unsigned long len,
+					   vm_flags_t vm_flags)
 {
 	return 1;
 }

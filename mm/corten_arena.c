@@ -544,6 +544,15 @@ static atomic_long_t corten_nr_brk_region_grows;
 static atomic_long_t corten_nr_brk_region_shrinks;
 static atomic_long_t corten_nr_brk_legacy;
 
+/* MV2 PR-0 (mv3e deletion ledger sec 1.3): the bss implant's tree
+ * retirement -- vm_brk_flags' window-domain leg answered on the region
+ * form (bss_declares), or degraded to the funnel VMA + implant pair
+ * (bss_legacy, the D28-style disclosure: each count is a bss still on
+ * tree form).
+ */
+static atomic_long_t corten_nr_bss_declares;
+static atomic_long_t corten_nr_bss_legacy;
+
 /* Ledger #1 (r07 mv3b): the declare-side emptiness probes skipped the PT
  * windows whose descriptor was already retired under them -- the funnel
  * contract guarantees such windows are content-free, and the skip is the
@@ -3614,6 +3623,14 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_brk_region_shrinks));
 	seq_printf(m, "brk_legacy          %ld\n",
 		   atomic_long_read(&corten_nr_brk_legacy));
+	/* MV2 PR-0: the bss implant's tree retirement -- the window leg
+	 * answered on the region form or degraded to the funnel+implant
+	 * pair (the D28-style disclosure).
+	 */
+	seq_printf(m, "bss_declares        %ld\n",
+		   atomic_long_read(&corten_nr_bss_declares));
+	seq_printf(m, "bss_legacy          %ld\n",
+		   atomic_long_read(&corten_nr_bss_legacy));
 	/* Ledger #1: the declare-side probes' retired-window skips (the
 	 * M2a exclusion took over a window whose descriptor was already
 	 * stale -- the DPA oops's interleave, now counted instead of
@@ -4122,6 +4139,20 @@ long corten_arena_test_implant_nr(struct mm_struct *mm)
 	return state->nr_implants;
 }
 
+/* MV2 PR-0: the vma-less region fault form (the W-2 GUP arm's entry,
+ * __corten_arena_handle_mm_fault() with a NULL anchor) -- the bss
+ * region content roundtrip's driver (a region has no VMA to hand the
+ * funnel).  Return: 0, or -EIO on a fault error.
+ */
+int corten_arena_test_region_fault(struct mm_struct *mm, unsigned long addr)
+{
+	vm_fault_t fault = __corten_arena_handle_mm_fault(mm, NULL, addr,
+							  FAULT_FLAG_WRITE,
+							  NULL);
+
+	return (fault & VM_FAULT_ERROR) ? -EIO : 0;
+}
+
 /* V-A.3c INV-MV2 walker anchors (C-group): the ledger reads and the
  * archived first-violation address.
  */
@@ -4211,6 +4242,21 @@ long corten_arena_test_brk_region(int which)
 		return atomic_long_read(&corten_nr_brk_region_shrinks);
 	case 3:
 		return atomic_long_read(&corten_nr_brk_legacy);
+	default:
+		return 0;
+	}
+}
+
+/* MV2 PR-0: the bss declare route's counters (KUnit anchors).  Index 0
+ * is the adoption (region form), 1 the legacy degradation.
+ */
+long corten_arena_test_bss_route(int which)
+{
+	switch (which) {
+	case 0:
+		return atomic_long_read(&corten_nr_bss_declares);
+	case 1:
+		return atomic_long_read(&corten_nr_bss_legacy);
 	default:
 		return 0;
 	}
@@ -13688,6 +13734,105 @@ int corten_brk_shrink_route(struct mm_struct *mm, unsigned long oldbrk,
 	return ret;
 }
 
+/* ------------------------------------------------------------------ *
+ * MV2 PR-0 (mv3e deletion ledger sec 1.3): the bss implant's tree
+ * retirement.  elf_load()'s vm_brk_flags arm (mm/mmap.c) is the window
+ * domain's last in-tree bss producer: with the exec image adopted the
+ * interpreter's bss lands inside the window, and the funnel VMA it
+ * installed had to be registered as an implant to keep the J1/J2
+ * faces honest.  The route retires that shape onto the region form
+ * the W-3 heap seed and the W-5 admission already run: the bss is
+ * declared an anon region -- no vm_area_struct, no registry write,
+ * and the W-7 frame bucket takes the co-frame page overlap with the
+ * FILE records below it (the same-frame multi-segment ELF shape).
+ *
+ * Every guard is a counted "run legacy": a non-MODE mm, an
+ * out-of-window or straddling range, an mlock-flavoured mm (the
+ * legacy arm populates; a region cannot), OVERCOMMIT_NEVER (the
+ * funnel VMA carries the VM_ACCOUNT committed charge the declare arm
+ * does not model -- the W-5 admission's refusal family), the funnel's
+ * own may_expand_vm() verdict (the funnel then answers the same
+ * -ENOMEM), a failed registry create or declare (memory pressure, or
+ * a live-overlap/content shape the funnel must own).
+ *
+ * Return: 0 = the region answered (the caller skips do_brk_flags
+ * entirely), 1 = run the legacy funnel (counted).
+ * ------------------------------------------------------------------
+ */
+static int corten_bss_declare1(struct mm_struct *mm, unsigned long addr,
+			       unsigned long len, vm_flags_t vm_flags)
+{
+	unsigned long prot = PROT_READ | PROT_WRITE;
+	struct corten_mm_state *state;
+	int ret;
+
+	if (!READ_ONCE(mm->corten_mode) || !corten_enabled_static())
+		return 1;
+	if (!len || addr < CORTEN_MODE_WINDOW_START ||
+	    addr + len > CORTEN_MODE_WINDOW_END)
+		return 1;
+	if (mm->def_flags & VM_LOCKED)
+		return 1;
+	if (sysctl_overcommit_memory == OVERCOMMIT_NEVER)
+		return 1;
+	/* The funnel's own gate (do_brk_flags' check): the flag word is
+	 * the one do_brk_flags would have built, so a refusal here is
+	 * the funnel's verdict arrived early.
+	 */
+	if (!may_expand_vm(mm, VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT |
+			   READ_ONCE(mm->def_flags) | vm_flags,
+			   len >> PAGE_SHIFT))
+		return 1;
+
+	/* The adopt/seed arms both need the registry; create it on
+	 * demand like every other first arena work (A5), under this
+	 * mmap_write.
+	 */
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state) {
+		state = corten_arena_state_create(mm);
+		if (!state)
+			return 1;
+	}
+
+	if (vm_flags & VM_EXEC)
+		prot |= PROT_EXEC;
+
+	/* The do_brk_flags flag word this replaces is
+	 * VM_DATA_DEFAULT_FLAGS|VM_ACCOUNT|def_flags plus @vm_flags --
+	 * RW, exec only when the loader asked, with the full MAY
+	 * superset: the declare's novma arm records the same perm and
+	 * the full may_prot bound.
+	 */
+	ret = corten_arena_declare_locked(mm, state, addr, len,
+					  corten_arena_perm_from_prot(prot),
+					  NULL, 0, true, false, NULL);
+	if (ret)
+		return 1;
+
+	atomic_long_inc(&corten_nr_bss_declares);
+	return 0;
+}
+
+/* vm_brk_flags' window arm (mm/mmap.c, MODE mms): runs with mmap_write
+ * held, after the leg's own do_vmi_munmap() has cleared the tree -- the
+ * declare's [C1] emptiness probe inherits that verdict for the PTE
+ * side.  Return: 0 = the region answered, 1 = run the legacy arm.
+ */
+int corten_bss_declare_route(struct mm_struct *mm, unsigned long addr,
+			     unsigned long len, vm_flags_t vm_flags)
+{
+	int ret = corten_bss_declare1(mm, addr, len, vm_flags);
+
+	/* The degradation disclosure: every 1 is a bss the tree
+	 * retirement did not take (still a funnel VMA, registered as
+	 * the implant it is).
+	 */
+	if (ret == 1)
+		atomic_long_inc(&corten_nr_bss_legacy);
+	return ret;
+}
+
 /*
  * MV2 W-3 (the brk delegation domain's region migration): the heap
  * region lives at the legacy brk addresses, page-granular -- its
@@ -14239,9 +14384,22 @@ static int corten_arena_mmap_punch(struct mm_struct *mm,
  * V-A.3a implant registry (D24): register [start, start+len) (clipped to
  * the window domain -- outside it an implant is an ordinary legacy VMA
  * among its peers and no walker will ask) as VA the legacy funnel legally
- * owns.  Producers: the punch route's success arms (a file MAP_FIXED over
- * live arena frames) and the P1b idle-eject (a plain MAP_FIXED over a
- * parked window).  Both run under this mm's mmap_write; @ctl_lock is
+ * owns.  Producers, after MV2 PR-0's census: the punch route's success
+ * arms (a file MAP_FIXED over live arena frames), the P1b idle-eject (a
+ * plain MAP_FIXED over a parked window) and the placement backstop's
+ * empty-window arm.  The census's history: the bss producer (the
+ * vm_brk_flags window leg) was retired onto the declare route in PR-0
+ * (mv3e deletion ledger sec 1.3) -- its window arm now only marks the
+ * guard degradations.  What stays is the D33 verdict (STATE r09 W-5):
+ * the MAP_SHARED punch tenant's registration is structural whitelist
+ * behavior, not a migration candidate.  The punch hole's VMA is the
+ * rmap anchor its pagecache pages need (the i_mmap node legacy
+ * writeback/truncate/reclaim walks to reach the funnel-served
+ * translations) and the arena has no shared write-through serving arm
+ * to replace the funnel with (the V-B write arm is COW-only by
+ * contract), so the tenant stays a tree VMA and the registry entry IS
+ * its J1/J2 exemption -- the wl SHARED bucket's bookkeeping, kept.
+ * All producers run under this mm's mmap_write; @ctl_lock is
  * taken here (DEV-13 order, like pool_prepare).  The array is kept sorted
  * and disjoint (merge on insert), so repeated punches of the same hole
  * cost no growth.  A krealloc failure drops the registration, counted --
@@ -15053,6 +15211,18 @@ static int corten_arena_placement_punch_idle(struct mm_struct *mm,
  * root cause.  Ranges the arena cannot own (boundary crossing, two
  * arenas) are cleanly rejected, same verdict as the munmap route.
  * Runs under mmap_write (do_mmap's contract).
+ *
+ * MV2 PR-0's D33 verdict on the registry marks below (STATE r09 W-5,
+ * the criterion narrowing): the non-encodable MAP_SHARED tenant stays
+ * the legacy funnel's tenant on purpose.  Its VMA is the rmap anchor
+ * its pagecache pages need (the i_mmap node writeback/truncate/reclaim
+ * walk to reach the translations), and the arena has no shared
+ * write-through arm to serve the hole with (the V-B write arm is
+ * COW-only by contract), so the hole cannot be declared a region
+ * without new machinery -- a feature, not a deletion.  The marks are
+ * therefore kept live for exactly this shape and the registry entry IS
+ * the tenant's J1/J2 exemption (the wl SHARED bucket); the guest
+ * battery's drops/violations/stale counters must read zero.
  *
  * @admitted: the W-5 explicit-address region admission
  * (corten_arena_explicit_region_route()) is only borrowing the overlap

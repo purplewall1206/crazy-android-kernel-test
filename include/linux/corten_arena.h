@@ -1136,6 +1136,16 @@ long corten_arena_test_heap_lookups(void);
  */
 long corten_arena_test_brk_region(int which);
 
+/* MV2 PR-0: the bss declare route's counters (@which indexes
+ * 0=declares 1=legacy-degradations).
+ */
+long corten_arena_test_bss_route(int which);
+
+/* MV2 PR-0: the vma-less region fault (the bss content roundtrip's
+ * driver -- a region has no VMA).  Return: 0 or -EIO.
+ */
+int corten_arena_test_region_fault(struct mm_struct *mm, unsigned long addr);
+
 /* MV2 W-4: the entry sweep's counters (@which indexes 0=anon-adopts
  * 1=file-adopts 2=skip-stack 3=skip-special 4=skip-shared 5=skip-window
  * 6=skip-other 7=resident-pages-recorded).
