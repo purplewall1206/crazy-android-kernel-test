@@ -1427,6 +1427,7 @@ int corten_unmap(struct corten_txn *txn, unsigned long start,
 		 unsigned long len, unsigned int flags)
 {
 	unsigned long addr, end;
+	struct corten_ptdesc *desc;
 	int ret;
 
 	if (unlikely(flags & ~CORTEN_UNMAP_ALL))
@@ -1435,6 +1436,46 @@ int corten_unmap(struct corten_txn *txn, unsigned long start,
 	ret = corten_txn_subrange(txn, start, len, &end);
 	if (unlikely(ret))
 		return ret;
+
+	/* Ledger #11 / W-3fix5: clamp both walks to the covering
+	 * descriptor's dirty range [rec_lo, rec_hi] -- the PTE indexes
+	 * this PT page ever recorded (u16, widened at every mark under
+	 * this covering write lock).
+	 *
+	 * INV6: a slot outside the dirty range was never recorded.  Every
+	 * non-INVALID state is written by map()/mark()/swap_replay() and
+	 * each of those widens the range before returning; the range's
+	 * only shrink (the full-window park collapse) runs after a zap
+	 * pass that reset every in-range slot, so it never orphans live
+	 * state.  A slot outside [rec_lo, rec_hi] therefore reads
+	 * INVALID -- the exact verdict the validate loop below answers
+	 * for it with -ENOENT, atomically and without writing anything
+	 * (validate-then-apply).  A sub-range that is not fully covered
+	 * by the dirty range gets that verdict right here, skipping both
+	 * loops: identical result and side effects to walking it, minus
+	 * the per-slot lookups on slots that never carried content.  A
+	 * fully covered sub-range walks unchanged (its intersection with
+	 * the dirty range is itself), and a non-INVALID slot is always
+	 * in-range, so no reset work can be skipped.  The dirty range is
+	 * read under the covering write lock -- the same serialization
+	 * the zap-side readers (corten_arena_zap_window's indirty gate)
+	 * rely on.
+	 *
+	 * u16 safety: pte_index() < PTRS_PER_PTE fits u16 (the widen
+	 * makes the same casts), and lock_range() pins the sub-range to
+	 * a single PT page, so first/last indexes are monotone in the
+	 * range and cannot wrap.
+	 */
+	desc = txn->covering;
+	if (desc) {
+		u16 rec_lo = desc->rec_lo;
+		u16 rec_hi = desc->rec_hi;
+
+		if (rec_lo > rec_hi ||
+		    (u16)pte_index(start) < rec_lo ||
+		    (u16)pte_index(end - PAGE_SIZE) > rec_hi)
+			return -ENOENT;
+	}
 
 	/* Validate the whole sub-range first (paper: atomic transaction). */
 	for (addr = start; addr < end; addr += PAGE_SIZE) {

@@ -15831,6 +15831,120 @@ static void corten_arena_test_dirty_range_park(struct kunit *test)
 	corten_ptdesc_put(desc);
 }
 
+/* Ledger #11 / W-3fix5: the dirty-range bounded park reset at the
+ * window's u16 endpoints.  Four scattered marks (both endpoints, 0 and
+ * 511, among them) make the recorded range the full span while the
+ * recorded *minority* stays 4 of 512 slots; the park's reset visits
+ * exactly that minority (nr_mapped back to 0) and collapses the range,
+ * and the reactivated window's next marks own the range verbatim --
+ * an interior slot first, then the low endpoint widening across it.
+ */
+static void corten_arena_test_dirty_range_scattered(struct kunit *test)
+{
+	static const unsigned int idx[4] = { 0, 7, 505, 511 };
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long win = CORTEN_ARENA_TEST_WIN;
+	unsigned long addr, len, flags;
+	struct corten_ptdesc *desc;
+	pmd_t *pmdp;
+	unsigned int fflags;
+	unsigned int i;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "dirty-range anchor requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	mmap_write_lock(mm);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_auto_attach(mm, win, PMD_SIZE,
+						 PROT_READ | PROT_WRITE),
+			0);
+	mmap_write_unlock(mm);
+
+	for (i = 0; i < ARRAY_SIZE(idx); i++) {
+		fflags = FAULT_FLAG_WRITE;
+		KUNIT_ASSERT_EQ(test,
+				corten_arena_user_fault(mm,
+							win + idx[i] *
+							PAGE_SIZE,
+							fflags, NULL,
+							&fflags),
+				CORTEN_FAULT_HANDLED);
+	}
+
+	pmdp = corten_arena_test_pmd(mm, win);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	rcu_read_lock();
+	desc = corten_ptdesc_get(page_to_pfn(pmd_page(READ_ONCE(*pmdp))));
+	rcu_read_unlock();
+	KUNIT_ASSERT_NOT_NULL(test, desc);
+	KUNIT_EXPECT_EQ(test, desc->rec_lo, 0);
+	KUNIT_EXPECT_EQ(test, desc->rec_hi, 511);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(desc->nr_mapped), 4);
+	corten_ptdesc_put(desc);
+
+	/* The glibc free() shape: full-coverage munmap parks -- the
+	 * reset touches the recorded minority only (nr_mapped 4 -> 0)
+	 * and the range collapses to empty.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 win, PAGE_SIZE),
+			1);
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_pool_idle(mm, win));
+
+	pmdp = corten_arena_test_pmd(mm, win);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	rcu_read_lock();
+	desc = corten_ptdesc_get(page_to_pfn(pmd_page(READ_ONCE(*pmdp))));
+	rcu_read_unlock();
+	KUNIT_ASSERT_NOT_NULL(test, desc);
+	KUNIT_EXPECT_TRUE(test, desc->rec_lo > desc->rec_hi);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(desc->nr_mapped), 0);
+	corten_ptdesc_put(desc);
+
+	/* The pool take, then the next incarnation's marks: an interior
+	 * slot owns exactly (3, 3) -- no [0, 511] residue from the
+	 * previous incarnation -- and the low endpoint widens across it.
+	 */
+	flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	len = PMD_SIZE;
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_auto_route_locked(mm, len,
+							    PROT_READ |
+							    PROT_WRITE,
+							    &addr, &len,
+							    &flags),
+			2);
+	KUNIT_EXPECT_EQ(test, addr, win);
+
+	fflags = FAULT_FLAG_WRITE;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_user_fault(mm, win + 3 * PAGE_SIZE,
+						fflags, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	pmdp = corten_arena_test_pmd(mm, win);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	rcu_read_lock();
+	desc = corten_ptdesc_get(page_to_pfn(pmd_page(READ_ONCE(*pmdp))));
+	rcu_read_unlock();
+	KUNIT_ASSERT_NOT_NULL(test, desc);
+	KUNIT_EXPECT_EQ(test, desc->rec_lo, 3);
+	KUNIT_EXPECT_EQ(test, desc->rec_hi, 3);
+
+	fflags = FAULT_FLAG_WRITE;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_user_fault(mm, win, fflags, NULL,
+						&fflags),
+			CORTEN_FAULT_HANDLED);
+	KUNIT_EXPECT_EQ(test, desc->rec_lo, 0);
+	KUNIT_EXPECT_EQ(test, desc->rec_hi, 3);
+	KUNIT_EXPECT_EQ(test, READ_ONCE(desc->nr_mapped), 2);
+	corten_ptdesc_put(desc);
+}
+
 /* ------------------------------------------------------------------
  * Ledger #2 (r07 mv3b): the per-mm registry walk's budget.  The =on
  * guest boots spun unkillably inside this walk's xa_find loop even
@@ -16071,6 +16185,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	 * reset -- exact widen, park collapse, reactive restart.
 	 */
 	KUNIT_CASE(corten_arena_test_dirty_range_park),
+	KUNIT_CASE(corten_arena_test_dirty_range_scattered),
 	/* Ledger #2 (r07 mv3b): the per-mm registry walk's budget and
 	 * truncation disclosure (the =on first-read hang's shape change).
 	 */
