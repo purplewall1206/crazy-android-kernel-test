@@ -552,6 +552,39 @@ static atomic_long_t corten_nr_brk_legacy;
  */
 static atomic_long_t corten_nr_probe_stale_skips;
 
+/* w3fix6 (residual ledger #5): the skip's per-mm half.  The global
+ * counter above proved the probes take the M2a exclusion; it cannot
+ * say WHOSE window was skipped, which is exactly what a "non-zero
+ * pgtables_bytes on freeing mm" residue needs (the mv3c round's
+ * finding: global counters blur every live mm into one net).  Both
+ * probes run on the probing mm's own page tables under mmap_write (or
+ * the dying mm's walk fence), so mm->corten_state is stable for the
+ * attribution -- a legacy mm probing before its registry exists (no
+ * state yet) keeps only the global count.  @stale/@foreign name the
+ * bucket (@stale: a live descriptor marked stale -- the retirement
+ * funnel's own trail; @foreign: a live descriptor naming another mm;
+ * both clear: no descriptor at all).  Observational only: no
+ * free/retire/verdict path reads these fields.
+ */
+static void corten_arena_note_probe_skip(struct mm_struct *mm,
+					 unsigned long addr,
+					 bool stale, bool foreign)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+
+	atomic_long_inc(&corten_nr_probe_stale_skips);
+	if (!state)
+		return;
+
+	if (stale)
+		atomic_long_inc(&state->stale_skips);
+	else if (foreign)
+		atomic_long_inc(&state->stale_skips_foreign);
+	else
+		atomic_long_inc(&state->stale_skips_gone);
+	WRITE_ONCE(state->stale_skip_last, addr);
+}
+
 /* MV2 W-4 (the entry sweep): resident-legacy -> region migration
  * accounting.  The two adopt counters name the arms (anonymous and
  * private-file VMA -> region); the skip buckets are the structural
@@ -2283,14 +2316,17 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 		 */
 		desc = corten_ptdesc_get(page_to_pfn(pmd_page(pmd)));
 		if (!desc) {
-			atomic_long_inc(&corten_nr_probe_stale_skips);
+			corten_arena_note_probe_skip(mm, addr, false, false);
 			continue;		/* retired/recycled: empty */
 		}
 		read_lock_bh(&desc->lock);
 		if (READ_ONCE(desc->stale) || desc->mm != mm) {
+			bool was_stale = READ_ONCE(desc->stale);
+
 			read_unlock_bh(&desc->lock);
 			corten_ptdesc_put(desc);
-			atomic_long_inc(&corten_nr_probe_stale_skips);
+			corten_arena_note_probe_skip(mm, addr, was_stale,
+						     !was_stale);
 			continue;	/* retired under us: empty */
 		}
 		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
@@ -4222,6 +4258,37 @@ long corten_arena_test_probe_stale(void)
 	return atomic_long_read(&corten_nr_probe_stale_skips);
 }
 
+/* w3fix6 (residual ledger #5): the per-mm attribution read.  @which
+ * indexes the trail buckets (0 stale / 1 gone / 2 foreign); *@last
+ * returns the last skipped window's base VA when non-NULL.  The
+ * localization anchor: a skip recorded on @mm must move @mm's bucket
+ * and no other mm's.
+ */
+long corten_arena_test_mm_probe_skips(struct mm_struct *mm, int which,
+				      unsigned long *last)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+	long v = 0;
+
+	if (!state)
+		return 0;
+	switch (which) {
+	case 0:
+		v = atomic_long_read(&state->stale_skips);
+		break;
+	case 1:
+		v = atomic_long_read(&state->stale_skips_gone);
+		break;
+	default:
+		v = atomic_long_read(&state->stale_skips_foreign);
+		break;
+	}
+	if (last)
+		*last = READ_ONCE(state->stale_skip_last);
+
+	return v;
+}
+
 /* w3fix4: a fresh R1 pass over @mm's registry, counting the records it
  * would emit.  The KUnit anchor for the brk shrink route's boundary
  * frame stranding: a full release must leave the registry with zero
@@ -4457,14 +4524,16 @@ static bool corten_arena_frame_ptes_empty(struct mm_struct *mm,
 	 */
 	desc = corten_ptdesc_get(page_to_pfn(pmd_page(pmd)));
 	if (!desc) {
-		atomic_long_inc(&corten_nr_probe_stale_skips);
+		corten_arena_note_probe_skip(mm, addr, false, false);
 		return true;	/* retired/recycled: empty */
 	}
 	read_lock_bh(&desc->lock);
 	if (READ_ONCE(desc->stale) || desc->mm != mm) {
+		bool was_stale = READ_ONCE(desc->stale);
+
 		read_unlock_bh(&desc->lock);
 		corten_ptdesc_put(desc);
-		atomic_long_inc(&corten_nr_probe_stale_skips);
+		corten_arena_note_probe_skip(mm, addr, was_stale, !was_stale);
 		return true;	/* retired under us: empty */
 	}
 
@@ -4532,6 +4601,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 	struct mmu_gather *tlb = &tlb_;
 	unsigned long frame, run_start = 0, run_frame = 0, run_end = 0;
 	unsigned long done_pmd_seg = 0, done_pud_seg = 0;
+	unsigned long seg;
 	void *slot;
 	bool have_run = false;
 
@@ -4750,6 +4820,121 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 			atomic_long_inc(&corten_nr_exit_upper_p4ds);
 		}
 	}
+
+	/* Pass C (w3fix6, residual ledger #6): the released-warm closure.
+	 * The B passes are registry-keyed -- they can only see the spans
+	 * some live record still names.  A RELEASE retires the window's
+	 * PT pages and erases the record, but deliberately leaves the
+	 * upper pages warm for the next arena in the span (V-A.1): after
+	 * the last record in a span is released, that span is invisible
+	 * to B -- and to free_pgtables() too, which descends tree-VMA
+	 * ranges only and a released span carries none (the W-4 sweep-in
+	 * shape: adopted regions leave vma-less gaps).  The pair rode to
+	 * free_mm as the 8192-byte residue: one PMD page + one PUD page
+	 * the walk-end ledger still counted and nothing ever collected.
+	 *
+	 * C walks the page tables themselves (entry presence, not
+	 * registry membership), one ascending pass per level, and retires
+	 * an upper page under exactly the guard triplet B used: the span
+	 * holds no tree VMA (the complement of free_pgtables()'s reach --
+	 * anything it will visit stays its business), every entry of the
+	 * page is none (the conservative leave-it rule: non-none content
+	 * discloses itself as a residue instead of being freed under a
+	 * walker), and the level below is already gone (the pass
+	 * separation: C1 runs after A/B1 emptied the PT pages, C2 after
+	 * C1, C3 after C2 -- the same ordering argument the B passes
+	 * document).  Retired-with-dec, through the same funnels and
+	 * counters, so the ledger closes instead of drifting.
+	 *
+	 * Range: the whole user half, TASK_SIZE-bounded at PUD/P4D
+	 * strides.  The absent-parent gates (corten_arena_pud()/the p4d
+	 * presence reads) make the sweep O(present tables), not
+	 * O(address space): every slot of an unmapped span reads none at
+	 * the top level and the walk moves on.
+	 */
+	for (seg = 0; seg < TASK_SIZE; seg += PUD_SIZE) {
+		pud_t *pudp;
+		pmd_t *pmdp;
+
+		/* C1 -- PMD pages the registry no longer names. */
+		pudp = corten_arena_pud(mm, seg);
+		if (!pudp || !pud_present(READ_ONCE(*pudp)) ||
+		    pud_leaf(READ_ONCE(*pudp)))
+			continue;
+		if (!corten_arena_exit_span_clear(mm, seg, seg + PUD_SIZE))
+			continue;
+		pmdp = pmd_offset(pudp, seg);
+		if (!corten_arena_exit_pmd_page_clear(pmdp))
+			continue;
+
+		pud_clear(pudp);
+		pmd_free_tlb(tlb, pmdp, seg);
+		mm_dec_nr_pmds(mm);
+		atomic_long_inc(&corten_nr_exit_upper_pmds);
+	}
+	for (seg = 0; seg < TASK_SIZE; seg += P4D_SIZE) {
+		p4d_t *p4dp;
+		pud_t *pudp;
+
+		/* C2 -- PUD pages, after every C1 span is down. */
+		p4dp = p4d_offset(pgd_offset(mm, seg), seg);
+		if (!p4d_present(READ_ONCE(*p4dp)) ||
+		    p4d_leaf(READ_ONCE(*p4dp)))
+			continue;
+		if (!corten_arena_exit_span_clear(mm, seg, seg + P4D_SIZE))
+			continue;
+		pudp = pud_offset(p4dp, seg);
+		if (!corten_arena_exit_pud_page_clear(pudp))
+			continue;
+
+		p4d_clear(p4dp);
+		pud_free_tlb(tlb, pudp, seg);
+		mm_dec_nr_puds(mm);
+		atomic_long_inc(&corten_nr_exit_upper_puds);
+	}
+	if (!mm_p4d_folded(mm)) {
+		for (seg = 0; seg < TASK_SIZE; seg += PGDIR_SIZE) {
+			pgd_t *pgdp;
+			p4d_t *p4dp;
+
+			/* C3 -- P4D pages (unfolded only; unaccounted,
+			 * matching free_p4d_range() upstream).
+			 */
+			pgdp = pgd_offset(mm, seg);
+			if (!pgd_present(READ_ONCE(*pgdp)))
+				continue;
+			if (!corten_arena_exit_span_clear(mm, seg,
+							  seg + PGDIR_SIZE))
+				continue;
+			p4dp = p4d_offset(pgdp, seg);
+			if (!corten_arena_exit_p4d_page_clear(p4dp))
+				continue;
+
+			pgd_clear(pgdp);
+			p4d_free_tlb(tlb, p4dp, seg);
+			atomic_long_inc(&corten_nr_exit_upper_p4ds);
+		}
+	}
+
+	/* The residue disclosure (ledger #5's localization face): a
+	 * tree-empty, fully-deregistered mm must exit at zero
+	 * pgtables_bytes -- the window domain above retires everything
+	 * it owns and free_pgtables() walks nothing.  Anything else here
+	 * is exactly the missed-dec shape the per-mm stale-skip trail
+	 * (state->stale_skips*) was built to attribute: print the trail
+	 * beside the accounting so one dmesg pair localizes the leak to
+	 * an address space and its last funnel-reachable window.  A mm
+	 * that still carries tree VMAs is not in that world (the legacy
+	 * pass legitimately holds their pages until free_pgtables()
+	 * runs) -- its residue, if any, discloses at check_mm() alone.
+	 */
+	if (!mm->map_count && mm_pgtables_bytes(mm))
+		pr_info("corten: mm exit pgtables_bytes residue %ld: stale_skips=%ld gone=%ld foreign=%ld last_win=%lx\n",
+			mm_pgtables_bytes(mm),
+			atomic_long_read(&state->stale_skips),
+			atomic_long_read(&state->stale_skips_gone),
+			atomic_long_read(&state->stale_skips_foreign),
+			READ_ONCE(state->stale_skip_last));
 
 	tlb_finish_mmu(tlb);
 	mmap_write_unlock(mm);

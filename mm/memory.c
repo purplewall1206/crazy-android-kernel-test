@@ -202,6 +202,52 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 	mm_dec_nr_ptes(tlb->mm);
 }
 
+/*
+ * The observed-emptiness half of the upper-table gates (w3fix6, C2
+ * residual ledger #6).  The floor/ceiling geometry below vouches that
+ * no tree VMA shares the span, but it can only see tree VMAs: a
+ * vma-less window (the CortenMM arena shape -- an adopted region or a
+ * punch leaves tree holes whose page tables carry no VMA) shares the
+ * table just the same, and geometry alone frees the page out from
+ * under its live lower tables -- stranding them uncounted (the pure
+ * stale pgtables_bytes face) or uncollected at exit.  The scans defer
+ * the free while any entry of the page still reads present; the exit
+ * walk retires such a span itself once the window domain is down, so
+ * the free is delayed, never lost.
+ */
+static bool free_pmd_page_empty(pmd_t *pmd)
+{
+	int i;
+
+	for (i = 0; i < PTRS_PER_PMD; i++)
+		if (!pmd_none(READ_ONCE(pmd[i])))
+			return false;
+
+	return true;
+}
+
+static bool free_pud_page_empty(pud_t *pud)
+{
+	int i;
+
+	for (i = 0; i < PTRS_PER_PUD; i++)
+		if (!pud_none(READ_ONCE(pud[i])))
+			return false;
+
+	return true;
+}
+
+static bool free_p4d_page_empty(p4d_t *p4d)
+{
+	int i;
+
+	for (i = 0; i < PTRS_PER_P4D; i++)
+		if (!p4d_none(READ_ONCE(p4d[i])))
+			return false;
+
+	return true;
+}
+
 static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 				unsigned long addr, unsigned long end,
 				unsigned long floor, unsigned long ceiling)
@@ -231,6 +277,8 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 		return;
 
 	pmd = pmd_offset(pud, start);
+	if (!free_pmd_page_empty(pmd))
+		return;
 	pud_clear(pud);
 	pmd_free_tlb(tlb, pmd, start);
 	mm_dec_nr_pmds(tlb->mm);
@@ -265,6 +313,8 @@ static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 		return;
 
 	pud = pud_offset(p4d, start);
+	if (!free_pud_page_empty(pud))
+		return;
 	p4d_clear(p4d);
 	pud_free_tlb(tlb, pud, start);
 	mm_dec_nr_puds(tlb->mm);
@@ -299,6 +349,8 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 		return;
 
 	p4d = p4d_offset(pgd, start);
+	if (!free_p4d_page_empty(p4d))
+		return;
 	pgd_clear(pgd);
 	p4d_free_tlb(tlb, p4d, start);
 }

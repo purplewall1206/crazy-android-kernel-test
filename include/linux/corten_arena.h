@@ -542,6 +542,31 @@ struct corten_mm_state {
 	unsigned int		nr_implants;
 	unsigned int		nr_implants_alloc;
 	struct mm_struct	*owner_mm;
+	/* w3fix6 (residual ledger #5): the stale-skip attribution block.
+	 * The M2a emptiness probes (the declare-side check_empty_locked
+	 * and the exit walk's frame_ptes_empty) skip a window when its PT
+	 * page's descriptor is stale, gone, or foreign -- the observable
+	 * trail of the retirement funnel.  Counting that trail PER MM
+	 * (the single-mm sequential lifetime the mv3c debug round asked
+	 * for) is what ties a "non-zero pgtables_bytes on freeing mm"
+	 * residue to the address space that produced it and to the last
+	 * window the funnel was seen retiring, instead of a global count
+	 * every live mm blurs into.  Strictly observational: no free,
+	 * retire, or verdict path reads these -- they only widen the
+	 * disclosure the residue already prints.
+	 *   @stale_skips: skips where the descriptor was live and marked
+	 *     stale -- the retirement funnel's own trail.
+	 *   @stale_skips_gone: skips where the PT page resolved to no
+	 *     descriptor at all (uninstalled or never installed).
+	 *   @stale_skips_foreign: skips where the descriptor named
+	 *     another mm (the recycled-pfn face).
+	 *   @stale_skip_last: the base VA of the last skipped window
+	 *     (WRITE_ONCE; an unordered observational trail, not a log).
+	 */
+	atomic_long_t		stale_skips;
+	atomic_long_t		stale_skips_gone;
+	atomic_long_t		stale_skips_foreign;
+	unsigned long		stale_skip_last;
 	struct list_head	shrink_reg;
 	spinlock_t		shrink_lock;
 	unsigned long		shrink_cursor;
@@ -1089,6 +1114,13 @@ long corten_arena_test_j2_first_violation(void);
  * skips -- the KUnit anchor for the M2a probe exclusion.
  */
 long corten_arena_test_probe_stale(void);
+
+/* w3fix6 (residual ledger #5): the per-mm skip attribution read.
+ * @which indexes the trail (0 stale / 1 gone / 2 foreign); *@last
+ * takes the last skipped window's base VA when non-NULL.
+ */
+long corten_arena_test_mm_probe_skips(struct mm_struct *mm, int which,
+				      unsigned long *last);
 
 /* w3fix4: a fresh R1 pass over @mm's registry, counting the records the
  * walk emits -- the KUnit anchor for the brk shrink route's boundary
