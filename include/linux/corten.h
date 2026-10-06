@@ -524,10 +524,15 @@ int corten_swap_replay(struct corten_txn *txn, unsigned long addr,
  *
  * Every page in the sub-range must be recorded (state != CORTEN_INVALID),
  * else -ENOENT and nothing is changed.  The whole sub-range is validated
- * before anything is written.  Dropping the physical page references is
- * wired in by M3/M4; 2b only flips the metadata back to CORTEN_INVALID
- * (with %CORTEN_UNMAP_KEEP_PERM, keeping the recorded permission -- see
- * the flag's documentation), else scrubbing the slot.
+ * before anything is written.  Ledger #11 (W-3fix5): the walk clamps to
+ * the covering descriptor's dirty range [rec_lo, rec_hi] -- a slot outside
+ * it was never recorded (INV6: every recording transition widens the
+ * range under the covering write lock), so a sub-range not fully covered
+ * by the dirty range is answered -ENOENT without the walk.  Dropping the
+ * physical page references is wired in by M3/M4; 2b only flips the
+ * metadata back to CORTEN_INVALID (with %CORTEN_UNMAP_KEEP_PERM, keeping
+ * the recorded permission -- see the flag's documentation), else
+ * scrubbing the slot.
  *
  * Return: 0 on success, negative error otherwise.
  */

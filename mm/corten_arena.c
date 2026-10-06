@@ -11932,9 +11932,20 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 	 * the INV6 invariant (every PTE write rides a transaction and the
 	 * transactions widen the range), so both metadata consumers below
 	 * (the FILE-event spare and the reset) have nothing to see there.
+	 * W-3fix5 closes the layer: corten_unmap() itself clamps to the
+	 * same range, so a reset's whole walk -- the arena per-slot calls
+	 * and any multi-page protocol caller alike -- is O(dirty) end to
+	 * end.
+	 *
 	 * The PTE-level scan itself stays full-window: PTEs can exist
 	 * without metadata behind them (the legacy fallback writer -- the
 	 * r03 defect C discipline), so the walk decides by PTE content.
+	 * Bounding the PTE walk to the dirty range would need the
+	 * legacy-writer shapes closed first (a punch implant inside the
+	 * arena writes plain PTEs through the legacy funnel without any
+	 * transaction, and a force-resumed walk can race a refill whose
+	 * marks the round-1 range snapshot misses) -- registered as the
+	 * follow-up, not silently assumed here.
 	 */
 	dirty_lo = txn->covering->rec_lo;
 	dirty_hi = txn->covering->rec_hi;

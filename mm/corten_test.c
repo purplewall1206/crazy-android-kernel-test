@@ -2008,6 +2008,163 @@ static void corten_test_full_window_atomic(struct kunit *test)
 	corten_unlock(&txn);
 }
 
+/* W-3fix5 (Ledger #11): the unmap walk clamps to the covering
+ * descriptor's dirty range.  The verdicts here are the pre-clamp ones
+ * by construction -- a slot outside [rec_lo, rec_hi] is provably
+ * Invalid (INV6), so an uncovered sub-range always failed validate with
+ * -ENOENT; the clamp answers that without the walk.  The anchors lock
+ * the contract: covered spans (including both u16 endpoints and the
+ * covered multi-page reset) succeed, spans straddling a dirty-range
+ * edge fail atomically leaving the in-range content untouched.
+ */
+static void corten_test_unmap_dirty_clamp(struct kunit *test)
+{
+	unsigned long start = 0;
+	unsigned long len = CORTEN_PTES_PER_PT_PAGE * PAGE_SIZE;
+	struct corten_test_tree *t;
+	struct corten_txn txn;
+	struct corten_pte_meta m, q;
+
+	t = corten_test_tree_std(test);
+
+	KUNIT_ASSERT_EQ(test, 0,
+			corten_txn_begin(&init_mm, start, start + len,
+					 &corten_test_tree_ops, t, &txn));
+
+	memset(&m, 0, sizeof(m));
+	m.state = CORTEN_PRIVATE_ANON;
+	m.perm = CORTEN_PERM_READ;
+
+	/* Three scattered marks (7, 400, 511 -- the high u16 endpoint):
+	 * the dirty range is exactly [7, 511].
+	 */
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_mark(&txn, 7 * PAGE_SIZE, PAGE_SIZE, &m));
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_mark(&txn, 400 * PAGE_SIZE, PAGE_SIZE, &m));
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_mark(&txn, 511 * PAGE_SIZE, PAGE_SIZE, &m));
+	KUNIT_EXPECT_EQ(test, t->desc[3]->rec_lo, 7);
+	KUNIT_EXPECT_EQ(test, t->desc[3]->rec_hi, 511);
+
+	/* Below the dirty range: index 0 was never recorded. */
+	KUNIT_EXPECT_EQ(test, -ENOENT,
+			corten_unmap(&txn, start, PAGE_SIZE, 0));
+
+	/* Straddling the low edge ([0..7], 0 uncovered): -ENOENT and the
+	 * recorded slot 7 stays untouched.
+	 */
+	KUNIT_EXPECT_EQ(test, -ENOENT,
+			corten_unmap(&txn, start, 8 * PAGE_SIZE, 0));
+	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 7 * PAGE_SIZE, &q));
+	KUNIT_EXPECT_EQ(test, q.state, CORTEN_PRIVATE_ANON);
+
+	/* Inside the dirty range, an Invalid gap (400..510): still
+	 * -ENOENT -- the covered walk validates every slot.
+	 */
+	KUNIT_EXPECT_EQ(test, -ENOENT,
+			corten_unmap(&txn, 400 * PAGE_SIZE,
+				     112 * PAGE_SIZE, 0));
+	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 511 * PAGE_SIZE, &q));
+	KUNIT_EXPECT_EQ(test, q.state, CORTEN_PRIVATE_ANON);
+
+	/* Covered resets: the high endpoint, then the rest. */
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_unmap(&txn, 511 * PAGE_SIZE, PAGE_SIZE, 0));
+	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 511 * PAGE_SIZE, &q));
+	KUNIT_EXPECT_EQ(test, q.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, q.perm, 0);
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_unmap(&txn, 7 * PAGE_SIZE, PAGE_SIZE, 0));
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_unmap(&txn, 400 * PAGE_SIZE, PAGE_SIZE, 0));
+
+	/* All four slots Invalid, range still [7, 511] (unmap does not
+	 * shrink it): a covered span still fails on the reset slots --
+	 * the full-window atomicity anchor's shape, now under the clamp.
+	 */
+	KUNIT_EXPECT_EQ(test, -ENOENT,
+			corten_unmap(&txn, 7 * PAGE_SIZE, 505 * PAGE_SIZE,
+				     0));
+
+	/* The covered multi-page reset in one call (the O(dirty) win
+	 * shape): re-mark the whole [7..511] span, retire it in one go.
+	 */
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_mark(&txn, 7 * PAGE_SIZE, 505 * PAGE_SIZE,
+				    &m));
+	KUNIT_EXPECT_EQ(test, t->desc[3]->rec_lo, 7);
+	KUNIT_EXPECT_EQ(test, t->desc[3]->rec_hi, 511);
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_unmap(&txn, 7 * PAGE_SIZE, 505 * PAGE_SIZE,
+				     0));
+	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 7 * PAGE_SIZE, &q));
+	KUNIT_EXPECT_EQ(test, q.state, CORTEN_INVALID);
+	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 511 * PAGE_SIZE, &q));
+	KUNIT_EXPECT_EQ(test, q.state, CORTEN_INVALID);
+
+	/* The low u16 endpoint as a recorded slot: covered single reset. */
+	KUNIT_EXPECT_EQ(test, 0, corten_mark(&txn, start, PAGE_SIZE, &m));
+	KUNIT_EXPECT_EQ(test, t->desc[3]->rec_lo, 0);
+	KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, start, PAGE_SIZE, 0));
+
+	corten_unlock(&txn);
+}
+
+/* W-3fix5 (Ledger #11): the empty dirty range.  Nothing ever recorded
+ * (fresh descriptor) or a collapsed range (the park reset leaves
+ * rec_lo > rec_hi behind): every unmap verdict is -ENOENT with nothing
+ * written, and the next mark restarts the range from scratch (the
+ * cross-iteration contract the reactivated pool window relies on).
+ */
+static void corten_test_unmap_dirty_empty(struct kunit *test)
+{
+	unsigned long start = 0;
+	unsigned long len = CORTEN_PTES_PER_PT_PAGE * PAGE_SIZE;
+	struct corten_test_tree *t;
+	struct corten_txn txn;
+	struct corten_pte_meta m, q;
+
+	t = corten_test_tree_std(test);
+
+	KUNIT_ASSERT_EQ(test, 0,
+			corten_txn_begin(&init_mm, start, start + len,
+					 &corten_test_tree_ops, t, &txn));
+
+	memset(&m, 0, sizeof(m));
+	m.state = CORTEN_PRIVATE_ANON;
+	m.perm = CORTEN_PERM_READ;
+
+	/* Fresh descriptor: the range is empty (rec_lo > rec_hi). */
+	KUNIT_EXPECT_TRUE(test, t->desc[3]->rec_lo > t->desc[3]->rec_hi);
+	KUNIT_EXPECT_EQ(test, -ENOENT,
+			corten_unmap(&txn, 100 * PAGE_SIZE, PAGE_SIZE, 0));
+	KUNIT_EXPECT_EQ(test, -ENOENT, corten_unmap(&txn, start, len, 0));
+
+	/* The park-collapse shape: record, reset, collapse by hand
+	 * (exactly what the full-window zap does), then the reset slot
+	 * is out-of-range Invalid -- -ENOENT either way.
+	 */
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_mark(&txn, 300 * PAGE_SIZE, PAGE_SIZE, &m));
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_unmap(&txn, 300 * PAGE_SIZE, PAGE_SIZE, 0));
+	t->desc[3]->rec_lo = 1;
+	t->desc[3]->rec_hi = 0;
+	KUNIT_EXPECT_EQ(test, -ENOENT,
+			corten_unmap(&txn, 300 * PAGE_SIZE, PAGE_SIZE, 0));
+
+	/* The next incarnation's first mark owns the range verbatim. */
+	KUNIT_EXPECT_EQ(test, 0,
+			corten_mark(&txn, 300 * PAGE_SIZE, PAGE_SIZE, &m));
+	KUNIT_EXPECT_EQ(test, t->desc[3]->rec_lo, 300);
+	KUNIT_EXPECT_EQ(test, t->desc[3]->rec_hi, 300);
+	KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, 300 * PAGE_SIZE, &q));
+	KUNIT_EXPECT_EQ(test, q.state, CORTEN_PRIVATE_ANON);
+
+	corten_unlock(&txn);
+}
+
 /* Parse the decimal that follows @key in a rendered debugfs section. */
 static bool corten_test_dbg_value(const char *s, const char *key, long *out)
 {
@@ -2098,6 +2255,8 @@ static struct kunit_case corten_test_cases[] = {
 	KUNIT_CASE(corten_test_txn_child_err),
 	KUNIT_CASE(corten_test_real_huge_leaf),
 	KUNIT_CASE(corten_test_full_window_atomic),
+	KUNIT_CASE(corten_test_unmap_dirty_clamp),
+	KUNIT_CASE(corten_test_unmap_dirty_empty),
 	KUNIT_CASE(corten_test_debugfs_content),
 	{}
 };
