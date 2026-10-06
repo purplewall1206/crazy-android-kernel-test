@@ -1,1 +1,24 @@
-timeout: failed to run command ‘g’: No such file or directory
+# P2 counters snapshot disposition (w3fix4, 2026-10-06)
+#
+# Requested: audit_gate + counters (arena_stats) snapshots from the live P2 VM
+# (port 10031, trixie-mv3d.img, kernel #365 = pre-w3fix4 MV3.d battery kernel,
+# cmdline corten=on corten_mode_default=on, journald masked = the p3-journal
+# world it was left in).
+#
+# audit_gate: TAKEN.  p2-audit-gate.txt (21 rows, gate_pass=1, wl_violations=0,
+# wl_brk_anomalies=0, tree_entries=0).  Read rc=0.
+#
+# counters (arena_stats): NOT READABLE on this kernel -- the residual-ledger #2
+# render hang, live.  Six `grep ... arena_stats` readers left by the original
+# P2 phase are still spinning in R state since 16:41 (130+ min CPU each),
+# SIGKILL-immune; a fresh bounded read (timeout 12 cat) also never returned.
+# Sysrq-t stack sample (p2-stats-hang-sysrq.txt): xas_find+0x187/xas_load inside
+#   corten_mm_state_pages+0x108 <- corten_arena_stats_report+0x9b6
+# -- the exact mv3b report sec 3 signature (registry-xa_find spin, unkillable).
+#
+# The hang's fix is ledger #2 in the w3fix4 diff (stats render leaves the
+# registry xarray entirely: obs-ledger walk + 64-pin-round budget + truncation
+# disclosure; KUnit anchor corten_arena_test_stats_walk_budget).  The
+# compensating counters snapshot is taken from the w3fix4 DPA boot with the fix
+# in: results/r07/w3fix4/dpa-arena-stats.txt (read rc=0 after full-system brk
+# churn).  This file stays as the old-kernel disposition record.

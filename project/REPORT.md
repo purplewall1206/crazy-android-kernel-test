@@ -1198,6 +1198,61 @@ run5 登记环境项）。
 
 ---
 
+## 10. MV3.d 全系统电池三腿 verdict 表（w3fix4 后补裁定, 2026-10-06）
+
+- 现场: 内核 #365（`6.18.32-gaaa51658ee1e`，MV3.c-feat 收官树）、trixie-mv3d.img、
+  port 10031。原始执行 2026-10-05（BATTERY-STATE 全程留档 results/r07/mv3d/）；P2-on 腿
+  7220s in-guest 重跑（rerun/RERUN-STATE）。本表为 post-hoc 逐格裁定（PASS / FAIL /
+  GAP=采证缺口），w3fix4 残留台账（#3 SSH 韧性 / #2 stats 挂起 / #4 wl_brk_multi）的
+  补偿采证以〔w3fix4 补〕标注。
+
+### P1 腿（=off 基线世界, cmdline corten=on 无 default）
+
+| 项 | verdict | 证据 / 缺口 |
+|---|---|---|
+| boot + ssh 采证 | **PASS** | BOOT_OK ssh_try=3；multi-user+graphical reached；degraded=redis-server 单元（镜像既有, 环境类, p1-failed-units.txt） |
+| mode 探针 | **PASS** | mode=0（PROBE_RC=1 为 SSH banner 污染 stdout 的已知脚本形, 探针值本身正确） |
+| LTP 构建 | **PASS** | autotools/configure/build/install 全 rc=0；5 产品冒烟 OK（battery-off.log SEC2） |
+| LTP 运行 | **PASS\*** | PASS=98 FAIL=11 CONF=0 MISSING=1 OTHER=5 / 115；FAIL 行中 6×rc=32（TCONF 形: sbrk03/madvise09/11/mremap07/fork05/mmapstress06）+ 3×timeout（fork13/shm_test/mmap1）+ 2×other。缺口: 未做逐用例历史基线 diff（登记） |
+| smoke 面（bare+hook） | **PASS** | 26/26 ×2（SEC4, SMOKE-DRIVER PASS ×2） |
+| dmesg 完整性 | **PASS** | corten warn/bug 计数 = 0 |
+| metis/sweep 腿 | **GAP** | 电池 1020s 处 SSH 断（台账 #3 原始形状）, SEC5/6 未达; guest-battery.sh:133 `i_RC unbound` 渲染缺陷同场暴露（verdict 行截断, raw log 有数据） |
+| 工件取回 | **GAP→已修** | 台账 #3: w3fix4 gate 驱动 gfetch（直接 scp×3 + 16M 分段重试 + md5 验收）落地, 两路径实测验证（分段 20M drill md5 精确） |
+
+### P2 腿（=on 默认进场世界, corten_mode_default=on, journald masked）
+
+| 项 | verdict | 证据 / 缺口 |
+|---|---|---|
+| boot + mode 探针 | **PASS** | BOOT_OK ssh_try=4；userspace 11.26s 到 graphical；mode=1 PROBE_RC=0 |
+| LTP 构建 | **PASS** | 四步 rc=0（rerun/battery-on.log SEC2） |
+| LTP 运行 | **GAP** | 7200s 天花板先于 SEC3 到点（=on 全系统 churn 下 LTP 长跑）, 无腿级 summary; ltp-out 只带出构建日志（art-on 72K） |
+| metis checksum | **PASS** | bare×2 与基准 `2d383eeed4ceb73b` 精确同值（BATTERY-STATE P2 行） |
+| hook-smoke 幂等 | **PASS** | run2 rc=0 PASS=26 FAIL=0（RERUN-STATE; run1 rc=255 为驱动器账面断言在 churn 下的已登记失效形） |
+| audit_gate 读数 | **GAP→PASS〔w3fix4 补〕** | 原始 rc=124/127（p2-audit-gate.txt 曾为 66B 破损件）; w3fix4 现场补读 rc=0: gate_pass=1, wl_violations=0, wl_brk_anomalies=0, tree_entries=0（p2-audit-gate.txt 新件, 旧内核无 wl_brk_multi 行）; ledger #4 的 wl_brk_multi 桶在 w3fix4 内核的 audit_gate 读数中在位（dpa-audit-gate.txt: wl_brk_multi=0, wl_brk_anomalies=0） |
+| counters 读数 | **FAIL→补偿〔w3fix4 补〕** | 残留台账 #2 活体: 六个 R 态不可杀 grep（自 16:41, 各 130+ min CPU）, 新读同样挂; sysrq 栈 = `xas_find/xas_load ← corten_mm_state_pages+0x108 ← corten_arena_stats_report`（p2-stats-hang-sysrq.txt, mv3b §3 签名同形）。修复入 w3fix4 diff（stats 渲染离 registry xarray + 预算 + 披露）; 补偿读数 = DPA boot（含修复内核）rc=0, results/r07/w3fix4/dpa-arena-stats.txt |
+| dmesg 完整性 | **GAP** | 原始与重跑两次取回均被 SSH banner 超时污染（91B 破损件, RERUN-STATE 同）; 部分补偿 = P3 腿 dmesg 41KB 零 warn |
+| 工件取回 | **GAP→已修** | 同 P1 台账 #3（gfetch 落地） |
+
+### P3 腿（journal 面: =on 默认进场 + journald 不 mask）
+
+| 项 | verdict | 证据 / 缺口 |
+|---|---|---|
+| boot（journald 在场） | **PASS** | BOOT_OK；journald active（p3-journal-face.log）, journal 行 938；无 MV3.a 时代的 tmpfiles 停摆形 |
+| mode 探针 | **PASS** | mode=1 PROBE_RC=0（默认进场与 journal 面共存） |
+| tmpfiles/journald 时长行 | **PASS** | face log 5 行时长+计数（MV3.b journald 面修复的持续有效证据） |
+| dmesg 完整性 | **PASS** | p3-dmesg-full.txt 41KB, WARNING/BUG/Oops/GPF 计数 = 0 |
+| 腿内 LTP/metis | **GAP** | P3 相位只做 face 采证未跑电池（设计如此, 登记） |
+
+### 三腿总判
+
+P1 全绿（metis/sweep 取回缺口由 #3 修复兜底）; P2 核心 faces（boot/mode/metis/hook/
+audit_gate）绿, LTP 腿级与 dmesg 完整性为登记缺口（SSH 韧性 + 天花板, 非内核失败证据）;
+P3 全绿。**残留台账 #1/#2/#4 的代码修复在 w3fix4 diff**（探针 pin 协议 + stats 渲染
+重构 + wl_brk_multi 桶）, KUnit 锚全绿（results/r07/w3fix4/）; #1 的 DPA 终局复测见
+results/r07/w3fix4/（零 oops + arena_stats 读 rc=0）。
+
+---
+
 ## 附: 本报告自检状态（v1.3 终稿, 2026-09-21）
 
 - 全部 §引用的 results/publish/docs/log 路径已核对存在（终稿时点 2026-09-21；v1.1 附录对

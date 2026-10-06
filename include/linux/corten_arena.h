@@ -45,6 +45,7 @@
 #include <linux/refcount.h>
 #include <linux/seq_file.h>
 #include <linux/types.h>
+#include <linux/workqueue.h>
 #include <linux/xarray.h>
 
 struct file;
@@ -547,6 +548,16 @@ struct corten_mm_state {
 	struct xarray		shrink_aged;
 	unsigned long __percpu	*stats;
 	struct rcu_head		rcu;
+	/* w3fix4: the deferred free's second hop -- the RCU callback only
+	 * schedules this work, and the actual teardown (xa_destroy et
+	 * al) runs in kworker task context.  Running the teardown in the
+	 * RCU softirq acquired the state xarrays' (shared dynamic-xarray)
+	 * lock class in softirq while the declare paths hold the same
+	 * class in task context with softirqs enabled -- a usage
+	 * inversion lockdep flags (the two lock objects are distinct,
+	 * but the class is shared by every xa_init()ed xarray).
+	 */
+	struct work_struct	free_work;
 };
 
 /* T1c resident-pool capacity.  The guest benchmark shapes (8 vCPU: the
@@ -996,6 +1007,13 @@ void corten_arena_audit_gate_report(struct seq_file *m);
 void corten_arena_test_inject_drain_timeout(void);
 long corten_arena_test_drain_timeouts(void);
 
+/* Ledger #2 hooks: shrink the per-mm registry-walk budget (the KUnit
+ * anchor drives the truncation arm deterministically) and read the
+ * truncation disclosure counter back.
+ */
+void corten_arena_test_stats_budget(unsigned long budget);
+long corten_arena_test_stats_walk_truncs(void);
+
 /* Test hooks for the M5 fork unwinds (R-A): arm a forced fork_commit
  * failure at @stage (1 = commit entry, 2 = after the first arena was
  * mirrored; 0 disarms) and read back an arena's frozen bit.
@@ -1067,6 +1085,17 @@ long corten_arena_test_j2_violations(void);
 long corten_arena_test_j2_stale(void);
 long corten_arena_test_j2_first_violation(void);
 
+/* Ledger #1 (r07 mv3b): the declare-side emptiness probes' retired-window
+ * skips -- the KUnit anchor for the M2a probe exclusion.
+ */
+long corten_arena_test_probe_stale(void);
+
+/* w3fix4: a fresh R1 pass over @mm's registry, counting the records the
+ * walk emits -- the KUnit anchor for the brk shrink route's boundary
+ * frame stranding (a full release must leave zero records).
+ */
+long corten_arena_test_registry_records(struct mm_struct *mm);
+
 /* V-D (B-2 closure ledger): the exit walk's per-level upper-table
  * retirement counts, and the S-3 swapoff-blindness disclosure counter.
  */
@@ -1122,6 +1151,11 @@ long corten_arena_test_sweep(int which);
 long corten_arena_test_wl_walks(void);
 long corten_arena_test_wl_violations(void);
 long corten_arena_test_wl_brk_anomalies(void);
+/* Ledger #4: the multi-brk form's own bucket (the expected split
+ * shape; wl_brk_anomalies stays the structurally-zero dead-man's
+ * switch).
+ */
+long corten_arena_test_wl_brk_multi(void);
 long corten_arena_test_wl_brk_vmas(void);
 void corten_arena_test_wl_histogram(struct mm_struct *mm,
 				    unsigned long *counts);
