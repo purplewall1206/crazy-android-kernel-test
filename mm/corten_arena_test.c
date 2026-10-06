@@ -7460,6 +7460,17 @@ static void corten_arena_test_op_do_mmap(struct corten_arena_test_op *o)
 	mmap_write_unlock(o->mm);
 }
 
+/* The plain do_munmap() funnel on the attached worker (vms_complete_
+ * munmap_vmas() reads current->mm -- the same worker discipline as the
+ * RELEASE/MODE-EXIT shapes above).
+ */
+static void corten_arena_test_op_do_munmap(struct corten_arena_test_op *o)
+{
+	mmap_write_lock(o->mm);
+	o->ret = do_munmap(o->mm, o->addr, o->len, NULL);
+	mmap_write_unlock(o->mm);
+}
+
 /* One file MAP_FIXED punch shape on the attached worker: the real
  * do_mmap() funnel -- the punch route, the overlap gather and the
  * implant VMA install exactly as the guest's memfd MAP_FIXED runs it.
@@ -15937,6 +15948,301 @@ static void corten_arena_test_declare_probe_stale_pt(struct kunit *test)
 }
 
 /* ------------------------------------------------------------------
+ * w3fix6 (residual ledger #5): the per-mm stale-skip attribution.
+ * The global probe_stale_skips counter proves the probes take the M2a
+ * exclusion; it cannot say whose window was skipped -- exactly what a
+ * "non-zero pgtables_bytes on freeing mm" residue needs (the mv3c
+ * round's finding: a global counter blurs every live mm into one net).
+ * The interleave's deterministic skip drives the trail: the skip must
+ * land on the probing mm's gone bucket and last-window VA, and a
+ * skip-free sibling mm must stay at zero on every bucket -- the
+ * stale-skip count localizes the mm.
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_probe_skip_mm_attribution(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct corten_arena_test_mm *t2 = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm, *mm2 = t2->mm;
+	unsigned long base = CORTEN_ARENA_TEST_BASE;
+	struct page *ptpage;
+	struct corten_ptdesc *desc;
+	pgd_t *pgdp;
+	p4d_t *p4dp;
+	pud_t *pudp;
+	pmd_t *pmdp;
+	pte_t *ptep;
+	spinlock_t *ptl;	/* the control arm's PTE rewrite lock */
+	unsigned long last = 0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "probe attribution anchor requires corten=on");
+
+	/* The interleave's fixture: a live PT page under the declare
+	 * target (the real allocator's page -- the teardown's unmap walk
+	 * takes its split PT lock), descriptor installed, pmd entry
+	 * present.
+	 */
+	ptpage = pte_alloc_one(mm);
+	KUNIT_ASSERT_NOT_NULL(test, ptpage);
+
+	mmap_write_lock(mm);
+	pgdp = pgd_offset(mm, base);
+	p4dp = p4d_alloc(mm, pgdp, base);
+	if (!p4dp) {
+		mmap_write_unlock(mm);
+		KUNIT_FAIL(test, "p4d_alloc failed");
+		return;
+	}
+	pudp = pud_alloc(mm, p4dp, base);
+	if (!pudp) {
+		mmap_write_unlock(mm);
+		KUNIT_FAIL(test, "pud_alloc failed");
+		return;
+	}
+	pmdp = pmd_alloc(mm, pudp, base);
+	if (!pmdp) {
+		mmap_write_unlock(mm);
+		KUNIT_FAIL(test, "pmd_alloc failed");
+		return;
+	}
+	if (!pmd_none(*pmdp)) {
+		mmap_write_unlock(mm);
+		kunit_skip(test, "test window PMD already populated");
+	}
+	pmd_populate(mm, pmdp, ptpage);
+	mmap_write_unlock(mm);
+
+	desc = corten_ptdesc_get(page_to_pfn(ptpage));
+	if (desc) {
+		corten_ptdesc_put(desc);
+	} else {
+		KUNIT_ASSERT_EQ(test, 0,
+				corten_ptdesc_install(mm, ptpage));
+	}
+
+	/* Baseline: neither mm carries a trail. */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm, 0, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm, 1, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm, 2, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm2, 0, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm2, 1, NULL),
+			0);
+
+	/* Control arm: live descriptor, present PTE -> [C1] -EBUSY, the
+	 * probe walked the live page -- no skip on any bucket.
+	 */
+	ptep = pte_offset_map_lock(mm, pmdp, base, &ptl);
+	KUNIT_ASSERT_NOT_NULL(test, ptep);
+	set_pte(ptep, __pte(_PAGE_PRESENT));
+	pte_unmap_unlock(ptep, ptl);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_declare(mm, base, CORTEN_ARENA_TEST_LEN),
+			-EBUSY);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm, 1, &last),
+			0);
+
+	/* Empty the window, then run the interleave: the descriptor half
+	 * of the retirement (xarray erase + stale store) with the pmd
+	 * entry still present -- the probe must skip and attribute.
+	 */
+	ptep = pte_offset_map_lock(mm, pmdp, base, &ptl);
+	pte_clear(mm, base, ptep);
+	pte_unmap_unlock(ptep, ptl);
+	corten_ptdesc_uninstall(ptpage);
+	KUNIT_EXPECT_NULL(test,
+			  corten_ptdesc_get(page_to_pfn(ptpage)));
+	memset(page_address(ptpage), 0x57, PAGE_SIZE);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_declare(mm, base, CORTEN_ARENA_TEST_LEN),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm, 1, &last),
+			1);
+	KUNIT_EXPECT_EQ(test, last, base);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm, 0, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm, 2, NULL),
+			0);
+
+	/* The attribution half: the skip-free sibling stays at zero on
+	 * every bucket -- the trail names its mm, not the world.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm2, 0, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm2, 1, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_mm_probe_skips(mm2, 2, NULL),
+			0);
+
+	/* Same scrub as the interleave anchor: retire the poisoned PT
+	 * page so the fixture teardown's exit walk sees the
+	 * declared-never-touched shape.
+	 */
+	mmap_write_lock(mm);
+	pmd_clear(pmdp);
+	mmap_write_unlock(mm);
+	pte_free(mm, ptpage);
+}
+
+/* ------------------------------------------------------------------
+ * w3fix6 (residual ledger #6): the free_pgtables upper-page gate.
+ * free_pgtables() is VMA-driven and its floor/ceiling geometry only
+ * sees tree VMAs -- a vma-less arena window sharing the same PMD page
+ * is invisible, so the legacy unmap of the tree neighbour freed the
+ * shared upper page out from under the window's live PT page: the
+ * window was orphaned (its translation silently gone) and its PT-page
+ * count rode to free_mm as the pure-stale 4096/8192 residue.  The
+ * observed-emptiness half of the gate (free_pX_page_empty()) defers
+ * the free while anything still hangs below; the exit walk then
+ * retires the deferred pair through the funnels.  The anchor drives
+ * the real do_munmap()->free_pgtables() funnel over the tree VMA and
+ * requires the window's page tables -- and their accounting -- to
+ * survive it, then requires the account to close at exit.
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_munmap_shared_upper_gate(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	/* Same 1GiB PUD span as the fixture VMA, outside its extent: a
+	 * tree neighbour and a vma-less window co-tenants of one PMD
+	 * page -- the geometry gate cannot tell them apart.
+	 */
+	unsigned long win = CORTEN_ARENA_TEST_BASE + 8UL * PMD_SIZE;
+	unsigned long a = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
+	struct page *page = NULL;
+	long bytes0, pmds0, puds0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "munmap upper-gate anchor requires corten=on");
+
+	pmds0 = corten_arena_test_exit_upper_pmds();
+	puds0 = corten_arena_test_exit_upper_puds();
+
+	/* The tree neighbour's PT page: one faulted page of the fixture
+	 * VMA installs the shared upper tier.
+	 */
+	mmap_read_lock(mm);
+	KUNIT_ASSERT_EQ(test,
+			get_user_pages_remote(mm, a, 1, FOLL_WRITE, &page,
+					      NULL), 1);
+	put_page(page);
+	mmap_read_unlock(mm);
+
+	/* The vma-less window in the same span, one mapped page -- its
+	 * PT page hangs off the very PMD page the munmap below will
+	 * judge.
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_pool_attach(mm, win,
+							    PMD_SIZE), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, win), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_seed_mapped(mm, win),
+			0);
+
+	bytes0 = mm_pgtables_bytes(mm);
+	KUNIT_ASSERT_TRUE(test, corten_arena_test_pt_present(mm, win));
+
+	/* The legacy unmap of the tree neighbour: free_pgtables() walks
+	 * [BASE, BASE+LEN) with open floor/ceiling (no tree neighbours).
+	 * The window's PT page must keep the shared upper page alive.
+	 * (The munmap runs on the attached worker: vms_complete_munmap_
+	 * vmas() reads current->mm.)
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_do_munmap,
+						 CORTEN_ARENA_TEST_BASE,
+						 CORTEN_ARENA_TEST_LEN), 0);
+
+	KUNIT_EXPECT_TRUE(test, corten_arena_test_pt_present(mm, win));
+	KUNIT_EXPECT_EQ(test, mm_pgtables_bytes(mm),
+			bytes0 - (long)PAGE_SIZE);
+
+	/* The exit closes the deferred pair: the window's own PT page
+	 * retires through the walk's funnel (A), the upper pages through
+	 * B1/B2 -- the account returns to zero, one PMD page and one PUD
+	 * page retired.
+	 */
+	mmgrab(mm);
+	mmput(mm);
+	KUNIT_EXPECT_EQ(test, mm_pgtables_bytes(mm), 0);
+	mmdrop(mm);
+	t->mm = NULL;
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_exit_upper_pmds(),
+			pmds0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_exit_upper_puds(),
+			puds0 + 1);
+}
+
+/* ------------------------------------------------------------------
+ * w3fix6 (residual ledger #6, the W-5 sweep-live face): the released
+ * span's warm upper pages.  A RELEASE retires the window's PT pages
+ * and erases the registry record, but leaves the span's upper pages
+ * warm for the next arena (V-A.1) -- after the last record in a span
+ * is released, the span is invisible to the registry-keyed B passes
+ * AND to free_pgtables() (no tree VMA in it to walk).  The pair rode
+ * to free_mm as the 8192-byte residue: one PMD page + one PUD page
+ * still counted, nothing ever collecting them.  Pass C walks the page
+ * tables themselves and closes exactly this span; the anchor requires
+ * the whole account back with the upper-table counters advancing by
+ * the warm pair.
+ * ------------------------------------------------------------------
+ */
+static void corten_arena_test_exit_warm_span_closure(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long win = CORTEN_ARENA_TEST_WIN;
+	long pmds0, puds0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "warm-span closure anchor requires corten=on");
+
+	pmds0 = corten_arena_test_exit_upper_pmds();
+	puds0 = corten_arena_test_exit_upper_puds();
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_pool_attach(mm, win,
+							    2 * PMD_SIZE),
+			0);
+	/* Metadata-only windows: fill_upper() builds the PT page and the
+	 * upper tier -- the release leaves exactly the warm pair behind.
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_test_fill_window(mm, win), 0);
+
+	/* The release: PT pages retired, registry erased, upper pages
+	 * warm -- the span no longer names any record and carries no
+	 * tree VMA (the fixture VMA sits a P4D span below).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_release,
+						 win, 2 * PMD_SIZE), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_records(mm), 0);
+	KUNIT_EXPECT_FALSE(test, corten_arena_test_pt_present(mm, win));
+
+	/* The real funnel: nothing but pass C can reach the warm span.
+	 */
+	mmgrab(mm);
+	mmput(mm);
+	KUNIT_EXPECT_EQ(test, mm_pgtables_bytes(mm), 0);
+	mmdrop(mm);
+	t->mm = NULL;
+
+	KUNIT_EXPECT_EQ(test, corten_arena_test_exit_upper_pmds(),
+			pmds0 + 1);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_exit_upper_puds(),
+			puds0 + 1);
+}
+
+/* ------------------------------------------------------------------
  * w3fix4: the brk shrink route's boundary-frame bookkeeping.  A trim
  * keeps the old boundary frame claimed while the new end still
  * reaches into it (the kept heap pages' tier-1 bounds read the frame
@@ -16488,6 +16794,14 @@ static struct kunit_case corten_arena_test_cases[] = {
 	 * retirement interleave -- the M2a probe exclusion's anchor.
 	 */
 	KUNIT_CASE(corten_arena_test_declare_probe_stale_pt),
+	/* w3fix6 (residual ledger #5/#6): the per-mm skip attribution,
+	 * the munmap-side upper-page gate and the released-warm-span
+	 * closure (registered before the whitelist anchor, which reads
+	 * the cumulative gate verdict).
+	 */
+	KUNIT_CASE(corten_arena_test_probe_skip_mm_attribution),
+	KUNIT_CASE(corten_arena_test_munmap_shared_upper_gate),
+	KUNIT_CASE(corten_arena_test_exit_warm_span_closure),
 	KUNIT_CASE(corten_arena_test_brk_boundary_strand),
 	/* Ledger #11 (mv3cfeat §2.4-1): the dirty-range bounded park
 	 * reset -- exact widen, park collapse, reactive restart.
