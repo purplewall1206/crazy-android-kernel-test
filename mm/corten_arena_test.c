@@ -12913,6 +12913,32 @@ static void corten_arena_test_gup_loop_legacy(struct kunit *test)
  * still no WARN face.  Pre-fix this read returned 0 bytes, tripped
  * the WARN and leaked the mmap_read (the journald stall).
  */
+/* Ledger #7 (mv3c sec 3.3): the single-suite flake family answers short
+ * through the remote faces, and access_remote_vm() swallows the
+ * underlying GUP errno -- the not-ok lines name the byte count only.
+ * Probe the errno directly so a failing run reads it off the log.
+ * Diagnostic only: every call site guards a failing EXPECT, so green
+ * runs never reach it, and a probe against a parked window counts one
+ * extra short in the face's own ledger (the accounting run's deviated
+ * counts, disclosed here).
+ */
+static int corten_arena_test_gup_errno(struct mm_struct *mm,
+				       unsigned long addr, bool write)
+{
+	struct page *page = NULL;
+	long nr;
+
+	nr = get_user_pages_remote(mm, addr, 1,
+				   write ? FOLL_WRITE | FOLL_FORCE :
+					   FOLL_ANON,
+				   &page, NULL);
+	if (nr > 0)
+		put_page(page);
+	if (nr > 0)
+		return 0;
+	return (int)nr;
+}
+
 static void corten_arena_test_remote_access_window(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
@@ -12962,6 +12988,10 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
 	 */
 	refs0 = folio_ref_count(page_folio(page));
 	ret = access_remote_vm(mm, a, buf, sizeof(buf), FOLL_ANON);
+	if (ret != (int)sizeof(buf))
+		kunit_err(test, "ledger #7: window read short: ret=%d expected=%zu gup_errno=%d\n",
+			  ret, sizeof(buf),
+			  corten_arena_test_gup_errno(mm, a, false));
 	KUNIT_EXPECT_EQ(test, ret, (int)sizeof(buf));
 	KUNIT_EXPECT_MEMEQ(test, buf, &pat, sizeof(pat));
 	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0);
@@ -12971,6 +13001,11 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
 	 * same per-read ref pairing.
 	 */
 	ret = access_remote_vm(mm, a + PAGE_SIZE - 1, buf, 1, FOLL_ANON);
+	if (ret != 1)
+		kunit_err(test, "ledger #7: arg_end-1 peek short: ret=%d expected=1 gup_errno=%d\n",
+			  ret, corten_arena_test_gup_errno(mm,
+							   a + PAGE_SIZE - 1,
+							   false));
 	KUNIT_EXPECT_EQ(test, ret, 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0);
 	KUNIT_EXPECT_EQ(test, folio_ref_count(page_folio(page)), refs0);
@@ -12983,6 +13018,9 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
 						 corten_arena_test_op_munmap_route,
 						 a, PAGE_SIZE), 1);
 	ret = access_remote_vm(mm, a, buf, sizeof(buf), FOLL_ANON);
+	if (ret != 0)
+		kunit_err(test, "ledger #7: parked window read: ret=%d expected=0 gup_errno=%d\n",
+			  ret, corten_arena_test_gup_errno(mm, a, false));
 	KUNIT_EXPECT_EQ(test, ret, 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0 + 1);
 
@@ -13048,6 +13086,9 @@ static void corten_arena_test_remote_poke_cow(struct kunit *test)
 	 */
 	back = (u64)'X';
 	ret = access_remote_vm(mm, a, &back, 1, FOLL_WRITE | FOLL_FORCE);
+	if (ret != 1)
+		kunit_err(test, "ledger #7: remote poke short: ret=%d expected=1 gup_errno=%d\n",
+			  ret, corten_arena_test_gup_errno(mm, a, true));
 	KUNIT_EXPECT_EQ(test, ret, 1);
 
 	/* The parent diverged at byte 0 only; the child keeps the seed
@@ -13131,8 +13172,17 @@ static void corten_arena_test_punch_bare_frame_pte(struct kunit *test)
 	/* ...and the bare frame is PT-retired.  The red face: the PT
 	 * entry survived the punch and its PT+PMD pair surfaced at
 	 * free_mm as the 8192 residue.
+	 * Ledger #7: on a deviation the registry-vs-PT pair is the
+	 * readout -- a present PMD over a registry-gone extent is
+	 * exactly the stranded pair.
 	 */
+	if (corten_arena_test_pmd(mm, win1))
+		kunit_err(test, "ledger #7: bare-frame PT survived: pmd_present(win1)=%d region_gone(win1)=%d region_alive(win0)=%d\n",
+			  !!corten_arena_test_pmd(mm, win1),
+			  !corten_arena_test_region_of(mm, win1),
+			  !!corten_arena_test_region_of(mm, win0));
 	KUNIT_EXPECT_NULL(test, corten_arena_test_pmd(mm, win1));
+
 }
 
 /*
