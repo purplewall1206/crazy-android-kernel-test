@@ -148,10 +148,10 @@ stack/special 是 T0 合同有意保留的 legacy 住户, wl_file 是待裁决�
 | 10 | **地板演化 bisect** | "-17~-22% → -84%" 漂移未定轮（候选 W-2/W-7/M-V）; D35 判定基线数字过时（mv3cfeat §2.1/§2.4-4） | build b9541335 + 中间点回放 mmbench_dyn 协议 | P2 |
 | 11 | **脏域 rec_lo/hi 有界 park reset（批 mark 刀 2）** | 设计节在案（mv3cfeat §2.4-1: O(512)→O(dirty), 不变式 PTE⊆已 mark 范围, INV6 支撑） | 独立性能片; 先量后动 | P2 |
 | 12 | **per-fault 簿记批化（刀 3）** | +~1.4µs/页归因（lookup/ref/tier/desc 锁/meta/stats）; desc 锁粒度+stats 合并（mv3cfeat §2.4-2） | 独立性能片, 排刀 2 后 | P2 |
-| 13 | **glibc 库非零 hint 收编（超红线裁决件）** | 库首段带非零 hint 永不达 addr==0 路由; 库段留树（wl_file ~9-70/进程主源）; 收编需"hint 迁移窗口"语义决定, 违 T0 显式地址契约（mv3cfeat §1.5-1） | **主会话裁决件**: 裁决前不动码; 裁决收编则是 WL-tree 归零的最后一大块 | P3 |
+| 13 | **glibc 库非零 hint 收编（超红线裁决件）** | 库首段带非零 hint 永不达 addr==0 路由; 库段留树（wl_file ~9-70/进程主源）; 收编需"hint 迁移窗口"语义决定, 违 T0 显式地址契约（mv3cfeat §1.5-1） | **已裁决（2026-10-06 主会话）: 选项 a——接受为永久边界**。不收编, wl_file 桶作为 D33/T0 契约内住户永续登记; "hint 迁移窗口"语义永不实施（除非未来新指令轮推翻）。终态口径 = 窗口域零 VMA + 白名单域契约保留 | **P3 → 已闭（裁决边界）** |
 | 14 | **static-PIE 对齐探针形** | 对齐 >ELF_MIN_ALIGN 的探针 map+munmap+NOREPLACE 重装会吃 -EEXIST; guest 无此形二进制（mv3cfeat §1.5-2） | 低优先; 探针 record 的 NOREPLACE 豁免小片 | P3 |
 | 15 | **bpf_iter/task_vma 窗口段（#39）** | 真保真缺口, 双源化唯一机械=BPF VMA 形对象=D28 明禁; 正典面 /proc/maps 已双源（mv3b §4.3, D28 阻断登记） | 新 BPF 面（region 迭代 kfunc/迭代器）独立设计片; 不排期 | P3 |
-| 16 | **裁剪 PR 序列 PR-0..4** | 本报告 §1.3 边界件 | PR-0（implant 退役）先行; 每枚独立 PR + 审计门 | P3（裁决后排期） |
+| 16 | **裁剪 PR 序列 PR-0..4** | 本报告 §1.3 边界件 | PR-0（implant 退役）已落（2d3febc401e1）; **已裁决（2026-10-06 主会话）: 执行删除**——PR-1..4 当夜在制（pr-deletion 分支） | **P3 → 执行中（已裁决）** |
 
 台账口径: D32 sticky-MODE / D33 判据收窄 / D34 frame-sharing 结构边界 /
 D35 基线刷新为**已决裁定**, 不占开项位; POKE-COW / journald 面 / S-3 /
