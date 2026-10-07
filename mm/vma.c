@@ -2589,8 +2589,17 @@ static int __mmap_prepare(struct mmap_state *map, struct list_head *uf)
 	 */
 	if (!vms->vma &&
 	    corten_arena_placement_backstop(map->mm, map->addr,
-					    map->end - map->addr))
+					    map->end - map->addr)) {
+		/*
+		 * PR-3 (C1, W-5): demote the silent placement backstop
+		 * to a loud one.  The backstop audit ruled this arm
+		 * unreachable (a hit means a placement guard failed);
+		 * the -EOPNOTSUPP fallback itself is kept -- the assert
+		 * does not touch control flow.
+		 */
+		WARN_ON_ONCE(1);
 		return -EOPNOTSUPP;
+	}
 #endif
 
 	/* OK, we have overlapping VMAs - prepare to unmap them. */
@@ -2615,8 +2624,17 @@ static int __mmap_prepare(struct mmap_state *map, struct list_head *uf)
 		 * corten=off / no arenas: two loads.
 		 */
 		if (corten_arena_range_overlaps(map->mm, map->addr,
-						map->end - map->addr))
+						map->end - map->addr)) {
+			/*
+			 * PR-3 (C1, W-5): demote the silent overlap
+			 * backstop to a loud one, symmetric with the
+			 * placement backstop above.  The -EOPNOTSUPP
+			 * fallback itself is kept -- the assert does not
+			 * touch control flow.
+			 */
+			WARN_ON_ONCE(1);
 			return -EOPNOTSUPP;
+		}
 #endif
 		mt_init_flags(&map->mt_detach,
 			      vmi->mas.tree->ma_flags & MT_FLAGS_LOCK_MASK);
