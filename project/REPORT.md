@@ -1295,8 +1295,18 @@ D29 把 MV2 的"prctl 显式进场"推进为三轴终点: **①机制面**——
 **A 窗口域树走查臂（死码, 可删）/ B merge 窗口臂（死码）/ C legacy 生产
 与 bulk 拆除（活, 服务白名单域）/ D 渲染面（活, 双源）/ E 勿删边界 5 项**。
 裁剪 PR-0..4, 每枚验收门 = j1/j2/wl delta 恒零 + 全套电池。
-**PR-0 已落地**（2d3febc401e1, bss implant adoption + D33 ruling）; PR-1..4
-待主会话裁决排期（台账 #16）。
+**全序列落地（2026-10-07 凌晨, 裁决 #16 = 执行删除）**:
+
+| PR | commit | 内容 | 门读数 |
+|---|---|---|---|
+| PR-0 | 2d3febc401e1 | bss implant adoption + MAP_SHARED punch D33 ruling（退化合同: VM_LOCKED/OVERCOMMIT_NEVER/may_expand_vm 三守卫逐项降级回 legacy 漏斗+implant, 计数 bss_legacy） | 落地夜引入 =on 回归, 见 §11.9 |
+| PR-1 | 140783d4c060 | **A 组窗口臂短路**: A1/A2/A4（find_vma/find_vma_intersection/lock_vma_under_rcu）窗口整段查询免走查直答 NULL, `corten_window_query()` 门 = MODE + 窗口双比较 + **nr_implants==0**（退化合同守卫——降级 mm 照常走查找到其树 VMA）; **A3/A5 记录性保留**（vma_iter_load 是 maple prev/next 合同的定位前提——auto_route 锚抓出; C1 空判据以 vma_lookup 为树净证人）; A6 骑 A1 形; 六处 corten_j1_probe 全保留（probes 持续计数, hits 恒零） | KUnit 26/0/1+147/0/0+34/0/5; checkpatch 0E/0W/0C; =n rc=0 零符号 |
+| PR-2 | 07b83961880e | **B 组窗口臂门控**: vma.c 五门位点（merge_new_range/modify/expand/shrink/munmap guard 后）count-and-proceed——unclaimed 计数器四读全零（零行为变化的实证口径）, 计数器挂 debugfs `corten_vma_unclaimed` | 与 PR-3/4 共栈 guest 验证: smoke 26/26 + metis 基准同值 + gate_pass=1 |
+| PR-3 | e12a89e420c0 | **C1 双 backstop 降级断言**: placement/overlap 两 backstop 兜底臂 WARN_ON_ONCE 化（W-5"不可达 backstop"自证审计）, guest 全程零 WARN | 同上 |
+| PR-4 | 00c07b199534 | **D 组渲染臂收尾**: task_mmu.c 三点恒真断言化（dual-source 门/prime MODE 门/树臂 INV-MV2 守卫）, registry 渲染臂逐字未动; =n 对 vanilla 机器码零差 | 同上 |
+
+口径如实: 本四枚为**边界件落地**（短路/门控/断言化）, mv3e §1.3 的"实删大头 =
+E2 审计机械退役"仍在二期台账（#16 的 PR 序列完成后按裁 决排期）。
 
 ### 11.5 残留台账现状（mv3e 16 开项 → 现 9 开项）
 
@@ -1304,8 +1314,9 @@ D29 把 MV2 的"prctl 显式进场"推进为三轴终点: **①机制面**——
 |---|---|
 | 已清偿 | P1 #1（pin 协议）#2（stats 渲染）#3（gfetch）#4（wl_brk_multi）——w3fix4; #5/#6（归属计数器+几何门）——w3fix6; #11（脏域夹取）——w3fix5 |
 | 开放 P2×5 | #7 单套件 flake（判据面外）#8 MADV_PAGEOUT 一行对齐 #9 MADV_POPULATE 片 #10 地板演化 bisect #12 per-fault 簿记批化（w3fix7 温快路径片在制） |
-| 裁决已落 | **#13 = 选项 a（2026-10-06 主会话）**: 库段 wl_file 接受为 D33/T0 契约内永久边界, 不收编; **#16 = 执行删除**: PR-1..4 当夜在制; #15 bpf_iter 维持登记降级（D28 口径） |
-| 开放 P3 | #14 static-PIE 对齐探针（S2 片当夜在制）; #15 维持登记 |
+| 裁决已落 | **#13 = 选项 a（2026-10-06 主会话）**: 库段 wl_file 接受为 D33/T0 契约内永久边界, 不收编; **#16 = 执行删除**: PR-1..4 全部落地（§11.4）; #15 bpf_iter 维持登记降级（D28 口径） |
+| 已清偿（10-07 夜） | **#7**（flake errno 记账交付, 3×3 复跑未复现——观测件口径）/ **#8**（PAGEOUT 并入 hints 臂）/ **#9**（populate-through-arena, KUnit 锚矩阵）/ **#14**（static-PIE NOREPLACE 探针豁免, 自建探针体红绿闭环——翻案"guest 无此形二进制"登记） |
+| 开放 | **#10**（地板 bisect, 测量片当夜在制）/ **#12**（w3fix7 温快路径, 接力在制 KUnit 已绿、bench 配对中断停摆——登记在制不落地）/ **#15**（维持登记）/ E2 二期退役（#16 后续） |
 
 ### 11.6 采证归档原件落库（mv3e 诚实披露的清偿）
 
@@ -1350,21 +1361,48 @@ membership test 免热路径 mutex+re-arm, 首轮 KUnit 两锚红, 修复迭代�
 t8 尾部差距的机制归因维持 mv3cfeat 判定: park PTE 级全幅走查（有意保留,
 W-3fix5 §3 裁决）+ per-fault ~+1.4µs（mv3cfeat §2.4-2 归因在案）。
 
-## 12. 终报最终成绩单（2026-10-06, D35 口径）
+### 11.9 ★ 删除账执行夜的重大发现: PR-0 =on 默认进场回归（P1 首项, 2026-10-07）
+
+PR-1 的验收 boot 揭露一个**被 lockdep 掩蔽的预存回归**, 与删除账执行同夜定罪
+（完整矩阵: next/pr0-defentry-regression-dev-report.md + results/r07/
+pr0-regression/ 六份 console 原件）:
+
+- **现象**: 非 lockdep 生产形 config 上, `corten_mode_default=on` 世界任何
+  init（bash 动态链接亦然, 非 static-PIE 特异）在 "Run /sbin/init" 后 ~30ms
+  首个用户写 SIGSEGV → kernel panic。w6v2 与 mv3d 双镜像皆崩。
+- **commit 定罪**: W-3fix5（47cc6cfb, PR-0 前）生产 config =on 干净 boot;
+  **PR-0 单点（2d3febc4）必崩**; 含 PR-0 的 lockdep 构建两次首 boot 干净
+  ——但**最终合并链的 lockdep 构建 =on 同样崩**（console-final-chain-
+  lockdep-crash.log）: 掩蔽是概率性的（竞态窗随 config 时序缩放）, 不是
+  config 边界。28 行全量 config diff 全为 lockdep/DEBUG 族（语义无关、
+  时序巨变）。
+- **诚实披露**: 全部既有 =on verdict（MV3.d 三腿 7216s 零 panic 在内）均为
+  mva lockdep 形 config 的结论——生产形 config 的 =on 世界在本发现前从未被
+  验证。prctl 进场世界与 =off 世界不受影响（本夜终电池全绿, §12）。
+- **机制画像**: exec 准入完成后首个写未被 fill 服务; 候选面 = PR-0 bss
+  adoption 臂（"early return, no populate"）× exec 镜像 FILE record 的 W-7
+  同帧共存 × fault fill/MAPERR 判定。根修轮预算满额后定点。
+- **处置**: 登记发运不凌晨抢修（W-7 同帧机械抢修风险 > 收益）; P1 首项,
+  根修验收门 = 生产 config =on 全系统 boot ×3 + 三腿电池复跑。
+
+## 12. 终报最终成绩单（2026-10-07 凌晨, D36 口径 = 删除账执行夜）
 
 **一句话: Linux 6.18 上 VMA-窗口域移除目标机制面全达成并过全系统电池;
-正确性面零内存安全事件; 性能面单线程税收窄至 −33%, 多线程 −62%, 三刀
-已落一刀、一刀在制; 全项目开项 9 枚（P2×5 + P3×4）, 无拦路面。**
+删除账 PR-0..4 全序列落地（窗口域死码面收口）; 正确性面零内存安全事件;
+性能面单线程税收窄至 −33%、多线程 −62%, 刀 2 已落、刀 3 在制;
+遗留 = PR-0 =on 生产 config 回归（P1 首项, commit 已定罪、lockdep 掩蔽
+机制已明, §11.9）+ 台账 4 枚（#10/#12/#15/E2 二期）。**
 
 | 账面 | 终态 | 证据 |
 |---|---|---|
-| VMA 移除 | MODE 进程窗口域 maple 树条目 **0**（P2 gate 归档 tree_entries=0; MV2 世代 prctl 世界 5 条全白名单豁免桶）; find_vma 严格零命中 | §10 verdict 表 + §11.6 原件 |
-| 窗口域审计 | 累计 j1 617 探针/0 非法命中; j2 69001 walk/0 违例; 归档单轮 310/0 + 3456/0; j2_stale=0 | mv3e + §11.6 |
-| 正确性 | LTP =off 98/11/115 与 =on 世界全编译+安装+运行 7216s **零 panic 零 corruption**; syzkaller 4.53M exec 零内存安全; smoke 26/26 双形; metis checksum `2d383eeed4ceb73b` 精确同基准; KUnit 三套件 204 pass/0 fail | §10 + mv3d/r07 工件 |
-| 兼容性 | 零改动已编译程序 MODE 下跑通（D12 六件套 rc=0）; =on 全 systemd 启动 153+ 进程默认进场 | §6 + mv3a |
-| 性能 | warm park **+134.6%（t4）/+135%（t8）**; MODE 税演化 −84.3%→−63.2%（mv3cfeat D35）→ **w3fix6 树 t4 −33.3% / t8 −61.5%**; mmap_lock 竞争面在窗口域**结构性消失**（无锁无树, 事务接口替代） | mv3cfeat §2 + w3fix7 bench-base |
-| 代码账 | VMA 层四件 13,408 LoC（vanilla 12,955, 路由钩净 +453——**窗口域臂已死, 删除账 PR-1..4 待裁**）; corten 生产 23,761 + 测试 20,573 | §10.3 J6 |
-| 开项账 | 9 开项（P2×5 + P3×4, §11.5）; D29 级 = 零; 无拦路面 | mv3e 台账 |
+| VMA 移除 | MODE 进程窗口域 maple 树条目 **0**（P2 gate 归档 tree_entries=0; MV2 世代 prctl 世界 5 条全白名单豁免桶）; find_vma 窗口臂短路后严格零命中（PR-1） | §10 verdict 表 + §11.6 原件 + §11.4 |
+| 删除账 | **PR-0..4 全落**: A 组窗口臂短路（implant 退化合同门）/ B 组门控计数全零 / C1 backstop 断言化 / D 组渲染臂收尾——窗口域死码面全部收口; 实删大头（E2 审计机械）在二期台账 | §11.4 |
+| 窗口域审计 | 累计 j1 617 探针/0 非法命中; j2 69001 walk/0 违例; 归档单轮 310/0 + 3456/0; 终电池 gate_pass=1 全零 + PR-2 unclaimed 计数器 0 | mv3e + §11.6 + final-battery/ |
+| 正确性 | 终电池（合并链 g34a103e2 生产 config, prctl 世界）: boot 净 + smoke 26/26 + metis MODE 下 65073 词 checksum `2d383eeed4ceb73b` 基准精确同值 + KUnit 三套件全绿; 历史面: LTP =off 98/11/115、=on 7216s 零 panic（lockdep config 口径, §11.9 披露）、syzkaller 4.53M exec 零内存安全 | final-battery/ + §10 + mv3d |
+| 兼容性 | 零改动已编译程序 MODE 下跑通（D12 六件套 rc=0）; prctl 进场 153+ 进程实证; =on 默认进场见 §11.9 披露 | §6 + mv3a |
+| 性能 | warm park **+134.6%（t4）/+135%（t8）**; MODE 税 −84.3%→−63.2%（D35）→ **w3fix6 树 t4 −33.3% / t8 −61.5%**; mmap_lock 竞争面在窗口域**结构性消失**; 刀 3（w3fix7 温快路径）在制 KUnit 已绿 | mv3cfeat §2 + w3fix7 bench-base |
+| 代码账 | VMA 层四件 13,408 LoC（vanilla 12,955, 路由钩净 +453）; 窗口域死码面收口净 +158 行门控/断言（登记件口径, 实删在 E2 二期）; corten 生产 23,761 + 测试 20,573 | §10.3 J6 + §11.4 |
+| 开项账 | **P1 首项 = PR-0 =on 生产 config 回归**（§11.9, 定罪矩阵在案）; P2×2（#10 bisect 在制 / #12 在制）+ P3×1（#15 登记）+ E2 二期; 无其它拦路面 | §11.5 + §11.9 |
 
 ## 附: 本报告自检状态（v1.3 终稿, 2026-09-21）
 
