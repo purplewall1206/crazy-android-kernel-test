@@ -1661,3 +1661,43 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
   - 内核仓 github 三线核对: **android17-6.18 = 6fd01509 ✓（W-3fix6 在线）,
     corten-github = 708c329 ✓**, 与本地一致; 「51 tag 补传」遗留项扩为
     55（+w3fix4/5/6/pr0/perf2a）, 网络慢链路下分批后台补推中。
+
+---
+
+- **[2026-10-07 主会话: 删除账执行夜 —— PR-0..4 全落 + PR-0 =on 回归定罪 + 终电池]**
+  - **裁决执行（用户 2026-10-06 深夜）**: #13=选项 a（库段 wl_file 永久边界, 落账
+    f37770d9f336）; #16=执行删除; #15 维持登记。
+  - **PR-2/3/4 落地**（agent pr234, merge 4e0338df8fae）: B 组五门位点
+    count-and-proceed（unclaimed 计数器 debugfs 顶面, 四读全零）+ C1 双
+    backstop WARN_ON_ONCE 化（guest 全程零 WARN）+ D 组渲染臂三点恒真断言
+    化（=n 对 vanilla 机器码零差）; 共栈 guest 门: smoke 26/26 + metis 基准
+    同值 + gate_pass=1。
+  - **PR-1 落地**（原 agent 分析瘫痪超时死亡, 主会话亲手接管, merge
+    34a103e24ce7）: A1/A2/A4 窗口整段查询免走查（`corten_window_query` =
+    MODE+窗口+**nr_implants==0** 三重门——PR-0 退化合同守卫, 降级 mm 照常
+    走查）; A3/A5 记录性保留（auto_route 锚抓出: vma_iter_load 是 maple
+    prev/next 定位前提、C1 空判据以 vma_lookup 为树净证人）; 六处
+    j1_probe 全留。KUnit 终态 26/0/1+147/0/0+34/0/5, checkpatch 0E/0W/0C,
+    =n 零符号。
+  - **★ PR-0 =on 默认进场回归定罪（P1 首项）**: 非 lockdep 生产 config 上
+    =on 世界任何 init exec 后首写 SIGSEGV→panic（双镜像、非 static-PIE
+    特异）; W-3fix5 生产 config 干净、PR-0 单点必崩、lockdep 构建两次首
+    boot 干净=时序掩蔽（28 行 config diff 全 lockdep 族）。**全部既有 =on
+    verdict 为 lockdep config 口径**——生产 config =on 世界此前从未被验证。
+    prctl 世界与 =off 不受影响。登记发运不凌晨抢修; 诊断报告
+    next/pr0-defentry-regression-dev-report.md + results/r07/pr0-regression/
+    六份 console 原件; 根修验收门=生产 config =on boot ×3+三腿复跑。
+  - **终电池（合并链 g34a103e2 生产 config, prctl 世界）**: systemd boot 净
+    + audit gate_pass=1 全零 + PR-2 unclaimed=0 + smoke 26/26 + metis MODE
+    65073 词 checksum 2d383eeed4ceb73b 基准精确同值。工件
+    results/r07/final-battery/。
+  - **小片清偿**: S1 madv-pair（#8 PAGEOUT 入 hints 臂 21ba16a9 + #9
+    populate-through-arena c27e25aa, 全门零 GAP）; S2 flake-pie（#7 记账
+    8ba443a4 + #14 NOREPLACE 探针豁免 c4448f35, 自建 static-PIE 探针体红绿
+    闭环翻案旧登记; 独立发现 = 本条 PR-0 回归的第一报）。均已 merge 入链。
+  - **登记在制**: #12 w3fix7（relay 会话 23:57 后停摆, VM 死; KUnit 已绿
+    146/0/0、bench 配对中断——不代落地, 归接力续）; #10 bisect 测量片
+    （独立 worktree/overlay, agent 在制）。
+  - **台账终态**: 已闭 #1-#6/#8/#9/#11/#13(裁决)/#14 + #16(PR-0..4 落地);
+    开放 #7(记账已交付, 根因观测件)/#10/#12/#15 + E2 二期; **P1 首项 =
+    PR-0 =on 生产 config 回归**。
