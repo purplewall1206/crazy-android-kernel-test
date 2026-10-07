@@ -1118,7 +1118,10 @@ struct vm_area_struct *find_vma_intersection(struct mm_struct *mm,
 	struct vm_area_struct *vma;
 
 	mmap_assert_locked(mm);
-	vma = mt_find(&mm->mm_mt, &index, end_addr - 1);
+	/* PR-1 (A2): a fully-in-window intersection has no tree answer. */
+	vma = NULL;
+	if (!corten_window_query(mm, start_addr, end_addr))
+		vma = mt_find(&mm->mm_mt, &index, end_addr - 1);
 	corten_j1_probe(mm, start_addr, end_addr, vma);
 	return vma;
 }
@@ -1160,7 +1163,13 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 	struct vm_area_struct *vma;
 
 	mmap_assert_locked(mm);
-	vma = mt_find(&mm->mm_mt, &index, ULONG_MAX);
+	/* PR-1 (A1): a window address has no tree answer -- the upward
+	 * walk could only return a far-above whitelist VMA, the misread
+	 * shape the J1 probe pair exists to police.
+	 */
+	vma = NULL;
+	if (!corten_window_query(mm, addr, addr + 1))
+		vma = mt_find(&mm->mm_mt, &index, ULONG_MAX);
 	corten_j1_probe(mm, addr, addr + 1, vma);
 	return vma;
 }
@@ -1186,6 +1195,13 @@ find_vma_prev(struct mm_struct *mm, unsigned long addr,
 	struct vm_area_struct *vma;
 	VMA_ITERATOR(vmi, mm, addr);
 
+	/* PR-1 (A3): the load stays.  vma_iter_load() positions the maple
+	 * iterator for the vma_prev()/vma_next() contract below -- a
+	 * window short-circuit here (the load can only miss) changes
+	 * what vma_next() hands back afterwards, and the auto_route
+	 * anchor caught exactly that.  A miss costs the same walk it
+	 * always did; the probe keeps counting.
+	 */
 	vma = vma_iter_load(&vmi);
 	/* V-A.2a J1 prelude, hook 4/5 (V-A.3b): same probe shape as
 	 * find_vma() above -- a hit means a tree VMA in the window

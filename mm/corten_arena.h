@@ -730,6 +730,49 @@ static inline void corten_j1_probe(struct mm_struct *mm, unsigned long start,
 }
 
 /*
+ * Deletion-ledger PR-1 (mv3e-dev-report.md sec 1.2, A group): the
+ * window short-circuit.  Post-PR-0 a MODE mm's tree holds no window
+ * VMA at all (the punch implant retired), so a query lying fully
+ * inside [WINDOW_START, WINDOW_END) can answer without the walk: the
+ * callers here probe the window for "is anything mapped at this
+ * address" and the structurally correct answer is NULL.  find_vma()'s
+ * upward walk could only hand back a far-out-of-range whitelist VMA
+ * -- exactly the misread the probe pair polices -- so the walk is
+ * skipped, not emulated.
+ *
+ * The one shape that keeps a window tree VMA is PR-0's degradation
+ * contract (VM_LOCKED / OVERCOMMIT_NEVER / may_expand_vm guards): a
+ * degraded bss stays a funnel VMA plus its implant mark, so its
+ * lookups must still walk and find it.  The implant count is the
+ * precise per-mm witness -- every degrade marks one, and no other
+ * production path pairs a window tree VMA with a registry entry.
+ * nr_implants > 0 disables the short-circuit for that mm; the walk
+ * then answers exactly as before.  Punches also live in the implant
+ * registry but hold no tree VMA post-PR-0, so their mms merely keep
+ * today's (walk-to-NULL) behavior -- no acceleration, no change.
+ *
+ * Queries crossing a window edge and every non-MODE mm walk the tree
+ * unchanged; the corten_j1_probe() at each call site stays put and
+ * keeps the audit counting.  nr_implants is written under mmap_write
+ * and read here under mmap_read (excluded) or RCU (a torn read costs
+ * one walk-shaped answer, the same "not yet visible" the RCU walk
+ * itself could produce).
+ */
+static inline bool corten_window_query(struct mm_struct *mm,
+				       unsigned long start, unsigned long end)
+{
+	struct corten_mm_state *state;
+
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+		return false;
+	state = READ_ONCE(mm->corten_state);
+	if (state && READ_ONCE(state->nr_implants))
+		return false;
+	return start >= CORTEN_MODE_WINDOW_START &&
+	       end <= CORTEN_MODE_WINDOW_END;
+}
+
+/*
  * The untracked maple lookup for corten's own walkers (the placement
  * obstacle scan, the punch split scan, the fault tier-2 check): the
  * probe above counts external consumers, so the registered internal
@@ -1443,6 +1486,13 @@ static inline void corten_j1_probe(struct mm_struct *mm, unsigned long start,
 				   unsigned long end,
 				   struct vm_area_struct *vma)
 {
+}
+
+/* No MODE mm can exist: every window query walks the tree as before. */
+static inline bool corten_window_query(struct mm_struct *mm,
+				       unsigned long start, unsigned long end)
+{
+	return false;
 }
 
 /* V-E brk arm note: no MODE mm can exist, never taken. */

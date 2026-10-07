@@ -3641,6 +3641,14 @@ struct vm_area_struct *find_vma_intersection(struct mm_struct *mm,
 static inline
 struct vm_area_struct *vma_lookup(struct mm_struct *mm, unsigned long addr)
 {
+	/* PR-1 (A5): the window short-circuit is NOT applied here.  The
+	 * arena's own C1 emptiness checker (corten_arena_check_empty_
+	 * locked()) consumes vma_lookup() as its tree-free witness, and
+	 * several funnel-side contracts read the same load; skipping it
+	 * from this header changes answers those callers were built to
+	 * trust (the auto_route anchor caught the shape).  The exact-
+	 * index load stays; A1/A2/A4 carry the deletion-ledger savings.
+	 */
 	return mtree_load(&mm->mm_mt, addr);
 }
 
