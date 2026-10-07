@@ -2042,6 +2042,10 @@ static int corten_arena_test_page_word(struct mm_struct *mm,
 				       bool write);
 static pmd_t *corten_arena_test_pmd(struct mm_struct *mm,
 				    unsigned long addr);
+static unsigned long corten_arena_test_mvc_attach(struct kunit *test,
+						  struct mm_struct *mm,
+						  unsigned long frames,
+						  unsigned long prot);
 static int corten_arena_test_fork_begin(struct mm_struct *child,
 					struct mm_struct *parent);
 static int corten_arena_test_fork_commit(struct mm_struct *child,
@@ -6763,6 +6767,13 @@ static void corten_arena_test_madvise_route(struct kunit *test)
 			corten_arena_madvise_route(mm, MADV_NORMAL,
 						   CORTEN_ARENA_TEST_BASE,
 						   PAGE_SIZE), -EOPNOTSUPP);
+	/* POPULATE_* keep the M3 matrix reject on a mode-targeted arena
+	 * (only MODE takeover sees the populate arm).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_POPULATE_READ,
+						   CORTEN_ARENA_TEST_BASE,
+						   PAGE_SIZE), -EOPNOTSUPP);
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
 
@@ -6832,6 +6843,112 @@ static void corten_arena_test_madvise_route(struct kunit *test)
 			corten_arena_madvise_route(mm, MADV_DONTNEED,
 						   CORTEN_ARENA_TEST_BASE,
 						   PAGE_SIZE), 1);
+}
+
+/*
+ * populate-through-arena (ledger #9): MADV_POPULATE_READ/WRITE on a
+ * window-domain arena ride the GUP window arm's faultin leg from the
+ * route.  A span inside one arena answers handled with the pages
+ * committed (read shape = the shared zero page, write shape = a real
+ * exclusive arena-anon page); boundary crossings keep the loud
+ * reject, holes and below-window shapes keep the legacy walk.
+ */
+static void corten_arena_test_madvise_populate(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct page *page = NULL;
+	struct folio *folio;
+	pmd_t *pmdp;
+	pte_t *ptep, pte;
+	spinlock_t *ptl;	/* guards the populate PT reads below */
+	unsigned long a;
+	long c0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "populate route requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	a = corten_arena_test_mvc_attach(test, mm, 2, PROT_READ | PROT_WRITE);
+
+	c0 = corten_arena_test_named_counter(test, "madvise_populate");
+
+	mmap_read_lock(mm);
+	/* POPULATE_READ on the never-faulted first page: handled, and
+	 * the fresh slot's read shape (the shared zero page) is
+	 * resident in the PT -- a later read answers from the PTE, no
+	 * fault.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_POPULATE_READ, a,
+						   PAGE_SIZE), 1);
+	pmdp = corten_arena_test_pmd(mm, a);
+	KUNIT_ASSERT_NOT_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_TRUE(test, is_zero_pfn(pte_pfn(pte)));
+	pte_unmap_unlock(ptep, ptl);
+
+	/* POPULATE_WRITE on the second page: handled, and a real
+	 * exclusive page is resident (the unanchored family mark the
+	 * W1.a novma install leaves).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_POPULATE_WRITE,
+						   a + PAGE_SIZE,
+						   PAGE_SIZE), 1);
+	page = NULL;
+	KUNIT_EXPECT_EQ(test,
+			corten_gup_window(mm, a + PAGE_SIZE,
+					  FOLL_GET | FOLL_TOUCH, &page), 0);
+	KUNIT_ASSERT_NOT_NULL(test, page);
+	KUNIT_EXPECT_TRUE(test, PageAnonExclusive(page));
+	folio = page_folio(page);
+	KUNIT_EXPECT_TRUE(test, corten_folio_is_arena_anon(folio));
+	put_page(page);
+	page = NULL;
+
+	/* The populated span re-populates as an idempotent no-op: the
+	 * follow leg answers every page from its resident PTE (the
+	 * "no longer faults" contract, whole-span form).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_POPULATE_READ, a,
+						   2 * PAGE_SIZE), 1);
+	mmap_read_unlock(mm);
+
+	KUNIT_EXPECT_GT(test,
+			corten_arena_test_named_counter(test,
+							"madvise_populate"),
+			c0);
+
+	/* Shapes that keep their verdicts: a range crossing the arena
+	 * boundary (the loud reject), a window hole and a below-window
+	 * address (legacy 0 -- the funnel answers the hole's -EFAULT).
+	 */
+	mmap_read_lock(mm);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_POPULATE_WRITE,
+						   a + 2 * PMD_SIZE -
+							   PAGE_SIZE,
+						   2 * PAGE_SIZE),
+			-EOPNOTSUPP);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_POPULATE_READ,
+						   a + 8 * PMD_SIZE,
+						   PAGE_SIZE), 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_POPULATE_READ,
+						   CORTEN_ARENA_TEST_NOWHERE,
+						   PAGE_SIZE), 0);
+	mmap_read_unlock(mm);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
 }
 
 /* mremap routing needs the calling task's mm attached (the move path
@@ -16782,6 +16899,8 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_mprotect_route),
 	KUNIT_CASE(corten_arena_test_protect_flags_kernel_gate),
 	KUNIT_CASE(corten_arena_test_madvise_route),
+	/* ledger #9: populate-through-arena (the MV3.b residual). */
+	KUNIT_CASE(corten_arena_test_madvise_populate),
 	KUNIT_CASE(corten_arena_test_mremap_route),
 	KUNIT_CASE(corten_arena_test_fork_faithful),
 	KUNIT_CASE(corten_arena_test_fork_unwind),

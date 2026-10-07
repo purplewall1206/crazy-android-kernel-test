@@ -1952,9 +1952,10 @@ static int madvise_do_behavior(unsigned long start, size_t len_in,
 	 * kept); MADV_FREE is folded into the same transaction (an eager
 	 * content drop is a compliance superset of lazy-free, counted);
 	 * the pure hints (NORMAL/SEQUENTIAL/RANDOM/COLD/PAGEOUT) are
-	 * no-op successes in-arena.  Every other behaviour on a
-	 * shadow-VMA is rejected by the per-VMA check in
-	 * madvise_vma_behavior() below.
+	 * no-op successes in-arena, and MADV_POPULATE_READ/WRITE fault
+	 * the window domain in through the arena's GUP arm.  Every
+	 * other behaviour on a shadow-VMA is rejected by the per-VMA
+	 * check in madvise_vma_behavior() below.
 	 * Runs under whatever madvise_lock() provides; the decision is
 	 * xarray-only, no VMA dereference.
 	 */

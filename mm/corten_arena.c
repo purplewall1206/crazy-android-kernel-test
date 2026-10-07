@@ -241,6 +241,7 @@ static atomic_long_t corten_nr_auto_exhausted;	/* window exhausted */
 static atomic_long_t corten_nr_mprotect_routes;	/* routed mprotect txns */
 static atomic_long_t corten_nr_madvise_free_txns; /* FREE folded to DONTNEED */
 static atomic_long_t corten_nr_madvise_hints;	/* hint behaviours no-op'd */
+static atomic_long_t corten_nr_madvise_populate; /* populate-through-arena */
 static atomic_long_t corten_nr_mremap_routes;	/* routed (moved) mremaps */
 static atomic_long_t corten_nr_mremap_rejects;	/* unroutable mremaps */
 static atomic_long_t corten_nr_munmap_releases;	/* release-rule munmaps */
@@ -3501,6 +3502,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_madvise_free_txns));
 	seq_printf(m, "madvise_hints       %ld\n",
 		   atomic_long_read(&corten_nr_madvise_hints));
+	seq_printf(m, "madvise_populate    %ld\n",
+		   atomic_long_read(&corten_nr_madvise_populate));
 	seq_printf(m, "mremap_routes       %ld\n",
 		   atomic_long_read(&corten_nr_mremap_routes));
 	seq_printf(m, "mremap_rejects      %ld\n",
@@ -17032,8 +17035,8 @@ static bool corten_arena_window_parked_span(struct mm_struct *mm,
  *
  * MODE-targeted arenas (mode=0) keep the S6 behaviour for the new rows:
  * FREE/hints on them stay rejects, so only MODE-process takeover sees
- * the relaxation.  MADV_POPULATE_* would be safe (it faults through the
- * arena hook) but keeps its M3 reject per the matrix.  process_madvise
+ * the relaxation.  MADV_POPULATE_* fault through the arena hook from
+ * their own arm (populate-through-arena, ledger #9).  process_madvise
  * (OQ-C) flows through this same decision point for its supported
  * behaviours (COLD/PAGEOUT), so a remote hint on a MODE arena is the
  * same counted no-op.
@@ -17163,6 +17166,94 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 		if (!in_arena)
 			return -EOPNOTSUPP;
 		atomic_long_inc(&corten_nr_madvise_hints);
+		/* V-A.3c hot-path sample (no tree mutation on this arm --
+		 * the walk is the periodic re-proof the sampling knob
+		 * exists for).
+		 */
+		corten_audit_j2_sample(mm);
+		return 1;
+
+	case MADV_POPULATE_READ:
+	case MADV_POPULATE_WRITE:
+		/* populate-through-arena (ledger #9, the MV3.b
+		 * residual): a hard populate contract on a window-domain
+		 * arena is served by the GUP window arm's faultin leg --
+		 * the same machinery every other populate consumer of a
+		 * window address rides -- instead of the blanket M3
+		 * reject.  The drain interlock was repaid by MV3.c (the
+		 * drain segment runs under mmap_write + assert), so a
+		 * reader-side faultin is admissible again.
+		 *
+		 * Shapes: a range outside the window keeps the matrix
+		 * answer at the bottom (whitelist domains unchanged); a
+		 * hole or a parked span keeps the legacy walk (parked
+		 * records are lookup-invisible, T1c -- the walk's -ENOMEM
+		 * is the disclosed S-5 residual row); a range that
+		 * crosses an arena boundary keeps the loud -EOPNOTSUPP.
+		 * Fully in-arena: a per-page faultin loop mirroring
+		 * faultin_page_range()'s flag contract (FOLL_TOUCH plus
+		 * the write bit; no FOLL_UNLOCKABLE -- the route holds
+		 * the mmap lock throughout and the arm never drops it).
+		 * An implant or tree-anchored member re-routes the whole
+		 * range to the legacy funnel (populate is idempotent:
+		 * the pages already faulted in re-follow as no-ops
+		 * there).
+		 *
+		 * process_madvise: POPULATE_* are not remote-valid
+		 * (process_madvise_remote_valid()), so the arm only ever
+		 * runs on current->mm -- no remote-fault semantics to
+		 * carry.
+		 */
+		if (!READ_ONCE(mm->corten_mode))
+			break;
+		if (start < CORTEN_MODE_WINDOW_START ||
+		    end > CORTEN_MODE_WINDOW_END)
+			break;		/* whitelist domain: matrix below */
+		if (!len || (len & ~PAGE_MASK) || end <= start)
+			return 0;
+		ar_start = corten_arena_lookup_get(mm, start);
+		ar_end = corten_arena_lookup_get(mm, end - 1);
+		/* W-3: drop frame-granular hits without a byte overlap
+		 * (a legacy neighbor sharing the boundary frame): the
+		 * populate runs legacy.
+		 */
+		if (ar_start && !corten_route_hit(ar_start, start, end)) {
+			percpu_ref_put(&ar_start->active);
+			ar_start = NULL;
+		}
+		if (ar_end && !corten_route_hit(ar_end, start, end)) {
+			percpu_ref_put(&ar_end->active);
+			ar_end = NULL;
+		}
+		ar = ar_start ?: ar_end;
+		in_arena = ar_start && ar_start == ar_end &&
+			   corten_arena_unmap_classify(start, end, ar->start,
+						       ar->end) !=
+					  CORTEN_UNMAP_PARTIAL;
+		if (ar_start)
+			percpu_ref_put(&ar_start->active);
+		if (ar_end)
+			percpu_ref_put(&ar_end->active);
+		if (!ar)
+			return 0;	/* hole/parked: legacy, as before */
+		if (!in_arena)
+			return -EOPNOTSUPP;
+		{
+			unsigned long addr;
+			unsigned int gup_flags = FOLL_TOUCH;
+
+			if (behavior == MADV_POPULATE_WRITE)
+				gup_flags |= FOLL_WRITE;
+			for (addr = start; addr < end; addr += PAGE_SIZE) {
+				ret = corten_gup_window(mm, addr, gup_flags,
+							NULL);
+				if (ret == 1)
+					return 0;	/* implant/tree member: legacy funnel */
+				if (ret < 0)
+					return ret;
+			}
+		}
+		atomic_long_inc(&corten_nr_madvise_populate);
 		/* V-A.3c hot-path sample (no tree mutation on this arm --
 		 * the walk is the periodic re-proof the sampling knob
 		 * exists for).
