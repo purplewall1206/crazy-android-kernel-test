@@ -16808,6 +16808,98 @@ bool corten_arena_range_occupied_incl_idle(struct mm_struct *mm,
 }
 
 /*
+ * Ledger #14: the static-PIE alignment probe's NOREPLACE re-install.
+ * The probe shape (an addr==0 map whose alignment exceeds ELF_MIN_ALIGN,
+ * then its full-extent munmap, then MAP_FIXED_NOREPLACE at the same
+ * address) leaves the window record parked, and the incl-idle occupancy
+ * probe above answered -EEXIST on the re-install -- an upstream-parity
+ * break (after the release the range carries no mapping, so the
+ * NOREPLACE contract has nothing left to protect) with no guest binary
+ * to reproduce the form (mv3cfeat sec 1.5-2).
+ *
+ * The exemption defers the placement to the routing: the do_mmap gate
+ * skips its -EEXIST answer when the ONLY occupancy is parked registry
+ * state and the request is an explicit-region admission form -- the
+ * admission answers instead, reactivating an exact-extent record in
+ * place (the pool prepare's ANON reuse arm) or ejecting a parked
+ * prelude for a fresh declare (the sub-extent arm the plain-MAP_FIXED
+ * admission already rides).  Everything else keeps the literal -EEXIST:
+ * a live window or a magazine reserve sentinel is real occupancy the
+ * funnel must never replace, a non-admission shape (shared, file,
+ * hugetlb, ...) never reaches the admission route, and a foreign VMA
+ * in range is occupancy in its own right -- a deflection of any of
+ * those would hand the range to the legacy funnel and silently replace
+ * state the registry still owns.
+ *
+ * mmap_write context (the do_mmap gate's contract -- serialized against
+ * park/eject writers), RCU read of the registry only.
+ * Return: true = parked-only occupancy of an admission form, defer.
+ */
+bool corten_arena_noreplace_probe_defer(struct mm_struct *mm,
+					unsigned long addr, unsigned long len,
+					unsigned long flags, bool file)
+{
+	struct corten_mm_state *state = READ_ONCE(mm->corten_state);
+	unsigned long frame, first, last;
+	struct corten_frame_bucket *b;
+	struct corten_arena *ar;
+	void *slot;
+	bool defer = true;
+
+	if (!corten_enabled_static() || !state)
+		return false;
+	/* The admission route's own gates: it must be the one answering
+	 * below (MODE, the classify whitelist's flag form, the window
+	 * domain), or the gate's -EEXIST must stand.
+	 */
+	if (!READ_ONCE(mm->corten_mode))
+		return false;
+	if (!(flags & MAP_FIXED) || !(flags & MAP_FIXED_NOREPLACE))
+		return false;
+	if (file || !(flags & MAP_ANONYMOUS))
+		return false;
+	if ((flags & MAP_TYPE) != MAP_PRIVATE)
+		return false;
+	if (flags & (MAP_HUGETLB | MAP_GROWSDOWN | MAP_POPULATE | MAP_LOCKED))
+		return false;
+	if (addr < CORTEN_MODE_WINDOW_START ||
+	    len > CORTEN_MODE_WINDOW_END - addr)
+		return false;
+	/* A tree VMA is occupancy in its own right, whatever the registry
+	 * holds (an implant tenant, an unrelated neighbor).
+	 */
+	if (find_vma_intersection(mm, addr, addr + len))
+		return false;
+
+	first = addr >> PMD_SHIFT;
+	last = (addr + len - 1) >> PMD_SHIFT;
+
+	rcu_read_lock();
+	xa_for_each_range(&state->arenas, frame, slot, first, last) {
+		unsigned int n = 1, i;
+
+		if (slot == &corten_va_reserve_sentinel) {
+			defer = false;	/* claimed VA, not a record */
+			break;
+		}
+		b = corten_slot_bucket(slot);
+		if (b)
+			n = b->nr;
+		for (i = 0; i < n && defer; i++) {
+			ar = b ? READ_ONCE(b->rec[i]) :
+				 corten_slot_arena(slot);
+			if (ar && !READ_ONCE(ar->idle))
+				defer = false;	/* live arena in range */
+		}
+		if (!defer)
+			break;
+	}
+	rcu_read_unlock();
+
+	return defer;
+}
+
+/*
  * V-A.3a P3: the zero-VMA arm of the __mmap_prepare() backstop
  * (mm/vma.c).  The placement guards upstream (do_mmap's NOREPLACE
  * -EEXIST, the punch route's idle-eject) make a hit unreachable; this

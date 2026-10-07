@@ -7709,16 +7709,25 @@ static void corten_arena_test_park_targeted(struct kunit *test,
 	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_BASE));
 }
 
-/* Audit #14: MAP_FIXED_NOREPLACE into a parked window must answer
- * -EEXIST (the contract's literal errno, unchanged from the
- * reservation-VMA era) although the range is tree-free -- only the
- * incl-idle registry probe can see the parked frames.  The rejection
- * changes nothing: no VMA appears, the window stays parked.
+/* Audit #14: MAP_FIXED_NOREPLACE into a parked window answers -EEXIST
+ * (the contract's literal errno, unchanged from the reservation-VMA
+ * era) although the range is tree-free -- only the incl-idle registry
+ * probe can see the parked frames.
+ * Ledger #14 amendment: the -EEXIST face survives on the shapes the
+ * exemption does NOT reach -- a non-admission form (the SHARED shape
+ * here; a deflection would hand the range to the legacy funnel) and
+ * any live/sentinel occupancy (noreplace_active).  The admission form
+ * over parked-only terrain is the placement's own answer now: the
+ * sub-extent re-install ejects the parked record and declares the
+ * region (the same arm the plain-MAP_FIXED admission rides), so it
+ * does NOT eat -EEXIST -- that is the static-PIE probe's upstream
+ * parity (the parked range carries no mapping to protect).
  */
 static void corten_arena_test_noreplace_parked(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
+	struct corten_arena *ar;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "placement guards require corten=on");
@@ -7734,19 +7743,23 @@ static void corten_arena_test_noreplace_parked(struct kunit *test)
 						 CORTEN_ARENA_TEST_WIN,
 						 PAGE_SIZE), 1);
 
+	/* The non-admission form: the gate's literal -EEXIST, and the
+	 * rejection changes nothing -- no VMA, the window stays parked.
+	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_vm_mmap(test, mm,
 						  CORTEN_ARENA_TEST_WIN,
 						  PMD_SIZE,
-						  MAP_FIXED_NOREPLACE),
+						  MAP_FIXED_NOREPLACE |
+						  MAP_SHARED),
 			-EEXIST);
 	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
 	KUNIT_EXPECT_TRUE(test,
 			  occupied_incl_idle(mm, CORTEN_ARENA_TEST_WIN,
 					     PMD_SIZE));
 	/* The parked window is invisible to the live-state probe (the
-	 * reject family's skip-idle meaning is unchanged) and stays in the
-	 * pool for the next handout.
+	 * reject family's skip-idle meaning is unchanged) and stays in
+	 * the pool for the next handout.
 	 */
 	KUNIT_EXPECT_FALSE(test,
 			   corten_arena_range_overlaps(mm,
@@ -7755,6 +7768,28 @@ static void corten_arena_test_noreplace_parked(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test,
 			  corten_arena_test_pool_idle(mm,
 						      CORTEN_ARENA_TEST_WIN));
+
+	/* The admission form, sub-extent: no -EEXIST -- the deferral
+	 * lands in the declare's eject-and-declare (the ledger #14
+	 * exemption), the region replaces the record one for one.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_vm_mmap(test, mm,
+						  CORTEN_ARENA_TEST_WIN,
+						  PAGE_SIZE,
+						  MAP_FIXED_NOREPLACE),
+			(long)CORTEN_ARENA_TEST_WIN);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_FALSE(test,
+			   corten_arena_test_pool_idle(mm,
+						       CORTEN_ARENA_TEST_WIN));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_range_overlaps(mm,
+						      CORTEN_ARENA_TEST_WIN,
+						      PAGE_SIZE));
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_WIN);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	KUNIT_EXPECT_FALSE(test, READ_ONCE(ar->idle));
 
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
@@ -7889,6 +7924,80 @@ static void corten_arena_test_mapfixed_over_parked(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, ret, 1);
 	KUNIT_EXPECT_NE(test, addr, CORTEN_ARENA_TEST_WIN);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_misses(), misses + 1);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0), 0);
+}
+
+/* Ledger #14: the static-PIE alignment probe's NOREPLACE re-install.
+ * The probe shape (an addr==0 map whose alignment exceeds ELF_MIN_ALIGN,
+ * its full-extent munmap, then MAP_FIXED_NOREPLACE at the same address)
+ * left the probe's window record parked, and the incl-idle gate answered
+ * -EEXIST on the re-install -- an upstream-parity break with no guest
+ * binary to reproduce the form (mv3cfeat sec 1.5-2).  The exemption
+ * defers that one shape to the explicit-region admission: the second
+ * NOREPLACE map does not eat -EEXIST -- it reactivates the record in
+ * place (the same arm the plain-MAP_FIXED-over-parked shape above
+ * rides), and the narrower shapes keep the literal -EEXIST
+ * (noreplace_parked pins the holed-window face).
+ */
+static void corten_arena_test_probe_reinstall(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	struct corten_arena *ar;
+	long routes;
+	unsigned long w;
+	long r;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "NOREPLACE probe reinstall requires corten=on");
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	routes = corten_arena_test_named_counter(test, "mmap_region_routes");
+	KUNIT_ASSERT_GE(test, routes, 0);
+
+	/* The probe: an addr==0 map handed a window record. */
+	w = corten_arena_test_vm_mmap(test, mm, 0, PMD_SIZE,
+				      MAP_PRIVATE | MAP_ANONYMOUS |
+				      MAP_NORESERVE);
+	KUNIT_ASSERT_EQ(test, w & ~PAGE_MASK, 0);
+	KUNIT_ASSERT_GE(test, w, CORTEN_MODE_WINDOW_START);
+
+	/* The probe's munmap: the full-extent park -- registry-only
+	 * occupancy, tree-free, the record intact (no hole).
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_munmap_route,
+						 w, PMD_SIZE), 1);
+	KUNIT_ASSERT_TRUE(test, corten_arena_test_pool_idle(mm, w));
+	KUNIT_ASSERT_TRUE(test, occupied_incl_idle(mm, w, PMD_SIZE));
+	KUNIT_ASSERT_NULL(test, vma_lookup(mm, w));
+
+	/* The re-install: same address, same extent, NOREPLACE -- the
+	 * anchor's red face was the gate's -EEXIST here.
+	 */
+	r = corten_arena_test_vm_mmap(test, mm, w, PMD_SIZE,
+				      MAP_FIXED_NOREPLACE);
+	KUNIT_EXPECT_EQ(test, r, (long)w);
+
+	/* The reactivation: the record is live region terrain again, no
+	 * funnel VMA, and the admission's own counted route answered.
+	 */
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, w));
+	KUNIT_EXPECT_FALSE(test, corten_arena_test_pool_idle(mm, w));
+	KUNIT_EXPECT_TRUE(test,
+			  corten_arena_range_overlaps(mm, w, PMD_SIZE));
+	ar = corten_arena_test_region_of(mm, w);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	KUNIT_EXPECT_FALSE(test, READ_ONCE(ar->idle));
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_named_counter(test,
+							"mmap_region_routes"),
+			routes + 1);
 
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
@@ -13046,6 +13155,32 @@ static void corten_arena_test_gup_loop_legacy(struct kunit *test)
  * still no WARN face.  Pre-fix this read returned 0 bytes, tripped
  * the WARN and leaked the mmap_read (the journald stall).
  */
+/* Ledger #7 (mv3c sec 3.3): the single-suite flake family answers short
+ * through the remote faces, and access_remote_vm() swallows the
+ * underlying GUP errno -- the not-ok lines name the byte count only.
+ * Probe the errno directly so a failing run reads it off the log.
+ * Diagnostic only: every call site guards a failing EXPECT, so green
+ * runs never reach it, and a probe against a parked window counts one
+ * extra short in the face's own ledger (the accounting run's deviated
+ * counts, disclosed here).
+ */
+static int corten_arena_test_gup_errno(struct mm_struct *mm,
+				       unsigned long addr, bool write)
+{
+	struct page *page = NULL;
+	long nr;
+
+	nr = get_user_pages_remote(mm, addr, 1,
+				   write ? FOLL_WRITE | FOLL_FORCE :
+					   FOLL_ANON,
+				   &page, NULL);
+	if (nr > 0)
+		put_page(page);
+	if (nr > 0)
+		return 0;
+	return (int)nr;
+}
+
 static void corten_arena_test_remote_access_window(struct kunit *test)
 {
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
@@ -13095,6 +13230,10 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
 	 */
 	refs0 = folio_ref_count(page_folio(page));
 	ret = access_remote_vm(mm, a, buf, sizeof(buf), FOLL_ANON);
+	if (ret != (int)sizeof(buf))
+		kunit_err(test, "ledger #7: window read short: ret=%d expected=%zu gup_errno=%d\n",
+			  ret, sizeof(buf),
+			  corten_arena_test_gup_errno(mm, a, false));
 	KUNIT_EXPECT_EQ(test, ret, (int)sizeof(buf));
 	KUNIT_EXPECT_MEMEQ(test, buf, &pat, sizeof(pat));
 	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0);
@@ -13104,6 +13243,11 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
 	 * same per-read ref pairing.
 	 */
 	ret = access_remote_vm(mm, a + PAGE_SIZE - 1, buf, 1, FOLL_ANON);
+	if (ret != 1)
+		kunit_err(test, "ledger #7: arg_end-1 peek short: ret=%d expected=1 gup_errno=%d\n",
+			  ret, corten_arena_test_gup_errno(mm,
+							   a + PAGE_SIZE - 1,
+							   false));
 	KUNIT_EXPECT_EQ(test, ret, 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0);
 	KUNIT_EXPECT_EQ(test, folio_ref_count(page_folio(page)), refs0);
@@ -13116,6 +13260,9 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
 						 corten_arena_test_op_munmap_route,
 						 a, PAGE_SIZE), 1);
 	ret = access_remote_vm(mm, a, buf, sizeof(buf), FOLL_ANON);
+	if (ret != 0)
+		kunit_err(test, "ledger #7: parked window read: ret=%d expected=0 gup_errno=%d\n",
+			  ret, corten_arena_test_gup_errno(mm, a, false));
 	KUNIT_EXPECT_EQ(test, ret, 0);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_remote_shorts(), shorts0 + 1);
 
@@ -13181,6 +13328,9 @@ static void corten_arena_test_remote_poke_cow(struct kunit *test)
 	 */
 	back = (u64)'X';
 	ret = access_remote_vm(mm, a, &back, 1, FOLL_WRITE | FOLL_FORCE);
+	if (ret != 1)
+		kunit_err(test, "ledger #7: remote poke short: ret=%d expected=1 gup_errno=%d\n",
+			  ret, corten_arena_test_gup_errno(mm, a, true));
 	KUNIT_EXPECT_EQ(test, ret, 1);
 
 	/* The parent diverged at byte 0 only; the child keeps the seed
@@ -13264,8 +13414,17 @@ static void corten_arena_test_punch_bare_frame_pte(struct kunit *test)
 	/* ...and the bare frame is PT-retired.  The red face: the PT
 	 * entry survived the punch and its PT+PMD pair surfaced at
 	 * free_mm as the 8192 residue.
+	 * Ledger #7: on a deviation the registry-vs-PT pair is the
+	 * readout -- a present PMD over a registry-gone extent is
+	 * exactly the stranded pair.
 	 */
+	if (corten_arena_test_pmd(mm, win1))
+		kunit_err(test, "ledger #7: bare-frame PT survived: pmd_present(win1)=%d region_gone(win1)=%d region_alive(win0)=%d\n",
+			  !!corten_arena_test_pmd(mm, win1),
+			  !corten_arena_test_region_of(mm, win1),
+			  !!corten_arena_test_region_of(mm, win0));
 	KUNIT_EXPECT_NULL(test, corten_arena_test_pmd(mm, win1));
+
 }
 
 /*
@@ -16964,6 +17123,12 @@ static struct kunit_case corten_arena_test_cases[] = {
 	 * taxonomy, the empty and zero-page stock shapes).
 	 */
 	KUNIT_CASE(corten_arena_test_whitelist_audit),
+	/* Ledger #14: the static-PIE alignment probe's NOREPLACE
+	 * re-install reactivates the parked probe record (registered
+	 * last: the single-suite flake family's 83/84/85 numbering
+	 * stays stable for the accounting evidence).
+	 */
+	KUNIT_CASE(corten_arena_test_probe_reinstall),
 	{}
 };
 

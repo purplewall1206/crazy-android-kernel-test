@@ -564,9 +564,21 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 		 * range is tree-free, so the find_vma_intersection() there
 		 * was a walk whose only product was a J1 probe count (the
 		 * operands are pure, the OR is unchanged).
+		 * Ledger #14: the static-PIE alignment probe's re-install
+		 * (probe map + munmap + NOREPLACE at the same address) is
+		 * the one shape the -EEXIST answer breaks -- the probe's
+		 * window record is parked, and after the release the range
+		 * carries no mapping for NOREPLACE to protect.  For the
+		 * admission-route forms whose only occupancy is parked
+		 * registry state the gate defers to the explicit-region
+		 * admission below, which reactivates or re-declares; live
+		 * windows, magazine sentinels and non-admission shapes
+		 * keep the literal -EEXIST.
 		 */
-		if (corten_arena_range_occupied_incl_idle(mm, addr, len) ||
-		    find_vma_intersection(mm, addr, addr + len))
+		if (!corten_arena_noreplace_probe_defer(mm, addr, len,
+							flags, !!file) &&
+		    (corten_arena_range_occupied_incl_idle(mm, addr, len) ||
+		     find_vma_intersection(mm, addr, addr + len)))
 			return -EEXIST;
 	}
 

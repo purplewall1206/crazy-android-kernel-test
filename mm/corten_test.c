@@ -1715,11 +1715,35 @@ static void corten_test_txn_uninstall_interlock(struct kunit *test)
 	schedule_timeout_uninterruptible(msecs_to_jiffies(200));
 	if (atomic_read(&c->b_done))
 		atomic_inc(&c->violations);
+	/* Ledger #7 (the kunit-off-flake-note posture): the deviation
+	 * shape reads a_locked==0 / violations==1 / a_err==1 with no
+	 * state readout beyond the four atomics.  Dump the full worker
+	 * state once, on the deviation path alone, so the next not-ok
+	 * line names the phase the stall came from (a_phase:
+	 * ENTERED=1, BEGIN_DONE=2, LOCKED=3, RELEASED=4, EXITED=5;
+	 * a_begin_ret != 0 = A's txn begin refused, a_err = begin/
+	 * deadline/mark-unmap failure respectively).
+	 */
+	if (atomic_read(&c->a_locked) != 1 || atomic_read(&c->violations) ||
+	    atomic_read(&c->a_err))
+		kunit_err(test, "ledger #7: interlock deviation: phase=%d begin_ret=%d a_err=%d a_locked=%d b_started=%d b_done=%d violations=%d\n",
+			  atomic_read(&c->a_phase),
+			  atomic_read(&c->a_begin_ret),
+			  atomic_read(&c->a_err),
+			  atomic_read(&c->a_locked),
+			  atomic_read(&c->b_started),
+			  atomic_read(&c->b_done),
+			  atomic_read(&c->violations));
 	KUNIT_EXPECT_EQ(test, atomic_read(&c->a_locked), 1);
 	KUNIT_EXPECT_EQ(test, atomic_read(&c->violations), 0);
 
 	/* Release A: uninstall must now complete. */
 	atomic_set(&c->go, 1);
+	if (!corten_test_wait_flag(&c->b_done, 5000))
+		kunit_err(test, "ledger #7: B uninstall unfinished after release: b_started=%d b_done=%d phase=%d\n",
+			  atomic_read(&c->b_started),
+			  atomic_read(&c->b_done),
+			  atomic_read(&c->a_phase));
 	KUNIT_EXPECT_TRUE(test, corten_test_wait_flag(&c->b_done, 5000));
 	wait_for_completion_timeout(&c->a_exited, msecs_to_jiffies(5000));
 	kthread_stop(tsk_a);

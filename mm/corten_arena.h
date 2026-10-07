@@ -515,6 +515,21 @@ bool corten_arena_range_occupied_incl_idle(struct mm_struct *mm,
 					   unsigned long len);
 
 /*
+ * Ledger #14: true when the MAP_FIXED_NOREPLACE request at [addr,
+ * addr+len) is an explicit-region admission form (MODE, window domain,
+ * private anonymous whitelist) whose ONLY occupancy is parked registry
+ * state -- no live arena, no magazine sentinel, no tree VMA.  The
+ * do_mmap gate defers its -EEXIST to the explicit-region admission,
+ * which reactivates an exact-extent record or ejects-and-declares a
+ * sub-extent one (the static-PIE alignment probe's re-install; the
+ * probe record carries no mapping after its release).  mmap_write
+ * context, RCU registry read.
+ */
+bool corten_arena_noreplace_probe_defer(struct mm_struct *mm,
+					unsigned long addr, unsigned long len,
+					unsigned long flags, bool file);
+
+/*
  * V-A.3a P3 helper (the __mmap_prepare zero-VMA backstop branch,
  * mm/vma.c): the live+parked arena occupancy test (reserve sentinels
  * excluded -- a sentinel under a legacy VMA is a legal shape the magazine
@@ -1176,6 +1191,14 @@ static inline bool corten_arena_range_overlaps(struct mm_struct *mm,
 static inline bool
 corten_arena_range_occupied_incl_idle(struct mm_struct *mm,
 				      unsigned long start, unsigned long len)
+{
+	return false;
+}
+
+static inline bool
+corten_arena_noreplace_probe_defer(struct mm_struct *mm, unsigned long addr,
+				   unsigned long len, unsigned long flags,
+				   bool file)
 {
 	return false;
 }
