@@ -175,8 +175,20 @@ static inline bool lock_vma_range(struct seq_file *m,
 	 * mmap_write) -- take the lock arm up front instead of the RCU
 	 * per-VMA walk.  Non-MODE mms keep the lockless walk unchanged.
 	 */
-	if (corten_maps_dual_source(lock_ctx->mm))
+	if (corten_maps_dual_source(lock_ctx->mm)) {
+#ifdef CONFIG_CORTEN_MM_ARENA
+		/*
+		 * Deletion-ledger PR-4 (D-group): the mmap_read arm
+		 * exists only for the registry stream's stability; the
+		 * tree walk it enables can never yield a window row
+		 * (the registry is the window's only render source).
+		 * Assert the gate coherence -- dual_source implies
+		 * MODE -- and keep both arms exactly as they are.
+		 */
+		WARN_ON_ONCE(!READ_ONCE(lock_ctx->mm->corten_mode));
+#endif
 		return lock_ctx_mm(lock_ctx) == 0;
+	}
 
 	rcu_read_lock();
 	reset_lock_ctx(lock_ctx);
@@ -304,6 +316,14 @@ static void corten_maps_prime(struct proc_maps_private *priv,
 	if (!corten_maps_dual_source(priv->lock_ctx.mm))
 		return;
 
+	/*
+	 * Deletion-ledger PR-4 (D-group): this prime is the registry
+	 * stream's own lookahead (the window's only render source), so
+	 * inside the dual-source arm the MODE gate is constant-true.
+	 * Assert it and leave the registry arm untouched.
+	 */
+	WARN_ON_ONCE(!READ_ONCE(priv->lock_ctx.mm->corten_mode));
+
 	corten_row_iter_init(&priv->corten_rows);
 	priv->corten_rows.rit.frame = pos >> PMD_SHIFT;
 	while (corten_row_next(priv->lock_ctx.mm, &priv->corten_rows,
@@ -377,6 +397,21 @@ retry:
 		return (struct vm_area_struct *)&priv->corten_row;
 	}
 	priv->corten_row_active = false;
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * Deletion-ledger PR-4 (D-group): the tree arm.  Every window
+	 * row is rendered from the registry stream above (W-2 C-fix);
+	 * the tree walk itself can never produce a window-borne row --
+	 * a MODE mm's tree rows all sit outside the window domain.  A
+	 * vma here overlapping the window would be an INV-MV2 shape:
+	 * assert it loudly and keep the walk unchanged.
+	 */
+	if (vma)
+		WARN_ON_ONCE(READ_ONCE(priv->lock_ctx.mm->corten_mode) &&
+			     vma->vm_start < CORTEN_MODE_WINDOW_END &&
+			     vma->vm_end > CORTEN_MODE_WINDOW_START);
+#endif
 
 	/* Store previous position to be able to restart if needed */
 	priv->last_pos = *ppos;
