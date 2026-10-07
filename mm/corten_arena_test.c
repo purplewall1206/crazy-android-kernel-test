@@ -6797,6 +6797,14 @@ static void corten_arena_test_madvise_route(struct kunit *test)
 			corten_arena_madvise_route(mm, MADV_COLD,
 						   CORTEN_ARENA_TEST_BASE,
 						   PAGE_SIZE), 1);
+	/* PAGEOUT joins the hints (ledger #8): the route's comment
+	 * claimed the COLD-form counted no-op all along -- process_madvise
+	 * serves COLD/PAGEOUT through this same decision point.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_PAGEOUT,
+						   CORTEN_ARENA_TEST_BASE,
+						   PAGE_SIZE), 1);
 
 	/* WILLNEED joins the hints (MV3.b closure list): the stock
 	 * anon-mapping answer is the same counted no-op success.
@@ -9146,6 +9154,14 @@ static void corten_arena_test_madvise_parked_terminal(struct kunit *test)
 	KUNIT_EXPECT_GT(test,
 			corten_arena_test_named_counter(test, "madvise_parked"),
 			c0);
+
+	/* PAGEOUT joins the hint family on a parked span too (ledger #8):
+	 * the same counted no-op success (park dropped the content; the
+	 * swapout hint has nothing to reclaim).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_madvise_route(mm, MADV_PAGEOUT, win,
+						   PAGE_SIZE), 1);
 
 	/* WILLNEED joins the hint family on a parked span too (MV3.b
 	 * closure list): the same counted no-op success.

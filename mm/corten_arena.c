@@ -17023,9 +17023,11 @@ static bool corten_arena_window_parked_span(struct mm_struct *mm,
  *				(lazy-free permits dropping the content
  *				at any time; an eager drop is a
  *				compliance superset -- counted)
- *   NORMAL/SEQUENTIAL/RANDOM/COLD/WILLNEED	T0: pure hints, no-op
- *				success in-arena (WILLNEED since MV3.b --
- *				the stock anon answer is this no-op)
+ *   NORMAL/SEQUENTIAL/RANDOM/COLD/PAGEOUT/WILLNEED	T0: pure hints,
+ *				no-op success in-arena (WILLNEED since MV3.b,
+ *				PAGEOUT since ledger #8 -- the stock anon
+ *				answer is this no-op, and process_madvise's
+ *				COLD/PAGEOUT pair read the same arm)
  *   everything else		reject when the range overlaps an arena
  *
  * MODE-targeted arenas (mode=0) keep the S6 behaviour for the new rows:
@@ -17070,6 +17072,7 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 		case MADV_SEQUENTIAL:
 		case MADV_RANDOM:
 		case MADV_COLD:
+		case MADV_PAGEOUT:
 		case MADV_WILLNEED:
 			atomic_long_inc(&corten_nr_madvise_parked);
 			return 1;
@@ -17110,6 +17113,7 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 	case MADV_SEQUENTIAL:
 	case MADV_RANDOM:
 	case MADV_COLD:
+	case MADV_PAGEOUT:
 	case MADV_WILLNEED:
 		/* Pure hints: success is contractual even when the kernel
 		 * ignores them, so an in-arena range is a counted no-op.
@@ -17122,7 +17126,10 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 		 * default arm turned it into an unregistered
 		 * -EOPNOTSUPP.  A FILE region's readahead is advisory
 		 * ("may be ignored") -- dropped, not a populate
-		 * contract; MADV_POPULATE_* keep their M3 reject.
+		 * contract.  PAGEOUT joins them (ledger #8): the swapout
+		 * hint is COLD's twin (both reclaim advisory, both
+		 * process_madvise-valid), so the route's comment and the
+		 * code now say the same counted no-op.
 		 */
 		if (!READ_ONCE(mm->corten_mode))
 			break;
