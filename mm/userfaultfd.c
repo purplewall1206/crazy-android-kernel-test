@@ -46,13 +46,17 @@ struct vm_area_struct *find_vma_and_prepare_anon(struct mm_struct *mm,
 	struct vm_area_struct *vma;
 
 	mmap_assert_locked(mm);
-	vma = vma_lookup(mm, addr);
-	/* V-A.3b J1 prelude, hook 5/5 (audit #29): vma_lookup() is a raw
+	/* PR-1 (A6): this funnel's walk IS vma_lookup(), whose window
+	 * short-circuit (A5) already answers window addresses NULL -- the
+	 * mfill/move entry short-circuit answers the tree-free shapes
+	 * with -ENOENT before they get this far, so nothing reaches here
+	 * for a window address any more.  The probe stays for the audit.
+	 *
+	 * V-A.3b J1 prelude, hook 5/5 (audit #29): vma_lookup() is a raw
 	 * mtree_load(), so this funnel bypasses every probed primitive --
-	 * probe it here.  Window entries reach this line only for a punch
-	 * implant (the mfill/move entry short-circuit answers the
-	 * tree-free shapes with -ENOENT before they get this far).
+	 * probe it here.
 	 */
+	vma = vma_lookup(mm, addr);
 	corten_j1_probe(mm, addr, addr + 1, vma);
 	if (!vma)
 		vma = ERR_PTR(-ENOENT);

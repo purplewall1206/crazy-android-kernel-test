@@ -230,7 +230,13 @@ struct vm_area_struct *lock_vma_under_rcu(struct mm_struct *mm,
 
 retry:
 	rcu_read_lock();
-	vma = mas_walk(&mas);
+	/* PR-1 (A4): a window address can only miss (no tree VMA lives
+	 * in the window), so the RCU walk is skipped and the miss path
+	 * below runs unchanged.
+	 */
+	vma = NULL;
+	if (!corten_window_query(mm, address, address + 1))
+		vma = mas_walk(&mas);
 	/* V-A.2a J1 prelude: the fault funnel's window probe.  A miss on
 	 * a window address is the expected post-A.2 shape (S-1: parked
 	 * windows and fresh faults -- MAPERR); a find would be a tree VMA
