@@ -18,6 +18,9 @@
  * in userspace against vma_internal.h, where the arena layer does not
  * exist.  Every arena use site below sits inside the same ifdef.
  */
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
+
 #include "corten_arena.h"
 #endif
 #undef CREATE_TRACE_POINTS
@@ -852,6 +855,55 @@ static bool can_merge_remove_vma(struct vm_area_struct *vma)
  * - The caller must hold a WRITE lock on the mm_struct->mmap_lock.
  * - vmi must be positioned within [@vmg->middle->vm_start, @vmg->middle->vm_end).
  */
+#ifdef CONFIG_CORTEN_MM_ARENA
+/*
+ * Deletion-ledger PR-2 (mv3e sec 1.2 B-group, ledger #16): the merge/
+ * modify/expand window arms.  In the window domain these funnels can
+ * only be reached by unclaimed shapes -- every routed shape
+ * (explicit_region/auto route/punch, munmap/mprotect/madvise/mremap
+ * routes) is declared ahead of the funnel -- and with the tree rows
+ * gone (PR-0 implant retirement) a window merge product cannot exist.
+ * The gates below count such arrivals with the existing window
+ * predicate and proceed down the legacy path unchanged ("count and
+ * proceed"): a non-zero count in a green run means the B-group
+ * judgment needs a second look, nothing else.  Disclosed through
+ * /sys/kernel/debug/corten_vma_unclaimed.
+ */
+static atomic_long_t corten_nr_unclaimed_window_txn;
+
+static void corten_count_unclaimed_window_txn(unsigned long start,
+					      unsigned long end)
+{
+	/* MODE + window double gate: corten_addr_in_window() folds the
+	 * corten-enabled and MODE checks with the [16T, 64T) overlap.
+	 */
+	if (corten_addr_in_window(start, end - start))
+		atomic_long_inc(&corten_nr_unclaimed_window_txn);
+}
+
+static int corten_vma_unclaimed_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "unclaimed_window_txns %ld\n",
+		   atomic_long_read(&corten_nr_unclaimed_window_txn));
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(corten_vma_unclaimed);
+
+static int __init corten_vma_unclaimed_debugfs_init(void)
+{
+	/* Top-level, not under the corten debugfs dir: mm/Makefile links
+	 * vma.o ahead of corten.o, so a same-level late_initcall lookup
+	 * of the dir would race its creation.
+	 */
+	debugfs_create_file("corten_vma_unclaimed", 0444, NULL, NULL,
+			    &corten_vma_unclaimed_fops);
+
+	return 0;
+}
+late_initcall(corten_vma_unclaimed_debugfs_init);
+#endif /* CONFIG_CORTEN_MM_ARENA */
+
 static __must_check struct vm_area_struct *vma_merge_existing_range(
 		struct vma_merge_struct *vmg)
 {
@@ -1096,6 +1148,18 @@ struct vm_area_struct *vma_merge_new_range(struct vma_merge_struct *vmg)
 	unsigned long end = vmg->end;
 	bool can_merge_left, can_merge_right;
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * PR-2 B1: the new-range merge funnel (__mmap_region() and
+	 * do_brk_flags() arrive here; vma_merge_extend() and
+	 * vma_merge_copied_range() funnel into this gate too, so the
+	 * B3 merge arms are covered by this single count).  Merging
+	 * needs tree neighbours and the window tree has none to give;
+	 * unclaimed shapes only.  Count and proceed.
+	 */
+	corten_count_unclaimed_window_txn(vmg->start, vmg->end);
+#endif
+
 	mmap_assert_write_locked(vmg->mm);
 	VM_WARN_ON_VMG(vmg->middle, vmg);
 	VM_WARN_ON_VMG(vmg->target, vmg);
@@ -1202,6 +1266,15 @@ int vma_expand(struct vma_merge_struct *vmg)
 	struct vm_area_struct *next = vmg->next;
 	int ret = 0;
 
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * PR-2 B3: mremap's window grow/shrink is routed ahead of the
+	 * funnel (mremap_route); vma_exec.c's expand face likewise only
+	 * serves whitelist-domain targets.  Count and proceed.
+	 */
+	corten_count_unclaimed_window_txn(vmg->start, vmg->end);
+#endif
+
 	VM_WARN_ON_VMG(!target, vmg);
 
 	mmap_assert_write_locked(vmg->mm);
@@ -1270,6 +1343,16 @@ int vma_shrink(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	       unsigned long start, unsigned long end, pgoff_t pgoff)
 {
 	struct vma_prepare vp;
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * PR-2 B3: window-domain shrink is answered by the mremap/munmap
+	 * routes; a shrink of a window-bound VMA cannot reach the legacy
+	 * body (the VMA itself only exists in the whitelist domain).
+	 * Count and proceed.
+	 */
+	corten_count_unclaimed_window_txn(start, end);
+#endif
 
 	WARN_ON((vma->vm_start != start) && (vma->vm_end != end));
 
@@ -1626,6 +1709,17 @@ int do_vmi_align_munmap(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	 */
 	if (corten_arena_munmap_vma_guard(mm, start, end))
 		return -EOPNOTSUPP;
+
+	/*
+	 * PR-2 B4: past the munmap guard, the window tree holds no rows
+	 * for a pure window-domain span (routed shapes are declared in
+	 * the syscall gate; internal callers were rejected above), so
+	 * the teardown body below has nothing window-borne to gather.
+	 * Arrival here is an unclaimed shape: count and proceed down
+	 * the legacy path unchanged -- the guard above keeps its exact
+	 * semantics.
+	 */
+	corten_count_unclaimed_window_txn(start, end);
 #endif
 
 	init_vma_munmap(&vms, vmi, vma, start, end, uf, unlock);
@@ -1708,6 +1802,17 @@ static struct vm_area_struct *vma_modify(struct vma_merge_struct *vmg)
 	unsigned long start = vmg->start;
 	unsigned long end = vmg->end;
 	struct vm_area_struct *merged;
+
+#ifdef CONFIG_CORTEN_MM_ARENA
+	/*
+	 * PR-2 B2: the modify funnel (mprotect/madvise/munmap split
+	 * arrive here through the vma_modify_* wrappers).  This covers
+	 * the vma_merge_existing_range() arm -- its only merge callee.
+	 * Window-domain arrival is an unclaimed shape: the syscall
+	 * gates route those first.  Count and proceed.
+	 */
+	corten_count_unclaimed_window_txn(vmg->start, vmg->end);
+#endif
 
 	/* First, try to merge. */
 	merged = vma_merge_existing_range(vmg);
