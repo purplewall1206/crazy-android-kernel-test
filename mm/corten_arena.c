@@ -9624,12 +9624,14 @@ static pud_t *corten_arena_pud(struct mm_struct *mm, unsigned long addr)
 
 /*
  * S4 (sec 4.4): ensure the upper page tables down to the tracked PTE-level
- * page exist for @addr, without mmap_lock.  Serialised per arena by
- * fill_lock (a cold-path mutex, never held with any descriptor lock); the
- * pX_alloc() primitives themselves are race-safe against concurrent fills
- * (install under the level spinlock with a re-check), and legacy writers
- * cannot reach an arena window because both fault hooks divert faults and
- * the S6 hooks reject/route every space operation.
+ * page exist for @addr, without mmap_lock.  The warm shape (every entry
+ * already installed -- the pool cycle's steady state since the warm park)
+ * is answered lock-free below; the allocating shape is serialised per
+ * arena by fill_lock (a cold-path mutex, never held with any descriptor
+ * lock); the pX_alloc() primitives themselves are race-safe against
+ * concurrent fills (install under the level spinlock with a re-check),
+ * and legacy writers cannot reach an arena window because both fault
+ * hooks divert faults and the S6 hooks reject/route every space operation.
  */
 int corten_arena_fill_upper(struct corten_arena *ar, unsigned long addr)
 {
@@ -9638,7 +9640,57 @@ int corten_arena_fill_upper(struct corten_arena *ar, unsigned long addr)
 	p4d_t *p4dp;
 	pud_t *pudp;
 	pmd_t *pmdp;
+	pud_t pud;
+	pmd_t pmd;
 	int ret = -ENOMEM;
+
+	/* W-3fix7 (ledger #12) warm fast path: since the warm park
+	 * (mv3cfeat sec 2.3) the window's upper path survives the pool
+	 * cycle, so the steady-state fault finds every entry already
+	 * installed and needs no allocation.  Answer that shape without
+	 * the fill_lock mutex: the mutex puts every fault of the arena
+	 * behind one contended cacheline (the t4/t8 stampede serialises
+	 * here before it even reaches the descriptor lock) for a walk
+	 * that would only re-read present entries.
+	 *
+	 * Safety: the read side is the same lockless top-down entry walk
+	 * corten_arena_pmd() (every fault arm, under the covering lock)
+	 * and corten_real_root() (every transaction, with no mmap_lock at
+	 * all on the fast hook) already run on this path; the entries are
+	 * naturally aligned machine words read with READ_ONCE, so no torn
+	 * value is possible.  The shape this answers is exact: entries
+	 * present and non-leaf down to the pmd, plus the PT page tracked
+	 * (the same lockless membership test the re-arm's first half
+	 * runs) -- so the descriptor install that pte_alloc_one() may
+	 * have missed is not skipped, it is simply absent here.  An
+	 * untracked (or leaf, or hole) shape takes the slow arm and its
+	 * old answer, including the r03 defect C re-arm.  A
+	 * window being torn down concurrently cannot make this shape
+	 * dereference freed memory below the pmd level (the entry is
+	 * only read here, never filled); the upper dereferences are the
+	 * same exposure class as the existing walkers, fenced by the
+	 * window teardown discipline (RELEASE drains the active refs
+	 * before its exit walk; the W-3fix6 gates spare window-domain
+	 * upper pages at munmap).
+	 *
+	 * FILLS keeps its exact stream (every successful fill, warm or
+	 * allocating): the write just left the mutex.
+	 */
+	pgdp = pgd_offset(mm, addr);
+	if (pgd_present(READ_ONCE(*pgdp))) {
+		p4dp = p4d_offset(pgdp, addr);
+		if (p4d_present(READ_ONCE(*p4dp))) {
+			pudp = pud_offset(p4dp, addr);
+			pud = READ_ONCE(*pudp);
+			if (pud_present(pud) && !pud_leaf(pud)) {
+				pmdp = pmd_offset(pudp, addr);
+				pmd = READ_ONCE(*pmdp);
+				if (pmd_present(pmd) && !pmd_leaf(pmd) &&
+				    corten_ptdesc_tracked(pmd_page(pmd)))
+					goto warm;
+			}
+		}
+	}
 
 	mutex_lock(&ar->fill_lock);
 
@@ -9715,6 +9767,15 @@ int corten_arena_fill_upper(struct corten_arena *ar, unsigned long addr)
 out:
 	mutex_unlock(&ar->fill_lock);
 	return ret;
+
+warm:
+	/* The whole upper path is installed and tracked: same answer the
+	 * slow arm would have produced, with the FILLS stream kept whole
+	 * and no mutex held.
+	 */
+	corten_arena_fault_stat(READ_ONCE(ar->mm->corten_state),
+				CORTEN_ARENA_STAT_FILLS);
+	return 0;
 }
 
 /*
@@ -9780,6 +9841,15 @@ struct corten_fault_ctx {
 					 * swapin shape; truncate racing the
 					 * fetch)
 					 */
+	/* W-3fix7 (ledger #12): the fault arm's stats bucket.  The arms
+	 * used to this_cpu_inc() it themselves -- under the covering
+	 * descriptor write lock, on the serialized section of every
+	 * fault.  They now only record the bucket here; fault_once
+	 * writes it once, with every lock dropped.  -1 = no arm stat
+	 * (the entry points initialize it; only success arms set it,
+	 * and a success attempt is never retried).
+	 */
+	int			arm_stat;
 	struct pt_regs		*regs;
 };
 
@@ -9952,8 +10022,10 @@ static int corten_arena_map_anon(struct corten_fault_ctx *ctx,
 	if (WARN_ON_ONCE(ret))
 		return -EFAULT;
 
-	corten_arena_fault_stat(READ_ONCE(ctx->mm->corten_state),
-				CORTEN_ARENA_STAT_MAPPED);
+	/* W-3fix7: the counter is written by the fault_once epilogue,
+	 * outside the covering write lock.
+	 */
+	ctx->arm_stat = CORTEN_ARENA_STAT_MAPPED;
 
 	return 0;
 }
@@ -10005,8 +10077,10 @@ static int corten_arena_zero_page(struct corten_fault_ctx *ctx,
 		update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
 	pte_unmap_unlock(ptep, ptl);
 
-	corten_arena_fault_stat(READ_ONCE(ctx->mm->corten_state),
-				CORTEN_ARENA_STAT_ZERO_PAGES);
+	/* W-3fix7: the counter is written by the fault_once epilogue,
+	 * outside the covering write lock.
+	 */
+	ctx->arm_stat = CORTEN_ARENA_STAT_ZERO_PAGES;
 
 	return ret;
 }
@@ -10087,8 +10161,10 @@ static int corten_arena_restore_pte(struct corten_fault_ctx *ctx,
 		update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
 	pte_unmap_unlock(ptep, ptl);
 
-	corten_arena_fault_stat(READ_ONCE(ctx->mm->corten_state),
-				CORTEN_ARENA_STAT_RESTORES);
+	/* W-3fix7: the counter is written by the fault_once epilogue,
+	 * outside the covering write lock.
+	 */
+	ctx->arm_stat = CORTEN_ARENA_STAT_RESTORES;
 
 	return 0;
 }
@@ -10221,8 +10297,10 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 			update_mmu_cache_range(NULL, vma, ctx->addr, ptep, 1);
 		pte_unmap_unlock(ptep, ptl);
 
-		corten_arena_fault_stat(READ_ONCE(mm->corten_state),
-					CORTEN_ARENA_STAT_COW_REUSE);
+		/* W-3fix7: the counter is written by the fault_once
+		 * epilogue, outside the covering write lock.
+		 */
+		ctx->arm_stat = CORTEN_ARENA_STAT_COW_REUSE;
 		return 0;
 	}
 
@@ -10301,8 +10379,10 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 	if (WARN_ON_ONCE(ret))
 		return -EFAULT;
 
-	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
-				CORTEN_ARENA_STAT_COW_COPY);
+	/* W-3fix7: the counter is written by the fault_once epilogue,
+	 * outside the covering write lock.
+	 */
+	ctx->arm_stat = CORTEN_ARENA_STAT_COW_COPY;
 	if (old_is_file)
 		atomic_long_inc(&corten_nr_file_cow_copies);
 
@@ -11309,8 +11389,11 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 		return -EFAULT;
 	}
 
-	corten_arena_fault_stat(READ_ONCE(mm->corten_state),
-				CORTEN_ARENA_STAT_COW_COPY);
+	/* W-3fix7: the counter is written by the fault_once epilogue,
+	 * outside this transaction (the file arm released the txn before
+	 * the fetch and re-locked its own commit).
+	 */
+	ctx->arm_stat = CORTEN_ARENA_STAT_COW_COPY;
 	atomic_long_inc(&corten_nr_file_cow_copies);
 	corten_unlock(&txn);
 
@@ -11592,6 +11675,21 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		 */
 		if (disp == CORTEN_DISP_MAP_ANON)
 			ctx->folio = NULL;
+		/* W-3fix7 (ledger #12): the arm's counter, written here
+		 * with every lock dropped -- the arms only recorded the
+		 * bucket (@ctx->arm_stat) while they held the covering
+		 * descriptor write lock.  Exactly one success arm set
+		 * it per attempt (and a success attempt is never
+		 * retried), so the stream is identical to the old
+		 * per-arm writes: same buckets, same totals, one write
+		 * site.
+		 */
+		if (ctx->arm_stat >= 0) {
+			struct corten_mm_state *state;
+
+			state = READ_ONCE(ctx->mm->corten_state);
+			corten_arena_fault_stat(state, ctx->arm_stat);
+		}
 		return CORTEN_F_HANDLED;
 	}
 	if (ret == -EAGAIN || ret == -ENOMEM)
@@ -11611,7 +11709,7 @@ enum corten_fault_action corten_arena_user_fault(struct mm_struct *mm,
 						 struct pt_regs *regs,
 						 unsigned int *flags)
 {
-	struct corten_fault_ctx ctx = { };
+	struct corten_fault_ctx ctx = { .arm_stat = -1 };
 	struct corten_mm_state *state;
 	struct corten_arena *ar;
 	bool need_folio;
@@ -11751,7 +11849,7 @@ static vm_fault_t __corten_arena_handle_mm_fault(struct mm_struct *mm,
 						 unsigned int flags,
 						 struct pt_regs *regs)
 {
-	struct corten_fault_ctx ctx = { };
+	struct corten_fault_ctx ctx = { .arm_stat = -1 };
 	struct corten_mm_state *state;
 	struct corten_arena *ar;
 	bool need_folio;

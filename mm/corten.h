@@ -47,6 +47,17 @@ void corten_ptdesc_uninstall(struct page *pte_page);
 bool corten_ptdesc_rearm(struct mm_struct *mm, struct page *pte_page);
 
 /*
+ * Membership test for the arena fill's warm fast path (W-3fix7): is
+ * @pte_page tracked?  The same lockless xa_load the re-arm's first
+ * half runs, never installing -- a fill whose window answers "tracked"
+ * needs no mutex and no re-arm.  An entry being torn down (erased,
+ * kfree_rcu in flight) can still answer "tracked": the caller's
+ * transaction then fails the pin with -EOPNOTSUPP and the window
+ * converges through the slow arm, the same race the re-arm itself has.
+ */
+bool corten_ptdesc_tracked(struct page *pte_page);
+
+/*
  * Drift observability (debugfs stats, next to free_untracked): a nonzero
  * count means legacy-written PTEs were found and cleaned on an untracked
  * window (r03 defect C).  reinstalled -- the successful re-arm counter --

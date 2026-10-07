@@ -16308,6 +16308,397 @@ static void corten_arena_test_stats_walk_budget(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, corten_arena_test_stats_walk_truncs(), t0);
 }
 
+/* ------------------------------------------------------------------ *
+ * Ledger #12 (mv3cfeat sec 2.4-2, W-3fix7): the per-fault bookkeeping
+ * merge.  The fault arms record their stats bucket in the fault
+ * context and fault_once writes it once with every lock dropped; the
+ * anchors below lock the observable contract -- the counter stream is
+ * identical to the per-arm writes (same buckets, same totals), in
+ * isolation and under a real kthread stampede on the collapsed
+ * covering lock.
+ * ------------------------------------------------------------------
+ */
+
+/* The fork-shape M5 marker: record the slot SHARED (WRITABLE kept
+ * alongside the WRITE perm) under the covering lock.
+ */
+static int corten_arena_test_arm_shared(struct mm_struct *mm,
+					unsigned long addr)
+{
+	struct corten_txn txn;
+	struct corten_pte_meta m, nm;
+	int ret;
+
+	ret = corten_arena_test_meta(mm, addr, &m);
+	if (ret)
+		return ret;
+	if (m.state != CORTEN_MAPPED)
+		return -EINVAL;
+
+	nm = m;
+	nm.flags = m.flags | CORTEN_PF_SHARED;
+	if (m.perm & CORTEN_PERM_WRITE)
+		nm.flags |= CORTEN_PF_WRITABLE;
+
+	ret = corten_lock_range(mm, addr, PAGE_SIZE, &txn);
+	if (ret)
+		return ret;
+	ret = corten_mark(&txn, addr, PAGE_SIZE, &nm);
+	corten_unlock(&txn);
+
+	return ret;
+}
+
+/* The fork wrprotect (the whitelisted copy_page_range glue): drop the
+ * write bit of the live translation.
+ */
+static int corten_arena_test_wrprotect(struct mm_struct *mm,
+				       unsigned long addr)
+{
+	pmd_t *pmdp;
+	pte_t *ptep;
+	spinlock_t *ptl;			/* guards the PTE rewrite */
+
+	pmdp = corten_arena_test_pmd(mm, addr);
+	if (!pmdp)
+		return -ENOENT;
+	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	if (!ptep)
+		return -EAGAIN;
+	set_ptes(mm, addr, ptep, pte_wrprotect(ptep_get(ptep)), 1);
+	pte_unmap_unlock(ptep, ptl);
+
+	return 0;
+}
+
+/* The stats-merge parity anchor: each fault arm keeps its exact
+ * counter (same bucket, same totals as the per-arm writes it
+ * replaced) while the write itself left the covering write lock.
+ * One fault per arm, exact +1 deltas.
+ */
+static void corten_arena_test_fault_stat_parity(struct kunit *test)
+{
+	struct corten_arena_test_mm *t;
+	struct mm_struct *mm, *child;
+	struct vm_area_struct *vma;
+	struct folio *folio;
+	unsigned long a_map = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
+	unsigned long a_zero = CORTEN_ARENA_TEST_BASE + 2 * PAGE_SIZE;
+	unsigned long a_reuse = CORTEN_ARENA_TEST_BASE + 3 * PAGE_SIZE;
+	unsigned long a_copy = CORTEN_ARENA_TEST_BASE + 4 * PAGE_SIZE;
+	long f0, mapped0, zero0, restore0, reuse0, copy0;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "fault stat anchor requires corten=on");
+
+	t = corten_arena_test_mm_setup(test);
+	mm = t->mm;
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+	vma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+
+	f0 = corten_arena_test_stat_sum(mm->corten_state,
+					CORTEN_ARENA_STAT_FAULTS);
+	mapped0 = corten_arena_test_stat_sum(mm->corten_state,
+					     CORTEN_ARENA_STAT_MAPPED);
+	zero0 = corten_arena_test_stat_sum(mm->corten_state,
+					   CORTEN_ARENA_STAT_ZERO_PAGES);
+	restore0 = corten_arena_test_stat_sum(mm->corten_state,
+					      CORTEN_ARENA_STAT_RESTORES);
+	reuse0 = corten_arena_test_stat_sum(mm->corten_state,
+					    CORTEN_ARENA_STAT_COW_REUSE);
+	copy0 = corten_arena_test_stat_sum(mm->corten_state,
+					   CORTEN_ARENA_STAT_COW_COPY);
+
+	/* MAP_ANON arm: a fresh write fault installs the page and
+	 * counts exactly one MAPPED (written by the fault_once
+	 * epilogue now).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_handle_mm_fault(vma, a_map,
+						     FAULT_FLAG_WRITE, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_FAULTS),
+			f0 + 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_MAPPED),
+			mapped0 + 1);
+
+	/* RESTORE arm: the second write on the live page re-arms the
+	 * translation from the metadata -- one RESTORES, no MAPPED.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_handle_mm_fault(vma, a_map,
+						     FAULT_FLAG_WRITE, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_FAULTS),
+			f0 + 2);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_RESTORES),
+			restore0 + 1);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_MAPPED),
+			mapped0 + 1);
+
+	/* ZERO_PAGE arm: a fresh read fault takes the shared zero page.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_handle_mm_fault(vma, a_zero, 0, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_FAULTS),
+			f0 + 3);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_ZERO_PAGES),
+			zero0 + 1);
+
+	/* COW reuse arm, fork shape without the peer: SHARED marker +
+	 * hardware wrprotect on a slot whose mapcount is still 1 -- the
+	 * first writer reuses the folio in place.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_fork_seed_mapped(mm, a_reuse), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_arm_shared(mm, a_reuse), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_wrprotect(mm, a_reuse), 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_handle_mm_fault(vma, a_reuse,
+						     FAULT_FLAG_WRITE, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_FAULTS),
+			f0 + 4);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_COW_REUSE),
+			reuse0 + 1);
+
+	/* COW copy arm, real fork shape: seed, mirror to a child (both
+	 * sides SHARED, hardware read-only), then the parent writes
+	 * while the peer still maps (mapcount 2) -- the private copy.
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_fork_seed_mapped(mm, a_copy), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_arm_shared(mm, a_copy), 0);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_wrprotect(mm, a_copy), 0);
+
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_EXPECT_NOT_ERR_OR_NULL(test,
+				     corten_arena_test_mkvm(child,
+							    CORTEN_ARENA_TEST_BASE,
+							    CORTEN_ARENA_TEST_BASE +
+							    CORTEN_ARENA_TEST_LEN,
+							    CORTEN_ARENA_TEST_FLAGS_OK |
+							    VM_CORTEN |
+							    VM_NOHUGEPAGE));
+	folio = corten_arena_test_fork_copy_pte(test, child, mm, a_copy);
+	KUNIT_ASSERT_NOT_NULL(test, folio);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_handle_mm_fault(vma, a_copy,
+						     FAULT_FLAG_WRITE, NULL),
+			0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_FAULTS),
+			f0 + 5);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_COW_COPY),
+			copy0 + 1);
+
+	mmput(child);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+}
+
+/* The stampede worker: fault a private run of pages in the shared
+ * window -- every fault takes the collapsed covering write lock and
+ * the lock-free warm fill, against the same descriptor as every
+ * other thread.
+ */
+struct corten_arena_test_stampede {
+	struct mm_struct *mm;
+	struct vm_area_struct *vma;
+	unsigned long base;
+	int nr;
+	atomic_t *gate;
+	atomic_t errors;
+	struct completion done;
+};
+
+static int corten_arena_test_stampede_worker(void *data)
+{
+	struct corten_arena_test_stampede *s = data;
+	int i;
+
+	/* All four threads enter the window together. */
+	atomic_inc(s->gate);
+	while (atomic_read(s->gate) < 4 && !kthread_should_stop())
+		cpu_relax();
+
+	for (i = 0; i < s->nr; i++) {
+		if (corten_arena_handle_mm_fault(s->vma,
+						 s->base + i * PAGE_SIZE,
+						 FAULT_FLAG_WRITE, NULL))
+			atomic_inc(&s->errors);
+	}
+
+	complete(&s->done);
+	/* The runner kthread_stop()s us after the completion: park here
+	 * so the task struct stays alive until then (the house worker
+	 * discipline).
+	 */
+	while (!kthread_should_stop())
+		schedule_timeout_idle(1);
+
+	return 0;
+}
+
+/* The concurrency anchor for the collapsed covering lock (W-3fix7):
+ * four kthreads fault 256 distinct pages of one 2M window -- one
+ * descriptor, one PT page, one fill -- so every transaction
+ * serialises on the direct write lock and every warm fill takes the
+ * lock-free fast path.  The exact counter totals double as the
+ * count-preservation proof under concurrency.
+ */
+static void corten_arena_test_fault_stampede(struct kunit *test)
+{
+	struct corten_arena_test_stampede s[4];
+	struct corten_arena_test_mm *t;
+	struct task_struct *tsk[4] = { };
+	struct mm_struct *mm;
+	atomic_t *gate;
+	long f0, mapped0, fills0;
+	unsigned long base;
+	int i, j;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "fault stampede anchor requires corten=on");
+	if (num_online_cpus() < 4)
+		kunit_skip(test, "need 4 online CPUs for the stampede");
+
+	t = corten_arena_test_mm_setup(test);
+	mm = t->mm;
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_declare(mm, CORTEN_ARENA_TEST_BASE,
+					     CORTEN_ARENA_TEST_LEN),
+			0);
+
+	f0 = corten_arena_test_stat_sum(mm->corten_state,
+					CORTEN_ARENA_STAT_FAULTS);
+	mapped0 = corten_arena_test_stat_sum(mm->corten_state,
+					     CORTEN_ARENA_STAT_MAPPED);
+	fills0 = corten_arena_test_stat_sum(mm->corten_state,
+					    CORTEN_ARENA_STAT_FILLS);
+
+	gate = kunit_kzalloc(test, sizeof(*gate), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, gate);
+	atomic_set(gate, 0);
+
+	/* One 2M frame: 512 slots, four threads x 64 pages at stride
+	 * 128 so the runs interleave inside one descriptor's window.
+	 */
+	base = CORTEN_ARENA_TEST_BASE;
+	for (i = 0; i < 4; i++) {
+		s[i].mm = mm;
+		s[i].vma = vma_lookup(mm, CORTEN_ARENA_TEST_BASE);
+		s[i].base = base + i * 128 * PAGE_SIZE;
+		s[i].nr = 64;
+		s[i].gate = gate;
+		atomic_set(&s[i].errors, 0);
+		init_completion(&s[i].done);
+	}
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, s[0].vma);
+
+	for (i = 0; i < 4; i++) {
+		tsk[i] = kthread_run(corten_arena_test_stampede_worker,
+				     &s[i], "corten_stampede%d", i);
+	}
+	for (i = 0; i < 4; i++) {
+		if (IS_ERR(tsk[i])) {
+			for (j = 0; j < 4; j++) {
+				if (!IS_ERR(tsk[j]))
+					kthread_stop(tsk[j]);
+			}
+			KUNIT_ASSERT_NOT_ERR_OR_NULL(test, tsk[i]);
+		}
+	}
+
+	/* Spread the stampede over four CPUs when the placement can be
+	 * established (a pinned-elsewhere run still exercises the
+	 * shared descriptor, just less hard).
+	 */
+	for (i = 0; i < 4; i++) {
+		if (num_online_cpus() > i)
+			set_cpus_allowed_ptr(tsk[i], cpumask_of(i));
+	}
+
+	for (i = 0; i < 4; i++) {
+		wait_for_completion(&s[i].done);
+		kthread_stop(tsk[i]);
+		KUNIT_EXPECT_EQ(test, atomic_read(&s[i].errors), 0);
+	}
+
+	/* Exact totals: every fault entered (FAULTS), every arm
+	 * succeeded (MAPPED), every fill answered (FILLS -- the
+	 * lock-free warm path keeps the stream whole).
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_FAULTS),
+			f0 + 256);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_MAPPED),
+			mapped0 + 256);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_stat_sum(mm->corten_state,
+						   CORTEN_ARENA_STAT_FILLS),
+			fills0 + 256);
+
+	/* Spot-check the installed state across all four runs. */
+	for (i = 0; i < 4; i++) {
+		struct corten_pte_meta m;
+
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_meta(mm, s[i].base, &m), 0);
+		KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+		KUNIT_EXPECT_EQ(test,
+				corten_arena_test_meta(mm,
+						       s[i].base +
+						       63 * PAGE_SIZE, &m),
+				0);
+		KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	}
+
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_sweep_anon_resident),
 	KUNIT_CASE(corten_arena_test_sweep_file_resident),
@@ -16504,6 +16895,13 @@ static struct kunit_case corten_arena_test_cases[] = {
 	 * truncation disclosure (the =on first-read hang's shape change).
 	 */
 	KUNIT_CASE(corten_arena_test_stats_walk_budget),
+	/* Ledger #12 (mv3cfeat sec 2.4-2, W-3fix7): the per-fault
+	 * bookkeeping merge -- arm stats out of the covering lock with
+	 * exact per-arm deltas, and the collapsed covering lock under a
+	 * real four-thread stampede (exact totals under contention).
+	 */
+	KUNIT_CASE(corten_arena_test_fault_stat_parity),
+	KUNIT_CASE(corten_arena_test_fault_stampede),
 	/* W1.a: the vma-free rmap wrappers on synthetic folios (no arena
 	 * state, registered before the V-E pair -- the whitelist anchor
 	 * below stays last for its cumulative gate verdict).
