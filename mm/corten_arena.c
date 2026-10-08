@@ -1215,6 +1215,10 @@ static void corten_arena_state_free_rcu(struct rcu_head *rcu)
  * pair the acquire load with the xa_load / refcount read below without any
  * further synchronization.
  */
+static void corten_arena_zap_orphan_ptes(struct mm_struct *mm,
+						 unsigned long start,
+						 unsigned long end);
+
 static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 {
 	struct corten_mm_state *state, *raced;
@@ -6742,6 +6746,45 @@ static int corten_arena_mmap_punch_route(struct mm_struct *mm,
 					 unsigned long addr, unsigned long len,
 					 unsigned long flags, bool mark);
 
+/* E2-V1: the orphan-PTE zap for the in-place wl adoption -- the PTE-driven
+ * clear of the teardown residue that the metadata-driven zaps can't see.
+ */
+static void corten_arena_zap_orphan_ptes(struct mm_struct *mm,
+					 unsigned long start,
+					 unsigned long end)
+{
+	unsigned long addr;
+
+	mmap_assert_write_locked(mm);
+	for (addr = start; addr < end;
+	     addr = min((addr | (PMD_SIZE - 1)) + 1, end)) {
+		unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1, end);
+		pmd_t *pmdp, pmd;
+		pte_t *ptep;
+		spinlock_t *ptl;
+		unsigned long a;
+
+		pmdp = corten_arena_pmd(mm, addr);
+		if (!pmdp)
+			continue;
+		pmd = READ_ONCE(*pmdp);
+		if (!pmd_present(pmd) || pmd_leaf(pmd))
+			continue;
+		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+		if (!ptep)
+			continue;
+		for (a = addr; a < win_end; a += PAGE_SIZE) {
+			pte_t pte = ptep[pte_index(a)];
+
+			if (pte_none(pte))
+				continue;
+			pte_clear(mm, a, ptep + pte_index(a));
+			corten_tlb_flush_page_novma(mm, a);
+		}
+		pte_unmap_unlock(ptep, ptl);
+	}
+}
+
 int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 				 unsigned long pgoff, unsigned long len,
 				 unsigned long prot, unsigned long *addr,
@@ -6830,17 +6873,15 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 		 */
 		if (find_vma_intersection(mm, *addr, *addr + len))
 			return 0;
-		/* E2-V1: the punch borrow (the W-7 co-frame machinery) --
-		 * the same pre-pass the window MAP_FIXED flow runs: any
-		 * overlapping arena state (the previous segment's pages)
-		 * is erased transactionally, and the declare then
-		 * coexists page-granular.  A range with no arena state
-		 * punches as a no-op.
+		/* E2-V1: the orphan-PTE zap -- the wl range may carry the
+		 * teardown residue (present PTEs whose VMA/region owners are
+		 * gone).  The legacy MAP_FIXED semantic: map here = destroy
+		 * whatever was here.  The C1-equivalent emptiness probe finds
+		 * them (the PTE-driven, not the metadata-driven); the zap
+		 * clears them PTE-driven with the rmap/mapcount handling the
+		 * legacy clobber always had.
 		 */
-		ret = corten_arena_mmap_punch_route(mm, *addr, len,
-						    *flagsp, false);
-		if (ret < 0)
-			return 0;
+		corten_arena_zap_orphan_ptes(mm, *addr, *addr + len);
 		*lenp = len;
 		return 1;
 	}
