@@ -1512,8 +1512,9 @@ pr0-regression/ 六份 console 原件）:
 | VMA 层四件 | 13,408 | 13,408（本周期未删 VMA 层源码） | 0 |
 | corten 代码 | 23,761 | 23,761（同上） | 0 |
 
-**J6 净删 = −900 行**（E2 审计退役 A/B 组），不含 V1 修复新增的 254 行
-（metadata-aware C1 + orphan zap + de-windowed gates = 正确性修复，非删除）。
+**J6 净删 = −900 行**（E2 审计退役 A/B 组），不含 V1 收敛轮的内核增量
++41/−14（metadata-aware C1 + fence 上域重设计 + 非 MAP_FIXED 门加宽 +
+exec 失败诊断；落地序 a8392b7，=on 布局收敛的正确性增量，非删除）。
 历史口径对照：W-6 测 44,334（生产 23,761 + 测试 20,573）为 mv3e 时点值。
 
 后续 VI（VMA 层删除）落地后追加终账。
