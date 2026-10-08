@@ -152,3 +152,25 @@ ELF_PLAT_INIT）+ wl region 布局转储。非确定性与 wl 收编布局相关
 explicit admission → pool_prepare/validate 链）。下轮: -EBUSY 源头 Hunt
 （admission 链逐点插桩）+ 与 wl 原址采纳的语义对齐（[C1] 等价预检或
 EBUSY→重定位降级）。
+
+## 7e. 深夜三轮总结（03:00）: 失败面完全定性, 机制待收敛
+
+连续 8 轮 boot 调试的收敛结果:
+- **确定性失败**: 每次 =on exec 都在 ld.so 的 libc/段映射链上失败
+  （-EBUSY → ld.so "cannot map segment" → exit 127）。非随机。
+- **失败链**: ld.so 的 hint 映射 → 原址臂占用检查通过（无 VMA/无
+  arena-registry 冲突）→ 原址 declare → **[C1] PTE 内容探针 -EBUSY**
+  （发现 [16T-0xFD000, 16T-0x90000) 有 present PTE——先前原址收编段的
+  页）→ mmap 整体失败（未重定位）→ ld.so 放弃 → init 死。
+- **已修的中间层**: maperr 去窗口化的栈扩展 SIGSEGV（真根因, 已修）、
+  exec 判别器、窗口外限定。
+- **结构性发现**: wl 域原址收编的段**页粒度共存**需要占用判定的完整
+  语义（VMA + registry + **PTE 内容**三面合一）; 现行 find_vma +
+  incl-idle 检查漏第三面。C1 等价预检已加但与 ld.so 的 hint 序列
+  仍有交互未收敛（round5-8 的失败面在多个锚间漂移）。
+- **明日首项**: (1) 原址臂的 C1 预检结果改为"跳过该 hint 回退重定位"
+  已实现但仍红——需 dump 失败时 [16T-1M,16T) 的完整 region+PTE 布局
+  定位残余交互; (2) 或评估原址臂改为"hint 范围 C1 拒 → 整段迁移到
+  窗口 placement"的混合语义。
+- 仓库: pr-v1 = d16e13d5→(本轮) 全部插桩与修复在案; 稳定链 909bccf
+  =on boot 绿（今晨电池）。

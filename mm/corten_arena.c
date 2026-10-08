@@ -2560,6 +2560,9 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	 */
 	ret = corten_arena_pool_prepare_locked(mm, state, addr, len, perm,
 					       novma, !!file);
+	if (ret < 0)
+		pr_warn("corten-dbg: pool_prepare FAIL ret=%d addr=%lx\n",
+			ret, addr);
 	if (ret <= 0) {
 		mutex_unlock(&state->ctl_lock);
 		return ret;		/* 0 = reactivated, else errno */
@@ -2599,6 +2602,8 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	 * same range.  Exclusive under ctl_lock.
 	 */
 	if (corten_arena_overlaps(state, addr, len)) {
+		pr_warn("corten-dbg: declare OVERLAP addr=%lx len=%lx\n",
+			addr, len);
 		ret = -EEXIST;
 		goto out_free_arena;
 	}
@@ -2613,8 +2618,11 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	 */
 	if (!adopt) {
 		ret = corten_arena_check_empty_locked(mm, addr, addr + len);
-		if (ret)
+		if (ret) {
+			pr_warn("corten-dbg: C1 refuse ret=%d addr=%lx len=%lx\n",
+				ret, addr, len);
 			goto out_free_arena;
+		}
 	}
 
 	if (novma) {
@@ -6790,6 +6798,16 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 		 */
 		if (find_vma_intersection(mm, *addr, *addr + len) ||
 		    corten_arena_range_occupied_incl_idle(mm, *addr, len))
+			return 0;
+		/* E2-V1: the [C1]-equivalent emptiness pre-check -- a range
+		 * whose PT pages carry content WITHOUT VMA coverage (the
+		 * stack-tail pages below the stack VMA's start) must fall
+		 * to the funnel, which RELOCATES; the declare itself would
+		 * refuse -EBUSY and the mmap would fail unrelocated.
+		 */
+		ret = corten_arena_check_empty_locked(mm, *addr,
+						      *addr + len);
+		if (ret)
 			return 0;
 		*lenp = len;
 		return 1;
