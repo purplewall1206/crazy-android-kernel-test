@@ -119,3 +119,13 @@
   load_elf 的 padzero/ELF_READ 对 wl region 页的访问面。
 - **工作树**: pr-v1 = 1d2953a + 插桩（load_elf 失败打印）; 稳定 =on 链 =
   android17-6.18 @ 909bccf（boot 绿验证于今晨电池）。
+
+## 7b. 调试进展补充（2026-10-08 23:15）
+
+插桩轮结果: place ✓ 成功（段已收编）、file_attach/auto_attach 零失败、
+padzero 零失败 → **load_elf_binary 的 -14 发生在晚段**（interp 装载 /
+create_elf_tables auxv / start_thread 之间）。插桩已就位（load_elf 失败
+打印 + padzero 失败打印 + attach 失败打印 + PLACE/入口决策打印）。
+下轮: 晚段三点的逐点插桩（interp map / create_elf_tables /
+ELF_PLAT_INIT）+ wl region 布局转储。非确定性与 wl 收编布局相关
+（boot4 vs boot5 崩点不同）。

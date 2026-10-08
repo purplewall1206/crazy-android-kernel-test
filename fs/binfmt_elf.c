@@ -429,8 +429,12 @@ static unsigned long elf_load(struct file *filep, unsigned long addr,
 			 * Zero the end of the last mapped page but ignore
 			 * any errors if the segment isn't writable.
 			 */
-			if (padzero(zero_start) && (prot & PROT_WRITE))
-				return -EFAULT;
+			if (padzero(zero_start)) {
+				pr_warn("corten-dbg: padzero FAIL zero_start=%px prot=%px\n",
+					(void *)zero_start, (void *)(unsigned long)prot);
+				if (prot & PROT_WRITE)
+					return -EFAULT;
+			}
 		}
 	} else {
 		map_addr = zero_start = ELF_PAGESTART(addr);

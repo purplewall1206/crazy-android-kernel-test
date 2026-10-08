@@ -6768,6 +6768,7 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 	 */
 	if (*addr && current->mm == mm &&
 	    !corten_addr_in_window(*addr, len)) {
+		pr_warn("corten-dbg: auto IN-PLACE hint=%lx len=%lx\n", *addr, len);
 		/* Window addresses stay the placement/magazine domain's
 		 * (the pool take and the window cursor below); only a
 		 * hint OUTSIDE the window adopts in place -- the loader's
@@ -6832,6 +6833,7 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 		atomic_long_inc(&corten_nr_pool_misses);
 	}
 
+	pr_warn("corten-dbg: auto PLACE ret_addr=%lx len=%lx\n", (unsigned long)addr2, len2);
 	ret = corten_arena_window_place(mm, state, len2, &addr2);
 	if (ret) {
 		/* Window exhausted or obstacle-skip ran out of window
@@ -6892,6 +6894,8 @@ int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
 					  corten_arena_perm_from_prot(prot),
 					  NULL, 0, true, false, NULL);
 	if (ret) {
+		pr_warn("corten-dbg: auto_attach FAIL ret=%d addr=%lx len=%lx\n",
+			ret, addr, len);
 		/* T0a counted attach failures in the per-mm fallback
 		 * bucket; T0b adds the named aggregates on top.
 		 */
@@ -6938,6 +6942,8 @@ int corten_arena_file_attach(struct mm_struct *mm, unsigned long addr,
 					  corten_arena_perm_from_prot(prot),
 					  file, pgoff, true, false, NULL);
 	if (ret) {
+		pr_warn("corten-dbg: file_attach FAIL ret=%d addr=%lx len=%lx\n",
+			ret, addr, len);
 		corten_arena_auto_fallback(state);
 		atomic_long_inc(&corten_nr_auto_attach_fails);
 	} else {
