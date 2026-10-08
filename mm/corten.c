@@ -1846,37 +1846,6 @@ static const struct file_operations corten_j2_walk_fops = {
  * value is the violation count (0 = the complete form holds); the
  * composition lands in audit_gate (wl_* lines).
  */
-static ssize_t corten_whitelist_write(struct file *file,
-				      const char __user *ubuf, size_t count,
-				      loff_t *ppos)
-{
-	char kbuf[16];
-	unsigned long long pid;
-	int ret;
-
-	if (*ppos || count >= sizeof(kbuf))
-		return count >= sizeof(kbuf) ? -EINVAL : 0;
-	if (copy_from_user(kbuf, ubuf, count))
-		return -EFAULT;
-	kbuf[count] = '\0';
-	strreplace(kbuf, '\n', '\0');
-	if (kstrtoull(kbuf, 10, &pid) || pid > INT_MAX)
-		return -EINVAL;
-
-	ret = corten_arena_wl_audit_pid((pid_t)pid);
-	if (ret < 0)
-		return ret;
-
-	*ppos += count;
-	return count;
-}
-
-static const struct file_operations corten_whitelist_fops = {
-	.owner		= THIS_MODULE,
-	.write		= corten_whitelist_write,
-	.llseek		= noop_llseek,
-};
-
 /*
  * V-A.3c: the hot-path sampling switch.  Write 0/1 (kstrtobool also
  * takes y/n): 1 arms the static key so the park/take/reactivate/route
@@ -1978,8 +1947,6 @@ static int __init corten_debugfs_init(void)
 	debugfs_create_file("audit_gate", 0444, dir, NULL,
 			    &corten_audit_gate_fops);
 	debugfs_create_file("j2_walk", 0200, dir, NULL, &corten_j2_walk_fops);
-	debugfs_create_file("whitelist", 0200, dir, NULL,
-			    &corten_whitelist_fops);
 
 	return 0;
 }
