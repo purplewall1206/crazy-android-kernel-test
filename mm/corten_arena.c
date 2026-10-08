@@ -2315,7 +2315,8 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 			 * INVALID is the teardown residue (the orphan:
 			 * the drop-content state kept the PTE but
 			 * dropped the live state).  Not content.  The
-			 * next declare's FRESH faults overwrite it. */
+			 * next declare's FRESH faults overwrite it.
+			 */
 			if (desc->meta) {
 				struct corten_pte_meta *m =
 					&desc->meta[pte_index(a)];
