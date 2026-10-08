@@ -2621,8 +2621,34 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	if (!adopt) {
 		ret = corten_arena_check_empty_locked(mm, addr, addr + len);
 		if (ret) {
-			pr_warn("corten-dbg: C1 refuse ret=%d addr=%lx len=%lx\n",
-				ret, addr, len);
+			{
+				unsigned long f;
+				void *sl;
+
+				pr_warn("corten-dbg: C1 refuse ret=%d addr=%lx len=%lx -- REGIONS:\n",
+					ret, addr, len);
+				for (f = 0; f < (1UL << (47 - PMD_SHIFT)); f++) {
+					sl = xa_load(&state->arenas, f);
+					if (sl) {
+						struct corten_arena *m = sl;
+						struct corten_frame_bucket *bk = corten_slot_bucket(sl);
+
+						if (bk) {
+							unsigned int i;
+
+							for (i = 0; i < bk->nr; i++)
+								pr_warn("corten-dbg:  f%lx r%u [%lx,%lx) p%x c%d\n",
+									f << PMD_SHIFT, i,
+									bk->rec[i]->start, bk->rec[i]->end,
+									bk->rec[i]->prot, bk->rec[i]->rclass);
+						} else if (sl != &corten_va_reserve_sentinel) {
+							pr_warn("corten-dbg:  f%lx [%lx,%lx) p%x c%d\n",
+								f << PMD_SHIFT, m->start, m->end,
+								m->prot, m->rclass);
+						}
+					}
+				}
+			}
 			goto out_free_arena;
 		}
 	}
