@@ -102,3 +102,139 @@
 - M2（V2/V3 落地）: map_count==0 达成（零 VMA 进程诞生）。
 - M3（V5 落地）: 总闸长开零触发。
 - M4（VI 落地）: VMA 层源文件删除, 单世界, J6 终账 = 项目常驻目标达成。
+
+## 7. V1 执行状态（2026-10-08 深夜, 调试中）
+
+- **已落地机械**: 原址臂（hint 页粒度收编, exec 判别器 + 窗口外限定）、
+  fault fallback/maperr MODE 门、madvise/mincore/msync 路由门
+  （lookup/occupancy 判定, parked 窗口语义保持）、move_pages 回退（V2/V3
+  前 wl VMA 不被接管）、GUP/remote 门、bss/implant 去窗口。
+- **登记的回归**: =on 全系统 boot 非确定性失败（boot4 = init -14 ×2;
+  boot5 = init 更早 SIGSEGV）——**布局依赖型**: 每次 boot 哪些 hint 映射
+  原址收编/哪些重定位不同 → 不同 region 布局 → 不同崩法。已排除: exec
+  判别器方向（修正后仍崩）、窗口门（修正后仍崩）。
+- **下一步调试序列**: (1) exec 链全程插桩（elf_map 每段打印收编/迁移/
+  原址决策 + region 布局转储）→ 定位布局敏感交互; (2) 检查 wl region 与
+  magazine 池帧的地址干扰（wl 地址与窗口帧的 xarray 帧键冲突?）; (3)
+  load_elf 的 padzero/ELF_READ 对 wl region 页的访问面。
+- **工作树**: pr-v1 = 1d2953a + 插桩（load_elf 失败打印）; 稳定 =on 链 =
+  android17-6.18 @ 909bccf（boot 绿验证于今晨电池）。
+
+## 7b. 调试进展补充（2026-10-08 23:15）
+
+插桩轮结果: place ✓ 成功（段已收编）、file_attach/auto_attach 零失败、
+padzero 零失败 → **load_elf_binary 的 -14 发生在晚段**（interp 装载 /
+create_elf_tables auxv / start_thread 之间）。插桩已就位（load_elf 失败
+打印 + padzero 失败打印 + attach 失败打印 + PLACE/入口决策打印）。
+下轮: 晚段三点的逐点插桩（interp map / create_elf_tables /
+ELF_PLAT_INIT）+ wl region 布局转储。非确定性与 wl 收编布局相关
+（boot4 vs boot5 崩点不同）。
+
+## 7c. 深夜推进（00:15）: exec 已深入至 wl 采纳策略洞
+
+修复 maperr 窗口域回退（栈 GROWSDOWN 扩展 fault 的 -14 根因）后, exec 前进
+到晚段 OK（entry/interp 装载完成, 第二次 placement 正确推进到 window+2M）,
+然后暴露**新洞**: ld.so 的一个 hint 映射（wl 域, 紧贴窗口下边界）走原址臂
+→ 占用检查（find_vma + incl-idle）判空闲 → 原址 declare → **[C1] 内容探针
+-EBUSY**（该范围有 PTE/元数据内容而无 VMA 覆盖——先前映射的残余或栈页）→
+整个 mmap 以 -EBUSY 失败（**未重定位**——get_unmapped_area 已按无 VMA 尊重
+了 hint）。init 三连 -16 → panic。
+
+**V1 完成的最后一块**: 原址臂的占用检查升级为 [C1] 等价（PTE+元数据+注册
+表三面), 或采纳前预跑 [C1]、拒时回退重定位语义。已登记, 明日首项。
+
+## 7d. 深夜二轮（01:20）: 失败点推进至 ld.so 的段映射
+
+布局转储轮: init 的 exec 本体成功（ld.so 已启动运行!）, 失败点推进到
+**ld.so 自己的段映射**: ld.so 的 mmap（MAP_FIXED 文件段, wl 域地址）收到
+-EBUSY → ld.so 报 "cannot map segment" → exit 127 → init 死。C1 内容探针
+打印未触发 → -EBUSY 来自采纳链更早的占用/状态检查点（范围已收窄至
+explicit admission → pool_prepare/validate 链）。下轮: -EBUSY 源头 Hunt
+（admission 链逐点插桩）+ 与 wl 原址采纳的语义对齐（[C1] 等价预检或
+EBUSY→重定位降级）。
+
+## 7e. 深夜三轮总结（03:00）: 失败面完全定性, 机制待收敛
+
+连续 8 轮 boot 调试的收敛结果:
+- **确定性失败**: 每次 =on exec 都在 ld.so 的 libc/段映射链上失败
+  （-EBUSY → ld.so "cannot map segment" → exit 127）。非随机。
+- **失败链**: ld.so 的 hint 映射 → 原址臂占用检查通过（无 VMA/无
+  arena-registry 冲突）→ 原址 declare → **[C1] PTE 内容探针 -EBUSY**
+  （发现 [16T-0xFD000, 16T-0x90000) 有 present PTE——先前原址收编段的
+  页）→ mmap 整体失败（未重定位）→ ld.so 放弃 → init 死。
+- **已修的中间层**: maperr 去窗口化的栈扩展 SIGSEGV（真根因, 已修）、
+  exec 判别器、窗口外限定。
+- **结构性发现**: wl 域原址收编的段**页粒度共存**需要占用判定的完整
+  语义（VMA + registry + **PTE 内容**三面合一）; 现行 find_vma +
+  incl-idle 检查漏第三面。C1 等价预检已加但与 ld.so 的 hint 序列
+  仍有交互未收敛（round5-8 的失败面在多个锚间漂移）。
+- **明日首项**: (1) 原址臂的 C1 预检结果改为"跳过该 hint 回退重定位"
+  已实现但仍红——需 dump 失败时 [16T-1M,16T) 的完整 region+PTE 布局
+  定位残余交互; (2) 或评估原址臂改为"hint 范围 C1 拒 → 整段迁移到
+  窗口 placement"的混合语义。
+- 仓库: pr-v1 = d16e13d5→(本轮) 全部插桩与修复在案; 稳定链 909bccf
+  =on boot 绿（今晨电池）。
+
+## 7f. 深夜三轮二（03:40）: 架构性 layout 修复 + C1 自相矛盾发现
+
+- **架构修复落地**: fence 重设计——MODE mm 的 legacy 域分配移到窗口上方
+  [64T, 128T)（原设计挤压在窗口起点正下方 [16T-1M, 16T) 窄带, ld.so 的
+  向下 hint 与栈页碰撞 = C1 保护性 -EBUSY 的根因）。hint 移到经典区
+  7f5f9d490000 ✓ layout 修复生效。
+- **新发现: C1 自相矛盾**: 同一 check_empty_locked——原址臂预检查空通过
+  → declare 内部 C1 报 PTE 内容 -EBUSY。微秒级窗口内状态变化或范围
+  计算差。**下轮: per-PTE 转储**（C1 内容打印已含 first= 地址; 需加
+  pre-check 与 declare-C1 的两次读数对比 + PT 页全 dump）。
+- 稳定链 909bccf =on boot 绿不受影响; pr-v1 全量在案。
+
+## 7g. 最终定位（04:15）: -EBUSY = ELF 重叠段映射 × [C1]
+
+**根因闭环**: ELF 的 PT_LOAD 段映射天然互相重叠（RW 嵌在 RX memsz 内）。
+ld.so 的段 MAP_FIXED 到达采纳门 → [C1] 检出**前一段的活页**在被收编范围
+内 → 保护性 -EBUSY → ld.so "cannot map segment" → exit 127。
+**修复点（单函数, 已精确）**: 采纳门的 overlap-teardown（punch borrow）
+需覆盖 dlopen/ld.so 的重叠段形态——W-7 exec 镜像已有同款机械, 差异仅在
+触发条件与 zflags 的页粒度对齐。这是 V1 的最后一块拼图。
+
+## 7h. 收敛轮终态（05:20）: 失败机制完整定性
+
+插桩轮定位: 失败 = ld.so 的**相邻段映射**（段 N+1 的 MAP_FIXED）到达原址
+采纳 → 原址臂占用检查（VMA + arena-registry 两面）判空闲 → declare →
+**[C1] 检出段 N 的活页在 N+1 范围内**（ELF 相邻段页粒度重叠的固有形状）
+→ -EBUSY → ld.so 放弃。
+
+**定性**: wl 域页粒度原址收编 × ELF 重叠段 = 需要 W-7 级 co-frame 共存
+机械的 dlopen 形态扩展——declare 的 [C1] 对"范围与前一段重叠"的形状需要
+W-7 桶式的页粒度共存判定（exec 镜像同形已由窗口机械覆盖, wl 域为新增）。
+**这是有明确设计路径的机制片**: (a) 原址臂预检改用 W-7 桶式重叠判定;
+(b) 或 declare 的 C1 对 wl 域增加"页粒度共存"半（前段记录覆盖的页不算
+内容）。估 1-2 枚 PR。
+
+**今夜成果封存**: pr-v1 = d7bc2d6（全量插桩+四轮修复+机制定性）; 稳定链
+909bccf =on 绿; E2 A/B/C 已落地; THE PLAN v2 与 J6 在案。
+
+## 7i. 机制完全闭环（05:45）: ld.so DSO 装载协议 × 采纳门
+
+**完整机制（全部插桩实证）**: ld.so 的 DSO 装载 = (1) mmap(NULL, total,
+PROT_NONE) 预订 → (2) 逐段 MAP_FIXED 进预订范围。V1 原址臂把预订收编为
+PROT_NONE region ✓; 段 1 的 MAP_FIXED = 采纳门 declare ✓; **段 2（与段 1
+页粒度重叠——ELF 段布局固有）的 MAP_FIXED → 采纳门重 declare → [C1] 检出
+段 1 的 FILE_MAPPED 标记 → -EBUSY → ld.so "cannot map segment" → 127**。
+
+**窗口机械已有同款处理**（=on exec 351 次进场、窗口内重叠段全绿为证）——
+**修复 = 采纳门移植窗口级的重叠段 declare 处理**（W-7 co-frame 的
+admission 形态）: 段 N+1 的 declare 对段 N 已标记页 = 元数据重写（新段
+赢）, 非 -EBUSY。估 1 枚 PR（admission 的 overlap 扩展 + KUnit 锚）。
+**V1 至此 = 机械全通, 唯此一片**。
+
+## 7j. 最终调试发现（06:00）: 元数据/PT 页腐蚀类（P1 级）
+
+C1 的 present PTE 值解码 = 物理地址超出 VM 内存的垃圾四元组 → **PT 页/
+元数据数组被先前的原址收编操作腐蚀**（非合法 PTE）。定级 P1: 内存腐蚀类。
+这是 wl 原址收编需要"设计片而非手术片"的最终实证: 交互面 =
+(原址 declare) × (punch borrow) × (窗口 placement 共存) × (fork/exit
+走查) 的状态一致性, 需要在设计文档层面先闭合（每条路径的状态转移表）,
+再写代码。今晚的 9 轮调试 + 全部插桩资产 = 该设计片的完整输入。
+
+**用户可见状态保护**: android17-6.18 @ 909bccf = 稳定 =on 链（boot 绿,
+电池绿, E2 退役含）——未受 V1 实验影响。V1 全部工作在 pr-v1 分支封存。
