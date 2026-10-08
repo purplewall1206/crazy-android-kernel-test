@@ -2313,6 +2313,8 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 		for (a = addr; a < win_end; a += PAGE_SIZE) {
 			if (pte_present(ptep[pte_index(a)])) {
 				empty = false;
+				pr_warn("corten-dbg: C1 present pte at %lx val=%llx\n",
+					a, (unsigned long long)pte_val(ptep[pte_index(a)]));
 				break;
 			}
 		}
