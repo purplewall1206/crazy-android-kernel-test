@@ -1306,6 +1306,40 @@ int corten_mark(struct corten_txn *txn, unsigned long start, unsigned long len,
 }
 
 /**
+ * corten_scrub - see include/linux/corten.h.
+ */
+int corten_scrub(struct corten_txn *txn, unsigned long start,
+		 unsigned long len)
+{
+	unsigned long addr, end;
+	int ret;
+
+	ret = corten_txn_subrange(txn, start, len, &end);
+	if (unlikely(ret))
+		return ret;
+
+	for (addr = start; addr < end; addr += PAGE_SIZE) {
+		struct corten_pte_meta *m = corten_txn_meta(txn, addr);
+
+		if (IS_ERR(m))
+			return PTR_ERR(m);
+		if (!m)
+			continue;	/* no array: pristine by absence */
+		/* The caller's [C1] emptiness probe guarantees the range
+		 * is content-free; anything else here is protocol drift
+		 * -- refuse loudly and let the caller degrade.
+		 */
+		if (WARN_ON_ONCE(m->state != CORTEN_INVALID))
+			return -EINVAL;
+		m->perm = 0;
+		m->flags = 0;
+		memset(m->__resv, 0, sizeof(m->__resv));
+	}
+
+	return 0;
+}
+
+/**
  * corten_swap_out - see include/linux/corten.h (M6.T2, spec D1/D6).
  */
 int corten_swap_out(struct corten_txn *txn, unsigned long addr,

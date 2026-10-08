@@ -2487,6 +2487,80 @@ scrub:
  * parked-arena eject half still runs, and the region joins the
  * mapping's per-inode registry as the very last publishing step (W1.b).
  */
+/* r07 PR-0 defentry fix (the ld.so bss ACCERR): the declare-side
+ * slot scrub.  A fresh-contract declare must not inherit the slot
+ * permissions a previous record's teardown left behind: the exec
+ * image's zap_window drops run KEEP_PERM, so a frame that once hosted
+ * a read-only FILE record answers the FRESH fault gate with the stale
+ * read-only perm -- which beats the declaring region's bound by
+ * design (the mprotect-contract rule) -- and the region's first write
+ * ACCERRs (the =on default-entry world's "Run /sbin/init" panic: the
+ * interpreter's bss page adopted by the PR-0 route over exactly such
+ * a slot).  The scrub resets the range's slots to pristine so the
+ * FRESH gate derives the contract from ar->prot; it runs behind the
+ * [C1] emptiness probe (no content to lose) under this ctl_lock hold,
+ * in the file_mark's lock order (ctl_lock > desc write).  A failure
+ * degrades the declare (the route runs the legacy funnel), never
+ * publishes a half-scrubbed region.
+ *
+ * Callers: the anon fresh-contract arms of corten_arena_declare_locked
+ * (!file && !adopt).  The FILE arm is self-scrubbing (the whole-region
+ * mark overwrites every slot); the adopt arm must not scrub (its
+ * range IS content -- the sweep backfills it).
+ */
+static int corten_arena_declare_scrub_one(struct mm_struct *mm,
+					  unsigned long addr,
+					  unsigned long len)
+{
+	struct corten_txn txn;
+	int ret, tries = 0;
+
+	/* -EAGAIN is the Fig.7 retirement race, not a verdict: retry
+	 * (the fault path's own budget) -- a punched frame's descriptor
+	 * answers it transiently and the stale slot MUST be scrubbed,
+	 * never skipped past.
+	 */
+	do {
+		ret = corten_lock_range(mm, addr, len, &txn);
+	} while (ret == -EAGAIN && ++tries < 2);
+	if (ret) {
+		/* The pristine-by-absence family: -ENOENT (no covering
+		 * PT page) and -EOPNOTSUPP (huge leaf, no PTE-level
+		 * metadata) answer "nothing to scrub".  Everything else
+		 * propagates: the caller degrades to the funnel.
+		 */
+		return ret == -ENOENT || ret == -EOPNOTSUPP ? 0 : ret;
+	}
+	ret = corten_scrub(&txn, addr, len);
+	corten_unlock(&txn);
+	return ret;
+}
+
+static int corten_arena_declare_scrub(struct mm_struct *mm,
+				      unsigned long addr, unsigned long len)
+{
+	unsigned long s = addr, e = addr + len;
+	int ret;
+
+	/* A PTE-level transaction cannot span a whole frame: a
+	 * frame-filling range answers the covering-level test at PMD
+	 * and lock_range rejects it.  Split every frame-filling run at
+	 * its last page (the two halves stay same-frame, PTE-level).
+	 */
+	while (s < e) {
+		unsigned long fend = (s & PMD_MASK) + PMD_SIZE;
+		unsigned long cend = min(e, fend);
+
+		if (cend - s == PMD_SIZE)
+			cend -= PAGE_SIZE;
+		ret = corten_arena_declare_scrub_one(mm, s, cend - s);
+		if (ret)
+			return ret;
+		s = cend;
+	}
+	return 0;
+}
+
 static int corten_arena_declare_locked(struct mm_struct *mm,
 				       struct corten_mm_state *state,
 				       unsigned long addr, unsigned long len,
@@ -2679,6 +2753,29 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 
 	first_frame = addr >> PMD_SHIFT;
 	last_frame = (addr + len - 1) >> PMD_SHIFT;
+
+	/* The r07 PR-0 defentry fix: the anon fresh-contract arms scrub
+	 * the range's stale slot perms before anything is published (the
+	 * r07 PR-0 regression: the interpreter's bss region adopted over
+	 * a KEEP_PERM-zapped read-only slot ACCERRed its first write).
+	 * @frame is pinned to @first_frame so the unwind below (still
+	 * legal here: nothing inserted) removes no slots.
+	 */
+	if (!file && !adopt) {
+		unsigned long f;
+
+		for (f = first_frame; f <= last_frame; f++) {
+			unsigned long s = max(addr, f << PMD_SHIFT);
+			unsigned long e = min(addr + len,
+					      (f + 1) << PMD_SHIFT);
+
+			ret = corten_arena_declare_scrub(mm, s, e - s);
+			if (ret)
+				goto out_unwind_pin;
+		}
+	}
+
+	frame = first_frame;
 	for (frame = first_frame; frame <= last_frame; frame++) {
 		ret = corten_slot_insert(&state->arenas, frame, arena);
 		if (ret)
@@ -2734,6 +2831,11 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 
 	return 0;
 
+out_unwind_pin:
+	/* The scrub failed before any frame store: nothing was
+	 * inserted, so the removal loop below must run zero times.
+	 */
+	frame = first_frame;
 out_unwind:
 	/* The arena is dead here (nothing published but some frame
 	 * slots) -- undo the stores; the record is never re-read after

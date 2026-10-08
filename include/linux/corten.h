@@ -540,6 +540,27 @@ int corten_unmap(struct corten_txn *txn, unsigned long start,
 		 unsigned long len, unsigned int flags);
 
 /**
+ * corten_scrub - reset a declared range's slot metadata to pristine
+ *                (the r07 PR-0 declare-side fix).
+ * @txn: locked transaction handle.
+ * @start: page-aligned range start inside the locked range.
+ * @len: page-aligned range length.
+ *
+ * The declare-side complement of the %CORTEN_UNMAP_KEEP_PERM drop: a
+ * fresh-contract declare must not inherit the slot permissions a
+ * previous record's teardown left behind (state INVALID, perm kept) --
+ * the FRESH fault gate prefers a slot-carried perm over the declaring
+ * region's bound, so a stale read-only perm would ACCERR the region's
+ * first write.  The callers run behind the [C1] emptiness probe, so
+ * the range carries no content: no counter moves, no PTE work, and a
+ * metadata array that was never allocated stays absent.
+ *
+ * Return: 0 on success, negative error otherwise.
+ */
+int corten_scrub(struct corten_txn *txn, unsigned long start,
+		 unsigned long len);
+
+/**
  * corten_unlock - release a transaction (paper: AddrSpace::unlock; releases
  *                 the acquired locks in reverse acquisition order).
  * @txn: handle returned by corten_lock_range(); invalid afterwards.
@@ -606,6 +627,12 @@ static inline int corten_swap_replay(struct corten_txn *txn,
 
 static inline int corten_unmap(struct corten_txn *txn, unsigned long start,
 			       unsigned long len, unsigned int flags)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int corten_scrub(struct corten_txn *txn, unsigned long start,
+			       unsigned long len)
 {
 	return -EOPNOTSUPP;
 }
