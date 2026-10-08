@@ -10,8 +10,8 @@ fi
 make[1]: Entering directory '/root/ltp/libs'
 make[1]: Entering directory '/root/ltp/lib'
 GEN ltp-version.h
-CC lib/cloner.o
 CC lib/get_path.o
+CC lib/cloner.o
 CC libs/ipc/tse_ipc.o
 CC libs/ipc/tse_msgctl.o
 AR libltpipc.a
@@ -97,9 +97,9 @@ safe_stdio.c:44:15: note: call to 'fclose' here
 CC libs/newipc/tse_newipc.o
 AR libltpnewipc.a
 RANLIB libltpnewipc.a
+CC lib/safe_stdio.o
 CC lib/safe_file_ops.o
 CC lib/safe_pthread.o
-CC lib/safe_stdio.o
 tlibio.c: In function 'lio_write_buffer':
 tlibio.c:625:17: warning: 'sigset' is deprecated: Use the signal and sigprocmask functions instead [-Wdeprecated-declarations]
   625 |                 sigset(sig, lio_async_signal_handler);
@@ -194,7 +194,6 @@ tlibio.c:1205:33: warning: 'sigrelse' is deprecated: Use the sigprocmask functio
 tlibio.c:937:22: warning: unused parameter 'wrd' [-Wunused-parameter]
   937 |                 long wrd)       /* to allow future features, use zero for now */
       |                 ~~~~~^~~
-CC libs/numa/tse_numa.o
 tlibio.c: In function 'lio_check_asyncio':
 tlibio.c:1339:17: warning: 'sigrelse' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
  1339 |                 sigrelse(aiocbp->aio_sigevent.sigev_signo);
@@ -209,23 +208,24 @@ tlibio.c:1479:25: warning: 'sigrelse' is deprecated: Use the sigprocmask functio
 /usr/include/signal.h:359:12: note: declared here
   359 | extern int sigrelse (int __sig) __THROW
       |            ^~~~~~~~
-AR libltpnuma.a
 tlibio.c:1487:25: warning: 'sigrelse' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
  1487 |                         sigrelse(aiocbp->aio_sigevent.sigev_signo);
       |                         ^~~~~~~~
 /usr/include/signal.h:359:12: note: declared here
   359 | extern int sigrelse (int __sig) __THROW
       |            ^~~~~~~~
-CC lib/tst_ansi_color.o
-RANLIB libltpnuma.a
+CC libs/numa/tse_numa.o
+AR libltpnuma.a
 CC lib/safe_net.o
+RANLIB libltpnuma.a
+CC lib/tst_ansi_color.o
 tst_af_alg.c: In function 'init_sockaddr_alg':
 tst_af_alg.c:62:9: warning: '__builtin_strncpy' specified bound 64 equals destination size [-Wstringop-truncation]
    62 |         strncpy((char *)addr->salg_name, algname, sizeof(addr->salg_name));
       |         ^
 CC lib/tst_arch.o
-CC lib/tst_assert.o
 CC lib/tst_af_alg.o
+CC lib/tst_assert.o
 tst_capability.c:82:6: warning: conflicting types for 'tst_cap_setup' due to enum/integer mismatch; have 'void(struct tst_cap *, unsigned int)' [-Wenum-int-mismatch]
    82 | void tst_cap_setup(struct tst_cap *caps, unsigned int action_mask)
       |      ^~~~~~~~~~~~~
@@ -234,16 +234,16 @@ In file included from ../include/tst_test.h:42,
 ../include/tst_capability.h:135:6: note: previous declaration of 'tst_cap_setup' with type 'void(struct tst_cap *, enum tst_cap_act)'
   135 | void tst_cap_setup(struct tst_cap *cap, enum tst_cap_act action_mask);
       |      ^~~~~~~~~~~~~
-CC lib/tst_capability.o
 CC lib/tst_buffers.o
-CC lib/tst_bool_expr.o
+CC lib/tst_capability.o
 CC libs/sigwait/tse_sigwait.o
 AR libltpsigwait.a
 RANLIB libltpsigwait.a
+CC lib/tst_bool_expr.o
 CC lib/tst_checksum.o
 CC lib/tlibio.o
-CC lib/tst_checkpoint.o
 CC lib/safe_macros.o
+CC lib/tst_checkpoint.o
 In file included from tst_clone.c:11:
 ../include/lapi/sched.h: In function 'ltp_clone3':
 ../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -261,34 +261,36 @@ In file included from tst_clone.c:11:
 CC lib/tst_clone.o
 CC libs/swap/tse_swap.o
 AR libltpswap.a
-CC lib/tst_coredump.o
 RANLIB libltpswap.a
+CC lib/tst_coredump.o
 CC lib/tst_clocks.o
 CC lib/tst_cmd.o
 CC lib/tst_cpu.o
 CC lib/tst_crypto.o
-CC lib/tst_dir_is_empty.o
 CC libs/uinput/tse_uinput.o
-CC lib/tst_epoll.o
 AR libltpuinput.a
+CC lib/tst_dir_is_empty.o
 RANLIB libltpuinput.a
+CC lib/tst_epoll.o
 CC libs/ujson/ujson_common.o
 CC lib/tst_fill_file.o
-CC lib/tst_fs_has_free.o
-CC lib/tst_fill_fs.o
-CC lib/tst_cgroup.o
-CC lib/tst_fd.o
 CC libs/ujson/ujson_utf.o
-CC lib/tst_fs_type.o
+CC lib/tst_fill_fs.o
+CC lib/tst_fd.o
+CC lib/tst_cgroup.o
+CC lib/tst_fs_has_free.o
 CC lib/tst_fs_setup.o
-CC lib/tst_fs_link_count.o
+CC lib/tst_fs_type.o
 CC lib/tst_device.o
+CC lib/tst_fs_link_count.o
 CC lib/tst_get_bad_addr.o
-CC lib/tst_hugepage.o
-CC lib/tst_ioctl.o
-CC lib/tst_kernel.o
 CC libs/ujson/ujson_writer.o
+CC lib/tst_ioctl.o
+CC lib/tst_hugepage.o
+CC lib/tst_kernel.o
 CC lib/tst_kvercmp.o
+CC lib/tst_mkfs.o
+CC lib/tst_memutils.o
 In file included from tst_net.c:17:
 ../include/lapi/sched.h: In function 'ltp_clone3':
 ../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -303,32 +305,29 @@ In file included from tst_net.c:17:
 ../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC lib/tst_mkfs.o
-CC lib/tst_memutils.o
-CC lib/tst_module.o
 CC libs/ujson/ujson_reader.o
 AR libujson.a
 RANLIB libujson.a
-CC lib/tst_net.o
+CC lib/tst_module.o
 CC lib/tst_parse_opts.o
+CC lib/tst_net.o
 CC lib/tst_path_exists.o
 CC lib/tst_kconfig.o
 CC lib/tst_path_has_mnt_flags.o
-CC lib/tst_rand_data.o
 CC libs/vdso/tse_parse_vdso.o
-CC lib/tst_process_state.o
-CC lib/tst_pid.o
-CC lib/tst_netlink.o
-CC lib/tst_netdevice.o
+CC lib/tst_rand_data.o
 CC libs/vdso/vdso_helpers.o
 AR libltpvdso.a
 RANLIB libltpvdso.a
 make[1]: Leaving directory '/root/ltp/libs'
+CC lib/tst_process_state.o
+CC lib/tst_netlink.o
+CC lib/tst_netdevice.o
+CC lib/tst_pid.o
 CC lib/tst_resource.o
 CC lib/tst_rtctime.o
 CC lib/tst_safe_io_uring.o
 CC lib/tst_safe_file_at.o
-CC lib/tst_res.o
 CC lib/tst_safe_timerfd.o
 tst_sig.c: In function 'tst_sig':
 tst_sig.c:210:28: warning: this statement may fall through [-Wimplicit-fallthrough=]
@@ -338,21 +337,22 @@ tst_sig.c:213:17: note: here
   213 |                 default:
       |                 ^~~~~~~
 CC lib/tst_safe_sysv_ipc.o
+CC lib/tst_res.o
 CC lib/tst_sig.o
-CC lib/tst_sig_proc.o
 CC lib/tst_security.o
+CC lib/tst_sig_proc.o
 CC lib/tst_status.o
+CC lib/tst_safe_macros.o
 CC lib/tst_supported_fs_types.o
 CC lib/tst_taint.o
 CC lib/tst_sys_conf.o
-CC lib/tst_safe_macros.o
 CC lib/tst_thread_state.o
 CC lib/tst_test_macros.o
 CC lib/tst_timer.o
-CC lib/tst_tmpdir.o
 CC lib/tst_uid.o
-CC lib/tst_virt.o
+CC lib/tst_tmpdir.o
 CC lib/tst_sysfs_assert.o
+CC lib/tst_virt.o
 CC lib/tst_timer_test.o
 CC lib/tst_wallclock.o
 CC lib/tst_test.o
@@ -360,39 +360,39 @@ AR libltp.a
 RANLIB libltp.a
 CC lib/newlib_tests/test03
 CC lib/newlib_tests/test01
-CC lib/newlib_tests/test02
-CC lib/newlib_tests/test04
 CC lib/newlib_tests/test06
+CC lib/newlib_tests/test04
+CC lib/newlib_tests/test02
 CC lib/newlib_tests/test05
 CC lib/newlib_tests/test07
-CC lib/newlib_tests/test13
 CC lib/newlib_tests/test11
 CC lib/newlib_tests/test14
+CC lib/newlib_tests/test13
 CC lib/newlib_tests/test09
 CC lib/newlib_tests/test08
-CC lib/newlib_tests/test_assert
 CC lib/newlib_tests/test19
-CC lib/newlib_tests/test20
 CC lib/newlib_tests/test22
-CC lib/newlib_tests/test_brk_child
+CC lib/newlib_tests/test20
+CC lib/newlib_tests/test_assert
 CC lib/newlib_tests/test15
-CC lib/newlib_tests/test_brk_pass
+CC lib/newlib_tests/test_brk_child
+CC lib/newlib_tests/test_brk_fail
 CC lib/newlib_tests/test_brk_parent
 CC lib/newlib_tests/test_brk_variant
-CC lib/newlib_tests/test_brk_fail
+CC lib/newlib_tests/test_brk_pass
 CC lib/newlib_tests/test_children_cleanup
 CC lib/newlib_tests/test_cpu_vendor
+CC lib/newlib_tests/test_exec
 CC lib/newlib_tests/test_exec_child
 CC lib/newlib_tests/test_fail_variant
-CC lib/newlib_tests/test_exec
 CC lib/newlib_tests/test_kconfig
-CC lib/newlib_tests/test_guarded_buf
 CC lib/newlib_tests/test_kconfig01
+CC lib/newlib_tests/test_guarded_buf
 CC lib/newlib_tests/test_kconfig02
 CC lib/newlib_tests/test_kconfig03
+CC lib/newlib_tests/test_macros05
 CC lib/newlib_tests/test_macros03
 CC lib/newlib_tests/test_macros01
-CC lib/newlib_tests/test_macros05
 CC lib/newlib_tests/test_macros02
 CC lib/newlib_tests/test_macros06
 CC lib/newlib_tests/test_parse_filesize
@@ -401,13 +401,13 @@ CC lib/newlib_tests/test_runtime02
 CC lib/newlib_tests/test_zero_hugepage
 CC lib/newlib_tests/tst_bool_expr
 CC lib/newlib_tests/tst_capability02
-CC lib/newlib_tests/tst_capability01
 CC lib/newlib_tests/tst_cgroup01
+CC lib/newlib_tests/tst_capability01
 CC lib/newlib_tests/test_timer
 CC lib/newlib_tests/tst_cgroup02
-CC lib/newlib_tests/tst_checkpoint
 CC lib/newlib_tests/tst_checkpoint_child
 CC lib/newlib_tests/tst_checkpoint_parent
+CC lib/newlib_tests/tst_checkpoint
 CC lib/newlib_tests/tst_checkpoint_wait_timeout
 CC lib/newlib_tests/tst_checkpoint_wake_timeout
 CC lib/newlib_tests/tst_device
@@ -416,37 +416,21 @@ CC lib/newlib_tests/tst_filesystems01
 CC lib/newlib_tests/tst_needs_cmds01
 CC lib/newlib_tests/tst_needs_cmds02
 CC lib/newlib_tests/tst_needs_cmds03
-CC lib/newlib_tests/tst_needs_cmds05
 CC lib/newlib_tests/tst_needs_cmds04
+CC lib/newlib_tests/tst_needs_cmds05
 CC lib/newlib_tests/tst_needs_cmds06
 CC lib/newlib_tests/tst_fuzzy_sync01
 CC lib/newlib_tests/tst_fuzzy_sync02
+CC lib/newlib_tests/tst_fuzzy_sync03
 CC lib/newlib_tests/tst_needs_cmds08
 CC lib/newlib_tests/tst_needs_cmds07
-CC lib/newlib_tests/tst_fuzzy_sync03
 CC lib/newlib_tests/tst_print_result
 CC lib/newlib_tests/tst_res_flags
 CC lib/newlib_tests/tst_res_hexd
 CC lib/newlib_tests/tst_safe_fileops
-CC lib/newlib_tests/tst_strstatus
 CC lib/newlib_tests/tst_safe_sscanf
+CC lib/newlib_tests/tst_strstatus
 CC lib/newlib_tests/variant
-tst_dataroot02.c: In function 'main':
-tst_dataroot02.c:51:36: warning: '/datafiles' directive output may be truncated writing 10 bytes into a region of size between 1 and 4096 [-Wformat-truncation=]
-   51 |         snprintf(tmp, PATH_MAX, "%s/datafiles", curdir);
-      |                                    ^~~~~~~~~~
-In file included from /usr/include/stdio.h:970,
-                 from ../../include/old/test.h:14,
-                 from tst_dataroot02.c:23:
-In function 'snprintf',
-    inlined from 'main' at tst_dataroot02.c:51:2:
-/usr/include/x86_64-linux-gnu/bits/stdio2.h:68:10: note: '__builtin___snprintf_chk' output between 11 and 4106 bytes into a destination of size 4096
-   68 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
-      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-   69 |                                    __glibc_objsize (__s), __fmt,
-      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-   70 |                                    __va_arg_pack ());
-      |                                    ~~~~~~~~~~~~~~~~~
 tst_dataroot03.c: In function 'main':
 tst_dataroot03.c:51:36: warning: '/datafiles' directive output may be truncated writing 10 bytes into a region of size between 1 and 4096 [-Wformat-truncation=]
    51 |         snprintf(tmp, PATH_MAX, "%s/datafiles", curdir);
@@ -456,6 +440,22 @@ In file included from /usr/include/stdio.h:970,
                  from tst_dataroot03.c:23:
 In function 'snprintf',
     inlined from 'main' at tst_dataroot03.c:51:2:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:68:10: note: '__builtin___snprintf_chk' output between 11 and 4106 bytes into a destination of size 4096
+   68 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   69 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   70 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+tst_dataroot02.c: In function 'main':
+tst_dataroot02.c:51:36: warning: '/datafiles' directive output may be truncated writing 10 bytes into a region of size between 1 and 4096 [-Wformat-truncation=]
+   51 |         snprintf(tmp, PATH_MAX, "%s/datafiles", curdir);
+      |                                    ^~~~~~~~~~
+In file included from /usr/include/stdio.h:970,
+                 from ../../include/old/test.h:14,
+                 from tst_dataroot02.c:23:
+In function 'snprintf',
+    inlined from 'main' at tst_dataroot02.c:51:2:
 /usr/include/x86_64-linux-gnu/bits/stdio2.h:68:10: note: '__builtin___snprintf_chk' output between 11 and 4106 bytes into a destination of size 4096
    68 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
       |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -473,8 +473,8 @@ CC lib/tests/tst_fs_fill_hardlinks
 CC lib/tests/tst_fs_fill_subdirs
 CC lib/tests/tst_record_childstatus
 CC lib/tests/tst_process_state
-CC lib/tests/tst_strerrno
 CC lib/tests/tst_safe_macros
+CC lib/tests/tst_strerrno
 CC lib/tests/tst_strsig
 CC lib/tests/tst_tmpdir_test
 make[1]: Leaving directory '/root/ltp/lib'
@@ -487,9 +487,9 @@ make -C "tools" \
 make -C "metadata" \
 	-f "/root/ltp/metadata/Makefile" all
 make[1]: Entering directory '/root/ltp/utils'
+make[1]: Entering directory '/root/ltp/metadata'
 make[1]: Entering directory '/root/ltp/testcases'
 make[1]: Entering directory '/root/ltp/tools'
-make[1]: Entering directory '/root/ltp/metadata'
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 make[4]: Nothing to be done for 'all'.
 GEN ltp-version.h
@@ -501,99 +501,99 @@ make[4]: Nothing to be done for 'all'.
 make[4]: Nothing to be done for 'all'.
 CC testcases/commands/file/datafiles/in
 make[3]: Nothing to be done for 'all'.
-HOSTCC metadata/metaparse-sh
 make[3]: Nothing to be done for 'all'.
 skip: 1, FORCE_MODULES: 
 make[3]: Nothing to be done for 'all'.
 make[3]: Nothing to be done for 'all'.
+HOSTCC metadata/metaparse-sh
 make[4]: Nothing to be done for 'all'.
 CC tools/apicmds/ltpapicmd.o
 gcc -L../../lib  ltpapicmd.o  -lltp -o tst_brk
-CC testcases/commands/ldd/datafiles/lddfile2.o
-CC testcases/commands/ldd/datafiles/lddfile1.o
 CC testcases/commands/ldd/datafiles/main.o
-CC testcases/commands/ldd/datafiles/lddfile4.o
-CC testcases/commands/ldd/datafiles/lddfile5.o
-gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -shared -o lddfile1.obj.so lddfile1.o
-gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -shared -o lddfile2.obj.so lddfile2.o
-CC testcases/commands/ldd/datafiles/lddfile3.o
-gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -shared -o lddfile4.obj.so lddfile4.o
+CC testcases/commands/ldd/datafiles/lddfile1.o
 gcc -L../../lib  ltpapicmd.o  -lltp -o tst_brkm
-gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -shared -o lddfile5.obj.so lddfile5.o
-gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -shared -o lddfile3.obj.so lddfile3.o
+CC testcases/commands/ldd/datafiles/lddfile2.o
 gcc -L../../lib  ltpapicmd.o  -lltp -o tst_exit
-CC utils/benchmark/ebizzy-0.3/ebizzy
+CC testcases/commands/ldd/datafiles/lddfile3.o
+CC testcases/commands/ldd/datafiles/lddfile4.o
+gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -shared -o lddfile1.obj.so lddfile1.o
 gcc -L../../lib  ltpapicmd.o  -lltp -o tst_res
+gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -shared -o lddfile2.obj.so lddfile2.o
+CC testcases/commands/ldd/datafiles/lddfile5.o
+gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -shared -o lddfile3.obj.so lddfile3.o
+CC utils/benchmark/ebizzy-0.3/ebizzy
 make[3]: Nothing to be done for 'all'.
-gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -O -o lddfile.out main.o lddfile1.obj.so lddfile2.obj.so lddfile3.obj.so lddfile4.obj.so lddfile5.obj.so
 gcc -L../../lib  ltpapicmd.o  -lltp -o tst_resm
 make -C "lib" -f "/root/ltp/utils/sctp/lib/Makefile" all
-rm lddfile2.o lddfile1.o lddfile4.o lddfile3.o lddfile5.o
-gcc -L../../lib  ltpapicmd.o  -lltp -o tst_ncpus
-make[3]: Nothing to be done for 'all'.
-skip: 1, FORCE_MODULES: 
-make[3]: Nothing to be done for 'all'.
-make[3]: Nothing to be done for 'all'.
-make[3]: Nothing to be done for 'all'.
-make[3]: Nothing to be done for 'all'.
-gcc -L../../lib  ltpapicmd.o  -lltp -o tst_ncpus_conf
-make[3]: Nothing to be done for 'all'.
-gcc -L../../lib  ltpapicmd.o  -lltp -o tst_ncpus_max
+gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -shared -o lddfile4.obj.so lddfile4.o
 make -C "testlib" -f "/root/ltp/utils/sctp/testlib/Makefile" all
-CC utils/sctp/lib/addrs.o
-gcc -L../../lib  ltpapicmd.o  -lltp -o tst_fs_has_free
-CC testcases/commands/nm/datafiles/f1
+gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -shared -o lddfile5.obj.so lddfile5.o
+gcc -L../../lib  ltpapicmd.o  -lltp -o tst_ncpus
 CC utils/sctp/lib/bindx.o
+gcc -g -O2 -g -O2 -fno-strict-aliasing -pipe -Wall -W -Wold-style-definition -std=gnu99 -O -o lddfile.out main.o lddfile1.obj.so lddfile2.obj.so lddfile3.obj.so lddfile4.obj.so lddfile5.obj.so
+CC utils/sctp/lib/addrs.o
+gcc -L../../lib  ltpapicmd.o  -lltp -o tst_ncpus_conf
+rm lddfile2.o lddfile1.o lddfile4.o lddfile3.o lddfile5.o
 connectx.c:78:12: warning: 'sctp_connectx_orig' alias between functions of incompatible types 'int(int)' and 'int(int,  struct sockaddr *, int)' [-Wattribute-alias=]
    78 | extern int sctp_connectx_orig (int)
       |            ^~~~~~~~~~~~~~~~~~
 connectx.c:67:5: note: aliased declaration here
    67 | int __sctp_connectx(int fd, struct sockaddr *addrs, int addrcnt)
       |     ^~~~~~~~~~~~~~~
+make[3]: Nothing to be done for 'all'.
+gcc -L../../lib  ltpapicmd.o  -lltp -o tst_ncpus_max
+skip: 1, FORCE_MODULES: 
+make[3]: Nothing to be done for 'all'.
+make[3]: Nothing to be done for 'all'.
+make[3]: Nothing to be done for 'all'.
+make[3]: Nothing to be done for 'all'.
+make[3]: Nothing to be done for 'all'.
+gcc -L../../lib  ltpapicmd.o  -lltp -o tst_fs_has_free
+CC utils/sctp/lib/connectx.o
+CC testcases/commands/nm/datafiles/f1
+CC testcases/commands/nm/datafiles/f2
 make[2]: Nothing to be done for 'all'.
+CC utils/sctp/lib/opt_info.o
 make[2]: Nothing to be done for 'all'.
 make[1]: Leaving directory '/root/ltp/tools'
-CC utils/sctp/lib/opt_info.o
-CC testcases/commands/nm/datafiles/f2
-CC utils/sctp/lib/connectx.o
-CC utils/sctp/lib/peeloff.o
 CC testcases/commands/nm/datafiles/f1.o
-CC testcases/commands/nm/datafiles/f3
-CC testcases/commands/nm/datafiles/f3.o
-CC utils/sctp/lib/sendmsg.o
-CC testcases/commands/nm/datafiles/f2.o
-ar rcs lib.a f1.o f2.o f3.o
-CC utils/sctp/lib/recvmsg.o
-AR libsctp.a
-make[3]: Nothing to be done for 'all'.
-make[3]: Nothing to be done for 'all'.
-RANLIB libsctp.a
-make[3]: Nothing to be done for 'all'.
-make[5]: Nothing to be done for 'all'.
-make[5]: Nothing to be done for 'all'.
-make[5]: Nothing to be done for 'all'.
-make[5]: Nothing to be done for 'all'.
-make[5]: Nothing to be done for 'all'.
+CC utils/sctp/lib/peeloff.o
 CC utils/sctp/testlib/sctputil.o
+CC testcases/commands/nm/datafiles/f3
 AR libsctputil.a
-make[5]: Nothing to be done for 'all'.
 RANLIB libsctputil.a
+CC testcases/commands/nm/datafiles/f2.o
+CC utils/sctp/lib/recvmsg.o
+CC testcases/commands/nm/datafiles/f3.o
+ar rcs lib.a f1.o f2.o f3.o
+make[3]: Nothing to be done for 'all'.
+make[3]: Nothing to be done for 'all'.
+make[3]: Nothing to be done for 'all'.
+CC utils/sctp/lib/sendmsg.o
+AR libsctp.a
+make[5]: Nothing to be done for 'all'.
+RANLIB libsctp.a
 make[5]: Nothing to be done for 'all'.
 make[5]: Nothing to be done for 'all'.
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC utils/sctp/func_tests/test_basic_v6.o
-make[5]: Nothing to be done for 'all'.
 CC utils/sctp/func_tests/test_fragments_v6.o
+make[5]: Nothing to be done for 'all'.
 CC utils/sctp/func_tests/test_getname_v6.o
 GEN ltp-version.h
 make[5]: Nothing to be done for 'all'.
 make[5]: Nothing to be done for 'all'.
 make[5]: Nothing to be done for 'all'.
-make[3]: Nothing to be done for 'all'.
 make[5]: Nothing to be done for 'all'.
 make[5]: Nothing to be done for 'all'.
-make[4]: Nothing to be done for 'all'.
+make[5]: Nothing to be done for 'all'.
+make[5]: Nothing to be done for 'all'.
 CC utils/sctp/func_tests/test_inaddr_any_v6.o
+make[5]: Nothing to be done for 'all'.
+make[5]: Nothing to be done for 'all'.
+make[5]: Nothing to be done for 'all'.
+make[3]: Nothing to be done for 'all'.
+make[4]: Nothing to be done for 'all'.
 make[3]: Nothing to be done for 'all'.
 make[3]: Nothing to be done for 'all'.
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
@@ -610,6 +610,8 @@ CC utils/sctp/func_tests/test_timetolive_v6.o
 CC testcases/cve/cve-2014-0196
 CC testcases/cve/cve-2015-3290
 CC testcases/cve/cve-2016-10044
+CC utils/sctp/func_tests/test_1_to_1_addrs
+CC utils/sctp/func_tests/test_1_to_1_accept_close
 In file included from cve-2017-16939.c:29:
 ../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -625,24 +627,23 @@ In file included from cve-2017-16939.c:29:
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
 CC testcases/cve/cve-2016-7042
-CC utils/sctp/func_tests/test_1_to_1_accept_close
 CC testcases/cve/cve-2017-16939
-CC testcases/cve/cve-2017-17052
-CC utils/sctp/func_tests/test_1_to_1_addrs
 CC utils/sctp/func_tests/test_1_to_1_connect
+CC utils/sctp/func_tests/test_1_to_1_connectx
+CC testcases/cve/cve-2017-17052
+CC testcases/cve/cve-2017-17053
 cve-2017-2618.c: In function 'do_test':
 cve-2017-2618.c:35:25: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
    35 |                         write(fd, "\n", 1);
       |                         ^~~~~~~~~~~~~~~~~~
-CC testcases/cve/cve-2017-17053
-CC testcases/cve/cve-2017-2618
-CC testcases/cve/cve-2016-7117
+CC utils/sctp/func_tests/test_1_to_1_initmsg_connect
 CC utils/sctp/func_tests/test_1_to_1_events
-CC utils/sctp/func_tests/test_1_to_1_connectx
+CC testcases/cve/cve-2016-7117
+CC testcases/cve/cve-2017-2618
+CC utils/sctp/func_tests/test_1_to_1_nonblock
 CC testcases/cve/cve-2022-4378
 CC testcases/cve/cve-2025-21756
-CC utils/sctp/func_tests/test_1_to_1_initmsg_connect
-CC utils/sctp/func_tests/test_1_to_1_nonblock
+CC utils/sctp/func_tests/test_1_to_1_recvfrom
 In file included from cve-2026-46331.c:54:
 ../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -658,25 +659,10 @@ In file included from cve-2026-46331.c:54:
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
 CC testcases/cve/cve-2025-38236
-CC testcases/cve/cve-2026-46331
-CC utils/sctp/func_tests/test_1_to_1_recvmsg
-CC testcases/cve/cve-2017-2671
-CC utils/sctp/func_tests/test_1_to_1_recvfrom
 CC utils/sctp/func_tests/test_1_to_1_rtoinfo
-In file included from icmp_rate_limit01.c:30:
-../../include/lapi/sched.h: In function 'ltp_clone3':
-../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
-../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                                                          ~~~~~~~^~~~
-../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                              ~~~~~~^~~~~~~~~~~
-../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                                                 ~~~~~~^~~
+CC utils/sctp/func_tests/test_1_to_1_recvmsg
+CC testcases/cve/cve-2026-46331
+CC testcases/cve/cve-2017-2671
 In file included from ghostlock.c:36:
 ../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -691,16 +677,37 @@ In file included from ghostlock.c:36:
 ../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
+In file included from icmp_rate_limit01.c:30:
+../../include/lapi/sched.h: In function 'ltp_clone3':
+../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
+../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                                                          ~~~~~~~^~~~
+../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                              ~~~~~~^~~~~~~~~~~
+../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                                                 ~~~~~~^~~
 CC utils/sctp/func_tests/test_1_to_1_send
+CC utils/sctp/func_tests/test_1_to_1_sendto
 CC utils/sctp/func_tests/test_1_to_1_sendmsg
 CC testcases/cve/ghostlock
 CC testcases/cve/icmp_rate_limit01
-CC utils/sctp/func_tests/test_1_to_1_sendto
-CC testcases/cve/meltdown
-CC utils/sctp/func_tests/test_1_to_1_shutdown
 CC utils/sctp/func_tests/test_1_to_1_socket_bind_listen
-CC testcases/cve/stack_clash
+CC utils/sctp/func_tests/test_1_to_1_shutdown
+CC utils/sctp/func_tests/test_1_to_1_sockopt
+CC testcases/cve/meltdown
+CC utils/sctp/func_tests/test_1_to_1_threads
+CC utils/sctp/func_tests/test_assoc_abort
+CC utils/sctp/func_tests/test_assoc_shutdown
+CC utils/sctp/func_tests/test_autoclose
+CC testcases/cve/refluxfs
+CC utils/sctp/func_tests/test_basic
 CC testcases/cve/sctphantom
+CC utils/sctp/func_tests/test_connect
 In file included from tcindex01.c:24:
 ../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -715,61 +722,54 @@ In file included from tcindex01.c:24:
 ../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC utils/sctp/func_tests/test_1_to_1_sockopt
-CC utils/sctp/func_tests/test_1_to_1_threads
+CC testcases/cve/stack_clash
 CC testcases/cve/tcindex01
-CC testcases/cve/refluxfs
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
-make[6]: Nothing to be done for 'all'.
-make[6]: Nothing to be done for 'all'.
-CC utils/sctp/func_tests/test_autoclose
-CC utils/sctp/func_tests/test_assoc_shutdown
-CC utils/sctp/func_tests/test_assoc_abort
-CC utils/sctp/func_tests/test_basic
-CC testcases/kernel/syscalls/abort/abort01
-make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-GEN ltp-version.h
-CC utils/sctp/func_tests/test_connect
+CC utils/sctp/func_tests/test_connectx
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC utils/sctp/func_tests/test_fragments
-CC utils/sctp/func_tests/test_connectx
 CC utils/sctp/func_tests/test_getname
-CC testcases/kernel/syscalls/accept/accept01
 CC utils/sctp/func_tests/test_inaddr_any
-CC testcases/kernel/syscalls/accept/accept02
-CC utils/sctp/func_tests/test_peeloff
+CC testcases/kernel/syscalls/abort/abort01
+make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
+GEN ltp-version.h
+make[6]: Nothing to be done for 'all'.
+make[6]: Nothing to be done for 'all'.
 CC utils/sctp/func_tests/test_recvmsg
+CC utils/sctp/func_tests/test_peeloff
+CC utils/sctp/func_tests/test_sctp_sendrecvmsg
+LD utils/sctp/func_tests/test_basic_v6
+CC testcases/kernel/syscalls/accept/accept01
+LD utils/sctp/func_tests/test_fragments_v6
+CC utils/sctp/func_tests/test_timetolive
+LD utils/sctp/func_tests/test_getname_v6
+CC utils/sctp/func_tests/test_sockopt
+LD utils/sctp/func_tests/test_inaddr_any_v6
+LD utils/sctp/func_tests/test_peeloff_v6
+CC utils/sctp/func_tests/test_tcp_style
+LD utils/sctp/func_tests/test_sockopt_v6
+LD utils/sctp/func_tests/test_sctp_sendrecvmsg_v6
+CC testcases/kernel/syscalls/accept/accept02
+LD utils/sctp/func_tests/test_tcp_style_v6
+LD utils/sctp/func_tests/test_timetolive_v6
+rm test_fragments_v6.o test_getname_v6.o test_basic_v6.o test_peeloff_v6.o test_tcp_style_v6.o test_inaddr_any_v6.o test_sockopt_v6.o test_sctp_sendrecvmsg_v6.o test_timetolive_v6.o
+make[1]: Leaving directory '/root/ltp/utils'
 CC testcases/kernel/syscalls/accept/accept03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC utils/sctp/func_tests/test_sctp_sendrecvmsg
-LD utils/sctp/func_tests/test_basic_v6
-LD utils/sctp/func_tests/test_fragments_v6
-CC utils/sctp/func_tests/test_timetolive
-LD utils/sctp/func_tests/test_getname_v6
-CC utils/sctp/func_tests/test_tcp_style
-CC utils/sctp/func_tests/test_sockopt
 CC testcases/kernel/syscalls/accept4/accept4_01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-LD utils/sctp/func_tests/test_inaddr_any_v6
 GEN ltp-version.h
-LD utils/sctp/func_tests/test_peeloff_v6
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-LD utils/sctp/func_tests/test_sockopt_v6
-LD utils/sctp/func_tests/test_sctp_sendrecvmsg_v6
-LD utils/sctp/func_tests/test_tcp_style_v6
-LD utils/sctp/func_tests/test_timetolive_v6
-rm test_fragments_v6.o test_getname_v6.o test_basic_v6.o test_peeloff_v6.o test_tcp_style_v6.o test_inaddr_any_v6.o test_sockopt_v6.o test_sctp_sendrecvmsg_v6.o test_timetolive_v6.o
-make[1]: Leaving directory '/root/ltp/utils'
 CC testcases/kernel/syscalls/access/access03
 CC testcases/kernel/syscalls/access/access04
-CC testcases/kernel/syscalls/access/access02
 CC testcases/kernel/syscalls/access/access01
+CC testcases/kernel/syscalls/access/access02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -782,26 +782,26 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/add_key/add_key02
-CC testcases/kernel/syscalls/add_key/add_key01
-CC testcases/kernel/syscalls/add_key/add_key04
 CC testcases/kernel/syscalls/add_key/add_key03
+CC testcases/kernel/syscalls/add_key/add_key04
+CC testcases/kernel/syscalls/add_key/add_key01
 CC testcases/kernel/syscalls/add_key/add_key05
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/adjtimex/adjtimex01
 CC testcases/kernel/syscalls/adjtimex/adjtimex03
+CC testcases/kernel/syscalls/adjtimex/adjtimex01
 CC testcases/kernel/syscalls/adjtimex/adjtimex02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/alarm/alarm03
-CC testcases/kernel/syscalls/alarm/alarm06
-CC testcases/kernel/syscalls/alarm/alarm05
 CC testcases/kernel/syscalls/alarm/alarm07
 CC testcases/kernel/syscalls/alarm/alarm02
+CC testcases/kernel/syscalls/alarm/alarm06
+CC testcases/kernel/syscalls/alarm/alarm03
+CC testcases/kernel/syscalls/alarm/alarm05
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -812,8 +812,8 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/bind/bind02
-CC testcases/kernel/syscalls/bind/bind01
 CC testcases/kernel/syscalls/bind/bind03
+CC testcases/kernel/syscalls/bind/bind01
 CC testcases/kernel/syscalls/bind/bind04
 CC testcases/kernel/syscalls/bind/bind05
 CC testcases/kernel/syscalls/bind/bind06
@@ -825,8 +825,8 @@ CC testcases/kernel/syscalls/bpf/bpf_common.o
 CC testcases/kernel/syscalls/bpf/bpf_prog01
 CC testcases/kernel/syscalls/bpf/bpf_prog04
 CC testcases/kernel/syscalls/bpf/bpf_prog02
-CC testcases/kernel/syscalls/bpf/bpf_map01
 CC testcases/kernel/syscalls/bpf/bpf_prog03
+CC testcases/kernel/syscalls/bpf/bpf_map01
 CC testcases/kernel/syscalls/bpf/bpf_prog06
 CC testcases/kernel/syscalls/bpf/bpf_prog07
 CC testcases/kernel/syscalls/bpf/bpf_prog05
@@ -834,8 +834,8 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/brk/brk01
 CC testcases/kernel/syscalls/brk/brk02
+CC testcases/kernel/syscalls/brk/brk01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -859,31 +859,31 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/capset/capset04
-CC testcases/kernel/syscalls/capset/capset03
 CC testcases/kernel/syscalls/capset/capset01
+CC testcases/kernel/syscalls/capset/capset03
+CC testcases/kernel/syscalls/capset/capset04
 CC testcases/kernel/syscalls/capset/capset02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/chdir/chdir04
 CC testcases/kernel/syscalls/chdir/chdir02
+CC testcases/kernel/syscalls/chdir/chdir04
 CC testcases/kernel/syscalls/chdir/chdir01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/chmod/chmod03
 CC testcases/kernel/syscalls/chmod/chmod07
+CC testcases/kernel/syscalls/chmod/chmod03
 CC testcases/kernel/syscalls/chmod/chmod01
 CC testcases/kernel/syscalls/chmod/chmod05
 CC testcases/kernel/syscalls/chmod/chmod06
-CC testcases/kernel/syscalls/chmod/chmod09
 CC testcases/kernel/syscalls/chmod/chmod08
+CC testcases/kernel/syscalls/chmod/chmod09
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-CC testcases/kernel/syscalls/chown/chown01_16.o
 CC testcases/kernel/syscalls/chown/chown02_16.o
+CC testcases/kernel/syscalls/chown/chown01_16.o
 CC testcases/kernel/syscalls/chown/chown03_16.o
 CC testcases/kernel/syscalls/chown/chown04_16.o
 GEN ltp-version.h
@@ -895,19 +895,19 @@ CC testcases/kernel/syscalls/chown/chown02
 CC testcases/kernel/syscalls/chown/chown04
 CC testcases/kernel/syscalls/chown/chown03
 LD testcases/kernel/syscalls/chown/chown01_16
+LD testcases/kernel/syscalls/chown/chown02_16
 CC testcases/kernel/syscalls/chown/chown05
 LD testcases/kernel/syscalls/chown/chown03_16
-LD testcases/kernel/syscalls/chown/chown02_16
-LD testcases/kernel/syscalls/chown/chown05_16
 LD testcases/kernel/syscalls/chown/chown04_16
+LD testcases/kernel/syscalls/chown/chown05_16
 rm chown04_16.o chown02_16.o chown01_16.o chown03_16.o chown05_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/chroot/chroot01
-CC testcases/kernel/syscalls/chroot/chroot04
 CC testcases/kernel/syscalls/chroot/chroot02
+CC testcases/kernel/syscalls/chroot/chroot04
+CC testcases/kernel/syscalls/chroot/chroot01
 CC testcases/kernel/syscalls/chroot/chroot03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -922,8 +922,8 @@ make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/clock_getres/clock_getres01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libvdso.a
-GEN ltp-version.h
 make[5]: Nothing to be done for 'all'.
+GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 In file included from clock_gettime03.c:20:
@@ -964,17 +964,17 @@ In file included from clock_nanosleep03.c:19:
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
 CC testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep02
+CC testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep03
 CC testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep04
 CC testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep01
-CC testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/clock_settime/clock_settime02
 CC testcases/kernel/syscalls/clock_settime/clock_settime03
-CC testcases/kernel/syscalls/clock_settime/clock_settime01
 CC testcases/kernel/syscalls/clock_settime/clock_settime04
+CC testcases/kernel/syscalls/clock_settime/clock_settime01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -983,10 +983,10 @@ clone02.c: In function 'sig_child_defined_handler':
 clone02.c:452:43: warning: unused parameter 'pid' [-Wunused-parameter]
   452 | static void sig_child_defined_handler(int pid)
       |                                       ~~~~^~~
-CC testcases/kernel/syscalls/clone/clone01
 CC testcases/kernel/syscalls/clone/clone04
 CC testcases/kernel/syscalls/clone/clone05
 CC testcases/kernel/syscalls/clone/clone03
+CC testcases/kernel/syscalls/clone/clone01
 CC testcases/kernel/syscalls/clone/clone02
 In file included from clone09.c:13:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
@@ -1026,20 +1026,6 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-In file included from clone303.c:17:
-../../../../include/lapi/sched.h: In function 'ltp_clone3':
-../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
-../../../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                                                          ~~~~~~~^~~~
-../../../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                              ~~~~~~^~~~~~~~~~~
-../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                                                 ~~~~~~^~~
 In file included from clone302.c:16:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -1059,6 +1045,20 @@ In file included from clone301.c:16:
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
    94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
       |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
+In file included from clone303.c:17:
+../../../../include/lapi/sched.h: In function 'ltp_clone3':
+../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
+../../../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                                                          ~~~~~~~^~~~
+../../../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                              ~~~~~~^~~~~~~~~~~
+../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                                                 ~~~~~~^~~
 ../../../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
    94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
       |                                                          ~~~~~~~^~~~
@@ -1124,16 +1124,17 @@ In file included from close_range02.c:19:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC testcases/kernel/syscalls/close_range/close_range02
 CC testcases/kernel/syscalls/close_range/close_range01
+make[1]: Leaving directory '/root/ltp/metadata'
+CC testcases/kernel/syscalls/close_range/close_range02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/cma/process_vm_readv02
 CC testcases/kernel/syscalls/cma/process_vm_writev02
-CC testcases/kernel/syscalls/cma/process_vm_readv03
 CC testcases/kernel/syscalls/cma/process_vm01
+CC testcases/kernel/syscalls/cma/process_vm_readv03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -1143,7 +1144,6 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-make[1]: Leaving directory '/root/ltp/metadata'
 CC testcases/kernel/syscalls/connect/connect02
 CC testcases/kernel/syscalls/connect/connect03
 CC testcases/kernel/syscalls/connect/connect01
@@ -1159,10 +1159,10 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/creat/creat07
-CC testcases/kernel/syscalls/creat/creat04
-CC testcases/kernel/syscalls/creat/creat03
-CC testcases/kernel/syscalls/creat/creat05
 CC testcases/kernel/syscalls/creat/creat01
+CC testcases/kernel/syscalls/creat/creat03
+CC testcases/kernel/syscalls/creat/creat04
+CC testcases/kernel/syscalls/creat/creat05
 CC testcases/kernel/syscalls/creat/creat06
 CC testcases/kernel/syscalls/creat/creat07_child
 CC testcases/kernel/syscalls/creat/creat09
@@ -1179,10 +1179,10 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/dup/dup05
 CC testcases/kernel/syscalls/dup/dup02
-CC testcases/kernel/syscalls/dup/dup01
+CC testcases/kernel/syscalls/dup/dup05
 CC testcases/kernel/syscalls/dup/dup04
+CC testcases/kernel/syscalls/dup/dup01
 CC testcases/kernel/syscalls/dup/dup03
 CC testcases/kernel/syscalls/dup/dup06
 CC testcases/kernel/syscalls/dup/dup07
@@ -1192,23 +1192,23 @@ make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/dup2/dup201
 CC testcases/kernel/syscalls/dup2/dup206
+CC testcases/kernel/syscalls/dup2/dup202
 CC testcases/kernel/syscalls/dup2/dup204
 CC testcases/kernel/syscalls/dup2/dup203
-CC testcases/kernel/syscalls/dup2/dup202
 CC testcases/kernel/syscalls/dup2/dup205
 CC testcases/kernel/syscalls/dup2/dup207
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/dup3/dup3_02
 CC testcases/kernel/syscalls/dup3/dup3_01
+CC testcases/kernel/syscalls/dup3/dup3_02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/epoll_create/epoll_create02
 CC testcases/kernel/syscalls/epoll_create/epoll_create01
+CC testcases/kernel/syscalls/epoll_create/epoll_create02
 CC testcases/kernel/syscalls/epoll_create/epoll_create03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -1220,9 +1220,9 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/epoll_ctl/epoll_ctl04
 CC testcases/kernel/syscalls/epoll_ctl/epoll_ctl03
 CC testcases/kernel/syscalls/epoll_ctl/epoll_ctl02
+CC testcases/kernel/syscalls/epoll_ctl/epoll_ctl04
 CC testcases/kernel/syscalls/epoll_ctl/epoll_ctl05
 CC testcases/kernel/syscalls/epoll_ctl/epoll_ctl06
 CC testcases/kernel/syscalls/epoll_ctl/epoll_ctl01
@@ -1233,9 +1233,9 @@ make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/epoll_pwait/epoll_pwait02
 CC testcases/kernel/syscalls/epoll_pwait/epoll_pwait05
-CC testcases/kernel/syscalls/epoll_pwait/epoll_pwait04
 CC testcases/kernel/syscalls/epoll_pwait/epoll_pwait03
 CC testcases/kernel/syscalls/epoll_pwait/epoll_pwait06
+CC testcases/kernel/syscalls/epoll_pwait/epoll_pwait04
 CC testcases/kernel/syscalls/epoll_pwait/epoll_pwait01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -1245,27 +1245,27 @@ CC testcases/kernel/syscalls/epoll_wait/epoll_wait03
 CC testcases/kernel/syscalls/epoll_wait/epoll_wait02
 CC testcases/kernel/syscalls/epoll_wait/epoll_wait05
 CC testcases/kernel/syscalls/epoll_wait/epoll_wait04
-CC testcases/kernel/syscalls/epoll_wait/epoll_wait01
 CC testcases/kernel/syscalls/epoll_wait/epoll_wait06
-CC testcases/kernel/syscalls/epoll_wait/epoll_wait08
+CC testcases/kernel/syscalls/epoll_wait/epoll_wait01
 CC testcases/kernel/syscalls/epoll_wait/epoll_wait07
+CC testcases/kernel/syscalls/epoll_wait/epoll_wait08
 CC testcases/kernel/syscalls/epoll_wait/epoll_wait10
-CC testcases/kernel/syscalls/epoll_wait/epoll_wait09
 CC testcases/kernel/syscalls/epoll_wait/epoll_wait11
+CC testcases/kernel/syscalls/epoll_wait/epoll_wait09
 CC testcases/kernel/syscalls/epoll_wait/epoll_wait12
 CC testcases/kernel/syscalls/epoll_wait/epoll_wait14
-CC testcases/kernel/syscalls/epoll_wait/epoll_wait13
 CC testcases/kernel/syscalls/epoll_wait/epoll_wait15
+CC testcases/kernel/syscalls/epoll_wait/epoll_wait13
 CC testcases/kernel/syscalls/epoll_wait/epoll_wait16
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/eventfd/eventfd06
-CC testcases/kernel/syscalls/eventfd/eventfd01
-CC testcases/kernel/syscalls/eventfd/eventfd04
 CC testcases/kernel/syscalls/eventfd/eventfd05
+CC testcases/kernel/syscalls/eventfd/eventfd01
 CC testcases/kernel/syscalls/eventfd/eventfd02
+CC testcases/kernel/syscalls/eventfd/eventfd04
 CC testcases/kernel/syscalls/eventfd/eventfd03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -1278,8 +1278,8 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/execl/execl01
 CC testcases/kernel/syscalls/execl/execl01_child
+CC testcases/kernel/syscalls/execl/execl01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -1290,8 +1290,8 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/execlp/execlp01
 CC testcases/kernel/syscalls/execlp/execlp01_child
+CC testcases/kernel/syscalls/execlp/execlp01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -1317,29 +1317,19 @@ In function 'sprintf',
       |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
-CC testcases/kernel/syscalls/execve/execve01_child
 CC testcases/kernel/syscalls/execve/execve01
 CC testcases/kernel/syscalls/execve/execve04
 CC testcases/kernel/syscalls/execve/execve02
+CC testcases/kernel/syscalls/execve/execve01_child
 CC testcases/kernel/syscalls/execve/execve05
 CC testcases/kernel/syscalls/execve/execve03
-CC testcases/kernel/syscalls/execve/execve_child
-CC testcases/kernel/syscalls/execve/execve06_child
 CC testcases/kernel/syscalls/execve/execve06
+CC testcases/kernel/syscalls/execve/execve06_child
+CC testcases/kernel/syscalls/execve/execve_child
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-In file included from execveat02.c:26:
-execveat.h: In function 'check_execveat':
-execveat.h:11:15: warning: argument 3 null where non-null expected [-Wnonnull]
-   11 |         ret = execveat(-1, "", NULL, NULL, AT_EMPTY_PATH);
-      |               ^~~~~~~~
-In file included from ../../../../include/tst_test.h:14,
-                 from execveat02.c:23:
-/usr/include/unistd.h:300:12: note: in a call to function 'execveat' declared 'nonnull'
-  300 | extern int execveat (int __fd, const char *__path, char *const __argv[],
-      |            ^~~~~~~~
 In file included from execveat03.c:35:
 execveat.h: In function 'check_execveat':
 execveat.h:11:15: warning: argument 3 null where non-null expected [-Wnonnull]
@@ -1347,6 +1337,16 @@ execveat.h:11:15: warning: argument 3 null where non-null expected [-Wnonnull]
       |               ^~~~~~~~
 In file included from ../../../../include/tst_test.h:14,
                  from execveat03.c:32:
+/usr/include/unistd.h:300:12: note: in a call to function 'execveat' declared 'nonnull'
+  300 | extern int execveat (int __fd, const char *__path, char *const __argv[],
+      |            ^~~~~~~~
+In file included from execveat02.c:26:
+execveat.h: In function 'check_execveat':
+execveat.h:11:15: warning: argument 3 null where non-null expected [-Wnonnull]
+   11 |         ret = execveat(-1, "", NULL, NULL, AT_EMPTY_PATH);
+      |               ^~~~~~~~
+In file included from ../../../../include/tst_test.h:14,
+                 from execveat02.c:23:
 /usr/include/unistd.h:300:12: note: in a call to function 'execveat' declared 'nonnull'
   300 | extern int execveat (int __fd, const char *__path, char *const __argv[],
       |            ^~~~~~~~
@@ -1388,8 +1388,6 @@ In function 'sprintf',
       |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
-CC testcases/kernel/syscalls/execveat/execveat_errno
-CC testcases/kernel/syscalls/execveat/execveat_child
 execveat01.c: In function 'setup':
 execveat01.c:72:35: warning: '%s' directive writing 22 bytes into a region of size between 0 and 511 [-Wformat-overflow=]
    72 |         sprintf(app_abs_path, "%s/%s", cur_dir_path, TEST_REL_APP);
@@ -1405,15 +1403,17 @@ In function 'sprintf',
       |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
-CC testcases/kernel/syscalls/execveat/execveat02
+CC testcases/kernel/syscalls/execveat/execveat_child
+CC testcases/kernel/syscalls/execveat/execveat_errno
 CC testcases/kernel/syscalls/execveat/execveat03
 CC testcases/kernel/syscalls/execveat/execveat01
+CC testcases/kernel/syscalls/execveat/execveat02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/execvp/execvp01
 CC testcases/kernel/syscalls/execvp/execvp01_child
+CC testcases/kernel/syscalls/execvp/execvp01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -1435,22 +1435,22 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/faccessat2/faccessat202
 CC testcases/kernel/syscalls/faccessat2/faccessat201
+CC testcases/kernel/syscalls/faccessat2/faccessat202
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-CC testcases/kernel/syscalls/fadvise/posix_fadvise01_64.o
 CC testcases/kernel/syscalls/fadvise/posix_fadvise02_64.o
+CC testcases/kernel/syscalls/fadvise/posix_fadvise01_64.o
 CC testcases/kernel/syscalls/fadvise/posix_fadvise03_64.o
 CC testcases/kernel/syscalls/fadvise/posix_fadvise04_64.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+LD testcases/kernel/syscalls/fadvise/posix_fadvise01_64
 LD testcases/kernel/syscalls/fadvise/posix_fadvise02_64
-LD testcases/kernel/syscalls/fadvise/posix_fadvise04_64
 CC testcases/kernel/syscalls/fadvise/posix_fadvise02
 CC testcases/kernel/syscalls/fadvise/posix_fadvise01
+LD testcases/kernel/syscalls/fadvise/posix_fadvise04_64
 LD testcases/kernel/syscalls/fadvise/posix_fadvise03_64
-LD testcases/kernel/syscalls/fadvise/posix_fadvise01_64
 CC testcases/kernel/syscalls/fadvise/posix_fadvise04
 CC testcases/kernel/syscalls/fadvise/posix_fadvise03
 rm posix_fadvise03_64.o posix_fadvise02_64.o posix_fadvise04_64.o posix_fadvise01_64.o
@@ -1468,17 +1468,17 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/fanotify/fanotify02
 CC testcases/kernel/syscalls/fanotify/fanotify04
-CC testcases/kernel/syscalls/fanotify/fanotify05
+CC testcases/kernel/syscalls/fanotify/fanotify02
 CC testcases/kernel/syscalls/fanotify/fanotify06
+CC testcases/kernel/syscalls/fanotify/fanotify05
 CC testcases/kernel/syscalls/fanotify/fanotify03
 CC testcases/kernel/syscalls/fanotify/fanotify01
 CC testcases/kernel/syscalls/fanotify/fanotify08
 CC testcases/kernel/syscalls/fanotify/fanotify07
 CC testcases/kernel/syscalls/fanotify/fanotify11
-CC testcases/kernel/syscalls/fanotify/fanotify12
 CC testcases/kernel/syscalls/fanotify/fanotify09
+CC testcases/kernel/syscalls/fanotify/fanotify12
 CC testcases/kernel/syscalls/fanotify/fanotify14
 In file included from fanotify17.c:25:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
@@ -1519,12 +1519,12 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+CC testcases/kernel/syscalls/fchmod/fchmod03
 CC testcases/kernel/syscalls/fchmod/fchmod02
+CC testcases/kernel/syscalls/fchmod/fchmod05
 CC testcases/kernel/syscalls/fchmod/fchmod04
 CC testcases/kernel/syscalls/fchmod/fchmod01
-CC testcases/kernel/syscalls/fchmod/fchmod03
 CC testcases/kernel/syscalls/fchmod/fchmod06
-CC testcases/kernel/syscalls/fchmod/fchmod05
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -1539,8 +1539,8 @@ CC testcases/kernel/syscalls/fchmodat2/fchmodat2_02
 CC testcases/kernel/syscalls/fchmodat2/fchmodat2_01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/fchown/fchown01_16.o
-CC testcases/kernel/syscalls/fchown/fchown02_16.o
 CC testcases/kernel/syscalls/fchown/fchown03_16.o
+CC testcases/kernel/syscalls/fchown/fchown02_16.o
 CC testcases/kernel/syscalls/fchown/fchown04_16.o
 CC testcases/kernel/syscalls/fchown/fchown05_16.o
 GEN ltp-version.h
@@ -1553,9 +1553,9 @@ LD testcases/kernel/syscalls/fchown/fchown03_16
 LD testcases/kernel/syscalls/fchown/fchown04_16
 LD testcases/kernel/syscalls/fchown/fchown05_16
 CC testcases/kernel/syscalls/fchown/fchown04
-CC testcases/kernel/syscalls/fchown/fchown03
 CC testcases/kernel/syscalls/fchown/fchown02
 CC testcases/kernel/syscalls/fchown/fchown05
+CC testcases/kernel/syscalls/fchown/fchown03
 rm fchown04_16.o fchown02_16.o fchown03_16.o fchown05_16.o fchown01_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -1565,12 +1565,12 @@ CC testcases/kernel/syscalls/fchownat/fchownat03
 CC testcases/kernel/syscalls/fchownat/fchownat02
 CC testcases/kernel/syscalls/fchownat/fchownat01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
+GEN ltp-version.h
 CC testcases/kernel/syscalls/fcntl/fcntl01_64.o
 CC testcases/kernel/syscalls/fcntl/fcntl02_64.o
 CC testcases/kernel/syscalls/fcntl/fcntl03_64.o
 CC testcases/kernel/syscalls/fcntl/fcntl04_64.o
 CC testcases/kernel/syscalls/fcntl/fcntl05_64.o
-GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/fcntl/fcntl07_64.o
@@ -1646,9 +1646,9 @@ CC testcases/kernel/syscalls/fcntl/fcntl01
 CC testcases/kernel/syscalls/fcntl/fcntl03
 CC testcases/kernel/syscalls/fcntl/fcntl04
 CC testcases/kernel/syscalls/fcntl/fcntl05
+CC testcases/kernel/syscalls/fcntl/fcntl07
 CC testcases/kernel/syscalls/fcntl/fcntl08
 CC testcases/kernel/syscalls/fcntl/fcntl09
-CC testcases/kernel/syscalls/fcntl/fcntl07
 CC testcases/kernel/syscalls/fcntl/fcntl10
 CC testcases/kernel/syscalls/fcntl/fcntl12
 fcntl16.c: In function 'catch_alarm':
@@ -1697,60 +1697,60 @@ CC testcases/kernel/syscalls/fcntl/fcntl22
 CC testcases/kernel/syscalls/fcntl/fcntl23
 CC testcases/kernel/syscalls/fcntl/fcntl24
 CC testcases/kernel/syscalls/fcntl/fcntl19
-CC testcases/kernel/syscalls/fcntl/fcntl20
 CC testcases/kernel/syscalls/fcntl/fcntl25
+CC testcases/kernel/syscalls/fcntl/fcntl20
 CC testcases/kernel/syscalls/fcntl/fcntl26
-CC testcases/kernel/syscalls/fcntl/fcntl21
 CC testcases/kernel/syscalls/fcntl/fcntl27
+CC testcases/kernel/syscalls/fcntl/fcntl21
 CC testcases/kernel/syscalls/fcntl/fcntl29
 CC testcases/kernel/syscalls/fcntl/fcntl30
 CC testcases/kernel/syscalls/fcntl/fcntl32
 CC testcases/kernel/syscalls/fcntl/fcntl31
-CC testcases/kernel/syscalls/fcntl/fcntl35
 CC testcases/kernel/syscalls/fcntl/fcntl33
+CC testcases/kernel/syscalls/fcntl/fcntl35
 CC testcases/kernel/syscalls/fcntl/fcntl34
-CC testcases/kernel/syscalls/fcntl/fcntl37
 LD testcases/kernel/syscalls/fcntl/fcntl01_64
-LD testcases/kernel/syscalls/fcntl/fcntl02_64
+CC testcases/kernel/syscalls/fcntl/fcntl37
 CC testcases/kernel/syscalls/fcntl/fcntl38
+LD testcases/kernel/syscalls/fcntl/fcntl02_64
 LD testcases/kernel/syscalls/fcntl/fcntl03_64
-CC testcases/kernel/syscalls/fcntl/fcntl39
-LD testcases/kernel/syscalls/fcntl/fcntl05_64
 LD testcases/kernel/syscalls/fcntl/fcntl04_64
-LD testcases/kernel/syscalls/fcntl/fcntl07_64
 CC testcases/kernel/syscalls/fcntl/fcntl40
+LD testcases/kernel/syscalls/fcntl/fcntl05_64
+LD testcases/kernel/syscalls/fcntl/fcntl07_64
 CC testcases/kernel/syscalls/fcntl/fcntl36
+CC testcases/kernel/syscalls/fcntl/fcntl39
 LD testcases/kernel/syscalls/fcntl/fcntl08_64
-LD testcases/kernel/syscalls/fcntl/fcntl09_64
-LD testcases/kernel/syscalls/fcntl/fcntl11_64
 LD testcases/kernel/syscalls/fcntl/fcntl10_64
+LD testcases/kernel/syscalls/fcntl/fcntl09_64
 LD testcases/kernel/syscalls/fcntl/fcntl12_64
+LD testcases/kernel/syscalls/fcntl/fcntl11_64
 LD testcases/kernel/syscalls/fcntl/fcntl13_64
 LD testcases/kernel/syscalls/fcntl/fcntl14_64
-LD testcases/kernel/syscalls/fcntl/fcntl15_64
 LD testcases/kernel/syscalls/fcntl/fcntl16_64
-LD testcases/kernel/syscalls/fcntl/fcntl17_64
+LD testcases/kernel/syscalls/fcntl/fcntl15_64
 LD testcases/kernel/syscalls/fcntl/fcntl18_64
-LD testcases/kernel/syscalls/fcntl/fcntl20_64
+LD testcases/kernel/syscalls/fcntl/fcntl17_64
 LD testcases/kernel/syscalls/fcntl/fcntl19_64
+LD testcases/kernel/syscalls/fcntl/fcntl20_64
 LD testcases/kernel/syscalls/fcntl/fcntl21_64
 LD testcases/kernel/syscalls/fcntl/fcntl22_64
 LD testcases/kernel/syscalls/fcntl/fcntl23_64
 LD testcases/kernel/syscalls/fcntl/fcntl24_64
 LD testcases/kernel/syscalls/fcntl/fcntl25_64
 LD testcases/kernel/syscalls/fcntl/fcntl26_64
-LD testcases/kernel/syscalls/fcntl/fcntl29_64
 LD testcases/kernel/syscalls/fcntl/fcntl27_64
 LD testcases/kernel/syscalls/fcntl/fcntl30_64
+LD testcases/kernel/syscalls/fcntl/fcntl29_64
 LD testcases/kernel/syscalls/fcntl/fcntl31_64
-LD testcases/kernel/syscalls/fcntl/fcntl33_64
 LD testcases/kernel/syscalls/fcntl/fcntl32_64
+LD testcases/kernel/syscalls/fcntl/fcntl33_64
 LD testcases/kernel/syscalls/fcntl/fcntl35_64
 LD testcases/kernel/syscalls/fcntl/fcntl34_64
 LD testcases/kernel/syscalls/fcntl/fcntl36_64
 LD testcases/kernel/syscalls/fcntl/fcntl37_64
-LD testcases/kernel/syscalls/fcntl/fcntl39_64
 LD testcases/kernel/syscalls/fcntl/fcntl38_64
+LD testcases/kernel/syscalls/fcntl/fcntl39_64
 LD testcases/kernel/syscalls/fcntl/fcntl40_64
 rm fcntl35_64.o fcntl08_64.o fcntl40_64.o fcntl03_64.o fcntl23_64.o fcntl29_64.o fcntl25_64.o fcntl30_64.o fcntl34_64.o fcntl37_64.o fcntl19_64.o fcntl14_64.o fcntl20_64.o fcntl21_64.o fcntl31_64.o fcntl15_64.o fcntl07_64.o fcntl12_64.o fcntl26_64.o fcntl10_64.o fcntl22_64.o fcntl13_64.o fcntl02_64.o fcntl11_64.o fcntl17_64.o fcntl38_64.o fcntl24_64.o fcntl16_64.o fcntl04_64.o fcntl18_64.o fcntl09_64.o fcntl33_64.o fcntl32_64.o fcntl05_64.o fcntl27_64.o fcntl39_64.o fcntl36_64.o fcntl01_64.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
@@ -1758,8 +1758,8 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/fdatasync/fdatasync01
-CC testcases/kernel/syscalls/fdatasync/fdatasync03
 CC testcases/kernel/syscalls/fdatasync/fdatasync02
+CC testcases/kernel/syscalls/fdatasync/fdatasync03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -1772,10 +1772,10 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/file_attr/file_attr05
-CC testcases/kernel/syscalls/file_attr/file_attr04
 CC testcases/kernel/syscalls/file_attr/file_attr03
-CC testcases/kernel/syscalls/file_attr/file_attr02
+CC testcases/kernel/syscalls/file_attr/file_attr04
 CC testcases/kernel/syscalls/file_attr/file_attr01
+CC testcases/kernel/syscalls/file_attr/file_attr02
 skip: 1, FORCE_MODULES: 
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -1787,19 +1787,19 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/flistxattr/flistxattr02
-CC testcases/kernel/syscalls/flistxattr/flistxattr03
 CC testcases/kernel/syscalls/flistxattr/flistxattr01
+CC testcases/kernel/syscalls/flistxattr/flistxattr03
+CC testcases/kernel/syscalls/flistxattr/flistxattr02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/flock/flock01
 CC testcases/kernel/syscalls/flock/flock02
 CC testcases/kernel/syscalls/flock/flock04
 CC testcases/kernel/syscalls/flock/flock06
-CC testcases/kernel/syscalls/flock/flock03
+CC testcases/kernel/syscalls/flock/flock01
 CC testcases/kernel/syscalls/flock/flock07
+CC testcases/kernel/syscalls/flock/flock03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -1838,12 +1838,12 @@ CC testcases/kernel/syscalls/fork/fork05
 CC testcases/kernel/syscalls/fork/fork03
 CC testcases/kernel/syscalls/fork/fork07
 CC testcases/kernel/syscalls/fork/fork04
-CC testcases/kernel/syscalls/fork/fork08
 CC testcases/kernel/syscalls/fork/fork01
+CC testcases/kernel/syscalls/fork/fork08
 CC testcases/kernel/syscalls/fork/fork10
-CC testcases/kernel/syscalls/fork/fork_procs
 CC testcases/kernel/syscalls/fork/fork13
 CC testcases/kernel/syscalls/fork/fork09
+CC testcases/kernel/syscalls/fork/fork_procs
 CC testcases/kernel/syscalls/fork/fork14
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -1860,15 +1860,15 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/fsconfig/fsconfig02
 CC testcases/kernel/syscalls/fsconfig/fsconfig03
 CC testcases/kernel/syscalls/fsconfig/fsconfig01
+CC testcases/kernel/syscalls/fsconfig/fsconfig02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/fsetxattr/fsetxattr01
 CC testcases/kernel/syscalls/fsetxattr/fsetxattr02
+CC testcases/kernel/syscalls/fsetxattr/fsetxattr01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -1879,8 +1879,8 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/fsopen/fsopen01
 CC testcases/kernel/syscalls/fsopen/fsopen02
+CC testcases/kernel/syscalls/fsopen/fsopen01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -1888,13 +1888,13 @@ make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/fspick/fspick02
 CC testcases/kernel/syscalls/fspick/fspick01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-CC testcases/kernel/syscalls/fstat/fstat03_64.o
 CC testcases/kernel/syscalls/fstat/fstat02_64.o
+CC testcases/kernel/syscalls/fstat/fstat03_64.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-LD testcases/kernel/syscalls/fstat/fstat03_64
 LD testcases/kernel/syscalls/fstat/fstat02_64
+LD testcases/kernel/syscalls/fstat/fstat03_64
 CC testcases/kernel/syscalls/fstat/fstat03
 CC testcases/kernel/syscalls/fstat/fstat02
 rm fstat02_64.o fstat03_64.o
@@ -1909,56 +1909,56 @@ CC testcases/kernel/syscalls/fstatfs/fstatfs02_64.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-LD testcases/kernel/syscalls/fstatfs/fstatfs02_64
 LD testcases/kernel/syscalls/fstatfs/fstatfs01_64
-CC testcases/kernel/syscalls/fstatfs/fstatfs02
+LD testcases/kernel/syscalls/fstatfs/fstatfs02_64
 CC testcases/kernel/syscalls/fstatfs/fstatfs01
+CC testcases/kernel/syscalls/fstatfs/fstatfs02
 rm fstatfs02_64.o fstatfs01_64.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/fsync/fsync04
-CC testcases/kernel/syscalls/fsync/fsync03
 CC testcases/kernel/syscalls/fsync/fsync01
+CC testcases/kernel/syscalls/fsync/fsync03
 CC testcases/kernel/syscalls/fsync/fsync02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/ftruncate/ftruncate01_64.o
-CC testcases/kernel/syscalls/ftruncate/ftruncate04_64.o
 CC testcases/kernel/syscalls/ftruncate/ftruncate03_64.o
+CC testcases/kernel/syscalls/ftruncate/ftruncate04_64.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 LD testcases/kernel/syscalls/ftruncate/ftruncate03_64
 LD testcases/kernel/syscalls/ftruncate/ftruncate01_64
+LD testcases/kernel/syscalls/ftruncate/ftruncate04_64
 CC testcases/kernel/syscalls/ftruncate/ftruncate03
 CC testcases/kernel/syscalls/ftruncate/ftruncate01
-LD testcases/kernel/syscalls/ftruncate/ftruncate04_64
 CC testcases/kernel/syscalls/ftruncate/ftruncate04
 rm ftruncate03_64.o ftruncate01_64.o ftruncate04_64.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/futex/futex_cmp_requeue02
-CC testcases/kernel/syscalls/futex/futex_wait02
-CC testcases/kernel/syscalls/futex/futex_wait01
-CC testcases/kernel/syscalls/futex/futex_wait03
 CC testcases/kernel/syscalls/futex/futex_cmp_requeue03
+CC testcases/kernel/syscalls/futex/futex_wait02
+CC testcases/kernel/syscalls/futex/futex_wait03
+CC testcases/kernel/syscalls/futex/futex_cmp_requeue02
+CC testcases/kernel/syscalls/futex/futex_wait01
 CC testcases/kernel/syscalls/futex/futex_cmp_requeue01
 CC testcases/kernel/syscalls/futex/futex_wait05
 CC testcases/kernel/syscalls/futex/futex_wait04
 CC testcases/kernel/syscalls/futex/futex_wait06
 CC testcases/kernel/syscalls/futex/futex_wait07
 CC testcases/kernel/syscalls/futex/futex_wait_bitset01
-CC testcases/kernel/syscalls/futex/futex_wake01
 CC testcases/kernel/syscalls/futex/futex_waitv01
+CC testcases/kernel/syscalls/futex/futex_wake01
 CC testcases/kernel/syscalls/futex/futex_waitv02
-CC testcases/kernel/syscalls/futex/futex_wake02
 CC testcases/kernel/syscalls/futex/futex_waitv03
+CC testcases/kernel/syscalls/futex/futex_wake02
 CC testcases/kernel/syscalls/futex/futex_wake03
-CC testcases/kernel/syscalls/futex/futex_wake04
 CC testcases/kernel/syscalls/futex/futex_wake05
+CC testcases/kernel/syscalls/futex/futex_wake04
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -1970,8 +1970,8 @@ make[5]: Nothing to be done for 'all'.
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/get_mempolicy/get_mempolicy01
 CC testcases/kernel/syscalls/get_mempolicy/get_mempolicy02
+CC testcases/kernel/syscalls/get_mempolicy/get_mempolicy01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -1986,7 +1986,7 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-In file included from getcpu02.c:16:
+In file included from getcpu01.c:22:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
    94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
@@ -2000,7 +2000,7 @@ In file included from getcpu02.c:16:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-In file included from getcpu01.c:22:
+In file included from getcpu02.c:16:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
    94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
@@ -2020,10 +2020,10 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/getcwd/getcwd01
 CC testcases/kernel/syscalls/getcwd/getcwd04
-CC testcases/kernel/syscalls/getcwd/getcwd03
+CC testcases/kernel/syscalls/getcwd/getcwd01
 CC testcases/kernel/syscalls/getcwd/getcwd02
+CC testcases/kernel/syscalls/getcwd/getcwd03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -2036,15 +2036,15 @@ make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/getdomainname/getdomainname01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-CC testcases/kernel/syscalls/getegid/getegid01_16.o
 CC testcases/kernel/syscalls/getegid/getegid02_16.o
+CC testcases/kernel/syscalls/getegid/getegid01_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-LD testcases/kernel/syscalls/getegid/getegid02_16
 LD testcases/kernel/syscalls/getegid/getegid01_16
-CC testcases/kernel/syscalls/getegid/getegid01
+LD testcases/kernel/syscalls/getegid/getegid02_16
 CC testcases/kernel/syscalls/getegid/getegid02
+CC testcases/kernel/syscalls/getegid/getegid01
 rm getegid01_16.o getegid02_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/geteuid/geteuid01_16.o
@@ -2052,8 +2052,8 @@ CC testcases/kernel/syscalls/geteuid/geteuid02_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-LD testcases/kernel/syscalls/geteuid/geteuid02_16
 LD testcases/kernel/syscalls/geteuid/geteuid01_16
+LD testcases/kernel/syscalls/geteuid/geteuid02_16
 CC testcases/kernel/syscalls/geteuid/geteuid01
 CC testcases/kernel/syscalls/geteuid/geteuid02
 rm geteuid01_16.o geteuid02_16.o
@@ -2063,10 +2063,10 @@ CC testcases/kernel/syscalls/getgid/getgid03_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+CC testcases/kernel/syscalls/getgid/getgid03
+LD testcases/kernel/syscalls/getgid/getgid01_16
 LD testcases/kernel/syscalls/getgid/getgid03_16
 CC testcases/kernel/syscalls/getgid/getgid01
-LD testcases/kernel/syscalls/getgid/getgid01_16
-CC testcases/kernel/syscalls/getgid/getgid03
 rm getgid03_16.o getgid01_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/getgroups/getgroups01_16.o
@@ -2152,44 +2152,44 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/getpriority/getpriority01
 CC testcases/kernel/syscalls/getpriority/getpriority02
+CC testcases/kernel/syscalls/getpriority/getpriority01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/getrandom/getrandom03
-CC testcases/kernel/syscalls/getrandom/getrandom01
 CC testcases/kernel/syscalls/getrandom/getrandom04
+CC testcases/kernel/syscalls/getrandom/getrandom01
 CC testcases/kernel/syscalls/getrandom/getrandom05
 CC testcases/kernel/syscalls/getrandom/getrandom02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
+CC testcases/kernel/syscalls/getresgid/getresgid01_16.o
 CC testcases/kernel/syscalls/getresgid/getresgid02_16.o
 CC testcases/kernel/syscalls/getresgid/getresgid03_16.o
-CC testcases/kernel/syscalls/getresgid/getresgid01_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-LD testcases/kernel/syscalls/getresgid/getresgid02_16
 LD testcases/kernel/syscalls/getresgid/getresgid01_16
-LD testcases/kernel/syscalls/getresgid/getresgid03_16
+LD testcases/kernel/syscalls/getresgid/getresgid02_16
 CC testcases/kernel/syscalls/getresgid/getresgid01
 CC testcases/kernel/syscalls/getresgid/getresgid02
+LD testcases/kernel/syscalls/getresgid/getresgid03_16
 CC testcases/kernel/syscalls/getresgid/getresgid03
 rm getresgid03_16.o getresgid01_16.o getresgid02_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-CC testcases/kernel/syscalls/getresuid/getresuid01_16.o
 CC testcases/kernel/syscalls/getresuid/getresuid02_16.o
 CC testcases/kernel/syscalls/getresuid/getresuid03_16.o
+CC testcases/kernel/syscalls/getresuid/getresuid01_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-LD testcases/kernel/syscalls/getresuid/getresuid01_16
 LD testcases/kernel/syscalls/getresuid/getresuid03_16
+LD testcases/kernel/syscalls/getresuid/getresuid01_16
 LD testcases/kernel/syscalls/getresuid/getresuid02_16
-CC testcases/kernel/syscalls/getresuid/getresuid01
 CC testcases/kernel/syscalls/getresuid/getresuid02
 CC testcases/kernel/syscalls/getresuid/getresuid03
+CC testcases/kernel/syscalls/getresuid/getresuid01
 rm getresuid02_16.o getresuid01_16.o getresuid03_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -2204,8 +2204,8 @@ make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/getrusage/getrusage01
 CC testcases/kernel/syscalls/getrusage/getrusage03_child
-CC testcases/kernel/syscalls/getrusage/getrusage04
 CC testcases/kernel/syscalls/getrusage/getrusage02
+CC testcases/kernel/syscalls/getrusage/getrusage04
 CC testcases/kernel/syscalls/getrusage/getrusage03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -2222,14 +2222,14 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/getsockopt/getsockopt02
 CC testcases/kernel/syscalls/getsockopt/getsockopt01
+CC testcases/kernel/syscalls/getsockopt/getsockopt02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/gettid/gettid01
 CC testcases/kernel/syscalls/gettid/gettid02
+CC testcases/kernel/syscalls/gettid/gettid01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -2242,10 +2242,10 @@ CC testcases/kernel/syscalls/getuid/getuid03_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-LD testcases/kernel/syscalls/getuid/getuid03_16
 LD testcases/kernel/syscalls/getuid/getuid01_16
-CC testcases/kernel/syscalls/getuid/getuid03
+LD testcases/kernel/syscalls/getuid/getuid03_16
 CC testcases/kernel/syscalls/getuid/getuid01
+CC testcases/kernel/syscalls/getuid/getuid03
 rm getuid03_16.o getuid01_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -2265,10 +2265,10 @@ In file included from getxattr05.c:35:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC testcases/kernel/syscalls/getxattr/getxattr04
-CC testcases/kernel/syscalls/getxattr/getxattr02
-CC testcases/kernel/syscalls/getxattr/getxattr05
 CC testcases/kernel/syscalls/getxattr/getxattr03
+CC testcases/kernel/syscalls/getxattr/getxattr02
+CC testcases/kernel/syscalls/getxattr/getxattr04
+CC testcases/kernel/syscalls/getxattr/getxattr05
 CC testcases/kernel/syscalls/getxattr/getxattr01
 skip: 1, FORCE_MODULES: 
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
@@ -2309,24 +2309,24 @@ In function 'snprintf',
       |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    70 |                                    __va_arg_pack ());
       |                                    ~~~~~~~~~~~~~~~~~
-CC testcases/kernel/syscalls/inotify/inotify06
 CC testcases/kernel/syscalls/inotify/inotify01
+CC testcases/kernel/syscalls/inotify/inotify06
 CC testcases/kernel/syscalls/inotify/inotify05
 CC testcases/kernel/syscalls/inotify/inotify04
-CC testcases/kernel/syscalls/inotify/inotify03
 CC testcases/kernel/syscalls/inotify/inotify02
-CC testcases/kernel/syscalls/inotify/inotify07
-CC testcases/kernel/syscalls/inotify/inotify11
-CC testcases/kernel/syscalls/inotify/inotify12
+CC testcases/kernel/syscalls/inotify/inotify03
 CC testcases/kernel/syscalls/inotify/inotify08
+CC testcases/kernel/syscalls/inotify/inotify07
+CC testcases/kernel/syscalls/inotify/inotify12
+CC testcases/kernel/syscalls/inotify/inotify11
 CC testcases/kernel/syscalls/inotify/inotify10
 CC testcases/kernel/syscalls/inotify/inotify09
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/inotify_init/inotify_init1_01
 CC testcases/kernel/syscalls/inotify_init/inotify_init1_02
+CC testcases/kernel/syscalls/inotify_init/inotify_init1_01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -2349,8 +2349,8 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/io_pgetevents/io_pgetevents02
 CC testcases/kernel/syscalls/io_pgetevents/io_pgetevents01
+CC testcases/kernel/syscalls/io_pgetevents/io_pgetevents02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -2371,31 +2371,31 @@ make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/io_uring/io_uring02
 CC testcases/kernel/syscalls/io_uring/io_uring01
-CC testcases/kernel/syscalls/io_uring/io_uring03
 CC testcases/kernel/syscalls/io_uring/io_uring04
+CC testcases/kernel/syscalls/io_uring/io_uring03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/ioctl/ioctl05
-CC testcases/kernel/syscalls/ioctl/ioctl04
 CC testcases/kernel/syscalls/ioctl/ioctl03
 CC testcases/kernel/syscalls/ioctl/ioctl06
+CC testcases/kernel/syscalls/ioctl/ioctl05
+CC testcases/kernel/syscalls/ioctl/ioctl04
 CC testcases/kernel/syscalls/ioctl/ioctl01
 CC testcases/kernel/syscalls/ioctl/ioctl02
 CC testcases/kernel/syscalls/ioctl/ioctl07
 CC testcases/kernel/syscalls/ioctl/ioctl08
-CC testcases/kernel/syscalls/ioctl/ioctl_ficlone01
 CC testcases/kernel/syscalls/ioctl/ioctl09
+CC testcases/kernel/syscalls/ioctl/ioctl_ficlone01
 CC testcases/kernel/syscalls/ioctl/ioctl_ficlone02
 CC testcases/kernel/syscalls/ioctl/ioctl10
-CC testcases/kernel/syscalls/ioctl/ioctl_ficlone04
 CC testcases/kernel/syscalls/ioctl/ioctl_ficlone03
+CC testcases/kernel/syscalls/ioctl/ioctl_ficlone04
 CC testcases/kernel/syscalls/ioctl/ioctl_ficlonerange02
 CC testcases/kernel/syscalls/ioctl/ioctl_ficlonerange01
 CC testcases/kernel/syscalls/ioctl/ioctl_fiemap01
-CC testcases/kernel/syscalls/ioctl/ioctl_loop01
 CC testcases/kernel/syscalls/ioctl/ioctl_getlbmd01
+CC testcases/kernel/syscalls/ioctl/ioctl_loop01
 CC testcases/kernel/syscalls/ioctl/ioctl_loop02
 CC testcases/kernel/syscalls/ioctl/ioctl_loop03
 CC testcases/kernel/syscalls/ioctl/ioctl_loop04
@@ -2413,11 +2413,11 @@ In file included from ioctl_ns01.c:23:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC testcases/kernel/syscalls/ioctl/ioctl_loop06
 CC testcases/kernel/syscalls/ioctl/ioctl_loop05
-CC testcases/kernel/syscalls/ioctl/ioctl_ns02
-CC testcases/kernel/syscalls/ioctl/ioctl_loop07
+CC testcases/kernel/syscalls/ioctl/ioctl_loop06
 CC testcases/kernel/syscalls/ioctl/ioctl_ns01
+CC testcases/kernel/syscalls/ioctl/ioctl_loop07
+CC testcases/kernel/syscalls/ioctl/ioctl_ns02
 CC testcases/kernel/syscalls/ioctl/ioctl_ns03
 In file included from ioctl_ns05.c:22:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
@@ -2464,6 +2464,7 @@ In file included from ioctl_pidfd02.c:13:
       |                                                 ~~~~~~^~~
 CC testcases/kernel/syscalls/ioctl/ioctl_ns07
 CC testcases/kernel/syscalls/ioctl/ioctl_ns05
+CC testcases/kernel/syscalls/ioctl/ioctl_ns06
 CC testcases/kernel/syscalls/ioctl/ioctl_pidfd01
 In file included from ioctl_pidfd03.c:13:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
@@ -2479,7 +2480,6 @@ In file included from ioctl_pidfd03.c:13:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC testcases/kernel/syscalls/ioctl/ioctl_ns06
 In file included from ioctl_pidfd04.c:12:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -2494,7 +2494,6 @@ In file included from ioctl_pidfd04.c:12:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC testcases/kernel/syscalls/ioctl/ioctl_pidfd02
 In file included from ioctl_pidfd05.c:16:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -2509,6 +2508,7 @@ In file included from ioctl_pidfd05.c:16:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
+CC testcases/kernel/syscalls/ioctl/ioctl_pidfd02
 In file included from ioctl_pidfd06.c:13:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -2524,8 +2524,8 @@ In file included from ioctl_pidfd06.c:13:
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
 CC testcases/kernel/syscalls/ioctl/ioctl_pidfd03
-CC testcases/kernel/syscalls/ioctl/ioctl_pidfd04
 CC testcases/kernel/syscalls/ioctl/ioctl_pidfd05
+CC testcases/kernel/syscalls/ioctl/ioctl_pidfd04
 CC testcases/kernel/syscalls/ioctl/ioctl_pidfd06
 CC testcases/kernel/syscalls/ioctl/ioctl_sg01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
@@ -2538,16 +2538,16 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/iopl/iopl02
 CC testcases/kernel/syscalls/iopl/iopl01
+CC testcases/kernel/syscalls/iopl/iopl02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/ioprio/ioprio_get01
 CC testcases/kernel/syscalls/ioprio/ioprio_set03
-CC testcases/kernel/syscalls/ioprio/ioprio_set01
 CC testcases/kernel/syscalls/ioprio/ioprio_set02
+CC testcases/kernel/syscalls/ioprio/ioprio_set01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -2566,17 +2566,17 @@ In file included from kcmp03.c:23:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC testcases/kernel/syscalls/kcmp/kcmp03
 CC testcases/kernel/syscalls/kcmp/kcmp01
+CC testcases/kernel/syscalls/kcmp/kcmp03
 CC testcases/kernel/syscalls/kcmp/kcmp02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/keyctl/keyctl04
+CC testcases/kernel/syscalls/keyctl/keyctl03
 CC testcases/kernel/syscalls/keyctl/keyctl01
 CC testcases/kernel/syscalls/keyctl/keyctl06
-CC testcases/kernel/syscalls/keyctl/keyctl03
 CC testcases/kernel/syscalls/keyctl/keyctl05
 CC testcases/kernel/syscalls/keyctl/keyctl02
 CC testcases/kernel/syscalls/keyctl/keyctl08
@@ -2593,14 +2593,14 @@ CC testcases/kernel/syscalls/keyctl/keyctl17
 CC testcases/kernel/syscalls/keyctl/keyctl18
 CC testcases/kernel/syscalls/keyctl/keyctl19
 CC testcases/kernel/syscalls/keyctl/keyctl20
+CC testcases/kernel/syscalls/keyctl/keyctl22
 CC testcases/kernel/syscalls/keyctl/keyctl21
 CC testcases/kernel/syscalls/keyctl/keyctl23
-CC testcases/kernel/syscalls/keyctl/keyctl22
 CC testcases/kernel/syscalls/keyctl/keyctl24
 CC testcases/kernel/syscalls/keyctl/keyctl25
 CC testcases/kernel/syscalls/keyctl/keyctl26
-CC testcases/kernel/syscalls/keyctl/keyctl28
 CC testcases/kernel/syscalls/keyctl/keyctl27
+CC testcases/kernel/syscalls/keyctl/keyctl28
 CC testcases/kernel/syscalls/keyctl/keyctl29
 CC testcases/kernel/syscalls/keyctl/keyctl30
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
@@ -2614,9 +2614,13 @@ kill02.c:603:13: warning: variable 'errno_buf' set but not used [-Wunused-but-se
   603 |         int errno_buf;          /*indicates the errno if pipe set up fails.             */
       |             ^~~~~~~~~
 kill02.c: In function 'child1_rout':
+kill10.c: In function 'ack_ready':
 kill02.c:411:23: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
   411 |                 (void)write(pipe1_fd[1], CHAR_SET_FAILED, 1);
       |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+kill10.c:365:47: warning: unused parameter 'data' [-Wunused-parameter]
+  365 | void ack_ready(int sig, siginfo_t * si, void *data)
+      |                                         ~~~~~~^~~~
 kill02.c:435:31: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
   435 |                         (void)write(pipe2_fd[1], CHAR_SET_FAILED, 1);
       |                               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2629,6 +2633,10 @@ kill02.c:460:23: warning: ignoring return value of 'write' declared with attribu
 kill02.c:471:23: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
   471 |                 (void)write(pipe1_fd[1], CHAR_SET_FAILED, 1);
       |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+kill10.c: In function 'ack_done':
+kill10.c:392:46: warning: unused parameter 'data' [-Wunused-parameter]
+  392 | void ack_done(int sig, siginfo_t * si, void *data)
+      |                                        ~~~~~~^~~~
 kill02.c:499:23: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
   499 |                 (void)write(pipe1_fd[1], CHAR_SET_FAILED, 1);
       |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2642,27 +2650,19 @@ kill02.c:542:23: warning: ignoring return value of 'write' declared with attribu
 kill02.c:547:15: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
   547 |         (void)write(pipe2_fd[1], CHAR_SET_PASSED, 1);
       |               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-kill10.c: In function 'ack_ready':
 kill02.c: In function 'childA_rout':
-kill10.c:365:47: warning: unused parameter 'data' [-Wunused-parameter]
-  365 | void ack_ready(int sig, siginfo_t * si, void *data)
-      |                                         ~~~~~~^~~~
 kill02.c:563:9: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
   563 |         write(pipeA_fd[1], CHAR_SET_PASSED, 1);
       |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-kill02.c: In function 'childB_rout':
-kill10.c: In function 'ack_done':
-kill02.c:587:9: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
-  587 |         write(pipeB_fd[1], CHAR_SET_PASSED, 1);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-kill10.c:392:46: warning: unused parameter 'data' [-Wunused-parameter]
-  392 | void ack_done(int sig, siginfo_t * si, void *data)
-      |                                        ~~~~~~^~~~
-kill02.c: In function 'chld1_kill':
 kill10.c: In function 'set_create_procs':
+kill02.c: In function 'childB_rout':
 kill10.c:477:27: warning: unused parameter 'sig' [-Wunused-parameter]
   477 | void set_create_procs(int sig)
       |                       ~~~~^~~
+kill02.c:587:9: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
+  587 |         write(pipeB_fd[1], CHAR_SET_PASSED, 1);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+kill02.c: In function 'chld1_kill':
 kill02.c:757:15: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
   757 |         (void)write(pipe1_fd[1], CHAR_SET_PASSED, 1);
       |               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2698,7 +2698,6 @@ kill10.c:670:17: warning: unused parameter 'sig' [-Wunused-parameter]
   670 | void wakeup(int sig)
       |             ~~~~^~~
 kill02.c: In function 'parent_rout':
-CC testcases/kernel/syscalls/kill/kill06
 kill02.c:277:9: warning: '__builtin_strncpy' output may be truncated copying 1 byte from a string of length 9 [-Wstringop-truncation]
   277 |         strncpy(buf_tmp1, pipe_buf, 1);
       |         ^
@@ -2709,6 +2708,7 @@ kill02.c:397:17: warning: '__builtin_strncpy' output may be truncated copying 1 
   397 |                 strncpy(buf_tmp1, pipe_buf, 1);
       |                 ^
 CC testcases/kernel/syscalls/kill/kill08
+CC testcases/kernel/syscalls/kill/kill06
 CC testcases/kernel/syscalls/kill/kill03
 CC testcases/kernel/syscalls/kill/kill05
 kill12.c: In function 'main':
@@ -2745,14 +2745,14 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/landlock/landlock01
-CC testcases/kernel/syscalls/landlock/landlock03
 CC testcases/kernel/syscalls/landlock/landlock02
-CC testcases/kernel/syscalls/landlock/landlock05
+CC testcases/kernel/syscalls/landlock/landlock03
 CC testcases/kernel/syscalls/landlock/landlock06
+CC testcases/kernel/syscalls/landlock/landlock05
 CC testcases/kernel/syscalls/landlock/landlock_exec
 CC testcases/kernel/syscalls/landlock/landlock07
-CC testcases/kernel/syscalls/landlock/landlock10
 CC testcases/kernel/syscalls/landlock/landlock09
+CC testcases/kernel/syscalls/landlock/landlock10
 CC testcases/kernel/syscalls/landlock/landlock08
 CC testcases/kernel/syscalls/landlock/landlock04
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
@@ -2784,16 +2784,16 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/lgetxattr/lgetxattr02
 CC testcases/kernel/syscalls/lgetxattr/lgetxattr01
+CC testcases/kernel/syscalls/lgetxattr/lgetxattr02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/link/link08
-CC testcases/kernel/syscalls/link/link04
 CC testcases/kernel/syscalls/link/link02
 CC testcases/kernel/syscalls/link/link05
+CC testcases/kernel/syscalls/link/link04
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -2837,24 +2837,24 @@ In file included from listmount01.c:22:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC testcases/kernel/syscalls/listmount/listmount03
 CC testcases/kernel/syscalls/listmount/listmount01
-CC testcases/kernel/syscalls/listmount/listmount02
+CC testcases/kernel/syscalls/listmount/listmount03
 CC testcases/kernel/syscalls/listmount/listmount04
+CC testcases/kernel/syscalls/listmount/listmount02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/listxattr/listxattr03
 CC testcases/kernel/syscalls/listxattr/listxattr04
-CC testcases/kernel/syscalls/listxattr/listxattr01
 CC testcases/kernel/syscalls/listxattr/listxattr02
+CC testcases/kernel/syscalls/listxattr/listxattr01
+CC testcases/kernel/syscalls/listxattr/listxattr03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/llistxattr/llistxattr02
 CC testcases/kernel/syscalls/llistxattr/llistxattr03
+CC testcases/kernel/syscalls/llistxattr/llistxattr02
 CC testcases/kernel/syscalls/llistxattr/llistxattr01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -2872,32 +2872,32 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+CC testcases/kernel/syscalls/lseek/lseek01
 CC testcases/kernel/syscalls/lseek/lseek02
 CC testcases/kernel/syscalls/lseek/lseek07
-CC testcases/kernel/syscalls/lseek/lseek01
 CC testcases/kernel/syscalls/lseek/lseek11
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+CC testcases/kernel/syscalls/lsm/lsm_set_self_attr01
 CC testcases/kernel/syscalls/lsm/lsm_list_modules01
 CC testcases/kernel/syscalls/lsm/lsm_get_self_attr01
-CC testcases/kernel/syscalls/lsm/lsm_set_self_attr01
 CC testcases/kernel/syscalls/lsm/lsm_get_self_attr02
 CC testcases/kernel/syscalls/lsm/lsm_get_self_attr03
 CC testcases/kernel/syscalls/lsm/lsm_list_modules02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
+CC testcases/kernel/syscalls/lstat/lstat02_64.o
 CC testcases/kernel/syscalls/lstat/lstat01_64.o
 CC testcases/kernel/syscalls/lstat/lstat03_64.o
-CC testcases/kernel/syscalls/lstat/lstat02_64.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 LD testcases/kernel/syscalls/lstat/lstat01_64
 LD testcases/kernel/syscalls/lstat/lstat02_64
-CC testcases/kernel/syscalls/lstat/lstat02
-CC testcases/kernel/syscalls/lstat/lstat01
 LD testcases/kernel/syscalls/lstat/lstat03_64
+CC testcases/kernel/syscalls/lstat/lstat01
+CC testcases/kernel/syscalls/lstat/lstat02
 CC testcases/kernel/syscalls/lstat/lstat03
 rm lstat02_64.o lstat01_64.o lstat03_64.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
@@ -2905,8 +2905,8 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/madvise/madvise05
-CC testcases/kernel/syscalls/madvise/madvise07
 CC testcases/kernel/syscalls/madvise/madvise03
+CC testcases/kernel/syscalls/madvise/madvise07
 CC testcases/kernel/syscalls/madvise/madvise01
 CC testcases/kernel/syscalls/madvise/madvise02
 madvise08.c: In function 'find_sequence':
@@ -2930,12 +2930,12 @@ mallinfo01.c: In function 'test_mallinfo':
 mallinfo01.c:41:9: warning: 'mallinfo' is deprecated [-Wdeprecated-declarations]
    41 |         info2 = mallinfo();
       |         ^~~~~
+mallinfo02.c: In function 'test_mallinfo':
 In file included from mallinfo_common.h:11,
                  from mallinfo01.c:11:
 /usr/include/malloc.h:114:24: note: declared here
   114 | extern struct mallinfo mallinfo (void) __THROW __MALLOC_DEPRECATED;
       |                        ^~~~~~~~
-mallinfo02.c: In function 'test_mallinfo':
 mallinfo02.c:24:9: warning: 'mallinfo' is deprecated [-Wdeprecated-declarations]
    24 |         info = mallinfo();
       |         ^~~~
@@ -2944,15 +2944,15 @@ In file included from mallinfo_common.h:11,
 /usr/include/malloc.h:114:24: note: declared here
   114 | extern struct mallinfo mallinfo (void) __THROW __MALLOC_DEPRECATED;
       |                        ^~~~~~~~
+mallinfo02.c:33:9: warning: 'mallinfo' is deprecated [-Wdeprecated-declarations]
+   33 |         info = mallinfo();
+      |         ^~~~
 mallinfo01.c:51:9: warning: 'mallinfo' is deprecated [-Wdeprecated-declarations]
    51 |         info2 = mallinfo();
       |         ^~~~~
 /usr/include/malloc.h:114:24: note: declared here
   114 | extern struct mallinfo mallinfo (void) __THROW __MALLOC_DEPRECATED;
       |                        ^~~~~~~~
-mallinfo02.c:33:9: warning: 'mallinfo' is deprecated [-Wdeprecated-declarations]
-   33 |         info = mallinfo();
-      |         ^~~~
 /usr/include/malloc.h:114:24: note: declared here
   114 | extern struct mallinfo mallinfo (void) __THROW __MALLOC_DEPRECATED;
       |                        ^~~~~~~~
@@ -3001,7 +3001,6 @@ numa_helper.c: In function 'get_allowed_nodes_arr':
 numa_helper.c:152:31: warning: unused parameter 'flag' [-Wunused-parameter]
   152 | int get_allowed_nodes_arr(int flag, int *num_nodes, int **nodes)
       |                           ~~~~^~~~
-CC testcases/kernel/lib/ksm_helper.o
 numa_cpuset.c: In function 'write_node_cpusets':
 numa_cpuset.c:27:52: warning: '/online' directive output may be truncated writing 7 bytes into a region of size between 1 and 8192 [-Wformat-truncation=]
    27 |                         snprintf(path1, BUFSIZ, "%s/online", path);
@@ -3021,14 +3020,15 @@ In function 'snprintf',
       |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    70 |                                    __va_arg_pack ());
       |                                    ~~~~~~~~~~~~~~~~~
+CC testcases/kernel/lib/ksm_helper.o
 CC testcases/kernel/lib/numa_helper.o
 CC testcases/kernel/lib/numa_cpuset.o
 AR libkerntest.a
 RANLIB libkerntest.a
-CC testcases/kernel/syscalls/mbind/mbind01
-CC testcases/kernel/syscalls/mbind/mbind02
-CC testcases/kernel/syscalls/mbind/mbind03
 CC testcases/kernel/syscalls/mbind/mbind04
+CC testcases/kernel/syscalls/mbind/mbind01
+CC testcases/kernel/syscalls/mbind/mbind03
+CC testcases/kernel/syscalls/mbind/mbind02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -3091,16 +3091,16 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/mincore/mincore03
 CC testcases/kernel/syscalls/mincore/mincore02
-CC testcases/kernel/syscalls/mincore/mincore04
+CC testcases/kernel/syscalls/mincore/mincore03
 CC testcases/kernel/syscalls/mincore/mincore01
+CC testcases/kernel/syscalls/mincore/mincore04
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/mkdir/mkdir04
 CC testcases/kernel/syscalls/mkdir/mkdir05
+CC testcases/kernel/syscalls/mkdir/mkdir04
 CC testcases/kernel/syscalls/mkdir/mkdir02
 CC testcases/kernel/syscalls/mkdir/mkdir03
 CC testcases/kernel/syscalls/mkdir/mkdir09
@@ -3114,15 +3114,15 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/mknod/mknod03
+CC testcases/kernel/syscalls/mknod/mknod06
 CC testcases/kernel/syscalls/mknod/mknod01
+CC testcases/kernel/syscalls/mknod/mknod02
+CC testcases/kernel/syscalls/mknod/mknod03
 CC testcases/kernel/syscalls/mknod/mknod05
 CC testcases/kernel/syscalls/mknod/mknod04
-CC testcases/kernel/syscalls/mknod/mknod02
-CC testcases/kernel/syscalls/mknod/mknod06
 CC testcases/kernel/syscalls/mknod/mknod09
-CC testcases/kernel/syscalls/mknod/mknod07
 CC testcases/kernel/syscalls/mknod/mknod08
+CC testcases/kernel/syscalls/mknod/mknod07
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -3134,17 +3134,17 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/mlock/mlock01
-CC testcases/kernel/syscalls/mlock/mlock04
 CC testcases/kernel/syscalls/mlock/mlock03
+CC testcases/kernel/syscalls/mlock/mlock04
 CC testcases/kernel/syscalls/mlock/mlock05
 CC testcases/kernel/syscalls/mlock/mlock02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/mlock2/mlock201
-CC testcases/kernel/syscalls/mlock2/mlock202
 CC testcases/kernel/syscalls/mlock2/mlock203
+CC testcases/kernel/syscalls/mlock2/mlock202
+CC testcases/kernel/syscalls/mlock2/mlock201
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -3160,12 +3160,12 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/mmap/mmap06
-CC testcases/kernel/syscalls/mmap/mmap02
 CC testcases/kernel/syscalls/mmap/mmap04
+CC testcases/kernel/syscalls/mmap/mmap02
+CC testcases/kernel/syscalls/mmap/mmap01
 CC testcases/kernel/syscalls/mmap/mmap05
 CC testcases/kernel/syscalls/mmap/mmap03
-CC testcases/kernel/syscalls/mmap/mmap01
+CC testcases/kernel/syscalls/mmap/mmap06
 mmap11.c: In function 'wait_thread':
 mmap11.c:128:25: warning: unused parameter 'args' [-Wunused-parameter]
   128 | void *wait_thread(void *args)
@@ -3175,16 +3175,16 @@ mmap11.c:139:26: warning: unused parameter 'args' [-Wunused-parameter]
   139 | void *wait_thread2(void *args)
       |                    ~~~~~~^~~~
 CC testcases/kernel/syscalls/mmap/mmap08
+CC testcases/kernel/syscalls/mmap/mmap11
 CC testcases/kernel/syscalls/mmap/mmap09
 CC testcases/kernel/syscalls/mmap/mmap10
-CC testcases/kernel/syscalls/mmap/mmap11
 CC testcases/kernel/syscalls/mmap/mmap13
 CC testcases/kernel/syscalls/mmap/mmap12
+CC testcases/kernel/syscalls/mmap/mmap15
 CC testcases/kernel/syscalls/mmap/mmap14
 CC testcases/kernel/syscalls/mmap/mmap17
-CC testcases/kernel/syscalls/mmap/mmap15
-CC testcases/kernel/syscalls/mmap/mmap19
 CC testcases/kernel/syscalls/mmap/mmap16
+CC testcases/kernel/syscalls/mmap/mmap19
 CC testcases/kernel/syscalls/mmap/mmap18
 CC testcases/kernel/syscalls/mmap/mmap20
 CC testcases/kernel/syscalls/mmap/mmap21
@@ -3195,20 +3195,20 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/modify_ldt/modify_ldt01
 CC testcases/kernel/syscalls/modify_ldt/modify_ldt02
+CC testcases/kernel/syscalls/modify_ldt/modify_ldt01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/mount/mount03_suid_child
 CC testcases/kernel/syscalls/mount/mount01
-CC testcases/kernel/syscalls/mount/mount04
 CC testcases/kernel/syscalls/mount/mount05
+CC testcases/kernel/syscalls/mount/mount04
 CC testcases/kernel/syscalls/mount/mount02
 CC testcases/kernel/syscalls/mount/mount03
-CC testcases/kernel/syscalls/mount/mount08
 CC testcases/kernel/syscalls/mount/mount06
+CC testcases/kernel/syscalls/mount/mount08
 CC testcases/kernel/syscalls/mount/mount07
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -3234,9 +3234,9 @@ In file included from move_mount03.c:76:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
+CC testcases/kernel/syscalls/move_mount/move_mount01
 CC testcases/kernel/syscalls/move_mount/move_mount02
 CC testcases/kernel/syscalls/move_mount/move_mount03
-CC testcases/kernel/syscalls/move_mount/move_mount01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -3287,14 +3287,14 @@ move_pages_support.c:393:32: warning: unused parameter 'min_nodes' [-Wunused-par
       |                   ~~~~~~~~~~~~~^~~~~~~~~
 CC testcases/kernel/syscalls/move_pages/move_pages_support.o
 CC testcases/kernel/syscalls/move_pages/move_pages01
-CC testcases/kernel/syscalls/move_pages/move_pages02
 CC testcases/kernel/syscalls/move_pages/move_pages06
 CC testcases/kernel/syscalls/move_pages/move_pages03
+CC testcases/kernel/syscalls/move_pages/move_pages02
 CC testcases/kernel/syscalls/move_pages/move_pages05
 CC testcases/kernel/syscalls/move_pages/move_pages04
-CC testcases/kernel/syscalls/move_pages/move_pages09
 CC testcases/kernel/syscalls/move_pages/move_pages07
 CC testcases/kernel/syscalls/move_pages/move_pages10
+CC testcases/kernel/syscalls/move_pages/move_pages09
 CC testcases/kernel/syscalls/move_pages/move_pages11
 CC testcases/kernel/syscalls/move_pages/move_pages12
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
@@ -3302,9 +3302,9 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/mprotect/mprotect03
-CC testcases/kernel/syscalls/mprotect/mprotect02
 CC testcases/kernel/syscalls/mprotect/mprotect05
 CC testcases/kernel/syscalls/mprotect/mprotect01
+CC testcases/kernel/syscalls/mprotect/mprotect02
 CC testcases/kernel/syscalls/mprotect/mprotect04
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -3359,27 +3359,27 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/msgctl/msgctl03
-CC testcases/kernel/syscalls/msgctl/msgctl05
 CC testcases/kernel/syscalls/msgctl/msgctl02
+CC testcases/kernel/syscalls/msgctl/msgctl05
 CC testcases/kernel/syscalls/msgctl/msgctl01
 CC testcases/kernel/syscalls/msgctl/msgctl06
 CC testcases/kernel/syscalls/msgctl/msgctl04
 CC testcases/kernel/syscalls/msgctl/msgctl12
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libnewipc.a
-GEN ltp-version.h
 make[5]: Nothing to be done for 'all'.
+GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+CC testcases/kernel/syscalls/msgget/msgget04
 CC testcases/kernel/syscalls/msgget/msgget01
 CC testcases/kernel/syscalls/msgget/msgget05
-CC testcases/kernel/syscalls/msgget/msgget04
 CC testcases/kernel/syscalls/msgget/msgget02
 CC testcases/kernel/syscalls/msgget/msgget03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libnewipc.a
-make[5]: Nothing to be done for 'all'.
 GEN ltp-version.h
+make[5]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/msgrcv/msgrcv06
@@ -3396,8 +3396,8 @@ make[5]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/msgsnd/msgsnd01
-CC testcases/kernel/syscalls/msgsnd/msgsnd06
 CC testcases/kernel/syscalls/msgsnd/msgsnd02
+CC testcases/kernel/syscalls/msgsnd/msgsnd06
 CC testcases/kernel/syscalls/msgsnd/msgsnd05
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -3430,8 +3430,8 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at02
-CC testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at01
 CC testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at03
+CC testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -3448,34 +3448,13 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-nftw.c: In function 'setup':
-nftw.c:686:9: warning: ignoring return value of 'setuid' declared with attribute 'warn_unused_result' [-Wunused-result]
-  686 |         setuid(ltpuser->pw_uid);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~
-tools.c: In function 'nftw_fn':
-tools.c:158:25: warning: unused parameter 'path' [-Wunused-parameter]
-  158 | int nftw_fn(const char *path, const struct stat *st, int ival, struct FTW *FTWS)
-      |             ~~~~~~~~~~~~^~~~
-tools.c:158:50: warning: unused parameter 'st' [-Wunused-parameter]
-  158 | int nftw_fn(const char *path, const struct stat *st, int ival, struct FTW *FTWS)
-      |                               ~~~~~~~~~~~~~~~~~~~^~
-tools.c:158:58: warning: unused parameter 'ival' [-Wunused-parameter]
-  158 | int nftw_fn(const char *path, const struct stat *st, int ival, struct FTW *FTWS)
-      |                                                      ~~~~^~~~
-tools.c:158:76: warning: unused parameter 'FTWS' [-Wunused-parameter]
-  158 | int nftw_fn(const char *path, const struct stat *st, int ival, struct FTW *FTWS)
-      |                                                                ~~~~~~~~~~~~^~~~
 test_func.c: In function 'test_func1':
-tools.c: In function 'do_info':
 test_func.c:41:54: warning: unused parameter 'stat_pointer' [-Wunused-parameter]
    41 | test_func1(const char *path_name, const struct stat *stat_pointer,
       |                                   ~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~
 test_func.c:42:16: warning: unused parameter 'ftw_integer' [-Wunused-parameter]
    42 |            int ftw_integer, struct FTW *ftwp)
       |            ~~~~^~~~~~~~~~~
-tools.c:250:26: warning: unused parameter 'path_name' [-Wunused-parameter]
-  250 | void do_info(const char *path_name)
-      |              ~~~~~~~~~~~~^~~~~~~~~
 test_func.c:42:41: warning: unused parameter 'ftwp' [-Wunused-parameter]
    42 |            int ftw_integer, struct FTW *ftwp)
       |                             ~~~~~~~~~~~~^~~~
@@ -3506,65 +3485,66 @@ test_func.c:114:54: warning: unused parameter 'stat_pointer' [-Wunused-parameter
 test_func.c:115:41: warning: unused parameter 'ftwp' [-Wunused-parameter]
   115 |            int ftw_integer, struct FTW *ftwp)
       |                             ~~~~~~~~~~~~^~~~
-tools.c: In function 'cleanup_function':
-tools.c:53:9: warning: ignoring return value of 'system' declared with attribute 'warn_unused_result' [-Wunused-result]
-   53 |         system("rm -rf ./tmp");
-      |         ^~~~~~~~~~~~~~~~~~~~~~
+tools.c: In function 'nftw_fn':
 test_func.c: In function 'test_func7':
 test_func.c:137:54: warning: unused parameter 'stat_pointer' [-Wunused-parameter]
   137 | test_func7(const char *path_name, const struct stat *stat_pointer,
       |                                   ~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~
+tools.c:158:25: warning: unused parameter 'path' [-Wunused-parameter]
+  158 | int nftw_fn(const char *path, const struct stat *st, int ival, struct FTW *FTWS)
+      |             ~~~~~~~~~~~~^~~~
+tools.c:158:50: warning: unused parameter 'st' [-Wunused-parameter]
+  158 | int nftw_fn(const char *path, const struct stat *st, int ival, struct FTW *FTWS)
+      |                               ~~~~~~~~~~~~~~~~~~~^~
 test_func.c:138:16: warning: unused parameter 'ftw_integer' [-Wunused-parameter]
   138 |            int ftw_integer, struct FTW *ftwp)
       |            ~~~~^~~~~~~~~~~
+tools.c:158:58: warning: unused parameter 'ival' [-Wunused-parameter]
+  158 | int nftw_fn(const char *path, const struct stat *st, int ival, struct FTW *FTWS)
+      |                                                      ~~~~^~~~
+tools.c:158:76: warning: unused parameter 'FTWS' [-Wunused-parameter]
+  158 | int nftw_fn(const char *path, const struct stat *st, int ival, struct FTW *FTWS)
+      |                                                                ~~~~~~~~~~~~^~~~
 test_func.c:138:41: warning: unused parameter 'ftwp' [-Wunused-parameter]
   138 |            int ftw_integer, struct FTW *ftwp)
       |                             ~~~~~~~~~~~~^~~~
-lib.c: In function 'get_long_name_buffer':
-lib.c:65:62: warning: comparison of integer expressions of different signedness: 'size_t' {aka 'long unsigned int'} and 'int' [-Wsign-compare]
-   65 |         if ((path_length = pathconf(tmp_path, _PC_PATH_MAX)) == -1) {
-      |                                                              ^~
-lib.c:72:62: warning: comparison of integer expressions of different signedness: 'size_t' {aka 'long unsigned int'} and 'int' [-Wsign-compare]
-   72 |         if ((name_length = pathconf(tmp_path, _PC_NAME_MAX)) == -1) {
-      |                                                              ^~
+tools.c: In function 'do_info':
+tools.c:250:26: warning: unused parameter 'path_name' [-Wunused-parameter]
+  250 | void do_info(const char *path_name)
+      |              ~~~~~~~~~~~~^~~~~~~~~
 test_func.c: In function 'test_func8':
 test_func.c:168:41: warning: unused parameter 'ftwp' [-Wunused-parameter]
   168 |            int ftw_integer, struct FTW *ftwp)
       |                             ~~~~~~~~~~~~^~~~
+nftw.c: In function 'setup':
 test_func.c: In function 'test_func9':
+tools.c: In function 'cleanup_function':
+tools.c:53:9: warning: ignoring return value of 'system' declared with attribute 'warn_unused_result' [-Wunused-result]
+   53 |         system("rm -rf ./tmp");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
 test_func.c:248:54: warning: unused parameter 'stat_pointer' [-Wunused-parameter]
   248 | test_func9(const char *path_name, const struct stat *stat_pointer,
       |                                   ~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~
+nftw.c:686:9: warning: ignoring return value of 'setuid' declared with attribute 'warn_unused_result' [-Wunused-result]
+  686 |         setuid(ltpuser->pw_uid);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~
 test_func.c:249:41: warning: unused parameter 'ftwp' [-Wunused-parameter]
   249 |            int ftw_integer, struct FTW *ftwp)
       |                             ~~~~~~~~~~~~^~~~
-lib.c: In function 'test_ENAMETOOLONG_path':
 test_func.c: In function 'test_func10':
-lib.c:183:60: warning: comparison of integer expressions of different signedness: 'size_t' {aka 'long unsigned int'} and 'int' [-Wsign-compare]
-  183 |         if ((pcPathMax = pathconf(tmp_path, _PC_PATH_MAX)) == -1) {
-      |                                                            ^~
 test_func.c:283:55: warning: unused parameter 'stat_pointer' [-Wunused-parameter]
   283 | test_func10(const char *path_name, const struct stat *stat_pointer,
       |                                    ~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~
 test_func.c:284:42: warning: unused parameter 'ftwp' [-Wunused-parameter]
   284 |             int ftw_integer, struct FTW *ftwp)
       |                              ~~~~~~~~~~~~^~~~
-lib.c:208:27: warning: comparison of integer expressions of different signedness: 'int' and 'size_t' {aka 'long unsigned int'} [-Wsign-compare]
-  208 |         while (pathLength < pcPathMax) {
-      |                           ^
 test_func.c: In function 'test_func11':
 test_func.c:317:55: warning: unused parameter 'stat_pointer' [-Wunused-parameter]
   317 | test_func11(const char *path_name, const struct stat *stat_pointer,
       |                                    ~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~
-lib.c:219:27: warning: comparison of integer expressions of different signedness: 'int' and 'size_t' {aka 'long unsigned int'} [-Wsign-compare]
-  219 |         while (pathLength <= pcPathMax) {
-      |                           ^~
 test_func.c:318:42: warning: unused parameter 'ftwp' [-Wunused-parameter]
   318 |             int ftw_integer, struct FTW *ftwp)
       |                              ~~~~~~~~~~~~^~~~
-lib.c:226:24: warning: comparison of integer expressions of different signedness: 'int' and 'size_t' {aka 'long unsigned int'} [-Wsign-compare]
-  226 |         if (pathLength != pcPathMax + 1) {
-      |                        ^~
 test_func.c: In function 'test_func12':
 test_func.c:351:55: warning: unused parameter 'stat_pointer' [-Wunused-parameter]
   351 | test_func12(const char *path_name, const struct stat *stat_pointer,
@@ -3572,7 +3552,14 @@ test_func.c:351:55: warning: unused parameter 'stat_pointer' [-Wunused-parameter
 test_func.c:352:42: warning: unused parameter 'ftwp' [-Wunused-parameter]
   352 |             int ftw_integer, struct FTW *ftwp)
       |                              ~~~~~~~~~~~~^~~~
+lib.c: In function 'get_long_name_buffer':
+lib.c:65:62: warning: comparison of integer expressions of different signedness: 'size_t' {aka 'long unsigned int'} and 'int' [-Wsign-compare]
+   65 |         if ((path_length = pathconf(tmp_path, _PC_PATH_MAX)) == -1) {
+      |                                                              ^~
 test_func.c: In function 'test_func13':
+lib.c:72:62: warning: comparison of integer expressions of different signedness: 'size_t' {aka 'long unsigned int'} and 'int' [-Wsign-compare]
+   72 |         if ((name_length = pathconf(tmp_path, _PC_NAME_MAX)) == -1) {
+      |                                                              ^~
 test_func.c:383:55: warning: unused parameter 'stat_pointer' [-Wunused-parameter]
   383 | test_func13(const char *path_name, const struct stat *stat_pointer,
       |                                    ~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~
@@ -3587,19 +3574,32 @@ test_func.c:419:42: warning: unused parameter 'ftwp' [-Wunused-parameter]
   419 |             int ftw_integer, struct FTW *ftwp)
       |                              ~~~~~~~~~~~~^~~~
 test_func.c: In function 'test_func15':
+lib.c: In function 'test_ENAMETOOLONG_path':
 test_func.c:453:55: warning: unused parameter 'stat_pointer' [-Wunused-parameter]
   453 | test_func15(const char *path_name, const struct stat *stat_pointer,
       |                                    ~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~
+lib.c:183:60: warning: comparison of integer expressions of different signedness: 'size_t' {aka 'long unsigned int'} and 'int' [-Wsign-compare]
+  183 |         if ((pcPathMax = pathconf(tmp_path, _PC_PATH_MAX)) == -1) {
+      |                                                            ^~
 test_func.c:454:42: warning: unused parameter 'ftwp' [-Wunused-parameter]
   454 |             int ftw_integer, struct FTW *ftwp)
       |                              ~~~~~~~~~~~~^~~~
 test_func.c: In function 'test_func16':
+lib.c:208:27: warning: comparison of integer expressions of different signedness: 'int' and 'size_t' {aka 'long unsigned int'} [-Wsign-compare]
+  208 |         while (pathLength < pcPathMax) {
+      |                           ^
 test_func.c:468:55: warning: unused parameter 'stat_pointer' [-Wunused-parameter]
   468 | test_func16(const char *path_name, const struct stat *stat_pointer,
       |                                    ~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~
+lib.c:219:27: warning: comparison of integer expressions of different signedness: 'int' and 'size_t' {aka 'long unsigned int'} [-Wsign-compare]
+  219 |         while (pathLength <= pcPathMax) {
+      |                           ^~
 test_func.c:469:17: warning: unused parameter 'ftw_integer' [-Wunused-parameter]
   469 |             int ftw_integer, struct FTW *ftwp)
       |             ~~~~^~~~~~~~~~~
+lib.c:226:24: warning: comparison of integer expressions of different signedness: 'int' and 'size_t' {aka 'long unsigned int'} [-Wsign-compare]
+  226 |         if (pathLength != pcPathMax + 1) {
+      |                        ^~
 test_func.c: In function 'test_func17':
 test_func.c:497:55: warning: unused parameter 'stat_pointer' [-Wunused-parameter]
   497 | test_func17(const char *path_name, const struct stat *stat_pointer,
@@ -3663,7 +3663,6 @@ nftw64.c: In function 'setup':
 nftw64.c:713:9: warning: ignoring return value of 'setuid' declared with attribute 'warn_unused_result' [-Wunused-result]
   713 |         setuid(ltpuser->pw_uid);
       |         ^~~~~~~~~~~~~~~~~~~~~~~
-CC testcases/kernel/syscalls/nftw/nftw64.o
 CC testcases/kernel/syscalls/nftw/tools.o
 tools64.c: In function 'nftw64_fn':
 tools64.c:158:23: warning: unused parameter 'path' [-Wunused-parameter]
@@ -3686,6 +3685,7 @@ tools64.c: In function 'cleanup_function':
 tools64.c:52:9: warning: ignoring return value of 'system' declared with attribute 'warn_unused_result' [-Wunused-result]
    52 |         system("rm -rf ./tmp");
       |         ^~~~~~~~~~~~~~~~~~~~~~
+CC testcases/kernel/syscalls/nftw/nftw64.o
 CC testcases/kernel/syscalls/nftw/lib.o
 test_func64.c: In function 'test_func1':
 test_func64.c:41:56: warning: unused parameter 'stat_pointer' [-Wunused-parameter]
@@ -3884,10 +3884,10 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/nice/nice01
 CC testcases/kernel/syscalls/nice/nice04
-CC testcases/kernel/syscalls/nice/nice03
 CC testcases/kernel/syscalls/nice/nice02
+CC testcases/kernel/syscalls/nice/nice01
+CC testcases/kernel/syscalls/nice/nice03
 nice05.c: In function 'setup':
 nice05.c:76:13: warning: 'some_cpu' may be used uninitialized [-Wmaybe-uninitialized]
    76 |         int some_cpu;
@@ -3899,15 +3899,15 @@ make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/open/open03
 CC testcases/kernel/syscalls/open/open06
+CC testcases/kernel/syscalls/open/open02
 CC testcases/kernel/syscalls/open/open07
 CC testcases/kernel/syscalls/open/open01
-CC testcases/kernel/syscalls/open/open02
 CC testcases/kernel/syscalls/open/open04
 CC testcases/kernel/syscalls/open/open12_child
 CC testcases/kernel/syscalls/open/open09
 CC testcases/kernel/syscalls/open/open08
-CC testcases/kernel/syscalls/open/open11
 CC testcases/kernel/syscalls/open/open10
+CC testcases/kernel/syscalls/open/open11
 CC testcases/kernel/syscalls/open/open12
 CC testcases/kernel/syscalls/open/open13
 CC testcases/kernel/syscalls/open/open15
@@ -3916,8 +3916,8 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/open_by_handle_at/open_by_handle_at02
 CC testcases/kernel/syscalls/open_by_handle_at/open_by_handle_at01
+CC testcases/kernel/syscalls/open_by_handle_at/open_by_handle_at02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -3952,9 +3952,9 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/openat2/openat202
-CC testcases/kernel/syscalls/openat2/openat203
 CC testcases/kernel/syscalls/openat2/openat201
+CC testcases/kernel/syscalls/openat2/openat203
+CC testcases/kernel/syscalls/openat2/openat202
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -3990,31 +3990,31 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/pidfd_open/pidfd_open01
-CC testcases/kernel/syscalls/pidfd_open/pidfd_open03
 CC testcases/kernel/syscalls/pidfd_open/pidfd_open02
+CC testcases/kernel/syscalls/pidfd_open/pidfd_open03
+CC testcases/kernel/syscalls/pidfd_open/pidfd_open01
 CC testcases/kernel/syscalls/pidfd_open/pidfd_open04
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/pidfd_send_signal/pidfd_send_signal03
-CC testcases/kernel/syscalls/pidfd_send_signal/pidfd_send_signal02
 CC testcases/kernel/syscalls/pidfd_send_signal/pidfd_send_signal01
+CC testcases/kernel/syscalls/pidfd_send_signal/pidfd_send_signal02
+CC testcases/kernel/syscalls/pidfd_send_signal/pidfd_send_signal03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/pipe/pipe05
 CC testcases/kernel/syscalls/pipe/pipe01
-CC testcases/kernel/syscalls/pipe/pipe03
 CC testcases/kernel/syscalls/pipe/pipe06
 CC testcases/kernel/syscalls/pipe/pipe02
+CC testcases/kernel/syscalls/pipe/pipe03
 CC testcases/kernel/syscalls/pipe/pipe04
-CC testcases/kernel/syscalls/pipe/pipe10
 CC testcases/kernel/syscalls/pipe/pipe08
-CC testcases/kernel/syscalls/pipe/pipe07
+CC testcases/kernel/syscalls/pipe/pipe10
 CC testcases/kernel/syscalls/pipe/pipe09
+CC testcases/kernel/syscalls/pipe/pipe07
 CC testcases/kernel/syscalls/pipe/pipe11
 CC testcases/kernel/syscalls/pipe/pipe12
 CC testcases/kernel/syscalls/pipe/pipe14
@@ -4025,8 +4025,8 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/pipe2/pipe2_02_child
-CC testcases/kernel/syscalls/pipe2/pipe2_02
 CC testcases/kernel/syscalls/pipe2/pipe2_01
+CC testcases/kernel/syscalls/pipe2/pipe2_02
 CC testcases/kernel/syscalls/pipe2/pipe2_04
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -4042,10 +4042,10 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/poll/poll03
 CC testcases/kernel/syscalls/poll/poll04
-CC testcases/kernel/syscalls/poll/poll02
+CC testcases/kernel/syscalls/poll/poll03
 CC testcases/kernel/syscalls/poll/poll01
+CC testcases/kernel/syscalls/poll/poll02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -4056,15 +4056,15 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/prctl/prctl01
-CC testcases/kernel/syscalls/prctl/prctl06_execve
-CC testcases/kernel/syscalls/prctl/prctl03
 CC testcases/kernel/syscalls/prctl/prctl05
-CC testcases/kernel/syscalls/prctl/prctl02
+CC testcases/kernel/syscalls/prctl/prctl03
+CC testcases/kernel/syscalls/prctl/prctl06_execve
 CC testcases/kernel/syscalls/prctl/prctl06
+CC testcases/kernel/syscalls/prctl/prctl02
 CC testcases/kernel/syscalls/prctl/prctl07
-CC testcases/kernel/syscalls/prctl/prctl10
 CC testcases/kernel/syscalls/prctl/prctl08
 CC testcases/kernel/syscalls/prctl/prctl09
+CC testcases/kernel/syscalls/prctl/prctl10
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/pread/pread01_64.o
 CC testcases/kernel/syscalls/pread/pread02_64.o
@@ -4077,23 +4077,23 @@ LD testcases/kernel/syscalls/pread/pread01_64
 CC testcases/kernel/syscalls/pread/pread01
 rm pread01_64.o pread02_64.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-CC testcases/kernel/syscalls/preadv/preadv02_64.o
 CC testcases/kernel/syscalls/preadv/preadv01_64.o
+CC testcases/kernel/syscalls/preadv/preadv02_64.o
 CC testcases/kernel/syscalls/preadv/preadv03_64.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 LD testcases/kernel/syscalls/preadv/preadv02_64
 LD testcases/kernel/syscalls/preadv/preadv01_64
-CC testcases/kernel/syscalls/preadv/preadv02
 LD testcases/kernel/syscalls/preadv/preadv03_64
+CC testcases/kernel/syscalls/preadv/preadv02
 CC testcases/kernel/syscalls/preadv/preadv01
 CC testcases/kernel/syscalls/preadv/preadv03
 rm preadv01_64.o preadv03_64.o preadv02_64.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-CC testcases/kernel/syscalls/preadv2/preadv202_64.o
-CC testcases/kernel/syscalls/preadv2/preadv201_64.o
 CC testcases/kernel/syscalls/preadv2/preadv203_64.o
+CC testcases/kernel/syscalls/preadv2/preadv201_64.o
+CC testcases/kernel/syscalls/preadv2/preadv202_64.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
@@ -4121,12 +4121,12 @@ CC testcases/kernel/syscalls/pselect/pselect03_64.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-LD testcases/kernel/syscalls/pselect/pselect02_64
 LD testcases/kernel/syscalls/pselect/pselect03_64
+LD testcases/kernel/syscalls/pselect/pselect02_64
 LD testcases/kernel/syscalls/pselect/pselect01_64
 CC testcases/kernel/syscalls/pselect/pselect03
-CC testcases/kernel/syscalls/pselect/pselect02
 CC testcases/kernel/syscalls/pselect/pselect01
+CC testcases/kernel/syscalls/pselect/pselect02
 rm pselect03_64.o pselect01_64.o pselect02_64.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -4137,15 +4137,15 @@ ptrace04.c:48:38: warning: unused parameter 'poison' [-Wunused-parameter]
    48 | void compare_registers(unsigned char poison)
       |                        ~~~~~~~~~~~~~~^~~~~~
 CC testcases/kernel/syscalls/ptrace/ptrace04
-CC testcases/kernel/syscalls/ptrace/ptrace02
 CC testcases/kernel/syscalls/ptrace/ptrace03
+CC testcases/kernel/syscalls/ptrace/ptrace02
+CC testcases/kernel/syscalls/ptrace/ptrace01
 CC testcases/kernel/syscalls/ptrace/ptrace06
 CC testcases/kernel/syscalls/ptrace/ptrace05
-CC testcases/kernel/syscalls/ptrace/ptrace01
-CC testcases/kernel/syscalls/ptrace/ptrace11
-CC testcases/kernel/syscalls/ptrace/ptrace09
 CC testcases/kernel/syscalls/ptrace/ptrace07
+CC testcases/kernel/syscalls/ptrace/ptrace11
 CC testcases/kernel/syscalls/ptrace/ptrace08
+CC testcases/kernel/syscalls/ptrace/ptrace09
 CC testcases/kernel/syscalls/ptrace/ptrace10
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/pwrite/pwrite01_64.o
@@ -4155,8 +4155,8 @@ CC testcases/kernel/syscalls/pwrite/pwrite04_64.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-LD testcases/kernel/syscalls/pwrite/pwrite02_64
 CC testcases/kernel/syscalls/pwrite/pwrite02
+LD testcases/kernel/syscalls/pwrite/pwrite02_64
 LD testcases/kernel/syscalls/pwrite/pwrite03_64
 CC testcases/kernel/syscalls/pwrite/pwrite01
 LD testcases/kernel/syscalls/pwrite/pwrite04_64
@@ -4193,8 +4193,7 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-In file included from quotactl02.h:15,
-                 from quotactl05.c:19:
+In file included from quotactl03.c:30:
 quotactl_syscall_var.h:24:13: warning: 'quotactl_info' defined but not used [-Wunused-function]
    24 | static void quotactl_info(void)
       |             ^~~~~~~~~~~~~
@@ -4215,7 +4214,8 @@ quotactl_syscall_var.h:17:12: warning: 'do_quotactl' defined but not used [-Wunu
 quotactl_syscall_var.h:15:12: warning: 'fd' defined but not used [-Wunused-variable]
    15 | static int fd = -1;
       |            ^~
-In file included from quotactl03.c:30:
+In file included from quotactl02.h:15,
+                 from quotactl05.c:19:
 quotactl_syscall_var.h:24:13: warning: 'quotactl_info' defined but not used [-Wunused-function]
    24 | static void quotactl_info(void)
       |             ^~~~~~~~~~~~~
@@ -4225,8 +4225,8 @@ quotactl_syscall_var.h:17:12: warning: 'do_quotactl' defined but not used [-Wunu
 quotactl_syscall_var.h:15:12: warning: 'fd' defined but not used [-Wunused-variable]
    15 | static int fd = -1;
       |            ^~
-CC testcases/kernel/syscalls/quotactl/quotactl05
 CC testcases/kernel/syscalls/quotactl/quotactl02
+CC testcases/kernel/syscalls/quotactl/quotactl05
 CC testcases/kernel/syscalls/quotactl/quotactl03
 CC testcases/kernel/syscalls/quotactl/quotactl01
 CC testcases/kernel/syscalls/quotactl/quotactl04
@@ -4320,8 +4320,8 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/recvmsg/recvmsg03
 CC testcases/kernel/syscalls/recvmsg/recvmsg02
+CC testcases/kernel/syscalls/recvmsg/recvmsg03
 CC testcases/kernel/syscalls/recvmsg/recvmsg01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -4339,17 +4339,16 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/rename/rename06
-CC testcases/kernel/syscalls/rename/rename04
 CC testcases/kernel/syscalls/rename/rename07
+CC testcases/kernel/syscalls/rename/rename04
 CC testcases/kernel/syscalls/rename/rename05
+CC testcases/kernel/syscalls/rename/rename06
 CC testcases/kernel/syscalls/rename/rename03
 CC testcases/kernel/syscalls/rename/rename01
 CC testcases/kernel/syscalls/rename/rename08
 CC testcases/kernel/syscalls/rename/rename09
 CC testcases/kernel/syscalls/rename/rename10
 CC testcases/kernel/syscalls/rename/rename11
-CC testcases/kernel/syscalls/rename/rename12
 rename14.c: In function 'main':
 rename14.c:75:26: warning: cast between incompatible function types from 'int (*)(void)' to 'void (*)()' [-Wcast-function-type]
    75 |         act.sa_handler = (void (*)())term;
@@ -4357,6 +4356,7 @@ rename14.c:75:26: warning: cast between incompatible function types from 'int (*
 rename14.c:83:26: warning: cast between incompatible function types from 'int (*)(void)' to 'void (*)()' [-Wcast-function-type]
    83 |         act.sa_handler = (void (*)())al;
       |                          ^
+CC testcases/kernel/syscalls/rename/rename12
 CC testcases/kernel/syscalls/rename/rename13
 CC testcases/kernel/syscalls/rename/rename14
 CC testcases/kernel/syscalls/rename/rename15
@@ -4369,15 +4369,15 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/renameat2/renameat201
 CC testcases/kernel/syscalls/renameat2/renameat202
+CC testcases/kernel/syscalls/renameat2/renameat201
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/request_key/request_key05
-CC testcases/kernel/syscalls/request_key/request_key01
 CC testcases/kernel/syscalls/request_key/request_key06
+CC testcases/kernel/syscalls/request_key/request_key01
 CC testcases/kernel/syscalls/request_key/request_key04
 CC testcases/kernel/syscalls/request_key/request_key02
 CC testcases/kernel/syscalls/request_key/request_key03
@@ -4386,22 +4386,12 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/rmdir/rmdir01
-CC testcases/kernel/syscalls/rmdir/rmdir03
 CC testcases/kernel/syscalls/rmdir/rmdir02
+CC testcases/kernel/syscalls/rmdir/rmdir03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-In file included from rt_sigaction03.c:38:
-../../../../include/lapi/rt_sigaction.h: In function 'handler_h':
-../../../../include/lapi/rt_sigaction.h:59:27: warning: unused parameter 'signal' [-Wunused-parameter]
-   59 | static void handler_h(int signal)
-      |                       ~~~~^~~~~~
-In file included from rt_sigaction02.c:38:
-../../../../include/lapi/rt_sigaction.h: In function 'handler_h':
-../../../../include/lapi/rt_sigaction.h:59:27: warning: unused parameter 'signal' [-Wunused-parameter]
-   59 | static void handler_h(int signal)
-      |                       ~~~~^~~~~~
 In file included from rt_sigaction01.c:42:
 ../../../../include/lapi/rt_sigaction.h: In function 'handler_h':
 ../../../../include/lapi/rt_sigaction.h:59:27: warning: unused parameter 'signal' [-Wunused-parameter]
@@ -4411,9 +4401,19 @@ rt_sigaction01.c: In function 'set_handler':
 rt_sigaction01.c:72:37: warning: unused parameter 'sig_to_mask' [-Wunused-parameter]
    72 | static int set_handler(int sig, int sig_to_mask, int mask_flags)
       |                                 ~~~~^~~~~~~~~~~
-CC testcases/kernel/syscalls/rt_sigaction/rt_sigaction03
-CC testcases/kernel/syscalls/rt_sigaction/rt_sigaction02
+In file included from rt_sigaction02.c:38:
+../../../../include/lapi/rt_sigaction.h: In function 'handler_h':
+../../../../include/lapi/rt_sigaction.h:59:27: warning: unused parameter 'signal' [-Wunused-parameter]
+   59 | static void handler_h(int signal)
+      |                       ~~~~^~~~~~
+In file included from rt_sigaction03.c:38:
+../../../../include/lapi/rt_sigaction.h: In function 'handler_h':
+../../../../include/lapi/rt_sigaction.h:59:27: warning: unused parameter 'signal' [-Wunused-parameter]
+   59 | static void handler_h(int signal)
+      |                       ~~~~^~~~~~
 CC testcases/kernel/syscalls/rt_sigaction/rt_sigaction01
+CC testcases/kernel/syscalls/rt_sigaction/rt_sigaction02
+CC testcases/kernel/syscalls/rt_sigaction/rt_sigaction03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -4462,8 +4462,8 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/sbrk/sbrk01
 CC testcases/kernel/syscalls/sbrk/sbrk03
+CC testcases/kernel/syscalls/sbrk/sbrk01
 CC testcases/kernel/syscalls/sbrk/sbrk02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -4483,8 +4483,8 @@ In file included from sched_get_priority_max01.c:19:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC testcases/kernel/syscalls/sched_get_priority_max/sched_get_priority_max02
 CC testcases/kernel/syscalls/sched_get_priority_max/sched_get_priority_max01
+CC testcases/kernel/syscalls/sched_get_priority_max/sched_get_priority_max02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -4514,7 +4514,7 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-In file included from sched_getattr02.c:20:
+In file included from sched_getattr01.c:22:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
    94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
@@ -4528,7 +4528,7 @@ In file included from sched_getattr02.c:20:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-In file included from sched_getattr01.c:22:
+In file included from sched_getattr02.c:20:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
    94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
@@ -4561,8 +4561,8 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/sched_rr_get_interval/sched_rr_get_interval02
-CC testcases/kernel/syscalls/sched_rr_get_interval/sched_rr_get_interval03
 CC testcases/kernel/syscalls/sched_rr_get_interval/sched_rr_get_interval01
+CC testcases/kernel/syscalls/sched_rr_get_interval/sched_rr_get_interval03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -4572,20 +4572,6 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-In file included from sched_setattr02.c:25:
-../../../../include/lapi/sched.h: In function 'ltp_clone3':
-../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
-../../../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                                                          ~~~~~~~^~~~
-../../../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                              ~~~~~~^~~~~~~~~~~
-../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                                                 ~~~~~~^~~
 In file included from sched_setattr01.c:26:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -4600,23 +4586,37 @@ In file included from sched_setattr01.c:26:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC testcases/kernel/syscalls/sched_setattr/sched_setattr02
+In file included from sched_setattr02.c:25:
+../../../../include/lapi/sched.h: In function 'ltp_clone3':
+../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
+../../../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                                                          ~~~~~~~^~~~
+../../../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                              ~~~~~~^~~~~~~~~~~
+../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                                                 ~~~~~~^~~
 CC testcases/kernel/syscalls/sched_setattr/sched_setattr01
+CC testcases/kernel/syscalls/sched_setattr/sched_setattr02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/sched_setparam/sched_setparam01
-CC testcases/kernel/syscalls/sched_setparam/sched_setparam03
 CC testcases/kernel/syscalls/sched_setparam/sched_setparam02
-CC testcases/kernel/syscalls/sched_setparam/sched_setparam05
 CC testcases/kernel/syscalls/sched_setparam/sched_setparam04
+CC testcases/kernel/syscalls/sched_setparam/sched_setparam03
+CC testcases/kernel/syscalls/sched_setparam/sched_setparam05
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/sched_setscheduler/sched_setscheduler01
 CC testcases/kernel/syscalls/sched_setscheduler/sched_setscheduler02
+CC testcases/kernel/syscalls/sched_setscheduler/sched_setscheduler01
 CC testcases/kernel/syscalls/sched_setscheduler/sched_setscheduler04
 CC testcases/kernel/syscalls/sched_setscheduler/sched_setscheduler03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
@@ -4652,14 +4652,14 @@ select01.c:44:14: note: 'buf' declared here
    44 |         char buf;
       |              ^~~
 CC testcases/kernel/syscalls/select/select02
-CC testcases/kernel/syscalls/select/select03
 CC testcases/kernel/syscalls/select/select04
+CC testcases/kernel/syscalls/select/select03
 CC testcases/kernel/syscalls/select/select01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libipc.a
 BUILD libnewipc.a
-GEN ltp-version.h
 make[5]: Nothing to be done for 'all'.
+GEN ltp-version.h
 make[5]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
@@ -4669,8 +4669,8 @@ semctl06.c:283:22: warning: unused parameter 'sig' [-Wunused-parameter]
       |                  ~~~~^~~
 CC testcases/kernel/syscalls/semctl/semctl02
 CC testcases/kernel/syscalls/semctl/semctl05
-CC testcases/kernel/syscalls/semctl/semctl04
 CC testcases/kernel/syscalls/semctl/semctl03
+CC testcases/kernel/syscalls/semctl/semctl04
 CC testcases/kernel/syscalls/semctl/semctl06
 CC testcases/kernel/syscalls/semctl/semctl01
 semctl09.c: In function 'do_semctl':
@@ -4693,8 +4693,8 @@ make[5]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/semget/semget01
-CC testcases/kernel/syscalls/semget/semget05
 CC testcases/kernel/syscalls/semget/semget02
+CC testcases/kernel/syscalls/semget/semget05
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libnewipc.a
 GEN ltp-version.h
@@ -4715,21 +4715,21 @@ semop05.c:142:20: warning: unused parameter 'foo' [-Wunused-parameter]
       |              ~~~~~~^~~
 CC testcases/kernel/syscalls/semop/semop05
 CC testcases/kernel/syscalls/semop/semop04
-CC testcases/kernel/syscalls/semop/semop03
 CC testcases/kernel/syscalls/semop/semop01
+CC testcases/kernel/syscalls/semop/semop03
 CC testcases/kernel/syscalls/semop/semop02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/send/send01
 CC testcases/kernel/syscalls/send/send02
+CC testcases/kernel/syscalls/send/send01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-CC testcases/kernel/syscalls/sendfile/sendfile03_64.o
 CC testcases/kernel/syscalls/sendfile/sendfile02_64.o
-CC testcases/kernel/syscalls/sendfile/sendfile04_64.o
+CC testcases/kernel/syscalls/sendfile/sendfile03_64.o
 CC testcases/kernel/syscalls/sendfile/sendfile05_64.o
 CC testcases/kernel/syscalls/sendfile/sendfile06_64.o
+CC testcases/kernel/syscalls/sendfile/sendfile04_64.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
@@ -4744,14 +4744,14 @@ LD testcases/kernel/syscalls/sendfile/sendfile02_64
 LD testcases/kernel/syscalls/sendfile/sendfile03_64
 CC testcases/kernel/syscalls/sendfile/sendfile06
 LD testcases/kernel/syscalls/sendfile/sendfile04_64
-LD testcases/kernel/syscalls/sendfile/sendfile05_64
 CC testcases/kernel/syscalls/sendfile/sendfile07
+LD testcases/kernel/syscalls/sendfile/sendfile05_64
 CC testcases/kernel/syscalls/sendfile/sendfile08
 LD testcases/kernel/syscalls/sendfile/sendfile06_64
 LD testcases/kernel/syscalls/sendfile/sendfile07_64
 CC testcases/kernel/syscalls/sendfile/sendfile09
-LD testcases/kernel/syscalls/sendfile/sendfile09_64
 LD testcases/kernel/syscalls/sendfile/sendfile08_64
+LD testcases/kernel/syscalls/sendfile/sendfile09_64
 rm sendfile08_64.o sendfile05_64.o sendfile07_64.o sendfile04_64.o sendfile06_64.o sendfile03_64.o sendfile02_64.o sendfile09_64.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -4779,8 +4779,8 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/sendto/sendto02
-CC testcases/kernel/syscalls/sendto/sendto01
 CC testcases/kernel/syscalls/sendto/sendto03
+CC testcases/kernel/syscalls/sendto/sendto01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libnuma.a
 GEN ltp-version.h
@@ -4800,10 +4800,10 @@ set_mempolicy05.c:53:19: warning: unused variable 'mode' [-Wunused-variable]
 set_mempolicy05.c:52:19: warning: unused variable 'sys_num' [-Wunused-variable]
    52 |         const int sys_num = 276;
       |                   ^~~~~~~
-CC testcases/kernel/syscalls/set_mempolicy/set_mempolicy04
 CC testcases/kernel/syscalls/set_mempolicy/set_mempolicy02
-CC testcases/kernel/syscalls/set_mempolicy/set_mempolicy03
 CC testcases/kernel/syscalls/set_mempolicy/set_mempolicy01
+CC testcases/kernel/syscalls/set_mempolicy/set_mempolicy03
+CC testcases/kernel/syscalls/set_mempolicy/set_mempolicy04
 CC testcases/kernel/syscalls/set_mempolicy/set_mempolicy05
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -4836,17 +4836,17 @@ CC testcases/kernel/syscalls/setegid/setegid02
 CC testcases/kernel/syscalls/setegid/setegid01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/setfsgid/setfsgid01_16.o
-CC testcases/kernel/syscalls/setfsgid/setfsgid02_16.o
 CC testcases/kernel/syscalls/setfsgid/setfsgid03_16.o
+CC testcases/kernel/syscalls/setfsgid/setfsgid02_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 LD testcases/kernel/syscalls/setfsgid/setfsgid03_16
+LD testcases/kernel/syscalls/setfsgid/setfsgid02_16
 LD testcases/kernel/syscalls/setfsgid/setfsgid01_16
 CC testcases/kernel/syscalls/setfsgid/setfsgid03
-CC testcases/kernel/syscalls/setfsgid/setfsgid02
-LD testcases/kernel/syscalls/setfsgid/setfsgid02_16
 CC testcases/kernel/syscalls/setfsgid/setfsgid01
+CC testcases/kernel/syscalls/setfsgid/setfsgid02
 rm setfsgid01_16.o setfsgid02_16.o setfsgid03_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/setfsuid/setfsuid01_16.o
@@ -4856,12 +4856,12 @@ CC testcases/kernel/syscalls/setfsuid/setfsuid04_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/setfsuid/setfsuid02
 LD testcases/kernel/syscalls/setfsuid/setfsuid02_16
 LD testcases/kernel/syscalls/setfsuid/setfsuid03_16
+CC testcases/kernel/syscalls/setfsuid/setfsuid02
 CC testcases/kernel/syscalls/setfsuid/setfsuid01
-LD testcases/kernel/syscalls/setfsuid/setfsuid04_16
 LD testcases/kernel/syscalls/setfsuid/setfsuid01_16
+LD testcases/kernel/syscalls/setfsuid/setfsuid04_16
 CC testcases/kernel/syscalls/setfsuid/setfsuid03
 CC testcases/kernel/syscalls/setfsuid/setfsuid04
 rm setfsuid04_16.o setfsuid01_16.o setfsuid03_16.o setfsuid02_16.o
@@ -4876,23 +4876,23 @@ LD testcases/kernel/syscalls/setgid/setgid03_16
 LD testcases/kernel/syscalls/setgid/setgid01_16
 LD testcases/kernel/syscalls/setgid/setgid02_16
 CC testcases/kernel/syscalls/setgid/setgid01
-CC testcases/kernel/syscalls/setgid/setgid02
 CC testcases/kernel/syscalls/setgid/setgid03
+CC testcases/kernel/syscalls/setgid/setgid02
 rm setgid02_16.o setgid03_16.o setgid01_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
+CC testcases/kernel/syscalls/setgroups/setgroups01_16.o
 CC testcases/kernel/syscalls/setgroups/setgroups02_16.o
 CC testcases/kernel/syscalls/setgroups/setgroups03_16.o
-CC testcases/kernel/syscalls/setgroups/setgroups01_16.o
 CC testcases/kernel/syscalls/setgroups/setgroups04_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+LD testcases/kernel/syscalls/setgroups/setgroups01_16
 LD testcases/kernel/syscalls/setgroups/setgroups02_16
-CC testcases/kernel/syscalls/setgroups/setgroups02
 CC testcases/kernel/syscalls/setgroups/setgroups01
+CC testcases/kernel/syscalls/setgroups/setgroups02
 LD testcases/kernel/syscalls/setgroups/setgroups03_16
 LD testcases/kernel/syscalls/setgroups/setgroups04_16
-LD testcases/kernel/syscalls/setgroups/setgroups01_16
 CC testcases/kernel/syscalls/setgroups/setgroups04
 CC testcases/kernel/syscalls/setgroups/setgroups03
 rm setgroups02_16.o setgroups04_16.o setgroups03_16.o setgroups01_16.o
@@ -4951,8 +4951,8 @@ make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/setpgid/setpgid03_child
 CC testcases/kernel/syscalls/setpgid/setpgid02
-CC testcases/kernel/syscalls/setpgid/setpgid03
 CC testcases/kernel/syscalls/setpgid/setpgid01
+CC testcases/kernel/syscalls/setpgid/setpgid03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -4963,8 +4963,8 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/setpriority/setpriority02
 CC testcases/kernel/syscalls/setpriority/setpriority01
+CC testcases/kernel/syscalls/setpriority/setpriority02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/setregid/setregid01_16.o
 CC testcases/kernel/syscalls/setregid/setregid03_16.o
@@ -4973,26 +4973,26 @@ CC testcases/kernel/syscalls/setregid/setregid04_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-LD testcases/kernel/syscalls/setregid/setregid01_16
-CC testcases/kernel/syscalls/setregid/setregid02
-LD testcases/kernel/syscalls/setregid/setregid03_16
-CC testcases/kernel/syscalls/setregid/setregid01
-LD testcases/kernel/syscalls/setregid/setregid04_16
 LD testcases/kernel/syscalls/setregid/setregid02_16
+LD testcases/kernel/syscalls/setregid/setregid01_16
+CC testcases/kernel/syscalls/setregid/setregid01
+CC testcases/kernel/syscalls/setregid/setregid02
+LD testcases/kernel/syscalls/setregid/setregid04_16
+LD testcases/kernel/syscalls/setregid/setregid03_16
 CC testcases/kernel/syscalls/setregid/setregid04
 CC testcases/kernel/syscalls/setregid/setregid03
 rm setregid02_16.o setregid03_16.o setregid04_16.o setregid01_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-CC testcases/kernel/syscalls/setresgid/setresgid02_16.o
 CC testcases/kernel/syscalls/setresgid/setresgid01_16.o
+CC testcases/kernel/syscalls/setresgid/setresgid02_16.o
 CC testcases/kernel/syscalls/setresgid/setresgid03_16.o
 CC testcases/kernel/syscalls/setresgid/setresgid04_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+LD testcases/kernel/syscalls/setresgid/setresgid02_16
 LD testcases/kernel/syscalls/setresgid/setresgid03_16
 CC testcases/kernel/syscalls/setresgid/setresgid02
-LD testcases/kernel/syscalls/setresgid/setresgid02_16
 CC testcases/kernel/syscalls/setresgid/setresgid01
 LD testcases/kernel/syscalls/setresgid/setresgid04_16
 LD testcases/kernel/syscalls/setresgid/setresgid01_16
@@ -5000,47 +5000,47 @@ CC testcases/kernel/syscalls/setresgid/setresgid03
 CC testcases/kernel/syscalls/setresgid/setresgid04
 rm setresgid02_16.o setresgid04_16.o setresgid01_16.o setresgid03_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
-CC testcases/kernel/syscalls/setresuid/setresuid01_16.o
-CC testcases/kernel/syscalls/setresuid/setresuid02_16.o
 CC testcases/kernel/syscalls/setresuid/setresuid03_16.o
-CC testcases/kernel/syscalls/setresuid/setresuid04_16.o
+CC testcases/kernel/syscalls/setresuid/setresuid02_16.o
+CC testcases/kernel/syscalls/setresuid/setresuid01_16.o
 CC testcases/kernel/syscalls/setresuid/setresuid05_16.o
+CC testcases/kernel/syscalls/setresuid/setresuid04_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/setresuid/setresuid01
 LD testcases/kernel/syscalls/setresuid/setresuid01_16
-LD testcases/kernel/syscalls/setresuid/setresuid02_16
 LD testcases/kernel/syscalls/setresuid/setresuid03_16
-LD testcases/kernel/syscalls/setresuid/setresuid04_16
+LD testcases/kernel/syscalls/setresuid/setresuid02_16
 LD testcases/kernel/syscalls/setresuid/setresuid05_16
-CC testcases/kernel/syscalls/setresuid/setresuid02
+LD testcases/kernel/syscalls/setresuid/setresuid04_16
 CC testcases/kernel/syscalls/setresuid/setresuid03
+CC testcases/kernel/syscalls/setresuid/setresuid02
 CC testcases/kernel/syscalls/setresuid/setresuid05
 CC testcases/kernel/syscalls/setresuid/setresuid04
 rm setresuid02_16.o setresuid03_16.o setresuid05_16.o setresuid04_16.o setresuid01_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/setreuid/setreuid01_16.o
-CC testcases/kernel/syscalls/setreuid/setreuid03_16.o
 CC testcases/kernel/syscalls/setreuid/setreuid02_16.o
-CC testcases/kernel/syscalls/setreuid/setreuid05_16.o
+CC testcases/kernel/syscalls/setreuid/setreuid03_16.o
 CC testcases/kernel/syscalls/setreuid/setreuid04_16.o
+CC testcases/kernel/syscalls/setreuid/setreuid05_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/setreuid/setreuid06_16.o
 CC testcases/kernel/syscalls/setreuid/setreuid07_16.o
 CC testcases/kernel/syscalls/setreuid/setreuid02
-CC testcases/kernel/syscalls/setreuid/setreuid04
 CC testcases/kernel/syscalls/setreuid/setreuid01
+CC testcases/kernel/syscalls/setreuid/setreuid04
 CC testcases/kernel/syscalls/setreuid/setreuid03
 CC testcases/kernel/syscalls/setreuid/setreuid05
 LD testcases/kernel/syscalls/setreuid/setreuid01_16
 LD testcases/kernel/syscalls/setreuid/setreuid02_16
 LD testcases/kernel/syscalls/setreuid/setreuid03_16
 LD testcases/kernel/syscalls/setreuid/setreuid04_16
-LD testcases/kernel/syscalls/setreuid/setreuid06_16
 LD testcases/kernel/syscalls/setreuid/setreuid05_16
+LD testcases/kernel/syscalls/setreuid/setreuid06_16
 LD testcases/kernel/syscalls/setreuid/setreuid07_16
 CC testcases/kernel/syscalls/setreuid/setreuid06
 CC testcases/kernel/syscalls/setreuid/setreuid07
@@ -5050,11 +5050,11 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/setrlimit/setrlimit02
-CC testcases/kernel/syscalls/setrlimit/setrlimit04
 CC testcases/kernel/syscalls/setrlimit/setrlimit03
+CC testcases/kernel/syscalls/setrlimit/setrlimit04
 CC testcases/kernel/syscalls/setrlimit/setrlimit05
-CC testcases/kernel/syscalls/setrlimit/setrlimit01
 CC testcases/kernel/syscalls/setrlimit/setrlimit06
+CC testcases/kernel/syscalls/setrlimit/setrlimit01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -5066,9 +5066,9 @@ make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/setsockopt/setsockopt04
 CC testcases/kernel/syscalls/setsockopt/setsockopt03
+CC testcases/kernel/syscalls/setsockopt/setsockopt01
 CC testcases/kernel/syscalls/setsockopt/setsockopt02
 CC testcases/kernel/syscalls/setsockopt/setsockopt05
-CC testcases/kernel/syscalls/setsockopt/setsockopt01
 In file included from setsockopt10.c:52:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -5083,8 +5083,8 @@ In file included from setsockopt10.c:52:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC testcases/kernel/syscalls/setsockopt/setsockopt08
 CC testcases/kernel/syscalls/setsockopt/setsockopt09
+CC testcases/kernel/syscalls/setsockopt/setsockopt08
 CC testcases/kernel/syscalls/setsockopt/setsockopt10
 CC testcases/kernel/syscalls/setsockopt/setsockopt11
 CC testcases/kernel/syscalls/setsockopt/setsockopt06
@@ -5093,8 +5093,8 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/settimeofday/settimeofday02
 CC testcases/kernel/syscalls/settimeofday/settimeofday01
+CC testcases/kernel/syscalls/settimeofday/settimeofday02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/setuid/setuid01_16.o
 CC testcases/kernel/syscalls/setuid/setuid03_16.o
@@ -5102,12 +5102,12 @@ CC testcases/kernel/syscalls/setuid/setuid04_16.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/setuid/setuid01
-LD testcases/kernel/syscalls/setuid/setuid04_16
 LD testcases/kernel/syscalls/setuid/setuid01_16
+LD testcases/kernel/syscalls/setuid/setuid04_16
 LD testcases/kernel/syscalls/setuid/setuid03_16
-CC testcases/kernel/syscalls/setuid/setuid03
+CC testcases/kernel/syscalls/setuid/setuid01
 CC testcases/kernel/syscalls/setuid/setuid04
+CC testcases/kernel/syscalls/setuid/setuid03
 rm setuid04_16.o setuid01_16.o setuid03_16.o
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -5123,8 +5123,8 @@ make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/sgetmask/sgetmask01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libnewipc.a
-make[5]: Nothing to be done for 'all'.
 GEN ltp-version.h
+make[5]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/shmat/shmat03
@@ -5133,8 +5133,8 @@ CC testcases/kernel/syscalls/shmat/shmat04
 CC testcases/kernel/syscalls/shmat/shmat01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libnewipc.a
-GEN ltp-version.h
 make[5]: Nothing to be done for 'all'.
+GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/shmctl/shmctl03
@@ -5159,13 +5159,13 @@ CC testcases/kernel/syscalls/shmdt/shmdt02
 CC testcases/kernel/syscalls/shmdt/shmdt01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libnewipc.a
-make[5]: Nothing to be done for 'all'.
 GEN ltp-version.h
+make[5]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+CC testcases/kernel/syscalls/shmget/shmget06
 CC testcases/kernel/syscalls/shmget/shmget05
 CC testcases/kernel/syscalls/shmget/shmget04
-CC testcases/kernel/syscalls/shmget/shmget06
 CC testcases/kernel/syscalls/shmget/shmget03
 CC testcases/kernel/syscalls/shmget/shmget02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
@@ -5221,24 +5221,24 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/signal/signal02
-CC testcases/kernel/syscalls/signal/signal05
 CC testcases/kernel/syscalls/signal/signal03
+CC testcases/kernel/syscalls/signal/signal05
 CC testcases/kernel/syscalls/signal/signal04
-CC testcases/kernel/syscalls/signal/signal06
+CC testcases/kernel/syscalls/signal/signal02
 CC testcases/kernel/syscalls/signal/signal01
+CC testcases/kernel/syscalls/signal/signal06
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/signalfd/signalfd02
 CC testcases/kernel/syscalls/signalfd/signalfd01
+CC testcases/kernel/syscalls/signalfd/signalfd02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/signalfd4/signalfd4_02
 CC testcases/kernel/syscalls/signalfd4/signalfd4_01
+CC testcases/kernel/syscalls/signalfd4/signalfd4_02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -5270,8 +5270,8 @@ CC testcases/kernel/syscalls/sigsuspend/sigsuspend01
 CC testcases/kernel/syscalls/sigsuspend/sigsuspend02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libsigwait.a
-GEN ltp-version.h
 make[5]: Nothing to be done for 'all'.
+GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/sigtimedwait/sigtimedwait01
@@ -5284,8 +5284,8 @@ make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/sigwait/sigwait01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libsigwait.a
-GEN ltp-version.h
 make[5]: Nothing to be done for 'all'.
+GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/sigwaitinfo/sigwaitinfo01
@@ -5299,9 +5299,9 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/socketcall/socketcall01
-CC testcases/kernel/syscalls/socketcall/socketcall02
 CC testcases/kernel/syscalls/socketcall/socketcall03
+CC testcases/kernel/syscalls/socketcall/socketcall02
+CC testcases/kernel/syscalls/socketcall/socketcall01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -5321,8 +5321,8 @@ CC testcases/kernel/syscalls/splice/splice03
 CC testcases/kernel/syscalls/splice/splice01
 CC testcases/kernel/syscalls/splice/splice04
 CC testcases/kernel/syscalls/splice/splice05
-CC testcases/kernel/syscalls/splice/splice02
 CC testcases/kernel/syscalls/splice/splice06
+CC testcases/kernel/syscalls/splice/splice02
 CC testcases/kernel/syscalls/splice/splice07
 CC testcases/kernel/syscalls/splice/splice08
 CC testcases/kernel/syscalls/splice/splice09
@@ -5333,9 +5333,9 @@ make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/ssetmask/ssetmask01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 CC testcases/kernel/syscalls/stat/stat01_64.o
-CC testcases/kernel/syscalls/stat/stat04_64.o
 CC testcases/kernel/syscalls/stat/stat02_64.o
 CC testcases/kernel/syscalls/stat/stat03_64.o
+CC testcases/kernel/syscalls/stat/stat04_64.o
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
@@ -5343,8 +5343,8 @@ LD testcases/kernel/syscalls/stat/stat02_64
 CC testcases/kernel/syscalls/stat/stat02
 CC testcases/kernel/syscalls/stat/stat01
 LD testcases/kernel/syscalls/stat/stat03_64
-LD testcases/kernel/syscalls/stat/stat04_64
 LD testcases/kernel/syscalls/stat/stat01_64
+LD testcases/kernel/syscalls/stat/stat04_64
 CC testcases/kernel/syscalls/stat/stat03
 CC testcases/kernel/syscalls/stat/stat04
 rm stat04_64.o stat01_64.o stat02_64.o stat03_64.o
@@ -5366,35 +5366,7 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-In file included from statmount04.c:23:
-../../../../include/lapi/sched.h: In function 'ltp_clone3':
-../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
-../../../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                                                          ~~~~~~~^~~~
-../../../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                              ~~~~~~^~~~~~~~~~~
-../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                                                 ~~~~~~^~~
-In file included from statmount02.c:22:
-../../../../include/lapi/sched.h: In function 'ltp_clone3':
-../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
-../../../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                                                          ~~~~~~~^~~~
-../../../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                              ~~~~~~^~~~~~~~~~~
-../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                                                 ~~~~~~^~~
-In file included from statmount06.c:21:
+In file included from statmount01.c:20:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
    94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
@@ -5422,7 +5394,21 @@ In file included from statmount03.c:23:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-In file included from statmount01.c:20:
+In file included from statmount04.c:23:
+../../../../include/lapi/sched.h: In function 'ltp_clone3':
+../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
+../../../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                                                          ~~~~~~~^~~~
+../../../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                              ~~~~~~^~~~~~~~~~~
+../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                                                 ~~~~~~^~~
+In file included from statmount06.c:21:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
    94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
@@ -5450,15 +5436,29 @@ In file included from statmount05.c:26:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
+In file included from statmount02.c:22:
+../../../../include/lapi/sched.h: In function 'ltp_clone3':
+../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
+../../../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                                                          ~~~~~~~^~~~
+../../../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                              ~~~~~~^~~~~~~~~~~
+../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                                                 ~~~~~~^~~
 CC testcases/kernel/syscalls/statmount/statmount06
 CC testcases/kernel/syscalls/statmount/statmount02
-CC testcases/kernel/syscalls/statmount/statmount05
 CC testcases/kernel/syscalls/statmount/statmount04
 CC testcases/kernel/syscalls/statmount/statmount01
+CC testcases/kernel/syscalls/statmount/statmount05
 CC testcases/kernel/syscalls/statmount/statmount03
 CC testcases/kernel/syscalls/statmount/statmount07
-CC testcases/kernel/syscalls/statmount/statmount08
 CC testcases/kernel/syscalls/statmount/statmount09
+CC testcases/kernel/syscalls/statmount/statmount08
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -5470,17 +5470,17 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/statx/statx03
-CC testcases/kernel/syscalls/statx/statx02
 CC testcases/kernel/syscalls/statx/statx04
-CC testcases/kernel/syscalls/statx/statx05
 CC testcases/kernel/syscalls/statx/statx06
 CC testcases/kernel/syscalls/statx/statx01
+CC testcases/kernel/syscalls/statx/statx02
+CC testcases/kernel/syscalls/statx/statx05
 CC testcases/kernel/syscalls/statx/statx07
 CC testcases/kernel/syscalls/statx/statx08
 CC testcases/kernel/syscalls/statx/statx10
 CC testcases/kernel/syscalls/statx/statx11
-CC testcases/kernel/syscalls/statx/statx09
 CC testcases/kernel/syscalls/statx/statx12
+CC testcases/kernel/syscalls/statx/statx09
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -5494,8 +5494,8 @@ make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/string/string01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 BUILD libswap.a
-make[5]: Nothing to be done for 'all'.
 GEN ltp-version.h
+make[5]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/swapoff/swapoff01
@@ -5507,8 +5507,8 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/swapon/swapon01
-CC testcases/kernel/syscalls/swapon/swapon03
 CC testcases/kernel/syscalls/swapon/swapon02
+CC testcases/kernel/syscalls/swapon/swapon03
 CC testcases/kernel/syscalls/swapon/swapon04
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -5547,8 +5547,8 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/syscall/syscall01
 CC testcases/kernel/syscalls/syscall/syscall02
+CC testcases/kernel/syscalls/syscall/syscall01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -5565,10 +5565,10 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/sysfs/sysfs02
-CC testcases/kernel/syscalls/sysfs/sysfs03
 CC testcases/kernel/syscalls/sysfs/sysfs01
 CC testcases/kernel/syscalls/sysfs/sysfs04
+CC testcases/kernel/syscalls/sysfs/sysfs03
+CC testcases/kernel/syscalls/sysfs/sysfs02
 CC testcases/kernel/syscalls/sysfs/sysfs05
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -5619,15 +5619,15 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/timer_create/timer_create02
 CC testcases/kernel/syscalls/timer_create/timer_create03
+CC testcases/kernel/syscalls/timer_create/timer_create02
 CC testcases/kernel/syscalls/timer_create/timer_create01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/timer_delete/timer_delete02
 CC testcases/kernel/syscalls/timer_delete/timer_delete01
+CC testcases/kernel/syscalls/timer_delete/timer_delete02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -5663,12 +5663,12 @@ In file included from timerfd04.c:22:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-CC testcases/kernel/syscalls/timerfd/timerfd_create01
-CC testcases/kernel/syscalls/timerfd/timerfd_settime01
-CC testcases/kernel/syscalls/timerfd/timerfd_gettime01
 CC testcases/kernel/syscalls/timerfd/timerfd02
-CC testcases/kernel/syscalls/timerfd/timerfd04
+CC testcases/kernel/syscalls/timerfd/timerfd_create01
+CC testcases/kernel/syscalls/timerfd/timerfd_gettime01
+CC testcases/kernel/syscalls/timerfd/timerfd_settime01
 CC testcases/kernel/syscalls/timerfd/timerfd01
+CC testcases/kernel/syscalls/timerfd/timerfd04
 CC testcases/kernel/syscalls/timerfd/timerfd_settime02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -5707,9 +5707,9 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/umount/umount01
 CC testcases/kernel/syscalls/umount/umount03
 CC testcases/kernel/syscalls/umount/umount02
+CC testcases/kernel/syscalls/umount/umount01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
@@ -5727,9 +5727,9 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+CC testcases/kernel/syscalls/unlink/unlink07
 CC testcases/kernel/syscalls/unlink/unlink05
 CC testcases/kernel/syscalls/unlink/unlink10
-CC testcases/kernel/syscalls/unlink/unlink07
 CC testcases/kernel/syscalls/unlink/unlink08
 CC testcases/kernel/syscalls/unlink/unlink09
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
@@ -5741,6 +5741,20 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+In file included from unshare04.c:14:
+../../../../include/lapi/sched.h: In function 'ltp_clone3':
+../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
+../../../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                                                          ~~~~~~~^~~~
+../../../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                              ~~~~~~^~~~~~~~~~~
+../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                                                 ~~~~~~^~~
 In file included from unshare03.c:17:
 ../../../../include/lapi/sched.h: In function 'ltp_clone3':
 ../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
@@ -5769,50 +5783,36 @@ In file included from unshare05.c:14:
 ../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
    95 |                              int (*fn)(void *), void *arg)
       |                                                 ~~~~~~^~~
-In file included from unshare04.c:14:
-../../../../include/lapi/sched.h: In function 'ltp_clone3':
-../../../../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
-../../../../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
-   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
-      |                                                          ~~~~~~~^~~~
-../../../../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                              ~~~~~~^~~~~~~~~~~
-../../../../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
-   95 |                              int (*fn)(void *), void *arg)
-      |                                                 ~~~~~~^~~
 CC testcases/kernel/syscalls/unshare/unshare01
 CC testcases/kernel/syscalls/unshare/unshare02
 CC testcases/kernel/syscalls/unshare/unshare05
-CC testcases/kernel/syscalls/unshare/unshare03
 CC testcases/kernel/syscalls/unshare/unshare04
+CC testcases/kernel/syscalls/unshare/unshare03
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/userfaultfd/userfaultfd02
 CC testcases/kernel/syscalls/userfaultfd/userfaultfd03
-CC testcases/kernel/syscalls/userfaultfd/userfaultfd04
 CC testcases/kernel/syscalls/userfaultfd/userfaultfd01
+CC testcases/kernel/syscalls/userfaultfd/userfaultfd02
 CC testcases/kernel/syscalls/userfaultfd/userfaultfd05
+CC testcases/kernel/syscalls/userfaultfd/userfaultfd04
 CC testcases/kernel/syscalls/userfaultfd/userfaultfd06
 CC testcases/kernel/syscalls/userfaultfd/userfaultfd07
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/ustat/ustat02
 CC testcases/kernel/syscalls/ustat/ustat01
+CC testcases/kernel/syscalls/ustat/ustat02
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
+CC testcases/kernel/syscalls/utime/utime06
 CC testcases/kernel/syscalls/utime/utime05
 CC testcases/kernel/syscalls/utime/utime04
 CC testcases/kernel/syscalls/utime/utime01
-CC testcases/kernel/syscalls/utime/utime06
 CC testcases/kernel/syscalls/utime/utime03
 CC testcases/kernel/syscalls/utime/utime02
 CC testcases/kernel/syscalls/utime/utime07
@@ -5842,9 +5842,9 @@ make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
-CC testcases/kernel/syscalls/vmsplice/vmsplice02
 CC testcases/kernel/syscalls/vmsplice/vmsplice03
 CC testcases/kernel/syscalls/vmsplice/vmsplice04
+CC testcases/kernel/syscalls/vmsplice/vmsplice02
 CC testcases/kernel/syscalls/vmsplice/vmsplice01
 make -C "/root/ltp/lib" -f "/root/ltp/lib/Makefile" all
 GEN ltp-version.h
@@ -5864,22 +5864,22 @@ GEN ltp-version.h
 make[6]: Nothing to be done for 'all'.
 make[6]: Nothing to be done for 'all'.
 CC testcases/kernel/syscalls/waitid/waitid03
-CC testcases/kernel/syscalls/waitid/waitid02
 CC testcases/kernel/syscalls/waitid/waitid04
 CC testcases/kernel/syscalls/waitid/waitid01
-CC testcases/kernel/syscalls/waitid/waitid06
+CC testcases/kernel/syscalls/waitid/waitid02
 CC testcases/kernel/syscalls/waitid/waitid05
+CC testcases/kernel/syscalls/waitid/waitid06
 CC testcases/kernel/syscalls/waitid/waitid09
 CC testcases/kernel/syscalls/waitid/waitid07
 /usr/bin/ld: final link failed: No space left on device
 collect2: error: ld returned 1 exit status
 make[4]: *** [../../../../include/mk/rules.mk:48: waitid08] Error 1
 make[4]: *** Waiting for unfinished jobs....
-/usr/bin/ld: final link failed: No space left on device
+/usr/bin/ld: final link failed: No space left on device/usr/bin/ld
+: final link failed: No space left on device
+collect2: error: ld returned 1 exit status
 collect2: error: ld returned 1 exit status
 make[4]: *** [../../../../include/mk/rules.mk:48: waitid11] Error 1
-/usr/bin/ld: final link failed: No space left on device
-collect2: error: ld returned 1 exit status
 make[4]: *** [../../../../include/mk/rules.mk:48: waitid10] Error 1
 make[3]: *** [../../../include/mk/generic_trunk_target.inc:92: all] Error 2
 make[2]: *** [../../include/mk/generic_trunk_target.inc:92: all] Error 2

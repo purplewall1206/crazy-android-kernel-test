@@ -1,0 +1,991 @@
+[    0.000000] Linux version 6.18.32-gd15d7449f4ab-dirty (ppw@vm) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #168 SMP PREEMPT_DYNAMIC Fri Oct  9 04:39:14 CST 2026
+[    0.000000] Command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M corten=on corten_mode_default=on
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x00000000bffdcfff] usable
+[    0.000000] BIOS-e820: [mem 0x00000000bffdd000-0x00000000bfffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000feffc000-0x00000000feffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000100000000-0x000000013fffffff] usable
+[    0.000000] NX (Execute Disable) protection: active
+[    0.000000] APIC: Static calls initialized
+[    0.000000] SMBIOS 2.8 present.
+[    0.000000] DMI: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[    0.000000] DMI: Memory slots populated: 1/1
+[    0.000000] Hypervisor detected: KVM
+[    0.000000] last_pfn = 0xbffdd max_arch_pfn = 0x400000000
+[    0.000000] kvm-clock: Using msrs 4b564d01 and 4b564d00
+[    0.000001] kvm-clock: using sched offset of 2123330234 cycles
+[    0.000003] clocksource: kvm-clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+[    0.000042] tsc: Detected 2419.198 MHz processor
+[    0.001623] last_pfn = 0x140000 max_arch_pfn = 0x400000000
+[    0.001803] MTRR map: 4 entries (3 fixed + 1 variable; max 19), built from 8 variable MTRRs
+[    0.001811] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+[    0.002038] last_pfn = 0xbffdd max_arch_pfn = 0x400000000
+[    0.013819] found SMP MP-table at [mem 0x000f5b90-0x000f5b9f]
+[    0.014119] Using GB pages for direct mapping
+[    0.422240] printk: log buffer data + meta data: 16777216 + 58720256 = 75497472 bytes
+[    0.422243] printk: early log buf free: 260024(99%)
+[    0.422305] ACPI: Early table checksum verification disabled
+[    0.422352] ACPI: RSDP 0x00000000000F59B0 000014 (v00 BOCHS )
+[    0.422403] ACPI: RSDT 0x00000000BFFE1B9C 000034 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.422427] ACPI: FACP 0x00000000BFFE1A18 000074 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.422461] ACPI: DSDT 0x00000000BFFE0040 0019D8 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.422469] ACPI: FACS 0x00000000BFFE0000 000040
+[    0.422471] ACPI: APIC 0x00000000BFFE1A8C 0000B0 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.422473] ACPI: HPET 0x00000000BFFE1B3C 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.422474] ACPI: WAET 0x00000000BFFE1B74 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.422476] ACPI: Reserving FACP table memory at [mem 0xbffe1a18-0xbffe1a8b]
+[    0.422477] ACPI: Reserving DSDT table memory at [mem 0xbffe0040-0xbffe1a17]
+[    0.422478] ACPI: Reserving FACS table memory at [mem 0xbffe0000-0xbffe003f]
+[    0.422478] ACPI: Reserving APIC table memory at [mem 0xbffe1a8c-0xbffe1b3b]
+[    0.422479] ACPI: Reserving HPET table memory at [mem 0xbffe1b3c-0xbffe1b73]
+[    0.422479] ACPI: Reserving WAET table memory at [mem 0xbffe1b74-0xbffe1b9b]
+[    0.424298] No NUMA configuration found
+[    0.424300] Faking a node at [mem 0x0000000000000000-0x000000013fffffff]
+[    0.424304] NODE_DATA(0) allocated [mem 0x13b7fc140-0x13b7fffff]
+[    0.425114] Zone ranges:
+[    0.425115]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+[    0.425117]   DMA32    [mem 0x0000000001000000-0x00000000ffffffff]
+[    0.425118]   Normal   [mem 0x0000000100000000-0x000000013fffffff]
+[    0.425119] Movable zone start for each node
+[    0.425119] Early memory node ranges
+[    0.425120]   node   0: [mem 0x0000000000001000-0x000000000009efff]
+[    0.425121]   node   0: [mem 0x0000000000100000-0x00000000bffdcfff]
+[    0.425122]   node   0: [mem 0x0000000100000000-0x000000013fffffff]
+[    0.425123] Initmem setup node 0 [mem 0x0000000000001000-0x000000013fffffff]
+[    0.425848] On node 0, zone DMA: 1 pages in unavailable ranges
+[    0.426220] On node 0, zone DMA: 97 pages in unavailable ranges
+[    0.765171] On node 0, zone Normal: 35 pages in unavailable ranges
+[    0.767149] ACPI: PM-Timer IO Port: 0x608
+[    0.767247] ACPI: LAPIC_NMI (acpi_id[0xff] dfl dfl lint[0x1])
+[    0.769498] IOAPIC[0]: apic_id 0, version 17, address 0xfec00000, GSI 0-23
+[    0.769527] ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+[    0.769533] ACPI: INT_SRC_OVR (bus 0 bus_irq 5 global_irq 5 high level)
+[    0.769537] ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+[    0.769574] ACPI: INT_SRC_OVR (bus 0 bus_irq 10 global_irq 10 high level)
+[    0.769578] ACPI: INT_SRC_OVR (bus 0 bus_irq 11 global_irq 11 high level)
+[    0.769589] ACPI: Using ACPI (MADT) for SMP configuration information
+[    0.769592] ACPI: HPET id: 0x8086a201 base: 0xfed00000
+[    0.769605] TSC deadline timer available
+[    0.769618] CPU topo: Max. logical packages:   1
+[    0.769620] CPU topo: Max. logical dies:       1
+[    0.769621] CPU topo: Max. dies per package:   1
+[    0.769631] CPU topo: Max. threads per core:   1
+[    0.769655] CPU topo: Num. cores per package:     8
+[    0.769657] CPU topo: Num. threads per package:   8
+[    0.769658] CPU topo: Allowing 8 present CPUs plus 0 hotplug CPUs
+[    0.769775] kvm-guest: APIC: eoi() replaced with kvm_guest_apic_eoi_write()
+[    0.769918] kvm-guest: KVM setup pv remote TLB flush
+[    0.770165] kvm-guest: setup PV sched yield
+[    0.771467] PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+[    0.771475] PM: hibernation: Registered nosave memory: [mem 0x0009f000-0x000fffff]
+[    0.771479] PM: hibernation: Registered nosave memory: [mem 0xbffdd000-0xffffffff]
+[    0.771483] [mem 0xc0000000-0xfeffbfff] available for PCI devices
+[    0.771486] Booting paravirtualized kernel on KVM
+[    0.771529] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1910969940391419 ns
+[    0.796859] setup_percpu: NR_CPUS:64 nr_cpumask_bits:8 nr_cpu_ids:8 nr_node_ids:1
+[    0.808074] percpu: Embedded 54 pages/cpu s182680 r8192 d30312 u262144
+[    0.808285] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M corten=on corten_mode_default=on
+[    0.809211] corten: requested on, activating at initcall time
+[    0.809217] corten: execve default entry enabled
+[    0.809269] random: crng init done
+[    0.827003] Dentry cache hash table entries: 524288 (order: 10, 4194304 bytes, linear)
+[    0.835823] Inode-cache hash table entries: 262144 (order: 9, 2097152 bytes, linear)
+[    0.837530] software IO TLB: area num 8.
+[    1.216408] Fallback order for Node 0: 0 
+[    1.216457] Built 1 zonelists, mobility grouping on.  Total pages: 1048443
+[    1.216462] Policy zone: Normal
+[    1.216468] mem auto-init: stack:off, heap alloc:off, heap free:off
+[    1.239448] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=8, Nodes=1
+[    1.255369] Dynamic Preempt: voluntary
+[    1.257202] rcu: Preemptible hierarchical RCU implementation.
+[    1.257206] rcu: 	RCU event tracing is enabled.
+[    1.257208] rcu: 	RCU restricting CPUs from NR_CPUS=64 to nr_cpu_ids=8.
+[    1.257214] 	Trampoline variant of Tasks RCU enabled.
+[    1.257215] 	Tracing variant of Tasks RCU enabled.
+[    1.257217] rcu: RCU calculated value of scheduler-enlistment delay is 100 jiffies.
+[    1.257219] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=8
+[    1.257373] RCU Tasks: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+[    1.257379] RCU Tasks Trace: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+[    1.269492] NR_IRQS: 4352, nr_irqs: 488, preallocated irqs: 16
+[    1.270318] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    1.339187] Console: colour VGA+ 80x25
+[    1.339727] printk: legacy console [ttyS0] enabled
+[    1.990283] ACPI: Core revision 20250807
+[    1.998896] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    2.007801] APIC: Switch to symmetric I/O mode setup
+[    2.021742] x2apic enabled
+[    2.033184] APIC: Switched APIC routing to: physical x2apic
+[    2.039541] kvm-guest: APIC: send_IPI_mask() replaced with kvm_send_ipi_mask()
+[    2.043202] kvm-guest: APIC: send_IPI_mask_allbutself() replaced with kvm_send_ipi_mask_allbutself()
+[    2.050907] kvm-guest: setup PV IPIs
+[    2.077976] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    2.086854] clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x22df0f35937, max_idle_ns: 440795269039 ns
+[    2.102857] Calibrating delay loop (skipped) preset value.. 4838.39 BogoMIPS (lpj=2419198)
+[    2.106744] x86/cpu: User Mode Instruction Prevention (UMIP) activated
+[    2.107947] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    2.109853] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    2.111160] mitigations: Enabled attack vectors: SMT mitigations: off
+[    2.111962] Speculative Store Bypass: Vulnerable
+[    2.112852] Spectre V2 : Vulnerable
+[    2.113860] ITS: Vulnerable
+[    2.114860] Spectre V1 : Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers
+[    2.116333] x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'
+[    2.116860] x86/fpu: Supporting XSAVE feature 0x002: 'SSE registers'
+[    2.117860] x86/fpu: Supporting XSAVE feature 0x004: 'AVX registers'
+[    2.118852] x86/fpu: Supporting XSAVE feature 0x200: 'Protection Keys User registers'
+[    2.119863] x86/fpu: xstate_offset[2]:  576, xstate_sizes[2]:  256
+[    2.120861] x86/fpu: xstate_offset[9]:  832, xstate_sizes[9]:    8
+[    2.121857] x86/fpu: Enabled xstate features 0x207, context size is 840 bytes, using 'compacted' format.
+[    2.221639] Freeing SMP alternatives memory: 64K
+[    2.221866] pid_max: default: 32768 minimum: 301
+[    2.223090] LSM: initializing lsm=capability,selinux
+[    2.223870] SELinux:  Initializing.
+[    2.227076] Mount-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    2.228099] Mountpoint-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    2.230816] smpboot: CPU0: 13th Gen Intel(R) Core(TM) i9-13900HX (family: 0x6, model: 0xb7, stepping: 0x1)
+[    2.232416] Performance Events: Alderlake Hybrid events, core PMU driver.
+[    2.233905] core: CPUID marked event: 'cpu cycles' unavailable
+[    2.234893] core: CPUID marked event: 'instructions' unavailable
+[    2.235893] core: CPUID marked event: 'bus cycles' unavailable
+[    2.236889] core: CPUID marked event: 'cache references' unavailable
+[    2.237866] core: CPUID marked event: 'cache misses' unavailable
+[    2.238900] core: CPUID marked event: 'branch instructions' unavailable
+[    2.239863] core: CPUID marked event: 'branch misses' unavailable
+[    2.241061] core: The event 0x100 is not supported as a normal event.
+[    2.241900] core: The event 0x300 is not supported as a normal event.
+[    2.242983] core: The event 0x400 is not supported as a normal event.
+[    2.243866] core: The event 0x8000 is not supported as a normal event.
+[    2.244864] core: The event 0x8100 is not supported as a normal event.
+[    2.245900] core: The event 0x8200 is not supported as a normal event.
+[    2.246895] core: The event 0x8300 is not supported as a normal event.
+[    2.247862] core: The event 0x8400 is not supported as a normal event.
+[    2.248862] core: The event 0x8500 is not supported as a normal event.
+[    2.249864] core: The event 0x8600 is not supported as a normal event.
+[    2.250892] core: The event 0x8700 is not supported as a normal event.
+[    2.252001] core: cpu_core PMU driver: 
+[    2.252893] ... version:                   1
+[    2.253898] ... bit width:                 48
+[    2.254863] ... generic counters:          6
+[    2.255897] ... generic bitmap:            000000000000003f
+[    2.256894] ... fixed-purpose counters:    0
+[    2.257903] ... fixed-purpose bitmap:      0000000000000000
+[    2.258901] ... value mask:                0000ffffffffffff
+[    2.259900] ... max period:                000000007fffffff
+[    2.260902] ... global_ctrl mask:          000100000000003f
+[    2.262739] signal: max sigframe size: 3632
+[    2.262958] rcu: Hierarchical SRCU implementation.
+[    2.263865] rcu: 	Max phase no-delay instances is 400.
+[    2.265699] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+[    2.267848] corten: page descriptors enabled
+[    2.269065] smp: Bringing up secondary CPUs ...
+[    2.271408] smpboot: x86: Booting SMP configuration:
+[    2.271911] .... node  #0, CPUs:      #1 #2 #3 #4 #5 #6 #7
+[    2.317848] smp: Brought up 1 node, 8 CPUs
+[    2.318895] smpboot: Total of 8 processors activated (38707.16 BogoMIPS)
+[    2.324122] Memory: 3926624K/4193772K available (21762K kernel code, 3206K rwdata, 9220K rodata, 3288K init, 1128K bss, 261308K reserved, 0K cma-reserved)
+[    2.326900] devtmpfs: initialized
+[    2.331651] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+[    2.339075] posixtimers hash table entries: 4096 (order: 4, 65536 bytes, linear)
+[    2.346613] futex hash table entries: 2048 (131072 bytes on 1 NUMA nodes, total 128 KiB, linear).
+[    2.353848] PM: RTC time: 20:41:07, date: 2026-10-08
+[    2.363982] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    2.367499] audit: initializing netlink subsys (disabled)
+[    2.371951] audit: type=2000 audit(1791492067.467:1): state=initialized audit_enabled=0 res=1
+[    2.372524] thermal_sys: Registered thermal governor 'step_wise'
+[    2.378928] cpuidle: using governor menu
+[    2.388104] PCI: Using configuration type 1 for base access
+[    2.394139] kprobes: kprobe jump-optimization is enabled. All kprobes are optimized if possible.
+[    2.402478] HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+[    2.404898] HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+[    2.459949] ACPI: Added _OSI(Module Device)
+[    2.462899] ACPI: Added _OSI(Processor Device)
+[    2.465898] ACPI: Added _OSI(Processor Aggregator Device)
+[    2.470848] ACPI: 1 ACPI AML tables successfully acquired and loaded
+[    2.486000] ACPI: Interpreter enabled
+[    2.489096] ACPI: PM: (supports S0 S3 S4 S5)
+[    2.490937] ACPI: Using IOAPIC for interrupt routing
+[    2.494465] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[    2.501911] PCI: Using E820 reservations for host bridge windows
+[    2.508291] ACPI: Enabled 2 GPEs in block 00 to 0F
+[    2.521848] ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-ff])
+[    2.526279] acpi PNP0A03:00: _OSC: OS supports [ASPM ClockPM Segments MSI HPX-Type3]
+[    2.529869] acpi PNP0A03:00: _OSC: not requesting OS control; OS requires [ExtendedConfig ASPM ClockPM MSI]
+[    2.537931] acpi PNP0A03:00: fail to add MMCONFIG information, can't access extended configuration space under this bridge
+[    2.549342] PCI host bridge to bus 0000:00
+[    2.555908] pci_bus 0000:00: root bus resource [io  0x0000-0x0cf7 window]
+[    2.561917] pci_bus 0000:00: root bus resource [io  0x0d00-0xffff window]
+[    2.566902] pci_bus 0000:00: root bus resource [mem 0x000a0000-0x000bffff window]
+[    2.575863] pci_bus 0000:00: root bus resource [mem 0xc0000000-0xfebfffff window]
+[    2.583896] pci_bus 0000:00: root bus resource [mem 0x140000000-0x1bfffffff window]
+[    2.589906] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    2.599949] pci 0000:00:00.0: [8086:1237] type 00 class 0x060000 conventional PCI endpoint
+[    2.609848] pci 0000:00:01.0: [8086:7000] type 00 class 0x060100 conventional PCI endpoint
+[    2.617848] pci 0000:00:01.1: [8086:7010] type 00 class 0x010180 conventional PCI endpoint
+[    2.629897] pci 0000:00:01.1: BAR 4 [io  0xc0a0-0xc0af]
+[    2.634975] pci 0000:00:01.1: BAR 0 [io  0x01f0-0x01f7]: legacy IDE quirk
+[    2.640902] pci 0000:00:01.1: BAR 1 [io  0x03f6]: legacy IDE quirk
+[    2.644863] pci 0000:00:01.1: BAR 2 [io  0x0170-0x0177]: legacy IDE quirk
+[    2.647900] pci 0000:00:01.1: BAR 3 [io  0x0376]: legacy IDE quirk
+[    2.653848] pci 0000:00:01.3: [8086:7113] type 00 class 0x068000 conventional PCI endpoint
+[    2.661329] pci 0000:00:01.3: quirk: [io  0x0600-0x063f] claimed by PIIX4 ACPI
+[    2.665989] pci 0000:00:01.3: quirk: [io  0x0700-0x070f] claimed by PIIX4 SMB
+[    2.674295] pci 0000:00:01.3: quirk_piix4_acpi+0x0/0x170 took 12695 usecs
+[    2.683249] pci 0000:00:02.0: [1234:1111] type 00 class 0x030000 conventional PCI endpoint
+[    2.703956] pci 0000:00:02.0: BAR 0 [mem 0xfd000000-0xfdffffff pref]
+[    2.708168] pci 0000:00:02.0: BAR 2 [mem 0xfeb90000-0xfeb90fff]
+[    2.712543] pci 0000:00:02.0: ROM [mem 0xfeb80000-0xfeb8ffff pref]
+[    2.720561] pci 0000:00:02.0: Video device with shadowed ROM at [mem 0x000c0000-0x000dffff]
+[    2.737848] pci 0000:00:03.0: [1af4:1000] type 00 class 0x020000 conventional PCI endpoint
+[    2.752955] pci 0000:00:03.0: BAR 0 [io  0xc080-0xc09f]
+[    2.754890] pci 0000:00:03.0: BAR 1 [mem 0xfeb91000-0xfeb91fff]
+[    2.758104] pci 0000:00:03.0: BAR 4 [mem 0xfe000000-0xfe003fff 64bit pref]
+[    2.764990] pci 0000:00:03.0: ROM [mem 0xfeb00000-0xfeb7ffff pref]
+[    2.774848] pci 0000:00:04.0: [1af4:1001] type 00 class 0x010000 conventional PCI endpoint
+[    2.784895] pci 0000:00:04.0: BAR 0 [io  0xc000-0xc07f]
+[    2.788892] pci 0000:00:04.0: BAR 1 [mem 0xfeb92000-0xfeb92fff]
+[    2.792957] pci 0000:00:04.0: BAR 4 [mem 0xfe004000-0xfe007fff 64bit pref]
+[    2.814642] ACPI: PCI: Interrupt link LNKA configured for IRQ 10
+[    2.820588] ACPI: PCI: Interrupt link LNKB configured for IRQ 10
+[    2.825583] ACPI: PCI: Interrupt link LNKC configured for IRQ 11
+[    2.831055] ACPI: PCI: Interrupt link LNKD configured for IRQ 11
+[    2.835427] ACPI: PCI: Interrupt link LNKS configured for IRQ 9
+[    2.852510] iommu: Default domain type: Translated
+[    2.857898] iommu: DMA domain TLB invalidation policy: lazy mode
+[    2.873593] SCSI subsystem initialized
+[    2.883690] ACPI: bus type USB registered
+[    2.890106] usbcore: registered new interface driver usbfs
+[    2.897133] usbcore: registered new interface driver hub
+[    2.901096] usbcore: registered new device driver usb
+[    2.904980] pps_core: LinuxPPS API ver. 1 registered
+[    2.908862] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    2.914929] PTP clock support registered
+[    2.922210] Advanced Linux Sound Architecture Driver Initialized.
+[    2.932497] NetLabel: Initializing
+[    2.936983] NetLabel:  domain hash size = 128
+[    2.943909] NetLabel:  protocols = UNLABELED CIPSOv4 CALIPSO
+[    2.953633] NetLabel:  unlabeled traffic allowed by default
+[    2.960489] PCI: Using ACPI for IRQ routing
+[    2.968297] pci 0000:00:02.0: vgaarb: setting as boot VGA device
+[    2.968848] pci 0000:00:02.0: vgaarb: bridge control possible
+[    2.968848] pci 0000:00:02.0: vgaarb: VGA device added: decodes=io+mem,owns=io+mem,locks=none
+[    2.985901] vgaarb: loaded
+[    2.988498] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+[    2.992896] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+[    3.005053] clocksource: Switched to clocksource kvm-clock
+[    3.030677] VFS: Disk quotas dquot_6.6.0
+[    3.035689] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    3.050367] pnp: PnP ACPI init
+[    3.058308] pnp: PnP ACPI: found 6 devices
+[    3.125261] kwatchdog (73) used greatest stack depth: 15624 bytes left
+[    3.173698] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+[    3.185688] NET: Registered PF_INET protocol family
+[    3.195216] IP idents hash table entries: 65536 (order: 7, 524288 bytes, linear)
+[    3.209847] tcp_listen_portaddr_hash hash table entries: 2048 (order: 3, 32768 bytes, linear)
+[    3.220217] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    3.230159] TCP established hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[    3.246176] TCP bind hash table entries: 32768 (order: 8, 1048576 bytes, linear)
+[    3.260981] TCP: Hash tables configured (established 32768 bind 32768)
+[    3.274397] UDP hash table entries: 2048 (order: 5, 131072 bytes, linear)
+[    3.282951] UDP-Lite hash table entries: 2048 (order: 5, 131072 bytes, linear)
+[    3.304622] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    3.320984] RPC: Registered named UNIX socket transport module.
+[    3.329421] RPC: Registered udp transport module.
+[    3.335356] RPC: Registered tcp transport module.
+[    3.341056] RPC: Registered tcp-with-tls transport module.
+[    3.347989] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    3.363097] pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+[    3.372071] pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+[    3.380980] pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000bffff window]
+[    3.390167] pci_bus 0000:00: resource 7 [mem 0xc0000000-0xfebfffff window]
+[    3.399710] pci_bus 0000:00: resource 8 [mem 0x140000000-0x1bfffffff window]
+[    3.410004] pci 0000:00:01.0: PIIX3: Enabling Passive Release
+[    3.417320] pci 0000:00:00.0: Limiting direct PCI/PCI transfers
+[    3.425612] PCI: CLS 0 bytes, default 64
+[    3.431120] PCI-DMA: Using software bounce buffering for IO (SWIOTLB)
+[    3.434733] software IO TLB: mapped [mem 0x00000000bbfdd000-0x00000000bffdd000] (64MB)
+[    3.447304] RAPL PMU: API unit is 2^-32 Joules, 0 fixed counters, 10737418240 ms ovfl timer
+[    3.461946] clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x22df0f35937, max_idle_ns: 440795269039 ns
+[    3.486629] Initialise system trusted keyrings
+[    3.492728] workingset: timestamp_bits=40 max_order=20 bucket_order=0
+[    3.505263] NFS: Registering the id_resolver key type
+[    3.512848] Key type id_resolver registered
+[    3.518560] Key type id_legacy registered
+[    3.524352] 9p: Installing v9fs 9p2000 file system support
+[    3.575934] Key type asymmetric registered
+[    3.580492] Asymmetric key parser 'x509' registered
+[    3.586049] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 251)
+[    3.596204] io scheduler mq-deadline registered
+[    3.602262] io scheduler kyber registered
+[    3.614965] input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input0
+[    3.625901] ACPI: button: Power Button [PWRF]
+[    3.684796] ACPI: \_SB_.LNKC: Enabled at IRQ 11
+[    3.750832] ACPI: \_SB_.LNKD: Enabled at IRQ 10
+[    3.767413] Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled
+[    3.780391] 00:04: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+[    3.798744] Non-volatile memory driver v1.3
+[    3.804158] Linux agpgart interface v0.103
+[    3.871431] ACPI: bus type drm_connector registered
+[    3.927840] loop: module loaded
+[    3.930826] virtio_blk virtio1: 8/0/0 default/read/poll queues
+[    3.979908] virtio_blk virtio1: [vda] 20971520 512-byte logical blocks (10.7 GB/10.0 GiB)
+[    4.002737] zram: Added device: zram0
+[    4.021704] scsi host0: ata_piix
+[    4.029091] scsi host1: ata_piix
+[    4.035779] ata1: PATA max MWDMA2 cmd 0x1f0 ctl 0x3f6 bmdma 0xc0a0 irq 14 lpm-pol 0
+[    4.042725] ata2: PATA max MWDMA2 cmd 0x170 ctl 0x376 bmdma 0xc0a8 irq 15 lpm-pol 0
+[    4.053121] tun: Universal TUN/TAP device driver, 1.6
+[    4.079815] e100: Intel(R) PRO/100 Network Driver
+[    4.085011] e100: Copyright(c) 1999-2006 Intel Corporation
+[    4.091257] e1000: Intel(R) PRO/1000 Network Driver
+[    4.097804] e1000: Copyright (c) 1999-2006 Intel Corporation.
+[    4.104780] e1000e: Intel(R) PRO/1000 Network Driver
+[    4.110976] e1000e: Copyright(c) 1999 - 2015 Intel Corporation.
+[    4.117659] sky2: driver version 1.30
+[    4.124284] usbcore: registered new interface driver usblp
+[    4.130233] usbcore: registered new interface driver usb-storage
+[    4.138761] i8042: PNP: PS/2 Controller [PNP0303:KBD,PNP0f13:MOU] at 0x60,0x64 irq 1,12
+[    4.157188] serio: i8042 KBD port at 0x60,0x64 irq 1
+[    4.162757] serio: i8042 AUX port at 0x60,0x64 irq 12
+[    4.172895] rtc_cmos 00:05: RTC can wake from S4
+[    4.176995] input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input1
+[    4.189162] rtc_cmos 00:05: registered as rtc0
+[    4.195333] rtc_cmos 00:05: alarms up to one day, y3k, 242 bytes nvram, hpet irqs
+[    4.209065] device-mapper: ioctl: 4.50.0-ioctl (2025-04-28) initialised: dm-devel@lists.linux.dev
+[    4.229787] intel_pstate: CPU model not supported
+[    4.230196] ata2: found unknown device (class 0)
+[    4.238743] hid: raw HID events driver (C) Jiri Kosina
+[    4.254281] ata2.00: ATAPI: QEMU DVD-ROM, 2.5+, max UDMA/100
+[    4.254436] usbcore: registered new interface driver usbhid
+[    4.273557] usbhid: USB HID core driver
+[    4.281185] scsi 1:0:0:0: CD-ROM            QEMU     QEMU DVD-ROM     2.5+ PQ: 0 ANSI: 5
+[    4.295870] xt_time: kernel timezone is -0000
+[    4.304154] Initializing XFRM netlink socket
+[    4.311453] NET: Registered PF_INET6 protocol family
+[    4.327469] Segment Routing with IPv6
+[    4.328326] In-situ OAM (IOAM) with IPv6
+[    4.332096] sit: IPv6, IPv4 and MPLS over IPv4 tunneling driver
+[    4.344486] NET: Registered PF_PACKET protocol family
+[    4.350655] NET: Registered PF_KEY protocol family
+[    4.357312] 9pnet: Installing 9P2000 support
+[    4.362193] Key type dns_resolver registered
+[    4.363839] sr 1:0:0:0: [sr0] scsi3-mmc drive: 4x/4x cd/rw xa/form2 tray
+[    4.370097] NET: Registered PF_VSOCK protocol family
+[    4.376451] cdrom: Uniform CD-ROM driver Revision: 3.20
+[    4.391895] IPI shorthand broadcast: enabled
+[    4.408317] sr 1:0:0:0: Attached scsi generic sg0 type 5
+[    4.413242] sched_clock: Marking stable (3597315905, 815488065)->(5368440070, -955636100)
+[    4.427010] registered taskstats version 1
+[    4.428523] Loading compiled-in X.509 certificates
+[    4.450195] Demotion targets for Node 0: null
+[    4.455308] Key type .fscrypt registered
+[    4.460257] Key type fscrypt-provisioning registered
+[    4.468706] PM:   Magic number: 14:879:699
+[    4.473039] netconsole: network logging started
+[    4.479499] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    4.495306] kworker/u32:1 (99) used greatest stack depth: 14272 bytes left
+[    4.502822] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    4.511262] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    4.521886] faux_driver regulatory: Direct firmware load for regulatory.db failed with error -2
+[    4.522905] ALSA device list:
+[    4.531304] cfg80211: failed to load regulatory.db
+[    4.532689]   No soundcards found.
+[    4.532758] kunit: disabled
+[    4.548859] check access for rdinit=/init failed: -2, ignoring
+[    4.754574] input: ImExPS/2 Generic Explorer Mouse as /devices/platform/i8042/serio1/input/input3
+[    4.768314] md: Waiting for all devices to be available before autodetect
+[    4.773516] md: If you don't use raid, use raid=noautodetect
+[    4.777697] md: Autodetecting RAID arrays.
+[    4.780680] md: autorun ...
+[    4.783117] md: ... autorun DONE.
+[    4.973324] EXT4-fs (vda): recovery complete
+[    4.980322] EXT4-fs (vda): mounted filesystem 56b1695a-8891-40bd-bc42-c7c8a70fe76d r/w with ordered data mode. Quota mode: none.
+[    4.988906] VFS: Mounted root (ext4 filesystem) on device 253:0.
+[    5.001396] devtmpfs: mounted
+[    5.034817] Freeing unused kernel image (initmem) memory: 3288K
+[    5.047671] Write protecting the kernel read-only data: 32768k
+[    5.096171] Freeing unused kernel image (text/rodata gap) memory: 764K
+[    5.109640] Freeing unused kernel image (rodata/data gap) memory: 1020K
+[    5.146363] x86/mm: Checked W+X mappings: passed, no W+X pages found.
+[    5.152982] Run /sbin/init as init process
+[    5.204455] corten-dbg: late stage OK entry=55fb11b028d0 interp_load=100000000000
+[    6.064174] SELinux:  Permission firmware_load in class system not defined in policy.
+[    6.070885] SELinux:  Permission kexec_image_load in class system not defined in policy.
+[    6.076822] SELinux:  Permission kexec_initramfs_load in class system not defined in policy.
+[    6.081697] SELinux:  Permission policy_load in class system not defined in policy.
+[    6.085800] SELinux:  Permission x509_certificate_load in class system not defined in policy.
+[    6.092185] SELinux:  Permission watch_mountns in class file not defined in policy.
+[    6.097113] SELinux:  Permission watch_mountns in class dir not defined in policy.
+[    6.102495] SELinux:  Permission watch_mountns in class lnk_file not defined in policy.
+[    6.107725] SELinux:  Permission watch_mountns in class chr_file not defined in policy.
+[    6.112467] SELinux:  Permission watch_mountns in class blk_file not defined in policy.
+[    6.115169] SELinux:  Permission watch_mountns in class sock_file not defined in policy.
+[    6.120620] SELinux:  Permission watch_mountns in class fifo_file not defined in policy.
+[    6.126935] SELinux:  Permission watch_mountns in class anon_inode not defined in policy.
+[    6.133053] SELinux:  Permission allowed in class io_uring not defined in policy.
+[    6.139563] SELinux:  Class memfd_file not defined in policy.
+[    6.145430] SELinux: the above unknown classes and permissions will be allowed
+[    6.182991] SELinux:  policy capability network_peer_controls=1
+[    6.186820] SELinux:  policy capability open_perms=1
+[    6.191316] SELinux:  policy capability extended_socket_class=1
+[    6.196184] SELinux:  policy capability always_check_network=0
+[    6.200519] SELinux:  policy capability cgroup_seclabel=1
+[    6.203820] SELinux:  policy capability nnp_nosuid_transition=1
+[    6.209462] SELinux:  policy capability genfs_seclabel_symlinks=0
+[    6.212464] SELinux:  policy capability ioctl_skip_cloexec=0
+[    6.215492] SELinux:  policy capability userspace_initial_context=0
+[    6.217794] SELinux:  policy capability netlink_xperm=0
+[    6.222305] SELinux:  policy capability netif_wildcard=0
+[    6.226269] SELinux:  policy capability genfs_seclabel_wildcard=0
+[    6.230263] SELinux:  policy capability functionfs_seclabel=0
+[    6.234254] SELinux:  policy capability memfd_class=0
+[    6.243801] audit: type=1403 audit(1791492071.336:2): auid=4294967295 ses=4294967295 lsm=selinux res=1
+[    6.247312] systemd[1]: Successfully loaded SELinux policy in 739.787ms.
+[    6.286022] ext4lazyinit (106) used greatest stack depth: 14080 bytes left
+[    8.010097] corten-dbg: late stage OK entry=560da0163d20 interp_load=100000000000
+[    8.042186] modprobe (107) used greatest stack depth: 12784 bytes left
+[    8.057203] systemd[1]: Relabeled /dev/, /dev/shm/, /run/ in 13.861ms.
+[!p]104[?7h[    8.088273] systemd[1]: systemd 257.13-1~deb13u1 running in system mode (+PAM +AUDIT +SELINUX +APPARMOR +IMA +IPE +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBCRYPTSETUP_PLUGINS +LIBFDISK +PCRE2 +PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD +BPF_FRAMEWORK +BTF -XKBCOMMON -UTMP +SYSVINIT +LIBARCHIVE)
+[    8.110485] systemd[1]: Detected virtualization kvm.
+[    8.114318] systemd[1]: Detected architecture x86-64.
+
+[0;1;39mWelcome to [0m[1mDebian GNU/Linux 13 (trixie)[0m[0;1;39m![0m
+
+[    8.129836] systemd[1]: Hostname set to <syzkaller>.
+[    8.352349] systemd[1]: bpf-restrict-fs: BPF LSM hook not enabled in the kernel, BPF LSM not supported.
+[    8.393332] corten-dbg: late stage OK entry=55a4ba701280 interp_load=100000000000
+[    8.397197] corten-dbg: late stage OK entry=5593ee671930 interp_load=100000000000
+[    8.400819] corten-dbg: late stage OK entry=5591f58ae940 interp_load=100000000000
+[    8.411342] corten-dbg: late stage OK entry=55dec53d24c0 interp_load=100000000000
+[    8.411610] corten-dbg: late stage OK entry=55fbe7f67fc0 interp_load=100000000000
+[    8.411630] corten-dbg: late stage OK entry=5595612f6500 interp_load=100000000000
+[    8.415623] corten-dbg: late stage OK entry=5649edbadbb0 interp_load=100000000000
+[    8.416460] corten-dbg: late stage OK entry=55fe90fe8760 interp_load=100000000000
+[    8.428932] corten-dbg: late stage OK entry=556f100f0070 interp_load=100000000000
+[    8.435060] corten-dbg: late stage OK entry=5645aa051660 interp_load=100000000000
+[    8.439753] corten-dbg: late stage OK entry=55a263c89520 interp_load=100000000000
+[    8.441476] corten-dbg: late stage OK entry=562fb0cdc610 interp_load=100000000000
+[    8.444208] systemd-debug-g (112) used greatest stack depth: 12568 bytes left
+[    8.444388] corten-dbg: late stage OK entry=5637cfb5e4f0 interp_load=100000000000
+[    8.473014] systemd-ssh-generator[120]: Failed to query local AF_VSOCK CID: Cannot assign requested address
+[    8.479358] systemd-rc-loca (118) used greatest stack depth: 12424 bytes left
+[    8.494147] corten-dbg: late stage OK entry=56477047a280 interp_load=100000000000
+[    8.541419] corten-dbg: late stage OK entry=5654d9559280 interp_load=100000000000
+[    8.561034] (sd-exec-[110]: /usr/lib/systemd/system-generators/systemd-ssh-generator failed with exit status 1.
+[    9.176940] systemd[1]: Queued start job for default target graphical.target.
+[    9.214188] systemd[1]: Created slice system-getty.slice - Slice /system/getty.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-getty.slice[0m - Slice /system/getty.
+[    9.239452] systemd[1]: Created slice system-modprobe.slice - Slice /system/modprobe.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-modprobe.slice[0m - Slice /system/modprobe.
+[    9.269013] systemd[1]: Created slice system-serial\x2dgetty.slice - Slice /system/serial-getty.
+[[0;32m  OK  [0m] Created slice [0;1;39msystem-serial\x2dget…slice[0m - Slice /system/serial-getty.
+[    9.304618] systemd[1]: Created slice user.slice - User and Session Slice.
+[[0;32m  OK  [0m] Created slice [0;1;39muser.slice[0m - User and Session Slice.
+[    9.321014] systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-ask-password-conso…[0mequests to Console Directory Watch.
+[    9.338471] systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-ask-password-wall.…[0md Requests to Wall Directory Watch.
+[    9.357195] systemd[1]: Set up automount proc-sys-fs-binfmt_misc.automount - Arbitrary Executable File Formats File System Automount Point.
+[[0;32m  OK  [0m] Set up automount [0;1;39mproc-sys-fs-binfm…[0mormats File System Automount Point.
+[    9.377287] systemd[1]: Expecting device dev-ttyS0.device - /dev/ttyS0...
+         Expecting device [0;1;39mdev-ttyS0.device[0m - /dev/ttyS0...
+[    9.388371] systemd[1]: Reached target paths.target - Path Units.
+[[0;32m  OK  [0m] Reached target [0;1;39mpaths.target[0m - Path Units.
+[    9.399473] systemd[1]: Reached target remote-fs.target - Remote File Systems.
+[[0;32m  OK  [0m] Reached target [0;1;39mremote-fs.target[0m - Remote File Systems.
+[    9.410300] systemd[1]: Reached target slices.target - Slice Units.
+[[0;32m  OK  [0m] Reached target [0;1;39mslices.target[0m - Slice Units.
+[    9.422021] systemd[1]: Reached target swap.target - Swaps.
+[[0;32m  OK  [0m] Reached target [0;1;39mswap.target[0m - Swaps.
+[    9.437943] systemd[1]: Listening on systemd-creds.socket - Credential Encryption/Decryption.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-creds.socket[0m - Credential Encryption/Decryption.
+[    9.454373] systemd[1]: Listening on systemd-initctl.socket - initctl Compatibility Named Pipe.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-initctl.socke…[0m- initctl Compatibility Named Pipe.
+[    9.470801] systemd[1]: Listening on systemd-journald-dev-log.socket - Journal Socket (/dev/log).
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-journald-dev-…socket[0m - Journal Socket (/dev/log).
+[    9.488117] systemd[1]: Listening on systemd-journald.socket - Journal Sockets.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-journald.socket[0m - Journal Sockets.
+[    9.502546] systemd[1]: systemd-pcrextend.socket - TPM PCR Measurements skipped, unmet condition check ConditionSecurity=measured-uki
+[    9.512455] systemd[1]: systemd-pcrlock.socket - Make TPM PCR Policy skipped, unmet condition check ConditionSecurity=measured-uki
+[    9.525782] systemd[1]: Listening on systemd-sysext.socket - System Extension Image Management.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-sysext.socket[0m… System Extension Image Management.
+[    9.549384] systemd[1]: Listening on systemd-udevd-control.socket - udev Control Socket.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-udevd-control.socket[0m - udev Control Socket.
+[    9.565159] systemd[1]: Listening on systemd-udevd-kernel.socket - udev Kernel Socket.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-udevd-kernel.socket[0m - udev Kernel Socket.
+[    9.585766] systemd[1]: Mounting dev-hugepages.mount - Huge Pages File System...
+[    9.587075] corten-dbg: late stage OK entry=560986cfd5f0 interp_load=100000000000
+         Mounting [0;1;39mdev-hugepages.mount[0m - Huge Pages File System...
+[    9.611069] corten-dbg: late stage OK entry=55c3dfe8c5f0 interp_load=100000000000
+[    9.611080] systemd[1]: Mounting dev-mqueue.mount - POSIX Message Queue File System...
+         Mounting [0;1;39mdev-mqueue.mount[0m - POSIX Message Queue File System...
+[    9.635099] corten-dbg: late stage OK entry=5598fe9085f0 interp_load=100000000000
+[    9.635425] systemd[1]: Mounting proc-sys-fs-binfmt_misc.mount - /proc/sys/fs/binfmt_misc...
+         Mounting [0;1;39mproc-[    9.647028] corten-dbg: late stage OK entry=563e67708e50 interp_load=100000000000
+sys-fs-binfmt_misc.mount[0m - /proc/sys/fs/binfmt_misc...
+[    9.662361] corten-dbg: late stage OK entry=55c8e09785f0 interp_load=100000000000
+[    9.662761] systemd[1]: Mounting sys-kernel-debug.mount - /sys/kernel/debug...
+[    9.666333] corten-dbg: late stage OK entry=5558837f4e50 interp_load=100000000000
+         Mounting [0;1;39msys-kernel-debug.mount[0m - /sys/kernel/debug...
+[    9.685598] systemd[1]: Mounting sys-kernel-tracing.mount - Kernel Trace File System...
+[    9.685970] corten-dbg: late stage OK entry=564943bce5f0 interp_load=100000000000
+         Mounting [0;1;39msys-kernel-tracing.mount[0m - Kernel Trace File System...
+[    9.705867] systemd[1]: tmp.mount: Directory /tmp to mount over is not empty, mounting anyway.
+[    9.719359] corten-dbg: late stage OK entry=55a0b3ae35f0 interp_load=100000000000
+[    9.719415] systemd[1]: Mounting tmp.mount - Temporary Directory /tmp...
+         Mounting [0;1;39mtmp.mount[0m - Temporary Directory /tmp...
+[    9.737533] systemd[1]: kmod-static-nodes.service - Create List of Static Device Nodes skipped, unmet condition check ConditionFileNotEmpty=/lib/modules/6.18.32-gd15d7449f4ab-dirty/modules.devname
+[    9.737593] corten-dbg: late stage OK entry=55e2a4cc9e50 interp_load=100000000000
+[    9.739081] corten-dbg: late stage OK entry=55bfd6ce0e50 interp_load=100000000000
+[    9.740234] corten-dbg: late stage OK entry=559c87682e50 interp_load=100000000000
+[    9.754819] corten-dbg: late stage OK entry=5561ed5db5f0 interp_load=100000000000
+[    9.755032] systemd[1]: Starting modprobe@drm.service - Load Kernel Module drm...
+         Starting [0;1;39mmodprobe@drm.service[0m - Load Kernel Module drm...
+[    9.784541] corten-dbg: late stage OK entry=55e945c79d20 interp_load=100000000000
+[    9.785976] corten-dbg: late stage OK entry=5574d5f8be50 interp_load=100000000000
+[    9.786305] corten-dbg: late stage OK entry=5605dbbac5f0 interp_load=100000000000
+[    9.787639] systemd[1]: Starting modprobe@efi_pstore.service - Load Kernel Module efi_pstore...
+         Starting [0;1;39mmodprobe@efi_pstore.servi…[0m - Load Kernel Module efi_pstore...
+[    9.819486] corten-dbg: late stage OK entry=56537d8cb5f0 interp_load=100000000000
+[    9.819516] systemd[1]: Starting modprobe@fuse.service - Load Kernel Module fuse...
+[    9.820214] corten-dbg: late stage OK entry=5574c8909d20 interp_load=100000000000
+         Starting [0;1;39mmodprobe@fuse.service[0m - Load Kernel Module fuse...
+[    9.843334] systemd[1]: systemd-hibernate-clear.service - Clear Stale Hibernate Storage Info skipped, unmet condition check ConditionPathExists=/sys/firmware/efi/efivars/HibernateLocation-8cf2644b-4b0b-428f-9387-6d876050dc67
+[    9.859568] systemd[1]: systemd-hwdb-update.service - Rebuild Hardware Database skipped, unmet condition check ConditionNeedsUpdate=/etc
+[    9.873913] corten-dbg: late stage OK entry=5613df53fd20 interp_load=100000000000
+[    9.887764] corten-dbg: late stage OK entry=564650ddf5f0 interp_load=100000000000
+[    9.887989] systemd[1]: Starting systemd-journald.service - Journal Service...
+         Starting [0;1;39msystemd-journald.service[0m - Journal Service...
+[    9.913681] corten-dbg: late stage OK entry=55d898fca5f0 interp_load=100000000000
+[    9.914462] systemd[1]: Starting systemd-modules-load.service - Load Kernel Modules...
+         Starting [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules...
+[    9.935732] systemd[1]: systemd-pcrmachine.service - TPM PCR Machine ID Measurement skipped, unmet condition check ConditionSecurity=measured-uki
+[    9.944280] corten-dbg: late stage OK entry=55bec3c355f0 interp_load=100000000000
+[    9.944486] systemd[1]: Starting systemd-random-seed.service - Load/Save OS Random Seed...
+         Starting [0;1;39msystemd-random-seed.service[0m - Load/Save OS Random Seed...
+[    9.966790] corten-dbg: late stage OK entry=5584634c3730 interp_load=100000000000
+[    9.969169] corten-dbg: late stage OK entry=56501cfcd5f0 interp_load=100000000000
+[    9.969410] systemd[1]: Starting systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully...
+         Starting [0;1;39msystemd-tmpfiles-setup-de…[0m Device Nodes in /dev gracefully...
+[    9.991928] systemd[1]: systemd-tpm2-setup-early.service - Early TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+[   10.003249] systemd[1]: systemd-tpm2-setup.service - TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+[   10.009440] corten-dbg: late stage OK entry=5650763d15f0 interp_load=100000000000
+[   10.009468] systemd[1]: Starting systemd-udev-load-credentials.service - Load udev Rules from Credentials...
+         Starting [0;1;39msystemd-udev-load-credent…[0mLoad udev Rules from Credentials...
+[   10.039853] corten-dbg: late stage OK entry=564c95ebc5f0 interp_load=100000000000
+[   10.039933] systemd[1]: Starting systemd-udev-trigger.service - Coldplug All udev Devices...
+[   10.041157] corten-dbg: late stage OK entry=561f92f18650 interp_load=100000000000
+         Starting [0;1;39msystemd-udev-trigger.service[0m - Coldplug All udev Devices...
+[   10.069037] systemd[1]: Mounted dev-hugepages.mount - Huge Pages File System.
+[[0;32m  OK  [0m] Mounted [0;1;39mdev-hugepages.mount[0m - Huge Pages File System.
+[   10.085940] systemd[1]: Mounted dev-mqueue.mount - POSIX Message Queue File System.
+[   10.089813] corten-dbg: late stage OK entry=5598f4da4fc0 interp_load=100000000000
+[[0;32m  OK  [0m] Mounted [0;1;39mdev-mqueue.mount[0m - POSIX Message Queue File System.
+[   10.109653] systemd[1]: Mounted proc-sys-fs-binfmt_misc.mount - /proc/sys/fs/binfmt_misc.
+[   10.110632] corten-dbg: late stage OK entry=562ba6681c70 interp_load=100000000000
+[   10.119016] systemd-journald[137]: Collecting audit messages is disabled.
+[   10.124277] corten-dbg: late stage OK entry=556e9bc95e90 interp_load=100000000000
+[[0;32m  OK  [0m] Mounted [0;1;39mproc-sys-fs-binfmt_misc.mount[0m - /proc/sys/fs/binfmt_misc.
+[   10.135811] systemd[1]: Mounted sys-kernel-debug.mount - /sys/kernel/debug.
+[[0;32m  OK  [0m] Mounted [0;[   10.144454] corten-dbg: late stage OK entry=55f40783fc70 interp_load=100000000000
+1;39msys-kernel-debug.mount[0m - /sys/kernel/debug.
+[   10.158475] systemd[1]: Mounted sys-kernel-tracing.mount - Kernel Trace File System.
+[[0;32m  OK  [0m] Mounted [0;1;39msys-kernel-tracing.mount[0m - Kernel Trace File System.
+[   10.167522] systemd[1]: Mounted tmp.mount - Temporary Directory /tmp.
+[[0;32m  OK  [0m] Mounted [0;1;39mtmp.mount[0m - Temporary Directory /tmp.
+[   10.184205] systemd[1]: Started systemd-journald.service - Journal Service.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-journald.service[0m - Journal Service.
+[[0;32m  OK  [0m] Finished [0;1;39mmodprobe@drm.service[0m - Load Kernel Module drm.
+[[0;32m  OK  [0m] Finished [0;1;39mmodprobe@efi_pstore.service[0m - Load Kernel Module efi_pstore.
+[[0;32m  OK  [0m] Finished [0;1;39mmodprobe@fuse.service[0m - Load Kernel Module fuse.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-random-seed.service[0m - Load/Save OS Random Seed.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup-de…[0mic Device Nodes in /dev gracefully.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-udev-load-credent…[0m- Load udev Rules from Credentials.
+[   10.287818] BUG: non-zero pgtables_bytes on freeing mm: 12288
+[   10.350332] corten-dbg: late stage OK entry=564be46d95f0 interp_load=100000000000
+         Starting [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats...
+[   10.364379] corten-dbg: late stage OK entry=562cbd3815f0 interp_load=100000000000
+         Starting [0;1;39msystemd-journal-flush.ser…[0msh Journal to Persistent Storage...
+[   10.381577] corten-dbg: late stage OK entry=56500c9bf5f0 interp_load=100000000000
+         Starting [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables...
+[   10.394215] corten-dbg: late stage OK entry=56077ec925f0 interp_load=100000000000
+[   10.396592] corten-dbg: late stage OK entry=56435ed79870 interp_load=100000000000
+[   10.403258] corten-dbg: late stage OK entry=5588a6859280 interp_load=100000000000
+         Starting [0;1;39msystemd-tmpfiles-setup-de…[0meate Static Device Nodes in /dev...
+[   10.427674] systemd-journald[137]: Received client request to flush runtime journal.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats.
+[   10.442715] systemd-journald[137]: File /var/log/journal/1c821f12757d4c338ffdb020ee1ae6e0/system.journal corrupted or uncleanly shut down, renaming and replacing.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-udev-trigger.service[0m - Coldplug All udev Devices.
+[   10.474887] corten-dbg: late stage OK entry=55b2075bd5f0 interp_load=100000000000
+         Starting [0;1;39mifupdown-pre.service[0m - He…synchronize boot up for ifupdown...
+[   10.506970] corten-dbg: late stage OK entry=563e77dfce90 interp_load=100000000000
+[   10.526216] corten-dbg: late stage OK entry=563596582760 interp_load=100000000000
+[   10.539601] corten-dbg: late stage OK entry=564cdd430cc0 interp_load=100000000000
+[   10.546396] corten-dbg: late stage OK entry=558b0e9abb90 interp_load=100000000000
+[   10.555158] corten-dbg: late stage OK entry=5586f3f68c70 interp_load=100000000000
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup-de…[0mCreate Static Device Nodes in /dev.
+[   10.580331] BUG: non-zero pgtables_bytes on freeing mm: 12288
+[   10.582978] corten-dbg: late stage OK entry=55b9c48f9d20 interp_load=100000000000
+[[0;32m  OK  [0m] Reached target [0;1;39mlocal-fs-pre.target[0m…Preparation for Local File Systems.
+[   10.608787] corten-dbg: late stage OK entry=55fa21bc55f0 interp_load=100000000000
+         Startin[   10.622754] systemd-sysctl (164) used greatest stack depth: 12328 bytes left
+g [0;1;39msystemd-udevd.service[0m - R…ager for Device Events and Files...
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables.
+[   10.822110] corten-dbg: late stage OK entry=55975feefc70 interp_load=100000000000
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-journal-flush.ser…[0mlush Journal to Persistent Storage.
+[   10.995990] corten-dbg: late stage OK entry=55557eb7c5f0 interp_load=100000000000
+         Starting [0;1;39msystemd-tmpfiles-setup.se…[0mate System Files and Directories...
+[[0;32m  OK  [0m] Started [0;1;39msystemd-udevd.service[0m - Ru…anager for Device Events and Files.
+[   11.153557] corten-dbg: late stage OK entry=558fd0241760 interp_load=100000000000
+[[0;32m  OK  [0m] Found device [0;1;39mdev-ttyS0.device[0m - /dev/ttyS0.[   11.164278] corten-dbg: late stage OK entry=55a49ab6b760 interp_load=100000000000
+
+[   11.169689] corten-dbg: late stage OK entry=558274946760 interp_load=100000000000
+[   11.177336] corten-dbg: late stage OK entry=55e7a09a1e90 interp_load=100000000000
+[   11.182138] corten-dbg: late stage OK entry=560376cd4cc0 interp_load=100000000000
+[   11.193173] corten-dbg: late stage OK entry=564c636383a0 interp_load=100000000000
+[   11.204489] corten-dbg: late stage OK entry=55d8fd662cc0 interp_load=100000000000
+[   11.215358] corten-dbg: late stage OK entry=55922da22b90 interp_load=100000000000
+[   11.243977] corten-dbg: late stage OK entry=5569082a0b90 interp_load=100000000000
+[   11.318026] corten-dbg: late stage OK entry=55feeccc6350 interp_load=100000000000
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup.se…[0mreate System Files and Directories.
+[[0;32m  OK  [0m] Reached target [0;1;39msysinit.target[0m - System Initialization.
+[[0;32m  OK  [0m] Started [0;1;39mapt-daily.timer[0m - Daily apt download activities.
+[[0;32m  OK  [[   11.390697] corten-dbg: late stage OK entry=5624966f0850 interp_load=100000000000
+0m] Started [0;1;39mapt-daily-upgrade.timer[0m - …y apt upgrade and clean activities.
+[[0;32m  OK  [0m] Started [0;1;39mdpkg-db-backup.timer[0m - Daily dpkg database backup timer.
+[[0;32m  OK  [0m] Started [0;1;39me2scrub_all.timer[0m - Period…Metadata Check for All Filesystems.
+[[0;32m  OK  [0m] Started [0;1;39mfstrim.timer[0m - Discard unused filesystem blocks once a week.
+[[0;32m  OK  [0m] Started [0;1;39mlogrotate.timer[0m - Daily rotation of log files.
+[[0;32m  OK  [0m] Started [0;1;39mphpsessionclean.timer[0m - Clean PHP session files every 30 mins.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-tmpfiles-clean.tim…[0my Cleanup of Temporary Directories.
+[[0;32m  OK  [0m] Reached target [0;1;39mtimers.target[0m - Timer Units.
+[[0;32m  OK  [0m] Listening on [0;1;39mdbus.socket[0m - D-Bus System Message Bus Socket.
+[[0;32m  OK  [0m] Listening on [0;1;39msshd-unix-local.socke…[0mtemd-ssh-generator, AF_UNIX Local).
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-hostnamed.socket[0m - Hostname Service Socket.
+[[0;32m  OK  [0m] Reached target [0;1;39msockets.target[0m - Socket Units.
+[[0;32m  OK  [0m] Reached target [0;1;39mbasic.target[0m - Basic System.
+[   11.528240] corten-dbg: late stage OK entry=55dc50cfc5f0 interp_load=100000000000
+[[0;32m  OK  [0m] Started [0;1;39mcron.service[0m - Regular background program processing daemon.
+[   11.545812] corten-dbg: late stage OK entry=55cc628ce5f0 interp_load=100000000000
+         Starting [0;1;39mdbus.service[0m - D-Bus System Message Bus...
+         Startin[   11.562196] corten-dbg: late stage OK entry=5630007575f0 interp_load=100000000000
+g [0;1;39me2scrub_reap.service[   11.567525] corten-dbg: late stage OK entry=55dcb9637270 interp_load=100000000000
+[0m - Re…ne ext4 Metadata Check Snapshots...
+[   11.591473] corten-dbg: late stage OK entry=55c2c2cc13a0 interp_load=100000000000
+[   11.596080] corten-dbg: late stage OK entry=55b3321085f0 interp_load=100000000000
+         Starting [0;1;39msystemd-logind.service[0m - User Login Management...
+[[0;32m  OK  [0m] Finished [0;1;39mifupdown-pre.service[0m - He…o synchronize boot up for ifupdown.
+[[0;32m  OK  [0m] Started [0;1;39mdbus.service[0m - D-Bus System Message Bus.
+[[0;32m  OK  [0m] Listening on [0;1;39msystemd-rfkill.socket[0m…ll Switch Status /dev/rfkill Watch.
+[   11.685075] corten-dbg: late stage OK entry=55ae2d7585f0 interp_load=100000000000
+         Starting [0;1;39mdpkg-db-backup.service[0m - …ily dpkg database backup service...
+[   11.699153] corten-dbg: late stage OK entry=5578787ce5f0 interp_load=100000000000
+         Starting [0;1;39mnetworking.service[0m - Raise network interfaces...
+[   11.714340] corten-dbg: late stage OK entry=5561bcf085f0 interp_load=100000000000
+         Starting [0;1;39mphpsessionclean.service[0m - Clean p[   11.723186] corten-dbg: late stage OK entry=55d6a98a4760 interp_load=100000000000
+hp session files...
+[   11.735873] corten-dbg: late stage OK entry=56470b50ccc0 interp_load=100000000000
+[   11.736158] corten-dbg: late stage OK entry=55cdae58a700 interp_load=100000000000
+[   11.747174] corten-dbg: late stage OK entry=55f1e9f75760 interp_load=100000000000
+[   11.750030] corten-dbg: late stage OK entry=55f45a91b760 interp_load=100000000000
+[   11.752943] corten-dbg: late stage OK entry=56055d534ae0 interp_load=100000000000
+[   11.767175] corten-dbg: late stage OK entry=55c5b3d1e6a0 interp_load=100000000000
+[   11.767330] corten-dbg: late stage OK entry=56190e5fe920 interp_load=100000000000
+[   11.788022] e2scrub_all (235) used greatest stack depth: 12256 bytes left
+[   11.798040] corten-dbg: late stage OK entry=55bd078c6750 interp_load=100000000000
+[   11.799441] corten-dbg: late stage OK entry=562b61db9760 interp_load=100000000000
+[[0;32m  OK  [0m] Finished [0;1;39me2scrub_reap.service[0m - Re…line ext4 Metadata Check Snapshots.
+[   11.811212] corten-dbg: late stage OK entry=55ae1555ac70 interp_load=100000000000
+[   11.815177] corten-dbg: late stage OK entry=55a466f66750 interp_load=100000000000
+[[0;32m  OK  [0m] Started [0;1;39msystemd-logind.service[0m - User Login Management.
+[   11.845345] corten-dbg: late stage OK entry=555bd2af9750 interp_load=100000000000
+[   11.853135] corten-dbg: late stage OK entry=55aa64c7d760 interp_load=100000000000
+[   11.861652] corten-dbg: late stage OK entry=5582d544b760 interp_load=100000000000
+[   11.871871] corten-dbg: late stage OK entry=55f6fdcbc310 interp_load=100000000000
+[   11.872546] corten-dbg: late stage OK entry=5589374ea760 interp_load=100000000000
+[   11.879362] corten-dbg: late stage OK entry=55e3aa8fb760 interp_load=100000000000
+[   11.879463] corten-dbg: late stage OK entry=56353e83c6a0 interp_load=100000000000
+[   11.879581] corten-dbg: late stage OK entry=56295cd4dbb0 interp_load=100000000000
+[   11.879822] corten-dbg: late stage OK entry=55d3c4f0dbb0 interp_load=100000000000
+[   11.910429] corten-dbg: late stage OK entry=558ce5dc89e0 interp_load=100000000000
+[[0;32m  OK  [0m] Finished [0;1;39mdpkg-db-backup.service[0m - Daily dpkg database backup service.
+[   11.934779] corten-dbg: late stage OK entry=564dd701b760 interp_load=100000000000
+[   11.943701] corten-dbg: late stage OK entry=5635f53e06a0 interp_load=100000000000
+[   11.955789] corten-dbg: late stage OK entry=5558855bbbb0 interp_load=100000000000
+[   11.956142] corten-dbg: late stage OK entry=55ba8f760be0 interp_load=100000000000
+[   11.962228] corten-dbg: late stage OK entry=55c799bf9760 interp_load=100000000000
+[   11.985095] corten-dbg: late stage OK entry=5585ad6d5030 interp_load=100000000000
+[   12.016503] corten-dbg: late stage OK entry=559f557f7a60 interp_load=100000000000
+[   12.038633] corten-dbg: late stage OK entry=555e174b8760 interp_load=100000000000
+[   12.050406] corten-dbg: late stage OK entry=55ba8c2a3760 interp_load=100000000000
+[   12.057095] corten-dbg: late stage OK entry=55d14b2da6a0 interp_load=100000000000
+[   12.074699] corten-dbg: late stage OK entry=557421451760 interp_load=100000000000
+[   12.087921] corten-dbg: late stage OK entry=55d87ec9b760 interp_load=100000000000
+[   12.096488] corten-dbg: late stage OK entry=55b5f60892f0 interp_load=100000000000
+[   12.143755] corten-dbg: late stage OK entry=55c3c6062d20 interp_load=100000000000
+[   12.161225] corten-dbg: late stage OK entry=55f7ac122d20 interp_load=100000000000
+[   12.181351] corten-dbg: late stage OK entry=564c75163d20 interp_load=100000000000
+[   12.211804] corten-dbg: late stage OK entry=55da63acd760 interp_load=100000000000
+[   12.237115] corten-dbg: late stage OK entry=55eb7f61a760 interp_load=100000000000
+[   12.254442] corten-dbg: late stage OK entry=55a393768fb0 interp_load=100000000000
+[   12.262554] corten-dbg: late stage OK entry=5564c6e8a750 interp_load=100000000000
+[   12.278620] corten-dbg: late stage OK entry=55ab73efdee0 interp_load=100000000000
+[   12.288136] corten-dbg: late stage OK entry=5622e912aee0 interp_load=100000000000
+[   12.317123] corten-dbg: late stage OK entry=55babb373760 interp_load=100000000000
+[   12.613370] corten-dbg: late stage OK entry=5625cce4dd70 interp_load=100000000000
+[   12.639406] corten-dbg: late stage OK entry=5582352abd70 interp_load=100000000000
+[   12.663629] corten-dbg: late stage OK entry=55717ec7dd70 interp_load=100000000000
+[   12.683404] corten-dbg: late stage OK entry=5564c7db1d70 interp_load=100000000000
+[   12.706410] corten-dbg: late stage OK entry=564bf0c36770 interp_load=100000000000
+[   12.740577] corten-dbg: late stage OK entry=558333a78be0 interp_load=100000000000
+[[0;32m  OK  [0m] Finished [0;1;39mphpsessionclean.service[0m - Clean php session files.
+[[0m[0;31m*     [0m] Job networking.service/start running (5s / 5min 2s)
+M[K[[0;1;31m*[0m[0;31m*    [0m] Job networking.service/start running (6s / 5min 2s)
+[   16.008714] corten-dbg: late stage OK entry=55c48d168760 interp_load=100000000000
+[   16.028667] corten-dbg: late stage OK entry=5573b06a7750 interp_load=100000000000
+[   16.043249] corten-dbg: late stage OK entry=55a510958ee0 interp_load=100000000000
+[   16.058818] corten-dbg: late stage OK entry=5652503b8ee0 interp_load=100000000000
+M[K[[0;31m*[0;1;31m*[0m[0;31m*   [0m] Job networking.service/start running (7s / 5min 2s)
+M[K[ [0;31m*[0;1;31m*[0m[0;31m*  [0m] Job networking.service/start running (7s / 5min 2s)
+M[K[  [0;31m*[0;1;31m*[0m[0;31m* [0m] Job networking.service/start running (8s / 5min 2s)
+M[K[   [0;31m*[0;1;31m*[0m[0;31m*[0m] Job networking.service/start running (8s / 5min 2s)
+[   18.402350] corten-dbg: late stage OK entry=55c0ed892760 interp_load=100000000000
+[   18.448014] corten-dbg: late stage OK entry=5619ce53ed70 interp_load=100000000000
+[   18.460886] corten-dbg: late stage OK entry=55bbe778cd70 interp_load=100000000000
+[   18.482317] corten-dbg: late stage OK entry=556a5b45cd70 interp_load=100000000000
+[   18.500060] corten-dbg: late stage OK entry=556160a43750 interp_load=100000000000
+[   18.510363] corten-dbg: late stage OK entry=55e5e6bec5a0 interp_load=100000000000
+[   18.525701] corten-dbg: late stage OK entry=561ef66f8ee0 interp_load=100000000000
+[   18.535947] corten-dbg: late stage OK entry=563019775f40 interp_load=100000000000
+M[K[    [0;31m*[0;1;31m*[0m] Job networking.service/start running (9s / 5min 2s)
+[   18.547810] corten-dbg: late stage OK entry=558109d2fee0 interp_load=100000000000
+[   18.575234] corten-dbg: late stage OK entry=55ffb1b09760 interp_load=100000000000
+[   18.583434] corten-dbg: late stage OK entry=558ddda2f6a0 interp_load=100000000000
+[   18.593025] corten-dbg: late stage OK entry=55586a828760 interp_load=100000000000
+[   18.595963] corten-dbg: late stage OK entry=556ce2d15030 interp_load=100000000000
+[   18.628249] corten-dbg: late stage OK entry=562fa68ef760 interp_load=100000000000
+[   18.637155] corten-dbg: late stage OK entry=559dc5fea6a0 interp_load=100000000000
+[   18.647793] corten-dbg: late stage OK entry=56173fd6f760 interp_load=100000000000
+[   18.670523] corten-dbg: late stage OK entry=5651e259e5f0 interp_load=100000000000
+[   18.699468] corten-dbg: late stage OK entry=5638f9de4760 interp_load=100000000000
+M[K[[0;32m  OK  [0m] Finished [0;1;39mnetworking.service[0m - Raise network interfaces.
+[K[[0;32m  OK  [0m] Reached target [0;1;39mnetwork.target[0m - Network.
+[[0;32m  OK  [0m] Reached target [0;1;39mnetwork-online.target[0m - Network is Online.
+[   18.743862] corten-dbg: late stage OK entry=5624a6f995f0 interp_load=100000000000
+         Starting [0;1;39mnginx.service[0m - A high pe…erver and a reverse proxy server...
+[   18.767291] corten-dbg: late stage OK entry=55e751a4e5f0 interp_load=100000000000
+         Starting [0;1;39mredis[   18.785369] corten-dbg: late stage OK entry=564a01aac9f0 interp_load=100000000000
+-server.service[0m - Advanced key-value store...
+         Starting [0;1;39mssh.service[0m - OpenBSD Secure Shel[   18.809337] corten-dbg: late stage OK entry=564fd5d555f0 interp_load=100000000000
+l server...
+[   18.827716] corten-dbg: late stage OK entry=56030a6345f0 interp_load=100000000000
+         Starting [0;1;39msystemd-user-sessions.service[0m - Permit User Sessions...
+[   18.873043] corten-dbg: late stage OK entry=5591eabe03e0 interp_load=100000000000
+[   18.873841] corten-dbg: late stage OK entry=559bf394f5f0 interp_load=100000000000
+[   18.903007] corten-dbg: late stage OK entry=55f8e56ba050 interp_load=100000000000
+[   18.920528] corten-dbg: late stage OK entry=55d69eaee9f0 interp_load=100000000000
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-user-sessions.service[0m - Permit User Sessions.
+[[0;32m  OK  [0m] Started [0;1;39mnginx.service[0m - A high per… server and a reverse proxy server.
+[   18.967033] corten-dbg: late stage OK entry=55c4834345f0 interp_load=100000000000
+[   18.987169] corten-dbg: late stage OK entry=558ad010f5f0 interp_load=100000000000
+[[0;32m  OK  [0m] Started [0;1;39mgetty@tty1.service[0m - Getty on tty1.
+[   19.009861] corten-dbg: late stage OK entry=5582aa9225f0 interp_load=100000000000
+[[0;32m  OK  [0m] Started [0;1;39mserial-getty@ttyS0.service[0m - Serial Getty on ttyS0.
+[[0;32m  OK  [0m] Reached target [0;1;39mgetty.target[0m - Login Prompts.
+[[0;1;31mFAILED[0m] Failed to start [0;1;39mredis-server.service[0m - Advanced key-value store.
+See 'systemctl status redis-serv[   19.047839] corten-dbg: late stage OK entry=55e5d3dc4050 interp_load=100000000000
+er.service' for details.
+[[0;32m  OK  [0m] Started [0;1;39mssh.service[0m - OpenBSD Secure Shell server.
+[[0;32m  OK  [0m] Reached target [0;1;39mmulti-user.target[0m - Multi-User System.
+[[0;32m  OK  [0m] Reached target [0;1;39mgraphical.target[0m - Graphical Interface.
+[!p]104[?7h[6n[32766;32766H[6n[   19.396381] corten-dbg: late stage OK entry=55578145d5f0 interp_load=100000000000
+[!p]104[?7h[6n[32766;32766H[6n[   19.945929] corten-dbg: late stage OK entry=55bab96715f0 interp_load=100000000000
+[   20.170915] corten-dbg: late stage OK entry=563c1bef79c0 interp_load=100000000000
+[   20.177698] corten-dbg: late stage OK entry=55fcfaf989c0 interp_load=100000000000
+[   20.471108] corten-dbg: late stage OK entry=55bfcc9435f0 interp_load=100000000000
+[   21.010452] corten-dbg: late stage OK entry=55b043c975f0 interp_load=100000000000
+
+Debian GNU/Linux 13 syzkaller ttyS0
+
+syzkaller login: [   21.821059] corten-dbg: late stage OK entry=558c864e1550 interp_load=100000000000
+[   21.899170] corten-dbg: late stage OK entry=55caf6c07460 interp_load=100000000000
+[   22.134578] audit: type=1107 audit(1791492087.229:3): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t:s0 msg='avc:  denied  { start } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user-runtime-dir@.service" cmdline="/usr/lib/systemd/systemd-logind" function="bus_unit_method_start_generic" scontext=system_u:system_r:kernel_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+[   22.146128] corten-dbg: late stage OK entry=5589921935f0 interp_load=100000000000
+[   22.218621] corten-dbg: late stage OK entry=5589ca6cecf0 interp_load=100000000000
+[   22.316066] corten-dbg: late stage OK entry=560c0c63f5f0 interp_load=100000000000
+[   22.362220] corten-dbg: late stage OK entry=55f28d940550 interp_load=100000000000
+[   22.393840] corten-dbg: late stage OK entry=5562d7a248d0 interp_load=100000000000
+[   22.404005] corten-dbg: late stage OK entry=55ffec900460 interp_load=100000000000
+[   22.621624] corten-dbg: late stage OK entry=563e5c493750 interp_load=100000000000
+[   22.701106] corten-dbg: late stage OK entry=55ad1f1566f0 interp_load=100000000000
+[   22.921526] corten-dbg: late stage OK entry=55b00204a5f0 interp_load=100000000000
+[   22.925046] corten-dbg: late stage OK entry=55d4dba995f0 interp_load=100000000000
+[   22.991125] corten-dbg: late stage OK entry=564947688030 interp_load=100000000000
+[   22.992026] corten-dbg: late stage OK entry=55c81ffff030 interp_load=100000000000
+[   23.082055] corten-dbg: late stage OK entry=561c79064760 interp_load=100000000000
+[   23.094685] corten-dbg: late stage OK entry=559372cffc10 interp_load=100000000000
+[   23.110470] corten-dbg: late stage OK entry=56023976d6a0 interp_load=100000000000
+[   23.131916] corten-dbg: late stage OK entry=55d5a69e5760 interp_load=100000000000
+[   23.141166] corten-dbg: late stage OK entry=55b28234fb20 interp_load=100000000000
+[   23.258890] corten-dbg: late stage OK entry=559d2bae1760 interp_load=100000000000
+[   23.325743] corten-dbg: late stage OK entry=55c2b33a2550 interp_load=100000000000
+[   23.378752] corten-dbg: late stage OK entry=55f71bd9f460 interp_load=100000000000
+[   23.591393] corten-dbg: late stage OK entry=561a2fff9760 interp_load=100000000000
+[   23.601413] corten-dbg: late stage OK entry=56275ed2fc10 interp_load=100000000000
+[   23.620297] corten-dbg: late stage OK entry=5640e7ee26a0 interp_load=100000000000
+[   23.635804] corten-dbg: late stage OK entry=55d6823e4760 interp_load=100000000000
+[   23.645257] corten-dbg: late stage OK entry=55f29a9feb20 interp_load=100000000000
+[   23.724507] corten-dbg: late stage OK entry=55f738d96760 interp_load=100000000000
+[   23.752971] corten-dbg: late stage OK entry=5590cdb959e0 interp_load=100000000000
+[   23.808906] corten-dbg: late stage OK entry=5577f3a6e9e0 interp_load=100000000000
+[   23.852908] corten-dbg: late stage OK entry=5592612769e0 interp_load=100000000000
+[   23.890711] corten-dbg: late stage OK entry=5616cca269e0 interp_load=100000000000
+[   23.927003] corten-dbg: late stage OK entry=55aa140da9e0 interp_load=100000000000
+[   23.964588] corten-dbg: late stage OK entry=557ea8bfd9e0 interp_load=100000000000
+[   24.005140] corten-dbg: late stage OK entry=5616256499e0 interp_load=100000000000
+[   24.055328] corten-dbg: late stage OK entry=55ebf5dd39e0 interp_load=100000000000
+[   24.107829] corten-dbg: late stage OK entry=55ed7fae99e0 interp_load=100000000000
+[   24.152624] corten-dbg: late stage OK entry=5583e34e29e0 interp_load=100000000000
+[   24.189591] corten-dbg: late stage OK entry=55d8f36cb9e0 interp_load=100000000000
+[   24.234354] corten-dbg: late stage OK entry=55a8e6fb39e0 interp_load=100000000000
+[   24.277182] corten-dbg: late stage OK entry=55885caa29e0 interp_load=100000000000
+[   24.312861] corten-dbg: late stage OK entry=5592433549e0 interp_load=100000000000
+[   24.354005] corten-dbg: late stage OK entry=5563db9199e0 interp_load=100000000000
+[   24.398548] corten-dbg: late stage OK entry=5624b9c9b9e0 interp_load=100000000000
+[   24.442589] corten-dbg: late stage OK entry=5613bb3129e0 interp_load=100000000000
+[   24.484728] corten-dbg: late stage OK entry=5569872bd9e0 interp_load=100000000000
+[   24.534640] corten-dbg: late stage OK entry=561c49fe69e0 interp_load=100000000000
+[   24.571821] corten-dbg: late stage OK entry=56141080e9e0 interp_load=100000000000
+[   24.612660] corten-dbg: late stage OK entry=55b0f638c9e0 interp_load=100000000000
+[   24.653698] corten-dbg: late stage OK entry=55a6729ff9e0 interp_load=100000000000
+[   24.700813] corten-dbg: late stage OK entry=5558876749e0 interp_load=100000000000
+[   24.745277] corten-dbg: late stage OK entry=56267dd069e0 interp_load=100000000000
+[   24.795005] corten-dbg: late stage OK entry=561f7e12e9e0 interp_load=100000000000
+[   24.842911] corten-dbg: late stage OK entry=55d41b24a9e0 interp_load=100000000000
+[   24.893558] corten-dbg: late stage OK entry=56154ae3c9e0 interp_load=100000000000
+[   24.944718] corten-dbg: late stage OK entry=562f513d29e0 interp_load=100000000000
+[   24.985288] corten-dbg: late stage OK entry=558342a029e0 interp_load=100000000000
+[   25.032935] corten-dbg: late stage OK entry=56358792c9e0 interp_load=100000000000
+[   25.080381] corten-dbg: late stage OK entry=556561ff69e0 interp_load=100000000000
+[   25.129679] corten-dbg: late stage OK entry=5572b44119e0 interp_load=100000000000
+[   25.172023] corten-dbg: late stage OK entry=55b830ab19e0 interp_load=100000000000
+[   25.220226] corten-dbg: late stage OK entry=5608b01689e0 interp_load=100000000000
+[   25.263577] corten-dbg: late stage OK entry=557dab3a49e0 interp_load=100000000000
+[   25.337310] corten-dbg: late stage OK entry=563a9c54a9e0 interp_load=100000000000
+[   25.382822] corten-dbg: late stage OK entry=5639701b69e0 interp_load=100000000000
+[   25.427882] corten-dbg: late stage OK entry=558f31d889e0 interp_load=100000000000
+[   25.473162] corten-dbg: late stage OK entry=55f1ab9fa9e0 interp_load=100000000000
+[   25.522739] corten-dbg: late stage OK entry=55ef7cbe29e0 interp_load=100000000000
+[   25.563987] corten-dbg: late stage OK entry=5594d76ee9e0 interp_load=100000000000
+[   25.605060] corten-dbg: late stage OK entry=5560d77aa9e0 interp_load=100000000000
+[   25.643884] corten-dbg: late stage OK entry=562051fba9e0 interp_load=100000000000
+[   25.681725] corten-dbg: late stage OK entry=56541a3689e0 interp_load=100000000000
+[   25.717319] corten-dbg: late stage OK entry=55d0c0e069e0 interp_load=100000000000
+[   25.764205] corten-dbg: late stage OK entry=55ce43e3c9e0 interp_load=100000000000
+[   25.805711] corten-dbg: late stage OK entry=562c752c09e0 interp_load=100000000000
+[   25.844345] corten-dbg: late stage OK entry=55e24d7a49e0 interp_load=100000000000
+[   25.884895] corten-dbg: late stage OK entry=557aea7b89e0 interp_load=100000000000
+[   25.931061] corten-dbg: late stage OK entry=563765f399e0 interp_load=100000000000
+[   25.982769] corten-dbg: late stage OK entry=5561f57819e0 interp_load=100000000000
+[   26.028262] corten-dbg: late stage OK entry=5563113649e0 interp_load=100000000000
+[   26.067735] corten-dbg: late stage OK entry=556e9d60b9e0 interp_load=100000000000
+[   26.105527] corten-dbg: late stage OK entry=564514f1e9e0 interp_load=100000000000
+[   26.150972] corten-dbg: late stage OK entry=55bdb755b9e0 interp_load=100000000000
+[   26.186327] corten-dbg: late stage OK entry=55996fb499e0 interp_load=100000000000
+[   26.228159] corten-dbg: late stage OK entry=55b204d0b9e0 interp_load=100000000000
+[   26.269866] corten-dbg: late stage OK entry=55e4e14969e0 interp_load=100000000000
+[   26.317541] corten-dbg: late stage OK entry=5636067479e0 interp_load=100000000000
+[   26.369450] corten-dbg: late stage OK entry=555725f399e0 interp_load=100000000000
+[   26.410336] corten-dbg: late stage OK entry=55606e6c39e0 interp_load=100000000000
+[   26.462505] corten-dbg: late stage OK entry=5638f85db9e0 interp_load=100000000000
+[   26.510815] corten-dbg: late stage OK entry=55afd19679e0 interp_load=100000000000
+[   26.547576] corten-dbg: late stage OK entry=55a754b499e0 interp_load=100000000000
+[   26.590538] corten-dbg: late stage OK entry=55cba19f79e0 interp_load=100000000000
+[   26.626109] corten-dbg: late stage OK entry=555cf1abb9e0 interp_load=100000000000
+[   26.659600] corten-dbg: late stage OK entry=564a36a249e0 interp_load=100000000000
+[   26.698754] corten-dbg: late stage OK entry=565118c439e0 interp_load=100000000000
+[   26.734280] corten-dbg: late stage OK entry=5570b45d89e0 interp_load=100000000000
+[   26.777036] corten-dbg: late stage OK entry=55ac4729f9e0 interp_load=100000000000
+[   26.811046] corten-dbg: late stage OK entry=5600be85d9e0 interp_load=100000000000
+[   26.848999] corten-dbg: late stage OK entry=563b76b009e0 interp_load=100000000000
+[   26.896460] corten-dbg: late stage OK entry=5557569a39e0 interp_load=100000000000
+[   26.961130] corten-dbg: late stage OK entry=55bbc3ac39e0 interp_load=100000000000
+[   27.013087] corten-dbg: late stage OK entry=560dac20c9e0 interp_load=100000000000
+[   27.066225] corten-dbg: late stage OK entry=561d6ec209e0 interp_load=100000000000
+[   27.104552] corten-dbg: late stage OK entry=55d30905f9e0 interp_load=100000000000
+[   27.148211] corten-dbg: late stage OK entry=558e549c79e0 interp_load=100000000000
+[   27.189625] corten-dbg: late stage OK entry=559a2fa5d9e0 interp_load=100000000000
+[   27.239960] corten-dbg: late stage OK entry=55761ae2a9e0 interp_load=100000000000
+[   27.299056] corten-dbg: late stage OK entry=557cc75e29e0 interp_load=100000000000
+[   27.348577] corten-dbg: late stage OK entry=56438cfc09e0 interp_load=100000000000
+[   27.389334] corten-dbg: late stage OK entry=55f980d679e0 interp_load=100000000000
+[   27.428403] corten-dbg: late stage OK entry=55bf54fee9e0 interp_load=100000000000
+[   27.463900] corten-dbg: late stage OK entry=55d7eb30d9e0 interp_load=100000000000
+[   27.505212] corten-dbg: late stage OK entry=558ecd1ee9e0 interp_load=100000000000
+[   27.538107] corten-dbg: late stage OK entry=561ce8b6d9e0 interp_load=100000000000
+[   27.579293] corten-dbg: late stage OK entry=560ecc6349e0 interp_load=100000000000
+[   27.626130] corten-dbg: late stage OK entry=55a66558a9e0 interp_load=100000000000
+[   27.666056] corten-dbg: late stage OK entry=558cebc139e0 interp_load=100000000000
+[   27.713184] corten-dbg: late stage OK entry=55f79f30a9e0 interp_load=100000000000
+[   27.759481] corten-dbg: late stage OK entry=56347a2429e0 interp_load=100000000000
+[   27.803221] corten-dbg: late stage OK entry=56374ddd99e0 interp_load=100000000000
+[   27.844000] corten-dbg: late stage OK entry=55a745a559e0 interp_load=100000000000
+[   27.886970] corten-dbg: late stage OK entry=563e7cd1a9e0 interp_load=100000000000
+[   27.924249] corten-dbg: late stage OK entry=5580495559e0 interp_load=100000000000
+[   27.963778] corten-dbg: late stage OK entry=5583ec1a59e0 interp_load=100000000000
+[   28.004266] corten-dbg: late stage OK entry=565081faa9e0 interp_load=100000000000
+[   28.044623] corten-dbg: late stage OK entry=562e68c389e0 interp_load=100000000000
+[   28.089539] corten-dbg: late stage OK entry=555fa97db9e0 interp_load=100000000000
+[   28.137035] corten-dbg: late stage OK entry=5632267689e0 interp_load=100000000000
+[   28.184648] corten-dbg: late stage OK entry=55d99cc359e0 interp_load=100000000000
+[   28.224831] corten-dbg: late stage OK entry=564d403d79e0 interp_load=100000000000
+[   28.267094] corten-dbg: late stage OK entry=5621b56b59e0 interp_load=100000000000
+[   28.321170] corten-dbg: late stage OK entry=557ed77789e0 interp_load=100000000000
+[   28.380600] corten-dbg: late stage OK entry=5646c55319e0 interp_load=100000000000
+[   28.417863] corten-dbg: late stage OK entry=5639a3d5a9e0 interp_load=100000000000
+[   28.454780] corten-dbg: late stage OK entry=55cade5949e0 interp_load=100000000000
+[   28.493209] corten-dbg: late stage OK entry=55ecfbdda9e0 interp_load=100000000000
+[   28.536182] corten-dbg: late stage OK entry=55f3a05d29e0 interp_load=100000000000
+[   28.581560] corten-dbg: late stage OK entry=55e3ab40f9e0 interp_load=100000000000
+[   28.634622] corten-dbg: late stage OK entry=55846e1f19e0 interp_load=100000000000
+[   28.682848] corten-dbg: late stage OK entry=55ab833d19e0 interp_load=100000000000
+[   28.724223] corten-dbg: late stage OK entry=5579669309e0 interp_load=100000000000
+[   28.762402] corten-dbg: late stage OK entry=5637b12b49e0 interp_load=100000000000
+[   28.841879] corten-dbg: late stage OK entry=5585f301f9e0 interp_load=100000000000
+[   28.887424] corten-dbg: late stage OK entry=56131afe89e0 interp_load=100000000000
+[   28.934115] corten-dbg: late stage OK entry=55a8d22539e0 interp_load=100000000000
+[   28.983231] corten-dbg: late stage OK entry=555b07c769e0 interp_load=100000000000
+[   29.027566] corten-dbg: late stage OK entry=55de530889e0 interp_load=100000000000
+[   29.072208] corten-dbg: late stage OK entry=55db0ebdb9e0 interp_load=100000000000
+[   29.116055] corten-dbg: late stage OK entry=5648574219e0 interp_load=100000000000
+[   29.166989] corten-dbg: late stage OK entry=562a2e7e39e0 interp_load=100000000000
+[   29.239583] corten-dbg: late stage OK entry=56318444a9e0 interp_load=100000000000
+[   29.291721] corten-dbg: late stage OK entry=563f25bf29e0 interp_load=100000000000
+[   29.351987] corten-dbg: late stage OK entry=5585cb9f19e0 interp_load=100000000000
+[   29.411529] corten-dbg: late stage OK entry=56167cd909e0 interp_load=100000000000
+[   29.451621] corten-dbg: late stage OK entry=55de05e9a9e0 interp_load=100000000000
+[   29.494667] corten-dbg: late stage OK entry=555bf61359e0 interp_load=100000000000
+[   29.546859] corten-dbg: late stage OK entry=557033f949e0 interp_load=100000000000
+[   29.581748] corten-dbg: late stage OK entry=5590159459e0 interp_load=100000000000
+[   29.617054] corten-dbg: late stage OK entry=55e21f6609e0 interp_load=100000000000
+[   29.663022] corten-dbg: late stage OK entry=55a5ab02a9e0 interp_load=100000000000
+[   29.707165] corten-dbg: late stage OK entry=5632eb1329e0 interp_load=100000000000
+[   29.742864] corten-dbg: late stage OK entry=55fb31bdd9e0 interp_load=100000000000
+[   29.783280] corten-dbg: late stage OK entry=5649ee6be9e0 interp_load=100000000000
+[   29.822587] corten-dbg: late stage OK entry=55ce756459e0 interp_load=100000000000
+[   29.864938] corten-dbg: late stage OK entry=555ccd9d99e0 interp_load=100000000000
+[   29.897718] corten-dbg: late stage OK entry=5640b6e3e9e0 interp_load=100000000000
+[   29.941905] corten-dbg: late stage OK entry=555dc481d9e0 interp_load=100000000000
+[   29.986351] corten-dbg: late stage OK entry=560fa05a99e0 interp_load=100000000000
+[   30.030058] corten-dbg: late stage OK entry=55780e8649e0 interp_load=100000000000
+[   30.070494] corten-dbg: late stage OK entry=56274590f9e0 interp_load=100000000000
+[   30.105917] corten-dbg: late stage OK entry=55b8ddb259e0 interp_load=100000000000
+[   30.146641] corten-dbg: late stage OK entry=556d4760a9e0 interp_load=100000000000
+[   30.155081] corten-dbg: late stage OK entry=55a13aef9760 interp_load=100000000000
+[   30.191012] corten-dbg: late stage OK entry=563692bd1280 interp_load=100000000000
+[   30.192335] corten-dbg: late stage OK entry=561b19ad64b0 interp_load=100000000000
+[   30.245503] corten-dbg: late stage OK entry=5641a7468030 interp_load=100000000000
