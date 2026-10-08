@@ -12,3 +12,80 @@ KIT-p1 OK (ssh-pushed to /root/kit; 9p not required)
 P1 failed-units rows=1 is-running=degraded (file: p1-failed-units.txt)
 P1 mode_probe want mode=0: Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts. mode=0 PROBE_RC=1 
 battery-off launched in-guest (setsid nohup; in-guest log /tmp/mv3d/guest-off.log)
+battery-off PROC_GONE_OR_SSH_DEAD at 1140s (partial fetch below)
+battery-off verdict lines (full: battery-off.log + art-off/):
+===SEC0 INVENTORY===
+===SEC1 BOOT===
+ISRUN_RC=1
+FAILED_RC=0
+===SEC2 LTP-BUILD===
+AUTOTOOLS_RC=0
+CONFIGURE_RC=0
+BUILD_RC=0
+INSTALL_RC=0
+PRODUCT mmap01 OK
+PRODUCT fork01 OK
+PRODUCT madvise01 OK
+PRODUCT mmapstress01 OK
+PRODUCT mtest01 OK
+===SEC3 LTP-RUN===
+LTP_SUMMAR PASS=98 FAIL=11 CONF=0 MISSING=1 OTHER=5 TOTAL=115
+===SEC4 FACES===
+SMOKE_BARE_RC=0 PASS=26 FAIL=0
+SMOKE_HOOK_RC=0 PASS=26 FAIL=0
+P1 dmesg corten_warn_bugs=Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts. integrity=0
+DONE-PHASE P1
+=== PHASE P2-on-full 2026-10-08 11:07:01 ===
+battery-off PROC_GONE_OR_SSH_DEAD at 1860s (partial fetch below)
+battery-off verdict lines (full: battery-off.log + art-off/):
+P1 dmesg corten_warn_bugs=Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts. integrity=0
+DONE-PHASE P1
+=== PHASE P2-on-full 2026-10-08 11:07:26 ===
+p2-on BOOT_OK ssh_try=4 append=[corten=on corten_mode_default=on systemd.mask=systemd-journald.service systemd.mask=systemd-journald.socket systemd.mask=systemd-journald-dev-log.socket systemd.mask=systemd-journal-flush.service systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M]
+p2-on BOOT_OK ssh_try=7 append=[corten=on corten_mode_default=on systemd.mask=systemd-journald.service systemd.mask=systemd-journald.socket systemd.mask=systemd-journald-dev-log.socket systemd.mask=systemd-journal-flush.service systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M]
+share-p2-on MOUNT_RC=0 share_read_bytes=LIST_RC=0
+share-p2-on MOUNT_RC=0 share_read_bytes=LIST_RC=0
+KIT-p2 OK (ssh-pushed to /root/kit; 9p not required)
+KIT-p2 OK (ssh-pushed to /root/kit; 9p not required)
+P2 failed-units rows=1 is-running=degraded
+P2 failed-units rows=1 is-running=degraded
+P2 audit_gate read rc=0 (124=hang; registered churn-read shape) file: p2-audit-gate.txt
+P2 audit_gate read rc=0 (124=hang; registered churn-read shape) file: p2-audit-gate.txt
+P2 counters rc=0: Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts. exec_default_enters 342 
+P2 counters rc=0: Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts. exec_default_enters 351 
+battery-on launched in-guest (setsid nohup; in-guest log /tmp/mv3d/guest-on.log)
+battery-on launched in-guest (setsid nohup; in-guest log /tmp/mv3d/guest-on.log)
+battery-on PROC_GONE_OR_SSH_DEAD at 1470s (partial fetch below)
+battery-on verdict lines (full: battery-on.log + art-on/):
+P2 metis checksum baseline=2d383eeed4ceb73b (compare METIS lines above, bare x2)
+P2 hook-smoke run2 (idempotency) rc=255 PASS=0 FAIL=0
+P2 dmesg integrity sum=Connection timed out during banner exchange (detail: p2-dmesg-full.txt)
+DONE-PHASE P2
+=== PHASE P3-on-journal-face 2026-10-08 11:37:59 ===
+battery-on PROC_GONE_OR_SSH_DEAD at 1350s (partial fetch below)
+battery-on verdict lines (full: battery-on.log + art-on/):
+P2 metis checksum baseline=2d383eeed4ceb73b (compare METIS lines above, bare x2)
+P2 hook-smoke run2 (idempotency) rc=1 PASS=26 FAIL=0
+P2 dmesg integrity sum=Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts. (detail: p2-dmesg-full.txt)
+DONE-PHASE P2
+=== PHASE P3-on-journal-face 2026-10-08 11:38:34 ===
+p3-journal BOOT_OK ssh_try=4 append=[corten=on corten_mode_default=on systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M]
+share-p3-journal MOUNT_RC=0 share_read_bytes=LIST_RC=0
+KIT-p3 OK (ssh-pushed to /root/kit; 9p not required)
+p3-journal BOOT_OK ssh_try=4 append=[corten=on corten_mode_default=on systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M]
+P3 is-system-running: Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts.
+P3 mode_probe want mode=1: mode=1 PROBE_RC=0 
+P3 tmpfiles/journald rows in face log: 5 (durations+counts: p3-journal-face.log)
+DONE-PHASE P3
+=== PHASE DONE 2026-10-08 11:39:19 ===
+=== BATTERY COMPLETE 2026-10-08 11:39:19 -- verdict triage is post-hoc by team-lead
+VM left running world=p3-journal port=10031 (shell: ssh -i /home/ppw/vm/trixie.id_rsa -p 10031 root@127.0.0.1; kill: bash /home/ppw/bench/share/t1-battery.sh kill)
+share-p3-journal MOUNT_RC=32 share_read_bytes=       dmesg(1) may have more information after failed mount system call.
+KIT-p3 OK (ssh-pushed to /root/kit; 9p not required)
+P3 is-system-running: Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts.
+P3 mode_probe want mode=1: mode=1 PROBE_RC=0 
+P3 tmpfiles/journald rows in face log: 5 (durations+counts: p3-journal-face.log)
+DONE-PHASE P3
+=== PHASE DONE 2026-10-08 11:39:52 ===
+=== BATTERY COMPLETE 2026-10-08 11:39:52 -- verdict triage is post-hoc by team-lead
+VM left running world=p3-journal port=10031 (shell: ssh -i /home/ppw/vm/trixie.id_rsa -p 10031 root@127.0.0.1; kill: bash /home/ppw/bench/share/t1-battery.sh kill)

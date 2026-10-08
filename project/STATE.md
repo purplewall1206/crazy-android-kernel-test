@@ -1739,3 +1739,22 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     片, 十轮锚形状动物园记录在案）; P2-c = mode-t8 bench 定读 GAP（T2）。
   - **电池**: 合并工件三腿复跑 10:44 启动（结果收口于下一条; 上一轮 10:32
     起跑的作废重跑——工件时序错误）。
+
+- **[2026-10-08 电池收口（同日续）: 合并工件三腿全绿, T1/T2 验收闭账]**
+  - **三腿电池（bzImage sha 15e1cc56 前缀 = 4e09dcb 合并工件, trixie-mv3d）**:
+    P1-off: LTP 编译全 rc=0 + **LTP_SUMMAR PASS=98 FAIL=11 = mv3d 基线逐字
+    一致**（mva results 同数 ×3）, smoke 26/26 裸/hook 双跑, dmesg
+    integrity=0; P2-on（journald 四件 mask + default=on）: **audit gate 全零
+    （j1_probes 200/hits 0, j2_walks 840/violations 0/stale 0/first_violation
+    0x0, wl 全桶零）** + smoke 26/26（含 idempotency run2）+ metis
+    2d383eeed4ceb73b 精确同值 ×2 + counters exec_default_enters 351（=on
+    世界活性）; P3-journal-face: PROBE_RC=0。**SSH banner 掉线 ×2 =
+    台账 #3 已知 flake 族（关键读数均先于掉线取得, 不重跑）**;
+    pgtables_bytes BUG 每腿 2 笔 = P2-a 已登记既有暴露。
+  - **=n 门**: =n 构建 rc=0, 17 消费对象 nm/strings 双零; .config 恢复 =y,
+    受影响对象重编（memory.o 9 corten 符号回归）。
+  - **推db 收口**: android17-6.18 与 corten-github 双推至
+    c31d5b4→（电池/addendum 后终推）, mv-a0 新分支, tag corten-r07-w3fix7
+    （4e09dcb）+ corten-report-d37（c31d5b4）。T4 裁决提案
+    next/e2-phase2-ruling-proposal.md（呈用户: 浸泡即刻 vs P2-a 先修、
+    B 组退役深度、PR 粒度三问）。
