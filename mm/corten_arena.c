@@ -235,6 +235,8 @@ static atomic_long_t corten_nr_exec_default_enters; /* MV3.a execve default MODE
  * DoD (wl_brk=0 / wl_stack=0): the region forms answer them instead.
  */
 static atomic_long_t corten_nr_brk_funnel;	/* MODE-mm brk funnel VMAs */
+static atomic_long_t corten_nr_sweep_stack_adopts; /* V2.2 stack adoptions */
+static atomic_long_t corten_nr_stack_grows;	/* V2.2 extend-arm services */
 /* Ledger #2: the arena_stats per-mm registry walks' truncation count
  * (declared here for the stats render; the walker lives at the shrinker
  * section where the budget and the disclosure live).
@@ -3527,6 +3529,10 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_exec_default_enters));
 	seq_printf(m, "brk_funnel          %ld\n",
 		   atomic_long_read(&corten_nr_brk_funnel));
+	seq_printf(m, "stack_adopts        %ld\n",
+		   atomic_long_read(&corten_nr_sweep_stack_adopts));
+	seq_printf(m, "stack_grows         %ld\n",
+		   atomic_long_read(&corten_nr_stack_grows));
 	seq_printf(m, "auto_fallbacks      %ld\n",
 		   atomic_long_read(&corten_nr_auto_fallbacks));
 	seq_printf(m, "auto_exhausted      %ld\n",
@@ -7619,6 +7625,51 @@ static int corten_sweep_adopt_file(struct mm_struct *mm,
  * W-6b: every skip path carries its own bucket -- the skip_other lump
  * hid the adoption shortfall's composition (the 347/battery reading).
  */
+/* The V2.2 stack arm: the exec stack VMA adopts as the grow-down
+ * region form (positive verdicts are adopt classes).
+ */
+#define CORTEN_SWEEP_ADOPT_STACK	(2)
+/*
+ * V2.2: adopt the exec stack VMA as the grow-down region form.  The
+ * ANON declare carries the body (the stack is private anonymous stock;
+ * its resident PTEs came from the legacy funnel, so the metadata-aware
+ * C1 passes them -- the same shape the exec image adoption proved).
+ * The record takes CORTEN_RF_GROWSDOWN so the fault miss path's extend
+ * arm may walk its start downward; the sweep's remove takes the VMA
+ * out of the tree.  The stack's only growth producer is the extend
+ * arm (MAP_GROWSDOWN refuses at the mmap routes), so the marker is
+ * never lost: rflags rewrites happen only at register/adopt time.
+ */
+static int corten_sweep_adopt_stack(struct mm_struct *mm,
+				    struct corten_mm_state *state,
+				    struct vm_area_struct *vma)
+{
+	struct corten_arena *ar;
+	int ret;
+
+	/* The anon arm carries the body: the picks, the surgery (the
+	 * anchor moves from the legacy anon_vma world to the metadata
+	 * world) and the finish windows -- the complete treatment for
+	 * the stack's resident funnel PTEs.  The growth marker rides
+	 * after publication; rflags rewrites happen only at
+	 * register/adopt time, so it lives as long as the record.
+	 */
+	ret = corten_sweep_adopt_anon(mm, state, vma);
+	if (ret)
+		return ret;		/* fail-open, the VMA is intact */
+
+	rcu_read_lock();
+	ar = corten_arena_lookup(mm, vma->vm_start);
+	rcu_read_unlock();
+	if (!ar)
+		return 1;
+	mutex_lock(&state->ctl_lock);
+	WRITE_ONCE(ar->rflags, READ_ONCE(ar->rflags) | CORTEN_RF_GROWSDOWN);
+	mutex_unlock(&state->ctl_lock);
+
+	return 0;
+}
+
 #define CORTEN_SWEEP_SKIP_WINDOW	(-2)
 #define CORTEN_SWEEP_SKIP_STACK		(-3)
 #define CORTEN_SWEEP_SKIP_SPECIAL	(-4)
@@ -7644,8 +7695,10 @@ static int corten_sweep_classify(struct mm_struct *mm,
 	    vma->vm_start < CORTEN_MODE_WINDOW_END)
 		return CORTEN_SWEEP_SKIP_WINDOW;
 
-	if (flags & (VM_GROWSDOWN | VM_GROWSUP))
-		return CORTEN_SWEEP_SKIP_STACK;
+	if (flags & VM_GROWSUP)
+		return CORTEN_SWEEP_SKIP_STACK;	/* non-x86 growth: legacy */
+	if (flags & VM_GROWSDOWN)
+		return CORTEN_SWEEP_ADOPT_STACK;
 	if (arch_vma_name(vma) || vma_is_special_mapping_family(vma))
 		return CORTEN_SWEEP_SKIP_SPECIAL;
 	/* The W-3 brk route owns the heap: the first post-entry GROW
@@ -7721,7 +7774,7 @@ static int corten_sweep_classify(struct mm_struct *mm,
 static void corten_arena_mode_sweep(struct mm_struct *mm)
 {
 	struct corten_mm_state *state;
-	struct vm_area_struct **cand, *vma;
+	struct vm_area_struct **cand, *vma, *stack_vma = NULL;
 	unsigned int n = 0, i;
 	int nr_vmas;
 
@@ -7750,6 +7803,9 @@ static void corten_arena_mode_sweep(struct mm_struct *mm)
 				break;		/* ours */
 			case CORTEN_SWEEP_SKIP_WINDOW:
 				atomic_long_inc(&corten_nr_sweep_skip_window);
+				break;
+			case CORTEN_SWEEP_ADOPT_STACK:
+				stack_vma = vma;
 				break;
 			case CORTEN_SWEEP_SKIP_STACK:
 				atomic_long_inc(&corten_nr_sweep_skip_stack);
@@ -7813,6 +7869,23 @@ static void corten_arena_mode_sweep(struct mm_struct *mm)
 			atomic_long_inc(&corten_nr_sweep_skip_declare);
 		else if (ret)
 			atomic_long_inc(&corten_nr_sweep_skip_other);
+	}
+
+	/* The stack arm runs last: its region's growth legality (the
+	 * extend arm's frame scans) reads the registry the adopts above
+	 * just filled -- the stack's lower frames stay empty because the
+	 * exec image lives in the window, but the ordering is load-
+	 * bearing for a stray legacy neighbour.
+	 */
+	if (stack_vma) {
+		int ret = corten_sweep_adopt_stack(mm, state, stack_vma);
+
+		if (ret == -EEXIST)
+			atomic_long_inc(&corten_nr_sweep_skip_declare);
+		else if (ret)
+			atomic_long_inc(&corten_nr_sweep_skip_other);
+		else
+			atomic_long_inc(&corten_nr_sweep_stack_adopts);
 	}
 
 	kfree(cand);
@@ -11709,6 +11782,357 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
  * any VMA/mmap_lock/per-VMA-lock action in do_user_addr_fault().  On
  * CORTEN_FAULT_FALLBACK the legacy path runs unchanged.
  */
+/* V2.2: the extend arm's frame-reach bound (16 PMD frames = 32MB; the
+ * default RLIMIT_STACK spans 4).  A longer rlimit grows across several
+ * faults -- each lowers the start by at least its own page.
+ */
+/*
+ * V2.2: the grow-down region's extend arm -- expand_downwards() on the
+ * region form.  Called from the fault fast hook's miss with no locks
+ * held.  Returns 1 when @address is now covered (the caller re-lookups
+ * and serves through the normal machinery), 0 when the miss is not a
+ * stack fault (the legacy funnel answers it as always -- including the
+ * refused growths: the walk finds no VMA and delivers the maperr
+ * SIGSEGV, expand_downwards()'s -ENOMEM verdict shape).
+ *
+ * Two stages under one mmap_write hold (the region record's lock, sec
+ * 2.7):
+ *
+ * - conversion: the exec-default flow never sweeps (enter_sweep is the
+ *   prctl entry's arm; the default entry is deliberate enter-only), so
+ *   the exec stack starts on the VMA form.  A growth miss whose
+ *   covering candidate is a grow-down VMA in reach adopts it first --
+ *   the ANON declare carries the body (the resident PTEs came from the
+ *   legacy funnel; the metadata-aware C1 passes them) and the record
+ *   takes CORTEN_RF_GROWSDOWN.  rflags rewrites happen only at
+ *   register/adopt time, so the marker lives as long as the record.
+ *
+ * - extension: the record's start walks down onto @address -- the
+ *   acct_stack_growth legality set (rlimit, address-space budget, the
+ *   mlock future, the committed-memory charge) plus the guard gap
+ *   against the nearest lower stock on both forms.
+ *
+ * The publish order is load-bearing: the new frames are inserted
+ * BEFORE the start drops, so a concurrent reader that walks a new
+ * frame sees a record whose start is still above it -- a miss that
+ * re-enters this same arm under the write lock -- never a partial
+ * cover.
+ */
+/* V2.2: the extend arm's boot switch (default off).  The arm's
+ * fault-path integration surfaced three designed-slice inputs in the
+ * r08/r09 boots -- find_vma()'s mmap-lock assertion in the pre-check,
+ * the fork COW storm serializing behind a per-fault mmap_write, and a
+ * NULL deref at user_fault+0x4ff when the conversion raced a lookup --
+ * each fixed or gated, but the whole arm stays opt-in until the
+ * pieces/ownership interaction is walked end to end (the VMA-COMPLETE
+ * plan's V2.2 slice).
+ */
+static bool corten_stack_extend_param;
+
+static int __init corten_stack_extend_setup(char *s)
+{
+	if (s && !strcmp(s, "on"))
+		corten_stack_extend_param = true;
+	return 1;
+}
+__setup("corten_stack_extend=", corten_stack_extend_setup);
+
+#define CORTEN_STACK_SCAN_FRAMES 16
+
+/* The nearest-start member of one registry slot (the bucket keeps its
+ * records sorted by start; a plain slot is its own single member; the
+ * reserve marker has none).  Every member of a frame starts at or
+ * above the frame base, so the lowest start is the nearest stock above
+ * the scan point.
+ */
+static struct corten_arena *corten_slot_lowest(void *slot)
+{
+	struct corten_frame_bucket *b;
+
+	if (!slot || slot == &corten_va_reserve_sentinel)
+		return NULL;
+	b = corten_slot_bucket(slot);
+	if (b)
+		return b->nr ? READ_ONCE(b->rec[0]) : NULL;
+	return slot;
+}
+
+/* The nearest grow-down record above @addr, or NULL.  Called either
+ * under rcu (the pre-check: reads stay inside the section) or under
+ * mmap_write (the exact scan: the registry is stable there -- every
+ * registry writer holds it).
+ */
+static struct corten_arena *corten_stack_scan(struct mm_struct *mm,
+					      unsigned long addr)
+{
+	struct corten_mm_state *state;
+	unsigned int i;
+
+	state = smp_load_acquire(&mm->corten_state);
+	for (i = 1; i <= CORTEN_STACK_SCAN_FRAMES; i++) {
+		struct corten_arena *m = corten_slot_lowest(
+			xa_load(&state->arenas, (addr >> PMD_SHIFT) + i));
+
+		if (!m || READ_ONCE(m->idle))
+			continue;
+		return m;
+	}
+	return NULL;
+}
+
+static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
+				   bool user)
+{
+	struct corten_mm_state *state;
+	struct corten_arena *stack;
+	unsigned long addr, old_start, grow;
+	unsigned int i;
+	int ret, dbg = 0;
+	bool convert;
+
+	if (!corten_stack_extend_param || !corten_enabled_static() ||
+	    !READ_ONCE(mm->corten_mode))
+		return 0;
+
+	addr = address & PAGE_MASK;
+	/* The all-window layout keeps the stack in the legacy domain
+	 * above the window: a window-domain miss is never stack growth
+	 * (the parked/hole shape answers through the maperr arm).
+	 */
+	if (addr >= CORTEN_MODE_WINDOW_START && addr < CORTEN_MODE_WINDOW_END)
+		return 0;
+
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state || !refcount_read(&state->nr))
+		return 0;
+
+	/* Cheap rcu pre-check: either a grow-down record within the
+	 * rlimit (the extension shape) or a grow-down VMA in reach (the
+	 * conversion shape).  Everything definitive repeats under the
+	 * write lock.
+	 */
+	/* The pre-check scans the registry only: find_vma() asserts the
+	 * mmap lock (the ud2 the r08 boot caught), so the VMA-side
+	 * decision belongs to the write-lock section.  The residual
+	 * cost -- a MODE process's legacy-domain misses take mmap_write
+	 * here -- is the same order as the funnel's own slow path.
+	 */
+	convert = false;
+	stack = NULL;
+	rcu_read_lock();
+	stack = corten_stack_scan(mm, addr);
+	if (stack && (!(READ_ONCE(stack->rflags) & CORTEN_RF_GROWSDOWN) ||
+		      (unsigned long)(READ_ONCE(stack->end) - addr) >
+		      task_rlimit(current, RLIMIT_STACK)))
+		stack = NULL;		/* nearest stock is not a legal stack */
+	rcu_read_unlock();
+	if (!stack && user) {
+		/* The conversion candidate: the grow-down VMA form.  The
+		 * probe is lock_vma_under_rcu -- find_vma() asserts the
+		 * mmap lock (the r08 boot's ud2) and an unchecked maple
+		 * read has no such sanction.  Without a candidate this
+		 * miss is the funnel's: RETURN, never the write lock --
+		 * every funnel-served fault would otherwise take it and
+		 * the fork COW storm serializes to a crawl (the sshd
+		 * banner timeout the r09 boot died of).
+		 */
+		struct vm_area_struct *vma = lock_vma_under_rcu(mm, addr);
+
+		if (vma) {
+			convert = vma->vm_start > addr &&
+				  (vma->vm_flags & VM_GROWSDOWN) &&
+				  vma->vm_end - addr <=
+				  task_rlimit(current, RLIMIT_STACK);
+			vma_end_read(vma);
+		}
+		if (!convert)
+			return 0;
+	}
+
+	mmap_write_lock(mm);
+	ret = 0;
+
+	/* Stage 1, exact: the extension record. */
+	stack = corten_stack_scan(mm, addr);
+	if (stack && !(READ_ONCE(stack->rflags) & CORTEN_RF_GROWSDOWN))
+		stack = NULL;
+
+	/* Stage 1, conversion: no record yet -- the grow-down VMA form
+	 * the pre-check vetted.
+	 */
+	if (!stack && convert) {
+		struct vm_area_struct *vma, *prev;
+		struct corten_arena *ar;
+
+		vma = find_vma_prev(mm, addr, &prev);
+		if (!vma || vma->vm_start <= addr)
+			goto out;		/* the funnel's fault */
+		if (!(vma->vm_flags & VM_GROWSDOWN))
+			goto out;
+		if (vma->vm_end - addr >
+		    task_rlimit(current, RLIMIT_STACK))
+			goto out;
+		if (prev && !(prev->vm_flags & VM_GROWSDOWN) &&
+		    vma_is_accessible(prev) &&
+		    vma->vm_start - prev->vm_end < stack_guard_gap)
+			goto out;		/* the guard gap */
+
+		/* The conversion rides the sweep's anon arm: the picks,
+		 * the surgery (the anchor moves from the legacy anon_vma
+		 * world to the metadata world) and the finish windows are
+		 * the complete treatment for resident funnel PTEs --
+		 * without them the fork mirror and reclaim see un-migrated
+		 * stock (the sshd privsep crash shape).  A refusal fails
+		 * open: the funnel keeps growing the VMA itself.
+		 */
+		if (corten_sweep_adopt_anon(mm, state, vma))
+			goto out;
+		rcu_read_lock();
+		ar = corten_arena_lookup(mm, vma->vm_start);
+		rcu_read_unlock();
+		if (!ar)
+			goto out;
+		mutex_lock(&state->ctl_lock);
+		WRITE_ONCE(ar->rflags,
+			   READ_ONCE(ar->rflags) | CORTEN_RF_GROWSDOWN);
+		mutex_unlock(&state->ctl_lock);
+		atomic_long_inc(&corten_nr_sweep_stack_adopts);
+		stack = ar;
+	}
+
+	old_start = READ_ONCE(stack->start);
+	if (addr >= old_start) {
+			/* not a below-start miss */
+			dbg = 2;
+			goto out;
+		}
+	grow = (old_start - addr) >> PAGE_SHIFT;
+
+	/* The tree stock: a VMA covering @addr is the legacy funnel's
+	 * fault; stock between the miss and the stack would be swallowed;
+	 * the nearest lower VMA keeps its guard gap (expand_downwards'
+	 * check, on the mixed world).
+	 */
+	{
+		struct vm_area_struct *vma, *prev;
+
+		vma = find_vma_prev(mm, addr, &prev);
+		if (vma && vma->vm_start <= addr) {
+			dbg = 3;
+			goto out;
+		}
+		if (vma && vma->vm_start < old_start) {
+			dbg = 4;
+			goto out;
+		}
+		if (prev && !(prev->vm_flags & VM_GROWSDOWN) &&
+		    vma_is_accessible(prev) &&
+		    addr - prev->vm_end < stack_guard_gap) {
+			dbg = 5;
+			goto out;
+		}
+	}
+
+	/* The registry stock: the scan above already refused when the
+	 * nearest stock ABOVE @addr is not the stack; a record ending
+	 * below it (in the new span's frames) keeps the same guard gap.
+	 */
+	{
+		unsigned long f = addr >> PMD_SHIFT;
+
+		for (i = 0; i < 2 && f >= i; i++) {
+			struct corten_frame_bucket *b;
+			void *slot = xa_load(&state->arenas, f - i);
+			unsigned int j;
+
+			if (!slot || slot == &corten_va_reserve_sentinel)
+				continue;
+			b = corten_slot_bucket(slot);
+			if (b) {
+				for (j = 0; j < b->nr; j++) {
+					struct corten_arena *m =
+						READ_ONCE(b->rec[j]);
+
+					if (!READ_ONCE(m->idle) &&
+					    READ_ONCE(m->end) <= addr &&
+					    addr - READ_ONCE(m->end) <
+					    stack_guard_gap) {
+						dbg = 6;
+						goto out;
+					}
+				}
+			} else {
+				struct corten_arena *m = slot;
+
+				if (!READ_ONCE(m->idle) &&
+				    READ_ONCE(m->end) <= addr &&
+				    addr - READ_ONCE(m->end) <
+				    stack_guard_gap) {
+					dbg = 7;
+					goto out;
+				}
+			}
+		}
+	}
+
+	/* acct_stack_growth on the region form: the address-space and
+	 * stack limits plus the mlock future budget.
+	 */
+	if (!may_expand_vm(mm, corten_take_vm_flags(READ_ONCE(stack->prot)),
+			   grow)) {
+		dbg = 8;
+		goto out;
+	}
+	if (!mlock_future_ok(mm, corten_take_vm_flags(READ_ONCE(stack->prot)),
+			     grow << PAGE_SHIFT)) {
+		dbg = 9;
+		goto out;
+	}
+
+	/* The new frames must be empty; insert the record into them
+	 * before the start drops (the publish order above).
+	 */
+	{
+		unsigned long first = addr >> PMD_SHIFT;
+		unsigned long last = old_start >> PMD_SHIFT;
+		unsigned long f;
+
+		for (f = first; f < last; f++) {
+			ret = corten_slot_insert(&state->arenas, f, stack);
+			if (ret) {
+				while (f-- > first)
+					xa_erase(&state->arenas, f);
+				dbg = 10;
+				goto out;
+			}
+		}
+	}
+
+	if (security_vm_enough_memory_mm(mm, grow)) {
+		dbg = 11;
+		unsigned long first = addr >> PMD_SHIFT;
+		unsigned long last = old_start >> PMD_SHIFT;
+		unsigned long f;
+
+		for (f = first; f < last; f++)
+			xa_erase(&state->arenas, f);
+		goto out;
+	}
+
+	WRITE_ONCE(stack->start, addr);
+	vm_stat_account(mm, corten_take_vm_flags(READ_ONCE(stack->prot)),
+			(long)grow);
+	atomic_long_inc(&corten_nr_stack_grows);
+	ret = 1;
+	goto out;
+out:
+	if (ret != 1 && printk_ratelimit())
+		pr_info("corten-dbg: stack_grow refuse stage=%d addr=%lx old=%lx\n",
+			dbg, addr, old_start);
+	mmap_write_unlock(mm);
+	return ret;
+}
+
 enum corten_fault_action corten_arena_user_fault(struct mm_struct *mm,
 						 unsigned long address,
 						 unsigned long error_code,
@@ -11731,8 +12155,18 @@ enum corten_fault_action corten_arena_user_fault(struct mm_struct *mm,
 		return CORTEN_FAULT_FALLBACK;
 
 	ar = corten_arena_lookup_get(mm, address);
-	if (!ar)
-		return CORTEN_FAULT_FALLBACK;
+	if (!ar) {
+		/* V2.2: a below-start miss at a grow-down region is the
+		 * stack extension fault -- extend (expand_downwards' region
+		 * form) and serve; anything else is the funnel's fault.
+		 */
+		if (corten_arena_stack_grow(mm, address,
+					    *flags & FAULT_FLAG_USER) != 1)
+			return CORTEN_FAULT_FALLBACK;
+		ar = corten_arena_lookup_get(mm, address);
+		if (!ar)
+			return CORTEN_FAULT_FALLBACK;
+	}
 
 	/* [F-A, D-G''] Ownership self-check: the frame table is
 	 * address-keyed, so a legacy punch (file MAP_FIXED into the arena,

@@ -164,6 +164,14 @@ enum corten_region_class {
  * leave MODE again.
  */
 #define CORTEN_RF_ADOPTED	_BITUL(5)	/* W-4 entry-sweep adoption */
+/*
+ * CORTEN_RF_GROWSDOWN rides outside CORTEN_RF_ALL beside ADOPTED for the
+ * same reason: no VMA flag is reflected -- it marks the exec stack's
+ * region form (V2.2).  The fault miss path reads it to answer "may the
+ * recorded start walk downward to @addr" (the legacy expand_downwards
+ * contract: within RLIMIT_STACK, clear of the nearest lower stock).
+ */
+#define CORTEN_RF_GROWSDOWN	_BITUL(6)	/* V2.2 stack region growth */
 
 /*
  * pagemap entry bits and the PSS fixed-point shift, shared between the

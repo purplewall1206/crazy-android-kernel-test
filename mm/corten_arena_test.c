@@ -13997,7 +13997,7 @@ static void corten_arena_test_sweep_skip_taxonomy(struct kunit *test)
 	struct mm_struct *mm = t->mm;
 	struct corten_arena_test_op o;
 	struct file *file;
-	long sstack, sspec, sshared, swin;
+	long sspec, sshared, swin;
 	loff_t pos = 0;
 	u64 pat = 0;
 	struct vm_area_struct *vma;
@@ -14040,22 +14040,36 @@ static void corten_arena_test_sweep_skip_taxonomy(struct kunit *test)
 	corten_implant_mark(mm, CORTEN_ARENA_TEST_WIN, PAGE_SIZE);
 	mmap_write_unlock(mm);
 
-	sstack = corten_arena_test_sweep(2);
 	sspec = corten_arena_test_sweep(3);
 	sshared = corten_arena_test_sweep(4);
 	swin = corten_arena_test_sweep(5);
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(2), sstack + 1);
+	/* V2.2: the grow-down specimen no longer skips -- it adopts as
+	 * the grow-down region form (the VMA leaves the tree, the record
+	 * carries the marker).  The shared and window specimens skip.
+	 */
 	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(4), sshared + 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(5), swin + 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(3), sspec);
 
-	/* None of them moved: the tree still owns all three. */
-	KUNIT_EXPECT_NOT_NULL(test,
-			      vma_lookup(mm, CORTEN_ARENA_TEST_START2));
+	/* The tree kept the two skips; the stack specimen's VMA left. */
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_START2));
 	KUNIT_EXPECT_NOT_NULL(test,
 			      vma_lookup(mm, CORTEN_ARENA_TEST_NOWHERE));
 	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+
+	/* The stack's region form: the record exists at the swept range
+	 * and carries the growth marker.
+	 */
+	{
+		struct corten_arena *ar =
+			corten_arena_lookup(mm, CORTEN_ARENA_TEST_START2);
+
+		KUNIT_EXPECT_NOT_NULL(test, ar);
+		KUNIT_EXPECT_TRUE(test,
+				  READ_ONCE(ar->rflags) &
+				  CORTEN_RF_GROWSDOWN);
+	}
 
 	fput(file);
 }
