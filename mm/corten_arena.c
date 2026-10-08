@@ -121,8 +121,6 @@ static void corten_va_release_frame(struct corten_mm_state *state,
 /* V-A.3c INV-MV2 audit walker samples, defined in the audit section
  * below (near the implant registry they read).
  */
-static void corten_audit_j2_sample(struct mm_struct *mm);
-static void corten_audit_j2_sample_locked(struct mm_struct *mm);
 
 /* T1c resident arena pool, defined in the pool section below. */
 static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
@@ -401,20 +399,6 @@ static atomic_long_t corten_nr_park_unmap_fails;
  */
 static atomic_long_t corten_nr_auto_vgate;
 
-/* V-A.2a J1 prelude (MV_VMA_FREE_SPEC.md sec 1.3): find_vma-family
- * calls on a MODE mm whose query range intersects the window domain.
- * Every corten-internal walker reaches the maple tree through the
- * untracked alias below, so the counters see only non-corten
- * consumers: j1_probes counts the calls (the literal J1 metric -- the
- * legacy funnel's miss-leg on parked windows is expected and benign,
- * semantic change S-1), j1_hits counts the calls that *found* a tree
- * VMA overlapping the window (post-A.2 the only legal shape is a
- * punch implant; anything else is a dominion violation -- J2's
- * negative probe).  The full J1/J2 audit walker lands with V-A.3.
- */
-static atomic_long_t corten_nr_j1_probes;
-static atomic_long_t corten_nr_j1_hits;
-
 /* V-A.3a placement-surface disclosure counters (audit #14-#17): both are
  * "normally zero" -- a non-zero value means a defensive layer, not a
  * semantic route, answered a placement request.  placement_backstop: the
@@ -499,8 +483,8 @@ static atomic_long_t corten_j2_first_violation;
  * reservation-VMA retirement turned from "anonymous no-op success" into
  * -ENOMEM, plus the move_pages stat leg's cheap window short-circuit.
  * All four are disclosure-only (each syscall's return value carries the
- * semantics); the guest exit gate reads them next to j1_probes to
- * attribute any surviving window probes.
+ * semantics); the S-5 terminals answer the window legs so a pure-MODE
+ * workload reads zero.
  */
 static atomic_long_t corten_nr_msync_window_skips;	/* msync segs answered 0 */
 static atomic_long_t corten_nr_mincore_routes;	/* mincore chunks answered */
@@ -3291,56 +3275,6 @@ static const char *corten_region_class_name(enum corten_region_class rclass)
  * reads them locklessly, so each column is a racing snapshot by design.
  */
 /*
- * The out-of-line J1 prelude counter (see mm/corten_arena.h): @vma is
- * the lookup result.  probes counts every external window query on a
- * MODE mm; hits counts the queries that found a tree VMA overlapping
- * the window domain -- post-A.2a/A.2b those must be punch implants (a
- * non-corten file/anon VMA a MAP_FIXED punch installed) and nothing
- * else; the guest gate asserts the split.
- */
-void corten_j1_slow(struct mm_struct *mm, unsigned long start,
-		    unsigned long end, struct vm_area_struct *vma)
-{
-	unsigned long clip;
-
-	/* V-A.3d J1 exemption (D24: "implant accesses are the legal tree
-	 * lookups inside the contract").  The A.3c audit-gate first run
-	 * showed the guest smoke's punch/implant contract shape landing
-	 * here as exactly one hit -- a legal find that must not pollute
-	 * the J1 ledger or the gate would stay red on a compliant
-	 * workload.  Two shapes are exempt: the query itself lands in
-	 * registered implant VA, or the lookup found a VMA whose window
-	 * intersection is registered (find_vma() on a neighbouring
-	 * window address returning the next VMA, an implant, is the same
-	 * legal access).  The lockless registry query is safe in every
-	 * probe context: callers hold this mm's mmap lock (excluded from
-	 * every mark writer) or an RCU read-side section (the array is
-	 * retired via kfree_rcu(), see corten_implant_mark()); torn
-	 * entry reads can only mis-sort a counter, never leave bounds.
-	 */
-	clip = max(start, CORTEN_MODE_WINDOW_START);
-	if (corten_implant_covers_lockless(mm, clip,
-					   min(end, CORTEN_MODE_WINDOW_END) -
-					   clip))
-		return;
-	if (vma && vma->vm_end > CORTEN_MODE_WINDOW_START &&
-	    vma->vm_start < CORTEN_MODE_WINDOW_END) {
-		clip = max(vma->vm_start, CORTEN_MODE_WINDOW_START);
-		if (corten_implant_covers_lockless(mm, clip,
-						   min(vma->vm_end,
-						       CORTEN_MODE_WINDOW_END) -
-						   clip))
-			return;
-	}
-
-	atomic_long_inc(&corten_nr_j1_probes);
-
-	if (vma && vma->vm_end > CORTEN_MODE_WINDOW_START &&
-	    vma->vm_start < CORTEN_MODE_WINDOW_END)
-		atomic_long_inc(&corten_nr_j1_hits);
-}
-
-/*
  * V-E (OQ-MV-7): the heap arm of the probe above -- a MODE-mm
  * find_vma-family call whose query address landed in [start_brk, brk).
  * The delegated-domain answer the legacy funnel gives is exactly what
@@ -3694,10 +3628,6 @@ void corten_arena_stats_report(struct seq_file *m)
 	 */
 	seq_printf(m, "auto_vgate          %ld\n",
 		   atomic_long_read(&corten_nr_auto_vgate));
-	seq_printf(m, "j1_probes           %ld\n",
-		   atomic_long_read(&corten_nr_j1_probes));
-	seq_printf(m, "j1_hits             %ld\n",
-		   atomic_long_read(&corten_nr_j1_hits));
 	/* V-A.3b J1-hygiene funnels (audit #1/#2/#3/#7/#29); the two
 	 * observation counters stay non-zero until V-C's gup probe.
 	 */
@@ -4109,16 +4039,6 @@ struct corten_arena *corten_arena_test_record_next(struct mm_struct *mm,
 long corten_arena_test_auto_vgate(void)
 {
 	return atomic_long_read(&corten_nr_auto_vgate);
-}
-
-long corten_arena_test_j1_probes(void)
-{
-	return atomic_long_read(&corten_nr_j1_probes);
-}
-
-long corten_arena_test_j1_hits(void)
-{
-	return atomic_long_read(&corten_nr_j1_hits);
 }
 
 /* V-A.3b: the J1-hygiene funnel counters (B-group anchors). */
@@ -5114,14 +5034,12 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	/* V-A.3c lifecycle trigger (j2-audit hook list): the INV-MV2 exit
 	 * audit runs first, before any drain or zap mutates the picture --
 	 * mm_users is 0, so both the tree and the registry are frozen and
-	 * the stable-registry walker entry needs no lock.  A violation here
-	 * is the process's final report card: every placement guard it ever
-	 * ran under had its say.  V-E appends the whitelist pass over the
-	 * full tree (the J2-complete form): same frozen picture, and the
-	 * delegated composition (heap/stack/special/file/anon buckets) of
-	 * every departing MODE mm is tallied for the audit gate.
+	 * the stable-registry walker entry needs no lock.  E2-A retired
+	 * the INV-MV2 oracle run (the walk lives on as the KUnit anchors'
+	 * synthetic form); V-E's whitelist pass over the full tree stays
+	 * (the delegated composition of every departing MODE mm is
+	 * tallied for the audit gate until the B-group PR).
 	 */
-	corten_audit_j2_walk_locked(mm);
 	corten_audit_whitelist_walk_locked(mm);
 
 	/* V-D: the pure-PT walk (zap + PTE/upper-table retirement) runs
@@ -9333,14 +9251,6 @@ int corten_arena_fork_commit(struct mm_struct *mm, struct mm_struct *oldmm)
 	if (!ret && did_arena)
 		atomic_long_inc(&corten_nr_fork_faithful);
 
-	/* V-A.3c lifecycle trigger: audit the child.  Its tree is the
-	 * dup_mmap() copy (complete), its registry the mirror above plus
-	 * the implant copy fork_begin made -- the one moment both sides of
-	 * the dominion are provably in sync before the child goes live.
-	 * Both mmap_writes are held: the stable-registry form.
-	 */
-	corten_audit_j2_walk_locked(mm);
-
 	return ret;
 }
 
@@ -13179,11 +13089,6 @@ static int corten_arena_pool_reactivate(struct mm_struct *mm,
 	corten_arena_stat_add(state, CORTEN_ARENA_STAT_DECLARES, 1);
 	atomic_long_inc(&corten_nr_pool_hits);
 
-	/* V-A.3c hot-path sample: the window just went live and VMA-free
-	 * (reactivation is a pure metadata flip) -- INV-MV2's window half
-	 * re-proven at handout.  ctl_lock and mmap_write held.
-	 */
-	corten_audit_j2_sample_locked(mm);
 
 	return 0;
 }
@@ -13533,14 +13438,6 @@ static bool corten_arena_pool_park_locked(struct mm_struct *mm,
 				-(long)((ar->end - ar->start) >> PAGE_SHIFT));
 	}
 
-	/* V-A.3c hot-path sample (j2-audit hook list): the parked window
-	 * is VMA-free and frame-registered again -- the cheapest moment
-	 * to prove the dominion holds after the park surgery.  ctl_lock
-	 * and mmap_write are held: the stable-registry form.  Default
-	 * off (corten_j2_walk_every).
-	 */
-	corten_audit_j2_sample_locked(mm);
-
 	return true;
 }
 
@@ -13700,11 +13597,6 @@ found:
 	*addr = ar->start;
 	mutex_unlock(&state->ctl_lock);
 
-	/* V-A.3c hot-path sample: the window handed out.  mmap_write is
-	 * still held (the take contract), so the stable-registry form
-	 * runs without re-entering ctl_lock.
-	 */
-	corten_audit_j2_sample_locked(mm);
 
 	return 0;
 
@@ -13715,11 +13607,6 @@ eject:
 	corten_arena_pool_eject_locked(mm, state, ar, true);
 	mutex_unlock(&state->ctl_lock);
 
-	/* V-A.3c hot-path sample: an ejected slot is the audit-interesting
-	 * arm of the take (a punched parked window leaves implant
-	 * neighbourhoods behind).
-	 */
-	corten_audit_j2_sample_locked(mm);
 
 	return -ENOENT;
 }
@@ -14347,8 +14234,6 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
 			 * rewrote the window's tree picture (lockless
 			 * here: the self-sufficient walker form).
 			 */
-			if (ret >= 0)
-				corten_audit_j2_sample(mm);
 			return ret < 0 ? ret : 1;
 		case CORTEN_UNMAP_CHUNK:
 			ret = corten_arena_unmap_chunk(mm, ar, start, len);
@@ -14367,13 +14252,6 @@ int corten_arena_munmap_route(struct mm_struct *mm, unsigned long start,
 		percpu_ref_put(&ar_start->active);
 	if (ar_end)
 		percpu_ref_put(&ar_end->active);
-
-	/* V-A.3c hot-path sample: the chunk transaction (ret == 1) just
-	 * carved the arena; nothing is held here, so the self-sufficient
-	 * walker form takes its own ctl_lock.
-	 */
-	if (ret == 1)
-		corten_audit_j2_sample(mm);
 
 	return ret;
 }
@@ -14940,8 +14818,8 @@ bool corten_implant_covers(struct mm_struct *mm, unsigned long start,
 /*
  * The RCU-safe query form (V-A.3d): same predicate as
  * corten_implant_covers(), for readers that hold an RCU read-side
- * section instead of the mmap lock -- the J1 exemption inside
- * corten_j1_slow(), reachable from lock_vma_under_rcu().  Safety has
+ * section instead of the mmap lock (the J1 exemption's form; its
+ * production consumer retired with the E2-A probe removal).  Safety has
  * two halves: (a) the array image read here is snapshot once (count
  * first, then pointer; the pair ordering with mark's publish -- pointer
  * before count, smp_wmb between -- guarantees the snapshot's count
@@ -15131,43 +15009,11 @@ int corten_audit_j2_walk_locked(struct mm_struct *mm)
 }
 
 /*
- * The hot-path sample gate (audit hook list; default off).  The park /
- * take / reactivate / route-tail triggers sit on churn-heavy paths, so
- * they walk only when the debugfs switch enables this static key; the
- * lifecycle points (mm_exit, fork_commit) always walk.  Off, the cost
- * is one patched-out branch.  Two forms for the two lock shapes of the
- * call sites (see the walkers above).
+ * debugfs "j2_walk <pid>" manual trigger backend (mm/corten.c owns the
+ * file).  E2-A retired the hot-path sampling hooks (the static key and
+ * the route-tail call sites): the oracle walks on demand -- the KUnit
+ * INV-MV2 anchors and the manual trigger -- never on production paths.
  */
-static DEFINE_STATIC_KEY_FALSE(corten_j2_sample_key);
-
-static void corten_audit_j2_sample(struct mm_struct *mm)
-{
-	if (static_branch_unlikely(&corten_j2_sample_key) &&
-	    READ_ONCE(mm->corten_mode))
-		corten_audit_j2_walk(mm);
-}
-
-static void corten_audit_j2_sample_locked(struct mm_struct *mm)
-{
-	if (static_branch_unlikely(&corten_j2_sample_key) &&
-	    READ_ONCE(mm->corten_mode))
-		corten_audit_j2_walk_locked(mm);
-}
-
-/*
- * debugfs "j2_walk_every" switch backend and the "j2_walk <pid>" manual
- * trigger backend (mm/corten.c owns the files).  The static key is
- * enabled/disabled from process context, exactly like the boot corten=on
- * key flip.
- */
-void corten_arena_j2_sample_set(bool on)
-{
-	if (on)
-		static_branch_enable(&corten_j2_sample_key);
-	else
-		static_branch_disable(&corten_j2_sample_key);
-}
-
 int corten_arena_j2_walk_pid(pid_t pid)
 {
 	struct task_struct *task;
@@ -15422,17 +15268,12 @@ int corten_arena_wl_audit_pid(pid_t pid)
 
 /*
  * The A-series exit-gate one-stop read (debugfs "audit_gate", kselftest
- * output style): the J1 pair and the J2 walker ledger in one place so
- * the guest acceptance run greps a single file.  gate_pass is the two
- * hard invariants -- no J1 window *hit* (a tree VMA the legacy lookup
- * found in the window domain; implant accesses are exempted from the
- * pair by V-A.3d, so a compliant workload has no legal hit source left)
- * and no INV-MV2 violation; j1_probes and j2_stale are printed raw
- * because their zero-ness is workload-bound (post-A.3d the S-5
- * terminals answer the msync/madvise/mincore window legs, so probes on
- * a pure-MODE workload should read zero too -- any residual belongs to
- * the V-C families (#3/#7) or a disclosed N-low row; stale is the
- * benign classification by design).  V-E extends gate_pass with the
+ * output style): the J2 walker ledger (the E2-A retirement took the J1
+ * pair; the window-lookup invariants are KUnit-synthetic now) in one
+ * place so the guest acceptance run greps a single file.  gate_pass is
+ * the hard invariants -- no INV-MV2 violation; j2_stale is printed raw
+ * because its zero-ness is workload-bound (stale is the benign
+ * classification by design).  V-E extends gate_pass with the
  * whitelist ledger's two zeros (wl_violations, wl_brk_anomalies -- the
  * latter structurally zero since ledger #4 renamed the split-heap form
  * into wl_brk_multi) and prints the composition raw:
@@ -15442,14 +15283,10 @@ int corten_arena_wl_audit_pid(pid_t pid)
  */
 void corten_arena_audit_gate_report(struct seq_file *m)
 {
-	long probes = atomic_long_read(&corten_nr_j1_probes);
-	long hits = atomic_long_read(&corten_nr_j1_hits);
 	long viol = atomic_long_read(&corten_nr_j2_violations);
 	long wl_viol = atomic_long_read(&corten_nr_wl_violations);
 	long wl_anom = atomic_long_read(&corten_nr_wl_brk_anomalies);
 
-	seq_printf(m, "j1_probes          %ld\n", probes);
-	seq_printf(m, "j1_hits            %ld\n", hits);
 	seq_printf(m, "j2_walks           %ld\n",
 		   atomic_long_read(&corten_nr_j2_walks));
 	seq_printf(m, "j2_violations      %ld\n", viol);
@@ -15495,8 +15332,13 @@ void corten_arena_audit_gate_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_tree_entries));
 	seq_printf(m, "tree_entries_pid   %ld\n",
 		   atomic_long_read(&corten_nr_tree_entries_pid));
+	/* E2-A: the J1 pair is retired (the probes' counting went with
+	 * corten_j1_slow(); the window-lookup invariants are kept by the
+	 * KUnit synthetic anchors).  gate_pass narrows to the surviving
+	 * ledgers.
+	 */
 	seq_printf(m, "gate_pass          %d\n",
-		   !hits && !viol && !wl_viol && !wl_anom);
+		   !viol && !wl_viol && !wl_anom);
 }
 
 /*
@@ -16810,10 +16652,6 @@ long corten_arena_mremap_route(struct mm_struct *mm, unsigned long addr,
 			percpu_ref_put(&ar_start->active);
 		if (ar_end)
 			percpu_ref_put(&ar_end->active);
-		/* V-A.3c hot-path sample: the shrink's chunk zap ran; the
-		 * route is lockless here (self-sufficient walker form).
-		 */
-		corten_audit_j2_sample(mm);
 		return addr;
 	}
 
@@ -16866,10 +16704,6 @@ long corten_arena_mremap_route(struct mm_struct *mm, unsigned long addr,
 	}
 	atomic_long_inc(&corten_nr_mremap_routes);
 
-	/* V-A.3c hot-path sample: the move retired the old window and
-	 * declared the new one; lockless here (self-sufficient form).
-	 */
-	corten_audit_j2_sample(mm);
 
 	return ret;
 
@@ -17384,8 +17218,6 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 		 * the window's content picture (self-sufficient form --
 		 * whatever madvise_lock() holds is DEV-13-legal).
 		 */
-		if (ret == 1)
-			corten_audit_j2_sample(mm);
 		return ret;
 
 	case MADV_FREE:
@@ -17398,10 +17230,8 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 		if (!len || (len & ~PAGE_MASK) || end <= start)
 			return 0;
 		ret = corten_arena_dontneed_route(mm, start, len);
-		if (ret == 1) {
+		if (ret == 1)
 			atomic_long_inc(&corten_nr_madvise_free_txns);
-			corten_audit_j2_sample(mm);
-		}
 		return ret;
 
 	case MADV_NORMAL:
@@ -17458,11 +17288,6 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 		if (!in_arena)
 			return -EOPNOTSUPP;
 		atomic_long_inc(&corten_nr_madvise_hints);
-		/* V-A.3c hot-path sample (no tree mutation on this arm --
-		 * the walk is the periodic re-proof the sampling knob
-		 * exists for).
-		 */
-		corten_audit_j2_sample(mm);
 		return 1;
 
 	case MADV_POPULATE_READ:
@@ -17546,11 +17371,6 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 			}
 		}
 		atomic_long_inc(&corten_nr_madvise_populate);
-		/* V-A.3c hot-path sample (no tree mutation on this arm --
-		 * the walk is the periodic re-proof the sampling knob
-		 * exists for).
-		 */
-		corten_audit_j2_sample(mm);
 		return 1;
 
 	default:

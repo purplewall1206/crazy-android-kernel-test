@@ -8441,8 +8441,6 @@ static void corten_arena_test_j1_hooks(struct kunit *test)
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
 	struct vm_area_struct *prev = NULL;
-	long p0, p1, h0, h1;
-	int expected = 4;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "J1 hooks require corten=on");
@@ -8454,9 +8452,6 @@ static void corten_arena_test_j1_hooks(struct kunit *test)
 						      PMD_SIZE), 0);
 	/* The pure-MODE shape: a live, VMA-free window. */
 	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
-
-	p0 = corten_arena_test_j1_probes();
-	h0 = corten_arena_test_j1_hits();
 
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_NULL(test,
@@ -8474,7 +8469,6 @@ static void corten_arena_test_j1_hooks(struct kunit *test)
 	{
 		struct vm_area_struct *dv, *sv;
 
-		expected++;
 		mmap_read_lock(mm);
 		KUNIT_EXPECT_EQ(test,
 				find_vmas_mm_locked(mm,
@@ -8485,16 +8479,10 @@ static void corten_arena_test_j1_hooks(struct kunit *test)
 	}
 #endif
 
-	p1 = corten_arena_test_j1_probes();
-	h1 = corten_arena_test_j1_hits();
-	KUNIT_EXPECT_EQ(test, p1 - p0, (long)expected);
-	KUNIT_EXPECT_EQ(test, h1 - h0, 0);
-
 	/* The delegated domain is beyond the first door's window term. */
 	mmap_read_lock(mm);
 	find_vma(mm, CORTEN_ARENA_TEST_NOWHERE);
 	mmap_read_unlock(mm);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p1, 0);
 
 	/* The second door: with MODE off, the same window call is silent. */
 	KUNIT_ASSERT_EQ(test,
@@ -8504,7 +8492,6 @@ static void corten_arena_test_j1_hooks(struct kunit *test)
 	mmap_read_lock(mm);
 	find_vma(mm, CORTEN_ARENA_TEST_WIN);
 	mmap_read_unlock(mm);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p1, 0);
 }
 
 /* The exemption channels (audit #52): a MODE mm drives the two corten
@@ -8518,7 +8505,6 @@ static void corten_arena_test_j1_self_exempt(struct kunit *test)
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
 	unsigned long hint = CORTEN_MODE_WINDOW_START + 4 * PMD_SIZE;
-	long p0, p1;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "J1 exemption requires corten=on");
@@ -8526,8 +8512,6 @@ static void corten_arena_test_j1_self_exempt(struct kunit *test)
 		kunit_skip(test, "auto takeover degraded (OVERCOMMIT_NEVER)");
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
-
-	p0 = corten_arena_test_j1_probes();
 
 	/* Auto takeover (addr == 0): the magazine obstacle scan reaches
 	 * the maple tree through the alias only.  A degraded-to-legacy
@@ -8545,15 +8529,6 @@ static void corten_arena_test_j1_self_exempt(struct kunit *test)
 								  hint,
 								  PAGE_SIZE,
 								  0)));
-
-	p1 = corten_arena_test_j1_probes();
-	KUNIT_EXPECT_EQ(test, p1 - p0, 0);
-
-	/* Positive control: the same window address, probed explicitly. */
-	mmap_read_lock(mm);
-	find_vma(mm, hint);
-	mmap_read_unlock(mm);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p1, 1);
 
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
@@ -8655,7 +8630,7 @@ static void corten_arena_test_fault_window_shorts(struct kunit *test)
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
 	unsigned long active = CORTEN_MODE_WINDOW_START + 2 * PMD_SIZE;
-	long p0, p1, f0, f1;
+	long f0, f1;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "fault short-circuit requires corten=on");
@@ -8681,7 +8656,6 @@ static void corten_arena_test_fault_window_shorts(struct kunit *test)
 			0);
 
 	f0 = corten_arena_test_fault_fallback_window();
-	p0 = corten_arena_test_j1_probes();
 
 	/* #1: the fast-hook arm is domain-wide (the slow path decides);
 	 * it counts and diverts, never terminates.
@@ -8700,9 +8674,7 @@ static void corten_arena_test_fault_window_shorts(struct kunit *test)
 	KUNIT_EXPECT_NULL(test,
 			  lock_mm_and_find_vma(mm, CORTEN_ARENA_TEST_WIN,
 					       NULL));
-	p1 = corten_arena_test_j1_probes();
 	f1 = corten_arena_test_fault_fallback_window();
-	KUNIT_EXPECT_EQ(test, p1 - p0, 0);
 	KUNIT_EXPECT_EQ(test, f1 - f0, 3);
 
 	/* The carve-out: an active arena keeps the walk (the probe below
@@ -8710,7 +8682,6 @@ static void corten_arena_test_fault_window_shorts(struct kunit *test)
 	 * punch implant there).
 	 */
 	KUNIT_EXPECT_NULL(test, lock_mm_and_find_vma(mm, active, NULL));
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p1, 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_fault_fallback_window(), f1);
 
 	KUNIT_EXPECT_EQ(test,
@@ -8721,18 +8692,11 @@ static void corten_arena_test_fault_window_shorts(struct kunit *test)
 
 /* ------------------------------------------------------------------
  * V-A.3c (j2-audit INV-MV2): the J2 walker -- clean shapes, injected
- * violations, the stale classification, the trigger-point wiring and
- * the fork implant mirror.
+ * violations, the stale classification and the fork implant mirror.
+ * The hot-path sampling and the trigger wiring retired with E2-A (the
+ * oracle walks on demand only).
  * ------------------------------------------------------------------
  */
-
-/* The sampling static key is global: a test that arms it must disarm it
- * whatever its assertions found.
- */
-static void corten_arena_test_j2_sample_off(void *ctx)
-{
-	corten_arena_j2_sample_set(false);
-}
 
 /* The clean anchor (brief C11): a MODE mm through its real lifecycle --
  * attach, madvise hint, park -- holds INV-MV2; the delegated-domain
@@ -8781,15 +8745,15 @@ static void corten_arena_test_inv_mv2_clean(struct kunit *test)
 						      CORTEN_ARENA_TEST_WIN));
 	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 0);
 
-	/* The exit-gate one-stop read: the guest interface must carry the
-	 * J1 pair, the J2 ledger and the verdict line.
+	/* The exit-gate one-stop read: the guest interface carries the
+	 * J2 ledger and the verdict line (the E2-A retirement took the
+	 * J1 rows; the wl rows are B-group's).
 	 */
 	{
 		char *gate = corten_test_render_dbg(CORTEN_DBG_AUDIT_GATE);
 
 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, gate);
-		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "j1_probes"));
-		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "j1_hits"));
+		KUNIT_ASSERT_NULL(test, strstr(gate, "j1_probes"));
 		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "j2_walks"));
 		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "j2_violations"));
 		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "j2_stale"));
@@ -8985,113 +8949,6 @@ static void corten_arena_test_inv_mv2_implant_fork(struct kunit *test)
 						 0, 0), 0);
 }
 
-/* The trigger wiring: fork_commit/mm_exit always walk, the hot-path
- * points (park, take/reactivate, route tails) only under the sampling
- * key, and each fires exactly its own count.
- */
-static void corten_arena_test_j2_triggers(struct kunit *test)
-{
-	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
-	struct mm_struct *mm = t->mm, *child;
-	unsigned long win2 = CORTEN_ARENA_TEST_WIN + PMD_SIZE;
-	unsigned long addr = 0, lenp = PMD_SIZE;
-	unsigned long flags = MAP_PRIVATE | MAP_ANONYMOUS;
-	long w;
-
-	if (!corten_enabled_static())
-		kunit_skip(test, "J2 triggers require corten=on");
-
-	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
-	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_pool_attach(mm,
-						      CORTEN_ARENA_TEST_WIN,
-						      PMD_SIZE), 0);
-
-	/* Lifecycle: the fork_commit tail walks the child (its registry
-	 * was just built by the mirror).
-	 */
-	w = corten_arena_test_j2_walks();
-	child = mm_alloc();
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
-	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
-	KUNIT_ASSERT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 1);
-	/* mm_exit walks the dying registry (the mirrored arena's child).
-	*/
-	mmput(child);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 2);
-
-	/* Default: the hot path is dark.  A full park (park_locked tail +
-	 * the route's EXACT exit) and a pool take (reactivate tail + the
-	 * take tail) both stay silent.
-	 */
-	w = corten_arena_test_j2_walks();
-	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_run_op(test, mm,
-						 corten_arena_test_op_munmap_route,
-						 CORTEN_ARENA_TEST_WIN,
-						 PAGE_SIZE), 1);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_pool_nr(mm), 1);
-	addr = 0;
-	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_auto_route_locked(mm, PMD_SIZE,
-							    PROT_READ |
-							    PROT_WRITE,
-							    &addr, &lenp,
-							    &flags),
-			2);
-	KUNIT_EXPECT_EQ(test, addr, CORTEN_ARENA_TEST_WIN);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w);
-
-	/* Sampling on: every hot point fires its own count. */
-	corten_arena_j2_sample_set(true);
-	KUNIT_ASSERT_EQ(test,
-			kunit_add_action(test, corten_arena_test_j2_sample_off,
-					 NULL), 0);
-
-	w = corten_arena_test_j2_walks();
-	/* Park: park_locked tail + the munmap route's EXACT exit. */
-	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_run_op(test, mm,
-						 corten_arena_test_op_munmap_route,
-						 CORTEN_ARENA_TEST_WIN,
-						 PAGE_SIZE), 1);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 2);
-
-	/* Take: reactivate tail + the take tail. */
-	addr = 0;
-	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_auto_route_locked(mm, PMD_SIZE,
-							    PROT_READ |
-							    PROT_WRITE,
-							    &addr, &lenp,
-							    &flags),
-			2);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 4);
-
-	/* A chunk munmap inside a live window: the route's chunk exit. */
-	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_pool_attach(mm, win2, PMD_SIZE), 0);
-	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_run_op(test, mm,
-						 corten_arena_test_op_munmap_route,
-						 win2 + PAGE_SIZE, PAGE_SIZE),
-			1);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 5);
-
-	/* The madvise hint arm. */
-	KUNIT_EXPECT_EQ(test,
-			corten_arena_madvise_route(mm, MADV_NORMAL, win2,
-						   PAGE_SIZE), 1);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j2_walks(), w + 6);
-
-	KUNIT_EXPECT_EQ(test,
-			corten_arena_test_run_op(test, mm,
-						 corten_arena_test_op_mode_exit,
-						 0, 0), 0);
-}
-
 /* ------------------------------------------------------------------
  * V-A.3d (D-group): the S-5 query-syscall terminals (j2-audit
  * #13/#20/#23/#28, D24) and the J1 implant exemption -- the A-series
@@ -9139,7 +8996,6 @@ static void corten_arena_test_msync_window_segments(struct kunit *test)
 	struct mm_struct *mm = t->mm;
 	struct vm_area_struct *vma;
 	unsigned long win = CORTEN_ARENA_TEST_WIN;
-	long p0;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "msync terminals require corten=on");
@@ -9159,8 +9015,6 @@ static void corten_arena_test_msync_window_segments(struct kunit *test)
 	vma = corten_arena_test_mkvm(mm, win - PMD_SIZE, win,
 				     CORTEN_ARENA_TEST_FLAGS_OK);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
-
-	p0 = corten_arena_test_j1_probes();
 
 	/* Pure parked window: the A.1-pre reservation no-op. */
 	KUNIT_EXPECT_EQ(test,
@@ -9182,7 +9036,6 @@ static void corten_arena_test_msync_window_segments(struct kunit *test)
 	 * find_vma() of the hole tail (one walk, the unchanged legacy
 	 * hole shape: a hole query paid the same walk before A.1).
 	 */
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p0, 1);
 	KUNIT_EXPECT_GT(test,
 			corten_arena_test_named_counter(test,
 							"msync_window_skips"),
@@ -9197,7 +9050,6 @@ static void corten_arena_test_msync_window_segments(struct kunit *test)
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_msync(test, mm, win + 3 * PMD_SIZE,
 						PMD_SIZE, MS_ASYNC), -ENOMEM);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p0, 3);
 
 	corten_arena_test_drop_vma(vma);
 	KUNIT_EXPECT_EQ(test,
@@ -9437,7 +9289,6 @@ static void corten_arena_test_j1_implant_exempt(struct kunit *test)
 	struct mm_struct *mm = t->mm;
 	unsigned long win = CORTEN_ARENA_TEST_WIN;
 	struct vm_area_struct *vma, *locked, *prev = NULL;
-	long p0, h0;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "J1 implant exemption requires corten=on");
@@ -9453,9 +9304,6 @@ static void corten_arena_test_j1_implant_exempt(struct kunit *test)
 	mmap_write_lock(mm);
 	corten_implant_mark(mm, win + PMD_SIZE, PAGE_SIZE);
 	mmap_write_unlock(mm);
-
-	p0 = corten_arena_test_j1_probes();
-	h0 = corten_arena_test_j1_hits();
 
 	/* The smoke contract shape: lookups on the implant VA find the
 	 * registered VMA -- all exempt, probes and hits both silent.
@@ -9473,8 +9321,6 @@ static void corten_arena_test_j1_implant_exempt(struct kunit *test)
 	KUNIT_EXPECT_PTR_EQ(test, locked, vma);
 	if (locked)
 		vma_end_read(locked);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p0, 0);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_hits() - h0, 0);
 
 	/* The neighbour shape: a query on the VMA-free active frame that
 	 * merely *returns* the implant is the same legal access.
@@ -9482,8 +9328,6 @@ static void corten_arena_test_j1_implant_exempt(struct kunit *test)
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_PTR_EQ(test, find_vma(mm, win), vma);
 	mmap_read_unlock(mm);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p0, 0);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_hits() - h0, 0);
 
 	/* The exit gate: with the exemption in place the smoke shape
 	 * leaves both hard invariants green.
@@ -9504,18 +9348,14 @@ static void corten_arena_test_j1_implant_exempt(struct kunit *test)
 	 */
 	{
 		struct vm_area_struct *fv;
-		long h1;
 
 		fv = corten_arena_test_mkvm(mm, win + 2 * PMD_SIZE,
 					    win + 2 * PMD_SIZE + PAGE_SIZE,
 					    CORTEN_ARENA_TEST_FLAGS_OK);
 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, fv);
-		h1 = corten_arena_test_j1_hits();
 		mmap_read_lock(mm);
 		KUNIT_EXPECT_PTR_EQ(test, find_vma(mm, win + 2 * PMD_SIZE), fv);
 		mmap_read_unlock(mm);
-		KUNIT_EXPECT_EQ(test, corten_arena_test_j1_hits() - h1, 1);
-		KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes() - p0, 1);
 		corten_arena_test_drop_vma(fv);
 	}
 
@@ -12487,7 +12327,7 @@ static void corten_arena_test_exit_lifecycle(struct kunit *test)
 	unsigned long keep = win + PAGE_SIZE;
 	unsigned long die = win + PMD_SIZE + PAGE_SIZE;
 	unsigned long anon = win + 2 * PAGE_SIZE;
-	long ptdescs0, arrays0, j1h0, pmds0, puds0, p4ds0, swaps0, timeouts;
+	long ptdescs0, arrays0, pmds0, puds0, p4ds0, swaps0, timeouts;
 	long upper_pmds, upper_puds;
 
 	if (!corten_enabled_static())
@@ -12495,7 +12335,6 @@ static void corten_arena_test_exit_lifecycle(struct kunit *test)
 
 	ptdescs0 = corten_arena_test_named_counter(test, "ptdescs");
 	arrays0 = corten_arena_test_named_counter(test, "meta_arrays");
-	j1h0 = corten_arena_test_j1_hits();
 	pmds0 = corten_arena_test_exit_upper_pmds();
 	puds0 = corten_arena_test_exit_upper_puds();
 	p4ds0 = corten_arena_test_exit_upper_p4ds();
@@ -12597,7 +12436,6 @@ static void corten_arena_test_exit_lifecycle(struct kunit *test)
 	 * and the J1 probe never found a window VMA.
 	 */
 	KUNIT_EXPECT_EQ(test, corten_audit_j2_walk(mm), 0);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_hits(), j1h0);
 
 	/* exit: the pure-PT walk itself (the guest reaches it through
 	 * exit_mmap(); the direct call keeps the assertions on this side
@@ -12878,7 +12716,7 @@ static void corten_arena_test_brk_delegation(struct kunit *test)
 	struct mm_struct *mm = t->mm;
 	const unsigned long heap = 2 * PMD_SIZE;
 	struct vm_area_struct *vma;
-	long g0, s0, n0, r0, h0, p0;
+	long g0, s0, n0, r0, h0;
 
 	if (!corten_enabled_static())
 		kunit_skip(test, "brk ledger requires corten=on");
@@ -12921,7 +12759,6 @@ static void corten_arena_test_brk_delegation(struct kunit *test)
 	mmap_write_unlock(mm);
 
 	h0 = corten_arena_test_heap_lookups();
-	p0 = corten_arena_test_j1_probes();
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_NOT_NULL(test,
 			      find_vma(mm, heap + 2 * PAGE_SIZE));
@@ -12932,7 +12769,6 @@ static void corten_arena_test_brk_delegation(struct kunit *test)
 	KUNIT_EXPECT_NOT_NULL(test, find_vma(mm, heap - PAGE_SIZE));
 	mmap_read_unlock(mm);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_heap_lookups(), h0 + 2);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_j1_probes(), p0);
 
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
@@ -17394,7 +17230,6 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_inv_mv2_inject),
 	KUNIT_CASE(corten_arena_test_inv_mv2_stale),
 	KUNIT_CASE(corten_arena_test_inv_mv2_implant_fork),
-	KUNIT_CASE(corten_arena_test_j2_triggers),
 	/* V-A.3d (D-group): the S-5 terminals (the J1 implant exemption
 	 * is registered with the B-group, see the note there).
 	 */
