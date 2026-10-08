@@ -2309,10 +2309,21 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 			continue;
 		}
 		for (a = addr; a < win_end; a += PAGE_SIZE) {
-			if (pte_present(ptep[pte_index(a)])) {
-				empty = false;
-				break;
+			if (!pte_present(ptep[pte_index(a)]))
+				continue;
+			/* E2-V1: a present PTE whose metadata is
+			 * INVALID is the teardown residue (the orphan:
+			 * the drop-content state kept the PTE but
+			 * dropped the live state).  Not content.  The
+			 * next declare's FRESH faults overwrite it. */
+			if (desc->meta) {
+				struct corten_pte_meta *m =
+					&desc->meta[pte_index(a)];
+				if (m->state == CORTEN_INVALID)
+					continue;
 			}
+			empty = false;
+			break;
 		}
 		pte_unmap_unlock(ptep, ptl);
 		read_unlock_bh(&desc->lock);
