@@ -13585,141 +13585,6 @@ static void corten_arena_test_brk_region_exit(struct kunit *test)
 	}
 }
 
-/*
- * The whitelist classifier (J2-complete): one full-tree pass buckets
- * every VMA -- the arena's own shadow piece, a registered implant, the
- * explicitly registered heap VMA (sec 3.5), a grows-flag stack, and
- * the delegated anon remainder; a foreign window VMA is exactly one
- * violation (the whitelist self-proof registers it clean); and a split
- * heap (two BRK-classified VMAs in one mm -- sys_brk cannot produce
- * the shape) counts one anomaly without a WARN.
- */
-static void corten_arena_test_whitelist_audit(struct kunit *test)
-{
-	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
-	struct mm_struct *mm = t->mm;
-	const unsigned long win = CORTEN_ARENA_TEST_WIN;
-	const unsigned long heap = 2 * PMD_SIZE, stack = 3 * PMD_SIZE;
-	unsigned long hist[CORTEN_WL_NR_CLASSES];
-	struct vm_area_struct *heap1, *heap2, *shadow, *impl, *stackv;
-	struct vm_area_struct *foreign;
-	long w0, v0, a0, b0, m0;
-
-	if (!corten_enabled_static())
-		kunit_skip(test, "whitelist audit requires corten=on");
-
-	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
-	KUNIT_ASSERT_EQ(test,
-			corten_arena_test_pool_attach(mm, win, PMD_SIZE), 0);
-
-	/* The delegated shapes: a split heap (both halves inside
-	 * [start_brk, brk)), a grows-flag stack, the harness's anon base
-	 * VMA from mm_setup -- plus, in the window, one shadow piece and
-	 * one registered implant.
-	 */
-	mmap_write_lock(mm);
-	mm->start_brk = heap;
-	mm->brk = heap + 4 * PAGE_SIZE;
-	mmap_write_unlock(mm);
-	heap1 = corten_arena_test_mkvm(mm, heap, heap + 2 * PAGE_SIZE,
-				       CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, heap1);
-	heap2 = corten_arena_test_mkvm(mm, heap + 2 * PAGE_SIZE,
-				       heap + 4 * PAGE_SIZE,
-				       CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, heap2);
-	stackv = corten_arena_test_mkvm(mm, stack, stack + PAGE_SIZE,
-					CORTEN_ARENA_TEST_FLAGS_OK |
-					VM_GROWSDOWN);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, stackv);
-	shadow = corten_arena_test_mkvm(mm, win + 3 * PMD_SIZE,
-					win + 3 * PMD_SIZE + PAGE_SIZE,
-					CORTEN_ARENA_TEST_FLAGS_OK |
-					VM_CORTEN);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, shadow);
-	impl = corten_arena_test_mkvm(mm, win + PMD_SIZE,
-				      win + PMD_SIZE + PAGE_SIZE,
-				      CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, impl);
-	mmap_write_lock(mm);
-	corten_implant_mark(mm, win + PMD_SIZE, PAGE_SIZE);
-	mmap_write_unlock(mm);
-
-	w0 = corten_arena_test_wl_walks();
-	v0 = corten_arena_test_wl_violations();
-	a0 = corten_arena_test_wl_brk_anomalies();
-	b0 = corten_arena_test_wl_brk_vmas();
-	m0 = corten_arena_test_wl_brk_multi();
-	memset(hist, 0, sizeof(hist));
-	corten_arena_test_wl_histogram(mm, hist);
-	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_SHADOW], 1);
-	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_IMPLANT], 1);
-	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_BRK], 2);
-	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_STACK], 1);
-	KUNIT_EXPECT_GE(test, hist[CORTEN_WL_ANON], 1);
-	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_VIOLATION], 0);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_walks(), w0 + 1);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_violations(), v0);
-	/* Ledger #4: the split heap is the measured multi-brk form --
-	 * both halves registered in the wl_brk_multi bucket, the anomaly
-	 * switch silent (structurally zero under the current predicate).
-	 */
-	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_multi(), m0 + 1);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_anomalies(), a0);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_brk_vmas(), b0 + 2);
-	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
-
-	/* The foreign window VMA: one violation, then the whitelist
-	 * self-proof (registering it clears the verdict) -- the same
-	 * contract the INV-MV2 inject anchor pins for the window-segment
-	 * walker.
-	 */
-	foreign = corten_arena_test_mkvm(mm, win + 2 * PMD_SIZE,
-					 win + 2 * PMD_SIZE + PAGE_SIZE,
-					 CORTEN_ARENA_TEST_FLAGS_OK);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, foreign);
-	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 1);
-	KUNIT_EXPECT_EQ(test, corten_arena_test_wl_violations(), v0 + 1);
-	mmap_write_lock(mm);
-	corten_implant_mark(mm, win + 2 * PMD_SIZE, PAGE_SIZE);
-	mmap_write_unlock(mm);
-	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
-
-	/* The exit-gate one-stop read carries the V-E lines and the
-	 * extended verdict (wl_violations>0 here keeps this boot's
-	 * gate_pass honestly 0 -- the anchor is registered after every
-	 * gate_pass==1 assertion above).
-	 */
-	{
-		char *gate = corten_test_render_dbg(CORTEN_DBG_AUDIT_GATE);
-
-		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, gate);
-		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_walks"));
-		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_violations"));
-		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_brk_vmas"));
-		/* Ledger #4: the multi-brk bucket rides the render. */
-		KUNIT_ASSERT_NOT_NULL(test, strstr(gate, "wl_brk_multi"));
-		KUNIT_ASSERT_NOT_NULL(test,
-				      strstr(gate, "gate_pass          0"));
-		kfree(gate);
-	}
-
-	/* drop_vma (not munmap): the completion leg reads current->mm,
-	 * which is NULL in the KUnit case thread -- the harness contract
-	 * every synthetic-VMAs teardown here follows.
-	 */
-	corten_arena_test_drop_vma(shadow);
-	corten_arena_test_drop_vma(impl);
-	corten_arena_test_drop_vma(stackv);
-	corten_arena_test_drop_vma(heap1);
-	corten_arena_test_drop_vma(heap2);
-	corten_arena_test_drop_vma(foreign);
-
-	KUNIT_EXPECT_EQ(test,
-			corten_arena_test_run_op(test, mm,
-						 corten_arena_test_op_mode_exit,
-						 0, 0), 0);
-}
 
 /*
  * W1.a: the vma-free rmap wrappers (mm/rmap.c), driven directly on
@@ -14208,7 +14073,6 @@ static void corten_arena_test_sweep_skip_special_mapping(struct kunit *test)
 		.name = "[vdso_test]",
 		.pages = spec_pages,
 	};
-	unsigned long hist[CORTEN_WL_NR_CLASSES];
 	unsigned long addr = CORTEN_ARENA_TEST_NOWHERE + 2 * PMD_SIZE;
 	struct vm_area_struct *vma;
 	long sspec;
@@ -14229,14 +14093,6 @@ static void corten_arena_test_sweep_skip_special_mapping(struct kunit *test)
 	/* The system mapping stays VMA-form (the skip, not an adopt). */
 	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, addr));
 
-	/* The histogram (the sweep created the state, so the walk is
-	 * live): exactly one SPECIAL, nothing unclassified -- the C-fix
-	 * B red face is hist[UNCLASSIFIED] == 1 with SPECIAL == 0.
-	 */
-	memset(hist, 0, sizeof(hist));
-	corten_arena_test_wl_histogram(mm, hist);
-	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_SPECIAL], 1);
-	KUNIT_EXPECT_EQ(test, hist[CORTEN_WL_UNCLASSIFIED], 0);
 }
 
 /*
@@ -15522,13 +15378,12 @@ static void corten_arena_test_pr0_bss_adopt(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, mm->map_count, map_count);
 	mmap_write_unlock(mm);
 
-	/* The record invariants over the shared frame and the J2-complete
-	 * face: no window VMA exists to classify, zero violations.
+	/* The record invariants over the shared frame: no window VMA
+	 * exists (the wl-classifying face retired with E2-B).
 	 */
 	mmap_read_lock(mm);
 	KUNIT_EXPECT_TRUE(test, corten_region_invariants_ok(mm));
 	mmap_read_unlock(mm);
-	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
 
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_run_op(test, mm,
@@ -15578,7 +15433,6 @@ static void corten_arena_test_pr0_bss_degrade(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test,
 			  corten_implant_covers(mm, CORTEN_ARENA_TEST_WIN,
 						2 * PAGE_SIZE));
-	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
 
 	mmap_write_lock(mm);
 	mm->def_flags &= ~VM_LOCKED;
@@ -15646,10 +15500,9 @@ static void corten_arena_test_pr0_shared_punch_whitelist(struct kunit *test)
 			  corten_implant_covers(mm, CORTEN_ARENA_TEST_WIN,
 						PMD_SIZE));
 
-	/* The J2-complete face: the registered tenant is whitelisted --
-	 * zero violations, the exemption doing its job.
+	/* The registered tenant is funnel-served by contract (the wl
+	 * classifying face retired with E2-B).
 	 */
-	KUNIT_EXPECT_EQ(test, corten_audit_whitelist_walk(mm), 0);
 
 	/* The tenant is funnel-served (the semantic reason the region
 	 * form cannot take it): the content faults and roundtrips
@@ -17355,7 +17208,6 @@ static struct kunit_case corten_arena_test_cases[] = {
 	/* MV2 W-4: the entry sweep (anon/file adoption, the skip
 	 * taxonomy, the empty and zero-page stock shapes).
 	 */
-	KUNIT_CASE(corten_arena_test_whitelist_audit),
 	/* Ledger #14: the static-PIE alignment probe's NOREPLACE
 	 * re-install reactivates the parked probe record (registered
 	 * last: the single-suite flake family's 83/84/85 numbering

@@ -614,18 +614,6 @@ int corten_arena_j2_walk_pid(pid_t pid);
  * legitimately serves anything outside the window, so an unclassified
  * delegated VMA is a counting bucket, never a verdict).
  */
-enum corten_wl_class {
-	CORTEN_WL_SHADOW = 0,
-	CORTEN_WL_IMPLANT,
-	CORTEN_WL_BRK,
-	CORTEN_WL_STACK,
-	CORTEN_WL_SPECIAL,
-	CORTEN_WL_FILE,
-	CORTEN_WL_ANON,
-	CORTEN_WL_UNCLASSIFIED,
-	CORTEN_WL_VIOLATION,
-	CORTEN_WL_NR_CLASSES,
-};
 
 /*
  * One whitelist pass.  Same read-only/locking contract as the J2
@@ -634,13 +622,10 @@ enum corten_wl_class {
  * holds; the heap-VMA anomaly -- more than one BRK-classified VMA in
  * one mm -- is counted into the wl ledger separately, never a WARN).
  */
-int corten_audit_whitelist_walk(struct mm_struct *mm);
-int corten_audit_whitelist_walk_locked(struct mm_struct *mm);
 
 /* V-E debugfs backend (mm/corten.c owns the file): the "whitelist
  * <pid>" manual trigger, same shape as corten_arena_j2_walk_pid().
  */
-int corten_arena_wl_audit_pid(pid_t pid);
 
 /*
  * V-E brk delegation observation (spec sec 3.5): the sys_brk arm

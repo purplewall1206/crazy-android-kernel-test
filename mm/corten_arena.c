@@ -624,27 +624,6 @@ static atomic_long_t corten_nr_sweep_skip_declare;
  * in-span, private and file-less by construction), which is exactly the
  * corrected whitelist expectation.
  */
-static atomic_long_t corten_nr_wl_walks;
-static atomic_long_t corten_nr_wl_violations;
-static atomic_long_t corten_nr_wl_brk_vmas;
-static atomic_long_t corten_nr_wl_delegated_vmas;
-static atomic_long_t corten_nr_wl_unclassified;
-static atomic_long_t corten_nr_wl_brk_anomalies;
-static atomic_long_t corten_nr_wl_brk_multi;
-/* W-6: the per-class split of the delegated composition (the guest
- * battery reads FILE and ANON at zero -- the "anonymous/file-private
- * leftover = FAIL" line needs the buckets apart, the merged
- * wl_delegated_vmas cannot prove it), plus the audited mm's tree
- * entry count (the tree-zeroing live assertion's debugfs carrier).
- */
-static atomic_long_t corten_nr_wl_shadow;
-static atomic_long_t corten_nr_wl_implant;
-static atomic_long_t corten_nr_wl_stack;
-static atomic_long_t corten_nr_wl_special;
-static atomic_long_t corten_nr_wl_file;
-static atomic_long_t corten_nr_wl_anon;
-static atomic_long_t corten_nr_tree_entries;
-static atomic_long_t corten_nr_tree_entries_pid;
 
 /* MV2 W-2: the detached-carrier counter retired with the object -- a
  * MODE mm allocates no vm_area_struct, detached included (the D28
@@ -4259,17 +4238,9 @@ long corten_arena_test_j2_first_violation(void)
 	return atomic_long_read(&corten_j2_first_violation);
 }
 
-/* V-E: the brk delegation ledger and the whitelist (J2-complete)
- * ledger.  The brk arm read takes the arm index (enum corten_brk_arm,
- * shared header); the whitelist histogram anchor walks @mm once with
- * the self-sufficient entry and fills @counts with this walk's
- * per-class VMA counts (array of CORTEN_WL_NR_CLASSES unsigned long).
- * Forward-declared: the scan body lives with the audit walkers below.
+/* V-E: the brk delegation ledger.  The brk arm read takes the arm
+ * index (enum corten_brk_arm, shared header).
  */
-static int corten_whitelist_scan(struct mm_struct *mm,
-				 const struct corten_implant_range *implants,
-				 unsigned int nr_implants,
-				 unsigned long *hist, bool publish);
 long corten_arena_test_brk_arm(int arm)
 {
 	switch (arm) {
@@ -4428,49 +4399,6 @@ long corten_arena_test_sweep(int which)
 	}
 }
 
-long corten_arena_test_wl_walks(void)
-{
-	return atomic_long_read(&corten_nr_wl_walks);
-}
-
-long corten_arena_test_wl_violations(void)
-{
-	return atomic_long_read(&corten_nr_wl_violations);
-}
-
-long corten_arena_test_wl_brk_anomalies(void)
-{
-	return atomic_long_read(&corten_nr_wl_brk_anomalies);
-}
-
-/* Ledger #4: the multi-brk form's own bucket (the expected split shape).
- */
-long corten_arena_test_wl_brk_multi(void)
-{
-	return atomic_long_read(&corten_nr_wl_brk_multi);
-}
-
-long corten_arena_test_wl_brk_vmas(void)
-{
-	return atomic_long_read(&corten_nr_wl_brk_vmas);
-}
-
-void corten_arena_test_wl_histogram(struct mm_struct *mm,
-				    unsigned long *counts)
-{
-	struct corten_mm_state *state;
-
-	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
-		return;
-	state = READ_ONCE(mm->corten_state);
-	if (!state)
-		return;
-
-	mutex_lock(&state->ctl_lock);
-	corten_whitelist_scan(mm, state->implants, state->nr_implants,
-			      counts, false);
-	mutex_unlock(&state->ctl_lock);
-}
 #endif
 
 /* ------------------------------------------------------------------ *
@@ -5035,12 +4963,9 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 * audit runs first, before any drain or zap mutates the picture --
 	 * mm_users is 0, so both the tree and the registry are frozen and
 	 * the stable-registry walker entry needs no lock.  E2-A retired
-	 * the INV-MV2 oracle run (the walk lives on as the KUnit anchors'
-	 * synthetic form); V-E's whitelist pass over the full tree stays
-	 * (the delegated composition of every departing MODE mm is
-	 * tallied for the audit gate until the B-group PR).
+	 * the INV-MV2 oracle run and E2-B the whitelist pass (both live
+	 * on as the KUnit anchors' synthetic forms only).
 	 */
-	corten_audit_whitelist_walk_locked(mm);
 
 	/* V-D: the pure-PT walk (zap + PTE/upper-table retirement) runs
 	 * before the unpublish below -- the zap's stats bookkeeping reads
@@ -15049,243 +14974,18 @@ int corten_arena_j2_walk_pid(pid_t pid)
  */
 
 /*
- * The pure predicate (KUnit-covered through the scan histogram):
- * window-intersecting VMAs must be the arena's own or an implant
- * (VIOLATION otherwise -- the same invariant corten_audit_j2_scan
- * asserts over the window segment; the whitelist form re-derives it
- * from the full-tree walk so the delegated composition and the window
- * closure come from one pass), and the delegated domain splits into
- * the whitelist categories (see enum corten_wl_class).  The heap
- * predicate accepts exactly the [start_brk, PAGE_ALIGN(brk)) span --
- * the VMA sys_brk/do_brk_flags maintains; the grows flags carry the
- * main stack; arch_vma_name() + the special_mapping family the system
- * mappings (vdso/vvar/vclock, W-3 item 4: 3/process); vm_file any
- * file mapping (exec-time and MAP_SHARED alike).
- */
-static enum corten_wl_class
-corten_whitelist_classify(const struct corten_implant_range *implants,
-			  unsigned int nr, struct mm_struct *mm,
-			  struct vm_area_struct *vma)
-{
-	unsigned long top = PAGE_ALIGN(mm->brk);
-
-	if (vma->vm_end > CORTEN_MODE_WINDOW_START &&
-	    vma->vm_start < CORTEN_MODE_WINDOW_END) {
-		unsigned long s, e;
-
-		if (vma->vm_flags & VM_CORTEN)
-			return CORTEN_WL_SHADOW;
-		s = max(vma->vm_start, CORTEN_MODE_WINDOW_START);
-		e = min(vma->vm_end, CORTEN_MODE_WINDOW_END);
-		if (corten_audit_j2_covered(implants, nr, s, e))
-			return CORTEN_WL_IMPLANT;
-		return CORTEN_WL_VIOLATION;
-	}
-	if (vma->vm_start >= mm->start_brk && vma->vm_start < top &&
-	    vma->vm_end <= top && !vma->vm_file)
-		return CORTEN_WL_BRK;
-	if (vma->vm_flags & (VM_GROWSDOWN | VM_GROWSUP))
-		return CORTEN_WL_STACK;
-	/* arch_vma_name() is silent for the special_mapping family on
-	 * x86_64 (no override at all) -- the vdso/vvar/vclock trio was
-	 * misbucketed UNCLASSIFIED through W-6's first measurement.
-	 */
-	if (arch_vma_name(vma) || vma_is_special_mapping_family(vma))
-		return CORTEN_WL_SPECIAL;
-	if (vma->vm_file)
-		return CORTEN_WL_FILE;
-	if (vma_is_anonymous(vma))
-		return CORTEN_WL_ANON;
-	return CORTEN_WL_UNCLASSIFIED;
-}
-
-/*
- * One audit pass (see the j2 scan above for the locking contract: RCU
- * tree walk, @implants image stable for the duration).  @hist, when
- * non-NULL, receives the per-class VMA count of this walk (KUnit).
- * Return: window-domain violations found (0 = J2-complete holds).
- */
-static int corten_whitelist_scan(struct mm_struct *mm,
-				 const struct corten_implant_range *implants,
-				 unsigned int nr_implants,
-				 unsigned long *hist, bool publish)
-{
-	struct vm_area_struct *vma;
-	unsigned long nr_entries = 0;
-	unsigned int brk_vmas = 0;
-	int violations = 0;
-
-	MA_STATE(mas, &mm->mm_mt, 0, ULONG_MAX);
-
-	if (hist)
-		memset(hist, 0, CORTEN_WL_NR_CLASSES * sizeof(*hist));
-
-	rcu_read_lock();
-	mas_for_each(&mas, vma, ULONG_MAX) {
-		enum corten_wl_class c;
-
-		nr_entries++;
-		c = corten_whitelist_classify(implants, nr_implants,
-					      mm, vma);
-
-		if (hist)
-			hist[c]++;
-		if (c == CORTEN_WL_VIOLATION) {
-			violations++;
-		} else if (c == CORTEN_WL_BRK) {
-			brk_vmas++;
-			atomic_long_inc(&corten_nr_wl_brk_vmas);
-		} else if (c >= CORTEN_WL_BRK) {
-			/* delegated whitelist (BRK handled above) */
-			atomic_long_inc(&corten_nr_wl_delegated_vmas);
-			if (c == CORTEN_WL_UNCLASSIFIED)
-				atomic_long_inc(&corten_nr_wl_unclassified);
-		}
-		/* W-6: the per-class ledger (see the declarations). */
-		switch (c) {
-		case CORTEN_WL_SHADOW:
-			atomic_long_inc(&corten_nr_wl_shadow);
-			break;
-		case CORTEN_WL_IMPLANT:
-			atomic_long_inc(&corten_nr_wl_implant);
-			break;
-		case CORTEN_WL_STACK:
-			atomic_long_inc(&corten_nr_wl_stack);
-			break;
-		case CORTEN_WL_SPECIAL:
-			atomic_long_inc(&corten_nr_wl_special);
-			break;
-		case CORTEN_WL_FILE:
-			atomic_long_inc(&corten_nr_wl_file);
-			break;
-		case CORTEN_WL_ANON:
-			atomic_long_inc(&corten_nr_wl_anon);
-			break;
-		default:
-			break;
-		}
-	}
-	rcu_read_unlock();
-
-	atomic_long_inc(&corten_nr_wl_walks);
-	/* W-6: the tree-zeroing live assertion's debugfs carrier -- the
-	 * audited mm's entry count, read next to tree_entries_pid.  Only
-	 * the debugfs-audit entry publishes, so the pair always describes
-	 * one audit (the route-internal scans leave both untouched).
-	 */
-	if (publish)
-		atomic_long_set(&corten_nr_tree_entries, nr_entries);
-	if (violations) {
-		atomic_long_add(violations, &corten_nr_wl_violations);
-		WARN_ONCE(1,
-			  "corten: whitelist violated: %d window vma(s) unclassified as shadow/implant\n",
-			  violations);
-	}
-	/* Ledger #4 (r07 mv3d): a walk carrying more than one heap VMA is
-	 * the measured multi-brk form (in-span private anonymous split --
-	 * the battery's heap-with-holes shape), a named observation, not
-	 * an anomaly.  wl_brk_anomalies is the dead-man's switch: the
-	 * current predicate cannot produce a walk that reaches it (see the
-	 * counter block comment); a future predicate relaxation must
-	 * decide what the residual anomaly class is before it fires.
-	 */
-	if (brk_vmas > 1)
-		atomic_long_inc(&corten_nr_wl_brk_multi);
-
-	return violations;
-}
-
-/* The self-sufficient entry: see corten_audit_j2_walk() above. */
-int corten_audit_whitelist_walk(struct mm_struct *mm)
-{
-	struct corten_mm_state *state;
-	int violations;
-
-	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
-		return 0;
-	state = READ_ONCE(mm->corten_state);
-	if (!state)
-		return 0;
-
-	mutex_lock(&state->ctl_lock);
-	violations = corten_whitelist_scan(mm, state->implants,
-					   state->nr_implants, NULL, true);
-	mutex_unlock(&state->ctl_lock);
-
-	return violations;
-}
-
-/* The stable-registry entry: see corten_audit_j2_walk_locked() above. */
-int corten_audit_whitelist_walk_locked(struct mm_struct *mm)
-{
-	struct corten_mm_state *state;
-
-	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
-		return 0;
-	state = READ_ONCE(mm->corten_state);
-	if (!state)
-		return 0;
-
-	return corten_whitelist_scan(mm, state->implants,
-				     state->nr_implants, NULL, false);
-}
-
-/* debugfs "whitelist <pid>" backend (mm/corten.c owns the file). */
-int corten_arena_wl_audit_pid(pid_t pid)
-{
-	struct task_struct *task;
-	struct mm_struct *mm;
-	pid_t audited;
-	int ret;
-
-	if (!corten_enabled_static())
-		return -EOPNOTSUPP;
-
-	rcu_read_lock();
-	task = find_get_task_by_vpid(pid);
-	rcu_read_unlock();
-	if (!task)
-		return -ESRCH;
-
-	audited = task_pid_nr(task);
-	mm = get_task_mm(task);
-	put_task_struct(task);
-	if (!mm)
-		return -EINVAL;
-
-	ret = corten_audit_whitelist_walk(mm);
-	/* W-6: stamp the audited pid so the tree_entries render (the
-	 * tree-zeroing live assertion's debugfs carrier) is attributable.
-	 * The mode gate mirrors the walk's own early-out: a non-MODE mm
-	 * is not audited and must not move the pair.
-	 */
-	if (ret >= 0 && READ_ONCE(mm->corten_mode))
-		atomic_long_set(&corten_nr_tree_entries_pid, audited);
-	mmput(mm);
-
-	return ret;
-}
-
-/*
  * The A-series exit-gate one-stop read (debugfs "audit_gate", kselftest
  * output style): the J2 walker ledger (the E2-A retirement took the J1
- * pair; the window-lookup invariants are KUnit-synthetic now) in one
- * place so the guest acceptance run greps a single file.  gate_pass is
- * the hard invariants -- no INV-MV2 violation; j2_stale is printed raw
- * because its zero-ness is workload-bound (stale is the benign
- * classification by design).  V-E extends gate_pass with the
- * whitelist ledger's two zeros (wl_violations, wl_brk_anomalies -- the
- * latter structurally zero since ledger #4 renamed the split-heap form
- * into wl_brk_multi) and prints the composition raw:
- * wl_brk_vmas/wl_delegated_vmas are workload-bound disclosure,
- * wl_unclassified is the same shape as j2_stale (a bucket, not a
- * verdict).
+ * pair, E2-B the whitelist ledger; the window-lookup and INV-MV2
+ * invariants are KUnit-synthetic now) in one place so the guest
+ * acceptance run greps a single file.  gate_pass is the hard invariant
+ * -- no INV-MV2 violation; j2_stale is printed raw because its
+ * zero-ness is workload-bound (stale is the benign classification by
+ * design).
  */
 void corten_arena_audit_gate_report(struct seq_file *m)
 {
 	long viol = atomic_long_read(&corten_nr_j2_violations);
-	long wl_viol = atomic_long_read(&corten_nr_wl_violations);
-	long wl_anom = atomic_long_read(&corten_nr_wl_brk_anomalies);
 
 	seq_printf(m, "j2_walks           %ld\n",
 		   atomic_long_read(&corten_nr_j2_walks));
@@ -15294,51 +14994,11 @@ void corten_arena_audit_gate_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_j2_stale));
 	seq_printf(m, "j2_first_violation 0x%lx\n",
 		   atomic_long_read(&corten_j2_first_violation));
-	/* V-E: the whitelist (J2-complete) ledger. */
-	seq_printf(m, "wl_walks           %ld\n",
-		   atomic_long_read(&corten_nr_wl_walks));
-	seq_printf(m, "wl_violations      %ld\n", wl_viol);
-	seq_printf(m, "wl_brk_vmas        %ld\n",
-		   atomic_long_read(&corten_nr_wl_brk_vmas));
-	seq_printf(m, "wl_delegated_vmas  %ld\n",
-		   atomic_long_read(&corten_nr_wl_delegated_vmas));
-	seq_printf(m, "wl_unclassified    %ld\n",
-		   atomic_long_read(&corten_nr_wl_unclassified));
-	seq_printf(m, "wl_brk_anomalies   %ld\n", wl_anom);
-	/* Ledger #4: the multi-brk form's own bucket (the expected split
-	 * shape; wl_brk_anomalies above stays the structurally-zero
-	 * dead-man's switch).
+	/* E2-B: the whitelist ledger's rows and the tree_entries pair
+	 * (the wl scan was their only writer) retired with the
+	 * classifier.
 	 */
-	seq_printf(m, "wl_brk_multi       %ld\n",
-		   atomic_long_read(&corten_nr_wl_brk_multi));
-	/* W-6: the delegated composition split (the guest battery reads
-	 * FILE and ANON at zero) and the last audit's tree entry count
-	 * (the tree-zeroing live assertion's debugfs carrier, read next
-	 * to tree_entries_pid).
-	 */
-	seq_printf(m, "wl_shadow          %ld\n",
-		   atomic_long_read(&corten_nr_wl_shadow));
-	seq_printf(m, "wl_implant         %ld\n",
-		   atomic_long_read(&corten_nr_wl_implant));
-	seq_printf(m, "wl_stack           %ld\n",
-		   atomic_long_read(&corten_nr_wl_stack));
-	seq_printf(m, "wl_special         %ld\n",
-		   atomic_long_read(&corten_nr_wl_special));
-	seq_printf(m, "wl_file            %ld\n",
-		   atomic_long_read(&corten_nr_wl_file));
-	seq_printf(m, "wl_anon            %ld\n",
-		   atomic_long_read(&corten_nr_wl_anon));
-	seq_printf(m, "tree_entries       %ld\n",
-		   atomic_long_read(&corten_nr_tree_entries));
-	seq_printf(m, "tree_entries_pid   %ld\n",
-		   atomic_long_read(&corten_nr_tree_entries_pid));
-	/* E2-A: the J1 pair is retired (the probes' counting went with
-	 * corten_j1_slow(); the window-lookup invariants are kept by the
-	 * KUnit synthetic anchors).  gate_pass narrows to the surviving
-	 * ledgers.
-	 */
-	seq_printf(m, "gate_pass          %d\n",
-		   !viol && !wl_viol && !wl_anom);
+	seq_printf(m, "gate_pass          %d\n", !viol);
 }
 
 /*
