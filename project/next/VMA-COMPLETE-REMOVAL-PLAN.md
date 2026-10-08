@@ -186,3 +186,12 @@ EBUSY→重定位降级）。
   计算差。**下轮: per-PTE 转储**（C1 内容打印已含 first= 地址; 需加
   pre-check 与 declare-C1 的两次读数对比 + PT 页全 dump）。
 - 稳定链 909bccf =on boot 绿不受影响; pr-v1 全量在案。
+
+## 7g. 最终定位（04:15）: -EBUSY = ELF 重叠段映射 × [C1]
+
+**根因闭环**: ELF 的 PT_LOAD 段映射天然互相重叠（RW 嵌在 RX memsz 内）。
+ld.so 的段 MAP_FIXED 到达采纳门 → [C1] 检出**前一段的活页**在被收编范围
+内 → 保护性 -EBUSY → ld.so "cannot map segment" → exit 127。
+**修复点（单函数, 已精确）**: 采纳门的 overlap-teardown（punch borrow）
+需覆盖 dlopen/ld.so 的重叠段形态——W-7 exec 镜像已有同款机械, 差异仅在
+触发条件与 zflags 的页粒度对齐。这是 V1 的最后一块拼图。
