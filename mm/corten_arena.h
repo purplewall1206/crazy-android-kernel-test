@@ -561,6 +561,8 @@ bool corten_arena_placement_backstop(struct mm_struct *mm,
  * kfree_rcu and the count/pointer snapshot protocol is barrier-paired
  * with the mark() publisher; read the .c comment before adding callers.
  */
+/* V2 census producer (the wl_brk acceptance denominator). */
+void corten_note_brk_funnel(struct mm_struct *mm);
 void corten_implant_mark(struct mm_struct *mm, unsigned long start,
 			 unsigned long len);
 bool corten_implant_covers(struct mm_struct *mm, unsigned long start,
@@ -1236,6 +1238,10 @@ corten_arena_placement_backstop(struct mm_struct *mm, unsigned long start,
 				unsigned long len)
 {
 	return false;
+}
+
+static inline void corten_note_brk_funnel(struct mm_struct *mm)
+{
 }
 
 static inline void corten_implant_mark(struct mm_struct *mm,

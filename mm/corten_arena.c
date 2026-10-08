@@ -229,6 +229,12 @@ static atomic_long_t corten_arena_nr_drain_timeouts;
 static atomic_long_t corten_nr_auto_mmaps;	/* auto arenas attached */
 static atomic_long_t corten_nr_auto_attach_fails; /* DECLARE in attach failed */
 static atomic_long_t corten_nr_exec_default_enters; /* MV3.a execve default MODEs */
+/* V2 census (the wl_* acceptance metrics): the funnel-VMA legs a MODE mm
+ * still took at the two G-phase shapes -- brk (vm_brk_flags' funnel) and
+ * the exec stack (the sweep's GROWSDOWN skip).  Both read 0 at the V2
+ * DoD (wl_brk=0 / wl_stack=0): the region forms answer them instead.
+ */
+static atomic_long_t corten_nr_brk_funnel;	/* MODE-mm brk funnel VMAs */
 /* Ledger #2: the arena_stats per-mm registry walks' truncation count
  * (declared here for the stats render; the walker lives at the shrinker
  * section where the budget and the disclosure live).
@@ -3519,6 +3525,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_auto_attach_fails));
 	seq_printf(m, "exec_default_enters %ld\n",
 		   atomic_long_read(&corten_nr_exec_default_enters));
+	seq_printf(m, "brk_funnel          %ld\n",
+		   atomic_long_read(&corten_nr_brk_funnel));
 	seq_printf(m, "auto_fallbacks      %ld\n",
 		   atomic_long_read(&corten_nr_auto_fallbacks));
 	seq_printf(m, "auto_exhausted      %ld\n",
@@ -14617,6 +14625,16 @@ static int corten_arena_mmap_punch(struct mm_struct *mm,
  * walker would count it.  get_state() runs under the caller's
  * mmap_write like every producer.
  */
+/* V2 census producer: vm_brk_flags' funnel leg ran for a MODE mm (the
+ * declare route degraded or refused) -- the wl_brk acceptance metric's
+ * denominator (target 0; the exec-time leg is the sweep's skip_brk).
+ */
+void corten_note_brk_funnel(struct mm_struct *mm)
+{
+	if (corten_enabled_static() && READ_ONCE(mm->corten_mode))
+		atomic_long_inc(&corten_nr_brk_funnel);
+}
+
 void corten_implant_mark(struct mm_struct *mm, unsigned long start,
 			 unsigned long len)
 {

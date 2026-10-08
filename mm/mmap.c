@@ -1591,6 +1591,11 @@ int vm_brk_flags(unsigned long addr, unsigned long request, vm_flags_t vm_flags)
 	if (!ret && addr >= CORTEN_MODE_WINDOW_START &&
 	    addr + len <= CORTEN_MODE_WINDOW_END)
 		corten_implant_mark(mm, addr, len);
+	/* V2 census: the funnel leg ran for a MODE mm -- the wl_brk
+	 * acceptance metric's denominator (target 0).
+	 */
+	if (!ret)
+		corten_note_brk_funnel(mm);
 #endif
 	populate = ((mm->def_flags & VM_LOCKED) != 0);
 	mmap_write_unlock(mm);
