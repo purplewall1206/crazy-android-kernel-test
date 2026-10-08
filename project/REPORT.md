@@ -1361,6 +1361,34 @@ membership test 免热路径 mutex+re-arm, 首轮 KUnit 两锚红, 修复迭代�
 t8 尾部差距的机制归因维持 mv3cfeat 判定: park PTE 级全幅走查（有意保留,
 W-3fix5 §3 裁决）+ per-fault ~+1.4µs（mv3cfeat §2.4-2 归因在案）。
 
+### 11.8b 三刀收官与 bisect 归因（2026-10-08, 修复与落地轮）
+
+三刀全部落地, 台账 #10/#12 闭:
+
+- **#12（per-fault 簿记批化/刀 3）**: w3fix7 落地并合并主链（fill 温快路径:
+  lockless ptdesc membership + txn_begin L3-before-L4 与 L7/L8 塌缩覆盖锁 +
+  fill 免 mutex）。接管验收门全绿（next/w3fix7-takeover-notes.md: checkpatch
+  0E/0W/0C, =n 零符号, KUnit on3 ×3 + off, smoke 26/26, metis
+  2d383eeed4ceb73b 精确同值, audit gate_pass=1）。bench-after vs base
+  （merge 前基树 #410, mmpf 中位）: stock t4 +14.4% / t8 +69.6%; mode t4
+  +52.1%; **mode t8 定读 GAP 登记**（宿主载入风暴窗双峰, 复跑套件
+  project/bin/w3fix7-vm.sh|guest.sh 安静窗 15 分钟可复全腿）。合并后 KUnit
+  27/0/1 + 151/0/0 + 34/0/5。
+- **#10（地板演化 bisect）**: 六锚 × t4/t8 × stock/mode × k1-3 重放收数
+  （72/72 腿有效, next/perf10-bisect-dev-report.md）。**字面问题**（
+  mv3cfeat→w3fix6 漂移）方向复现: t4 mode 0.000845→0.000943（+11.6%, 3v3
+  分离）——但参考读数的低端（0.000453）疑被当时宿主水位压低, 重放幅度远小
+  于 +84%。**六锚全窗的真实结构**（以抗宿主漂移的同 boot 配对 mode/stock
+  ratio 为准）: 最大坍塌事件在 **A5→corten-mv-complete（0.791→0.235,
+  −71%）**——即 MV3.a 默认进场落地轮; 随后逐锚修复（mv2-complete→mv3cfeat
+  +83% 为大头）, w3fix6 ratio 已回 A5 水位（0.789）。stock 臂在锚 3→4 间的
+  47% 整体下跌 = 宿主两次水位混杂警示: 跨锚绝对数不可直接比较, 结论一律以
+  配对 ratio 口径; 36-commit 窗口二分到单 commit 需追加 bisect 片（未排期）。
+- **#11（脏域有界化/刀 2）**: W-3fix5 已落地（§11.8 原文), 三刀清账。
+- **D36 刷新口径**: t4 MODE 税 −33.3%→（w3fix7 合并后复测待安静窗）, t8
+  −61.5%→同上; bisect 证明地板漂移非单点回归而是 MV3.a 采纳机械的既有成本
+  + 逐片修复轨迹, "个位数地板"目标转入 w3fix7 后续片与 #11 深化。
+
 ### 11.9 ★ 删除账执行夜的重大发现: PR-0 =on 默认进场回归（P1 首项, 2026-10-07）
 
 PR-1 的验收 boot 揭露一个**被 lockdep 掩蔽的预存回归**, 与删除账执行同夜定罪
