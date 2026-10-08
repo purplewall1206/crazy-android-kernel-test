@@ -481,6 +481,11 @@ void corten_legacy_drift_inc(void)
 	atomic_long_inc(&corten_nr_legacy_drift);
 }
 
+bool corten_ptdesc_tracked(struct page *pte_page)
+{
+	return xa_load(&corten_ptdesc_xa, page_to_pfn(pte_page));
+}
+
 /* KUnit-visible snapshots of the drift counters (debugfs shows the same
  * numbers between runs).
  */
@@ -711,9 +716,12 @@ static struct corten_ptdesc *corten_txn_fill_hole(struct corten_ptdesc *cur,
  *   L2   cur = ops->root(ctx, start)     -- descend from the (highest
  *                                           tracked) root page;
  *   L3   while child_covers(cur, range)  -- corten_child_covers_range();
- *   L4   read_lock(cur)                  -- taken on every page the walk
- *                                           stands on, keeping the whole
- *                                           root->covering path locked;
+ *                                           evaluated before any lock is
+ *                                           taken (W-3fix7): the answer is
+ *                                           arithmetic on cur->level;
+ *   L4   read_lock(cur)                  -- taken on every interior page
+ *                                           the walk descends through,
+ *                                           keeping the walked path locked;
  *   L5/L6 cur = child_node_of(cur)       -- ops->child(), pinned;
  *   L5'  no child (hole): ensure-alloc, paper Figure 5 L5' + the
  *        reference implementation's alloc_if_none.  When the view
@@ -807,6 +815,7 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 
 	for (;;) {
 		struct corten_ptdesc *child;
+		bool covering;
 
 		/* CORTEN_TXN_PATH_MAX bounds the walk structurally (the
 		 * level strictly decreases each round); a violation means a
@@ -816,6 +825,65 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 			corten_ptdesc_put(cur);
 			corten_txn_release_path(txn);
 			return -EPROTO;
+		}
+
+		/* L3 before L4 (W-3fix7): whether @cur is the covering
+		 * candidate is pure arithmetic on its level -- the decision
+		 * needs no lock, so compute it first and lock exactly once,
+		 * with the kind the role demands.
+		 */
+		covering = !corten_child_covers_range(start, end, cur->level);
+
+		if (covering) {
+			/* L7/L8, collapsed: the candidate takes the covering
+			 * write lock directly, with no read-lock round trip
+			 * and no unlocked upgrade window.  The old shape
+			 * (read_lock, stale check, read_unlock, write_lock,
+			 * stale re-check) paid two extra lock operations per
+			 * transaction -- the per-fault bookkeeping tax the
+			 * performance ledger charges -- for a decision that
+			 * could not have been invalidated: the read lock only
+			 * held the walk's place while child_covers_range()
+			 * ran, and that answer is already in hand.  What the
+			 * upgrade re-check guaranteed -- staleness judged
+			 * under the write lock, i.e. mutually exclusive with
+			 * the uninstaller's stale publication -- this shape
+			 * still guarantees, because the only stale verdict is
+			 * issued under the write lock itself (below).  BH
+			 * symmetry is unchanged (corten_ptdesc_uninstall()).
+			 *
+			 * The protocol counters run before the acquisition:
+			 * they are advisory instrumentation (debugfs only,
+			 * never control flow) and do not need the covering
+			 * exclusivity, so between the write lock sides of
+			 * same-window threads they no longer lengthen the
+			 * serialized section.  Between this increment and
+			 * @covering taking the lock, "active" can transiently
+			 * count one transaction that has not begun yet (and
+			 * the failed-stale arm below decrements its own);
+			 * a quiesced read stays exact.
+			 */
+			active = atomic_long_inc_return(&corten_nr_txns);
+			watermark = atomic_long_read(&corten_nr_txns_max);
+			while (active > watermark &&
+			       !atomic_long_try_cmpxchg(&corten_nr_txns_max,
+							&watermark, active))
+				;
+
+			write_lock_bh(&cur->lock);
+			if (unlikely(READ_ONCE(cur->stale))) {
+				write_unlock_bh(&cur->lock);
+				corten_ptdesc_put(cur);
+				corten_txn_release_path(txn);
+				atomic_long_dec(&corten_nr_txns);
+				return -EAGAIN;
+			}
+
+			/* The candidate never joins txn->path: there is
+			 * nothing left to descend to, and the finish path
+			 * releases it through @covering alone.
+			 */
+			break;
 		}
 
 		/* L4: read-lock the page the walk stands on.  BH-symmetric:
@@ -831,10 +899,6 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 			return -EAGAIN;
 		}
 		txn->path[txn->nr_path++] = cur;
-
-		/* L3: does a single child of cur cover the whole range? */
-		if (!corten_child_covers_range(start, end, cur->level))
-			break;		/* cur is the covering candidate */
 
 		/* L5/L6: descend to the child containing start. */
 		child = ops->child(ctx, cur, start);
@@ -870,17 +934,6 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 		cur = child;
 	}
 
-	/* L7/L8: upgrade the candidate to the covering write lock. */
-	cur = txn->path[--txn->nr_path];
-	read_unlock_bh(&cur->lock);
-	write_lock_bh(&cur->lock);
-	if (unlikely(READ_ONCE(cur->stale))) {
-		write_unlock_bh(&cur->lock);
-		corten_ptdesc_put(cur);
-		corten_txn_release_path(txn);
-		return -EAGAIN;
-	}
-
 	txn->covering = cur;
 	txn->level = cur->level;
 	/* First visit: record the covered window base (0 until now; the
@@ -900,13 +953,6 @@ int corten_txn_begin(struct mm_struct *mm, unsigned long start,
 	 * scope of the freeze argument in multi-level tree views.
 	 */
 	corten_txn_release_path(txn);
-
-	active = atomic_long_inc_return(&corten_nr_txns);
-	watermark = atomic_long_read(&corten_nr_txns_max);
-	while (active > watermark &&
-	       !atomic_long_try_cmpxchg(&corten_nr_txns_max, &watermark,
-					active))
-		;
 
 	return 0;
 }

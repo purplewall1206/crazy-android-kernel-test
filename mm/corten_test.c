@@ -41,6 +41,9 @@
 
 #include "corten.h"
 
+/* Defined near the tail with the debugfs render assertions. */
+static bool corten_test_dbg_value(const char *s, const char *key, long *out);
+
 /* Exit action: retire the descriptor (if any) and return the PT page. */
 static void corten_test_uninstall_free(void *ctx)
 {
@@ -831,15 +834,72 @@ static void corten_test_real_destroy(void *ctx)
 		mmput(r->mm);
 }
 
+/* Build the real-view fixture: a private mm with a manually installed
+ * 4G-aligned pud/pmd path and one tracked PT page (plus an untracked
+ * neighbor).  4G-aligned base: its pud/pmd slot indices are 0, so the
+ * pointers returned by pud_alloc()/pmd_alloc() are the page bases the
+ * page-aligned BUG_ONs in pud_free()/pmd_free() demand.  Cleanup is
+ * the test-managed corten_test_real_destroy() action.
+ */
+static struct corten_test_real_ctx *corten_test_real_setup(struct kunit *test)
+{
+	struct corten_test_real_ctx *r;
+	unsigned long addr = PAGE_SIZE;
+	pgd_t *pgdp;
+	p4d_t *p4dp;
+	pud_t *pudp;
+	pmd_t *pmdp;
+
+	r = kunit_kzalloc(test, sizeof(*r), GFP_KERNEL);
+	if (!r)
+		return NULL;
+	kunit_add_action(test, corten_test_real_destroy, r);
+
+	r->mm = mm_alloc();
+	if (!r->mm)
+		return NULL;
+
+	pgdp = pgd_offset(r->mm, addr);
+	p4dp = p4d_alloc(r->mm, pgdp, addr);
+	if (!p4dp)
+		return NULL;
+	pudp = pud_alloc(r->mm, p4dp, addr);
+	if (!pudp)
+		return NULL;
+	r->pud = pudp;
+	pmdp = pmd_alloc(r->mm, pudp, addr);
+	if (!pmdp)
+		return NULL;
+	r->pmd = pmdp;
+
+	/*
+	 * Install the PT page for @addr.  On a corten=on kernel the
+	 * pte_alloc_one() hook would have tracked it; the tests run under
+	 * the gate too, so install explicitly (same function the hook
+	 * calls).  The neighboring window is populated without a
+	 * descriptor (untracked).
+	 */
+	r->pte_page = alloc_page(GFP_KERNEL);
+	if (!r->pte_page)
+		return NULL;
+	pmd_populate(r->mm, pmdp, r->pte_page);
+	if (corten_ptdesc_install(r->mm, r->pte_page))
+		return NULL;
+
+	r->pte_page2 = alloc_page(GFP_KERNEL);
+	if (!r->pte_page2)
+		return NULL;
+	pmd_populate(r->mm, pmd_offset(pudp, addr + 6 * PMD_SIZE),
+		     r->pte_page2);
+
+	return r;
+}
+
 static void corten_test_txn_real_glue(struct kunit *test)
 {
 	/*
 	 * The context is test-managed heap memory: KUnit runs cleanup
 	 * actions outside the test function's stack frame.
-	 *
-	 * 4G-aligned base: its pud/pmd slot indices are 0, so the pointers
-	 * returned by pud_alloc()/pmd_alloc() are the page bases the
-	 * page-aligned BUG_ONs in pud_free()/pmd_free() demand.
 	 */
 	struct corten_test_real_ctx *r;
 	unsigned long base = 0;
@@ -849,44 +909,10 @@ static void corten_test_txn_real_glue(struct kunit *test)
 	struct corten_txn txn;
 	struct corten_pte_meta m, q;
 	struct corten_ptdesc *desc;
-	pgd_t *pgdp;
-	p4d_t *p4dp;
-	pud_t *pudp;
-	pmd_t *pmdp;
 	int ret;
 
-	r = kunit_kzalloc(test, sizeof(*r), GFP_KERNEL);
+	r = corten_test_real_setup(test);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, r);
-	kunit_add_action(test, corten_test_real_destroy, r);
-
-	r->mm = mm_alloc();
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, r->mm);
-
-	pgdp = pgd_offset(r->mm, addr);
-	p4dp = p4d_alloc(r->mm, pgdp, addr);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, p4dp);
-	pudp = pud_alloc(r->mm, p4dp, addr);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pudp);
-	r->pud = pudp;
-	pmdp = pmd_alloc(r->mm, pudp, addr);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
-	r->pmd = pmdp;
-
-	/*
-	 * Install the PT page for @addr.  On a corten=on kernel the
-	 * pte_alloc_one() hook would have tracked it; the tests run under
-	 * the gate too, so install explicitly (same function the hook
-	 * calls).  The neighboring windows are populated without a
-	 * descriptor (untracked) or not at all (hole).
-	 */
-	r->pte_page = alloc_page(GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, r->pte_page);
-	pmd_populate(r->mm, pmdp, r->pte_page);
-	KUNIT_ASSERT_EQ(test, 0, corten_ptdesc_install(r->mm, r->pte_page));
-
-	r->pte_page2 = alloc_page(GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, r->pte_page2);
-	pmd_populate(r->mm, pmd_offset(pudp, addr_untracked), r->pte_page2);
 
 	/* Happy path: lock, mark (mmap), map (fault), query, unmap. */
 	ret = corten_lock_range(r->mm, addr, PAGE_SIZE, &txn);
@@ -929,6 +955,85 @@ static void corten_test_txn_real_glue(struct kunit *test)
 	ret = corten_lock_range(r->mm, addr, PAGE_SIZE, &txn);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	corten_unlock(&txn);
+}
+
+/*
+ * W-3fix7: the real view's candidate is its root (2b tracks PTE-level
+ * pages only), so every transaction here takes the collapsed L7/L8
+ * path -- the covering write lock acquired directly, with no read-lock
+ * round trip and no path entry for the candidate.  Churn the
+ * transaction through that path and lock the observable contract: the
+ * metadata roundtrip stays exact, every round releases its pin back
+ * to the xarray base reference, the dirty range keeps tracking the
+ * recorded slot, and the protocol counters (moved out of the covering
+ * hold in the same slice) read back exact at quiesce with the
+ * watermark recorded.
+ */
+static void corten_test_txn_candidate_churn(struct kunit *test)
+{
+	struct corten_test_real_ctx *r;
+	unsigned long addr = PAGE_SIZE;
+	struct corten_txn txn;
+	struct corten_pte_meta m, q;
+	struct corten_ptdesc *desc;
+	char *dbg;
+	long v;
+	int i;
+
+	r = corten_test_real_setup(test);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, r);
+
+	memset(&m, 0, sizeof(m));
+	m.state = CORTEN_PRIVATE_ANON;
+	m.perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER;
+
+	for (i = 0; i < 200; i++) {
+		KUNIT_ASSERT_EQ(test,
+				corten_lock_range(r->mm, addr, PAGE_SIZE,
+						  &txn),
+				0);
+		KUNIT_EXPECT_EQ(test, txn.level, CORTEN_LEVEL_PTE);
+		KUNIT_EXPECT_EQ(test, txn.covering->va_base, addr & PMD_MASK);
+		/* The fixture's xarray base pin plus the covering pin:
+		 * the candidate never rides txn->path, so there is
+		 * nothing else held.
+		 */
+		KUNIT_EXPECT_EQ(test, refcount_read(&txn.covering->refs), 2);
+
+		KUNIT_EXPECT_EQ(test, 0, corten_mark(&txn, addr, PAGE_SIZE,
+						     &m));
+		KUNIT_EXPECT_EQ(test, 0, corten_map(&txn, addr, r->pte_page,
+						    m.perm, 0));
+		KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, addr, &q));
+		KUNIT_EXPECT_EQ(test, q.state, CORTEN_MAPPED);
+		KUNIT_EXPECT_EQ(test, 0, corten_unmap(&txn, addr, PAGE_SIZE,
+						      0));
+		KUNIT_EXPECT_EQ(test, 0, corten_query(&txn, addr, &q));
+		KUNIT_EXPECT_EQ(test, q.state, CORTEN_INVALID);
+
+		corten_unlock(&txn);
+	}
+
+	/* Every round released its pin: the descriptor sits at the xarray
+	 * base reference, and the dirty range still names the one
+	 * recorded slot (the widen ran under the collapsed lock; unmap
+	 * never shrinks it).
+	 */
+	desc = corten_ptdesc_get(page_to_pfn(r->pte_page));
+	KUNIT_ASSERT_NOT_NULL(test, desc);
+	KUNIT_EXPECT_EQ(test, refcount_read(&desc->refs), 2);
+	KUNIT_EXPECT_EQ(test, desc->rec_lo, (u16)pte_index(addr));
+	KUNIT_EXPECT_EQ(test, desc->rec_hi, (u16)pte_index(addr));
+	corten_ptdesc_put(desc);
+
+	/* The protocol counters: exact at quiesce, watermark recorded. */
+	dbg = corten_test_render_dbg(CORTEN_DBG_TXN);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dbg);
+	KUNIT_EXPECT_TRUE(test, corten_test_dbg_value(dbg, "active", &v));
+	KUNIT_EXPECT_EQ(test, v, 0);
+	KUNIT_EXPECT_TRUE(test, corten_test_dbg_value(dbg, "active_max", &v));
+	KUNIT_EXPECT_GE(test, v, 1);
+	kfree(dbg);
 }
 
 /*
@@ -2268,6 +2373,12 @@ static struct kunit_case corten_test_cases[] = {
 	KUNIT_CASE(corten_test_txn_state_machine),
 	KUNIT_CASE(corten_test_txn_atomic_validate),
 	KUNIT_CASE(corten_test_txn_real_glue),
+	/* W-3fix7: the real view's candidate lock is acquired directly
+	 * (no read-lock round trip) -- the churn anchor for the
+	 * collapsed path, its pin discipline and the protocol
+	 * counters' exactness at quiesce.
+	 */
+	KUNIT_CASE(corten_test_txn_candidate_churn),
 	KUNIT_CASE(corten_test_txn_mutex_overlap),
 	KUNIT_CASE(corten_test_txn_mutex_disjoint),
 	KUNIT_CASE(corten_test_fail_alloc),
