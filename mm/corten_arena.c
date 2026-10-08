@@ -3305,8 +3305,8 @@ void corten_brk_note_slow(struct mm_struct *mm, enum corten_brk_arm arm)
  */
 bool corten_fault_window_fallback(struct mm_struct *mm, unsigned long addr)
 {
-	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
-	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
+	/* E2-V1: de-windowed -- the whole MODE address space. */
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
 		return false;
 
 	atomic_long_inc(&corten_nr_fault_fallback_window);
@@ -3330,8 +3330,7 @@ bool corten_fault_window_maperr(struct mm_struct *mm, unsigned long addr)
 {
 	struct corten_arena *ar;
 
-	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
-	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
 		return false;
 
 	rcu_read_lock();
@@ -3399,8 +3398,7 @@ bool corten_uffd_window_reject(struct mm_struct *mm,
  */
 void corten_gup_note_window_miss(struct mm_struct *mm, unsigned long addr)
 {
-	if (corten_enabled_static() && READ_ONCE(mm->corten_mode) &&
-	    addr >= CORTEN_MODE_WINDOW_START && addr < CORTEN_MODE_WINDOW_END)
+	if (corten_enabled_static() && READ_ONCE(mm->corten_mode))
 		atomic_long_inc(&corten_nr_gup_window_miss);
 }
 
@@ -3412,8 +3410,7 @@ void corten_gup_note_window_miss(struct mm_struct *mm, unsigned long addr)
  */
 void corten_remote_note_window_short(struct mm_struct *mm, unsigned long addr)
 {
-	if (corten_enabled_static() && READ_ONCE(mm->corten_mode) &&
-	    addr >= CORTEN_MODE_WINDOW_START && addr < CORTEN_MODE_WINDOW_END)
+	if (corten_enabled_static() && READ_ONCE(mm->corten_mode))
 		atomic_long_inc(&corten_nr_remote_access_window_short);
 }
 
@@ -5347,8 +5344,13 @@ int corten_gup_window(struct mm_struct *mm, unsigned long addr,
 	u8 perm = 0;
 	int tries;
 
+	/* E2-V1: de-windowed, lookup-routed -- an arena at @addr is
+	 * served by the arm; everything else (the V2/V3 legacy
+	 * residents, true holes) delegates to the tree, whose verdict
+	 * is identical (a hole EFAULTs exactly as the arena would).
+	 */
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
-	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
+	    !corten_arena_lookup_get(mm, addr))
 		return 1;
 
 	/* Implants own real tree VMAs -- find_vma() must see them. */
@@ -5627,9 +5629,17 @@ faultin:
 
 bool corten_remote_vm_window(struct mm_struct *mm, unsigned long addr)
 {
-	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
-	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
+	/* E2-V1: de-windowed, lookup-routed -- arena-owned addresses
+	 * take the arm unless an implant owns them; the V2/V3 legacy
+	 * residents delegate to the tree.
+	 */
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
 		return false;
+	if (!corten_arena_lookup_get(mm, addr)) {
+		bool covers = corten_implant_covers(mm, addr, 1);
+
+		return !covers;
+	}
 	return !corten_implant_covers(mm, addr, 1);
 }
 
@@ -6741,6 +6751,33 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 	    corten_file_may(file, prot, pgoff, len2, NULL)) {
 		corten_arena_auto_fallback(NULL);
 		return 0;
+	}
+
+	/* E2-V1 (the in-place arm): a hinted private mapping adopts at
+	 * the hint address -- the loader's library shape (every DSO
+	 * segment maps with an explicit base hint; the migration
+	 * semantics the #13 ruling worried about are never exercised:
+	 * the address does not move).  Page-granular, the W-7
+	 * exec-mirror form -- a PMD-rounded tail would eat the next
+	 * DSO's hint, the loader packs them back to back.  The hint is
+	 * honored when the range is free of both tree VMAs and arena
+	 * occupancy (the reserve sentinel included); anything else
+	 * falls through to the legacy flow, which relocates the mapping
+	 * normally.  No flag rewrite, no placement: an attach failure
+	 * degrades with the caller's own hint semantics.
+	 */
+	if (*addr && current->mm == mm) {
+		/* The exec load's own segment maps carry hints too -- but
+		 * during load_elf_binary() current->mm is still the OLD mm,
+		 * so the equality above is exactly the exec-load
+		 * discriminator: the image takes the window placement (the
+		 * MV3.c exec mirror), never the in-place arm.
+		 */
+		if (find_vma_intersection(mm, *addr, *addr + len) ||
+		    corten_arena_range_occupied_incl_idle(mm, *addr, len))
+			return 0;
+		*lenp = len;
+		return 1;
 	}
 
 	state = corten_arena_get_state(mm);
@@ -13968,8 +14005,11 @@ static int corten_bss_declare1(struct mm_struct *mm, unsigned long addr,
 
 	if (!READ_ONCE(mm->corten_mode) || !corten_enabled_static())
 		return 1;
-	if (!len || addr < CORTEN_MODE_WINDOW_START ||
-	    addr + len > CORTEN_MODE_WINDOW_END)
+	/* E2-V1: de-windowed -- the bss adopts wherever the main exe's
+	 * segments landed (in-place wl adoption moves their addresses
+	 * nowhere; the non-PIE shape keeps its link-time addresses).
+	 */
+	if (!len)
 		return 1;
 	if (mm->def_flags & VM_LOCKED)
 		return 1;
@@ -14626,19 +14666,12 @@ void corten_implant_mark(struct mm_struct *mm, unsigned long start,
 	 * producers were window-bound by construction, the backstop arm
 	 * is not).
 	 */
-	if (!len || start >= CORTEN_MODE_WINDOW_END ||
-	    start + len <= CORTEN_MODE_WINDOW_START)
+	if (!len)
 		return;
-	/* The true end before the start clip: a range straddling the
-	 * window edge registers only its intersection.
+	/* E2-V1: de-windowed -- no clip; the punch registry serves the
+	 * whole MODE address space.
 	 */
 	end = start + len;
-	if (start < CORTEN_MODE_WINDOW_START)
-		start = CORTEN_MODE_WINDOW_START;
-	if (end > CORTEN_MODE_WINDOW_END)
-		end = CORTEN_MODE_WINDOW_END;
-	if (end <= start)
-		return;
 
 	mutex_lock(&state->ctl_lock);
 
@@ -15296,8 +15329,13 @@ static int corten_arena_explicit_region_route(struct mm_struct *mm,
 		return 0;
 	if (!(flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)))
 		return 0;
-	if (!len || end <= addr || addr >= CORTEN_MODE_WINDOW_END ||
-	    end <= CORTEN_MODE_WINDOW_START)
+	/* E2-V1: de-windowed -- the admission adopts at ANY address of
+	 * a MODE mm (the loader's library shape maps with explicit base
+	 * hints; in-place, the address never moves).  Overlaps with
+	 * live content degrade to the funnel (the declare's own
+	 * verdicts).
+	 */
+	if (!len || end <= addr)
 		return 0;
 	/* The classify whitelist's flag form (the encodable set). */
 	if (flags & (MAP_HUGETLB | MAP_GROWSDOWN | MAP_POPULATE | MAP_LOCKED))
@@ -16983,9 +17021,7 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 		 */
 		if (!READ_ONCE(mm->corten_mode))
 			break;
-		if (start < CORTEN_MODE_WINDOW_START ||
-		    end > CORTEN_MODE_WINDOW_END)
-			break;		/* whitelist domain: matrix below */
+		/* E2-V1: de-windowed -- the MODE break above is the gate. */
 		if (!len || (len & ~PAGE_MASK) || end <= start)
 			return 0;
 		ar_start = corten_arena_lookup_get(mm, start);
@@ -17073,11 +17109,12 @@ unsigned long corten_arena_msync_skip(struct mm_struct *mm,
 	state = READ_ONCE(mm->corten_state);
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) || !state)
 		return start;
-	if (start < CORTEN_MODE_WINDOW_START ||
-	    start >= CORTEN_MODE_WINDOW_END || start >= end)
+	if (start >= end)
+		return start;
+	if (!corten_arena_range_occupied_incl_idle(mm, start, end - start))
 		return start;
 
-	fend = min(end, CORTEN_MODE_WINDOW_END);
+	fend = end;
 
 	rcu_read_lock();
 	for (f = start >> PMD_SHIFT; (f << PMD_SHIFT) < fend; f++) {
@@ -17202,11 +17239,16 @@ long corten_arena_mincore_route(struct mm_struct *mm, unsigned long addr,
 	 * PAGE_SIZE chunk, so a range crossing the window edge is served
 	 * as [window part routed][rest legacy]).
 	 */
-	if (!pages || addr < CORTEN_MODE_WINDOW_START ||
-	    addr >= CORTEN_MODE_WINDOW_END)
+	/* E2-V1: de-windowed, lookup-routed -- a chunk is served when an
+	 * arena covers its first or last byte (the wl-region form); the
+	 * V2/V3 legacy residents keep the tree's answer.
+	 */
+	if (!pages ||
+	    !corten_arena_range_occupied_incl_idle(mm, addr,
+						   pages << PAGE_SHIFT))
 		return -EAGAIN;
 	end = addr + (pages << PAGE_SHIFT);
-	fend = min(end, CORTEN_MODE_WINDOW_END);
+	fend = end;
 
 	/* Every window frame of the chunk must be registered; classify
 	 * each frame on the way (parked -> zero vector, active -> truth

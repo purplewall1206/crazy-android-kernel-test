@@ -1726,16 +1726,20 @@ static void corten_arena_test_auto_route(struct kunit *test)
 	addr = 0xdead0000UL;
 	len = CORTEN_VA_SEG_SIZE + PMD_SIZE;
 	flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	/* E2-V1: window exhaustion no longer degrades -- a hinted wl
+	 * address adopts in place at the hint (ret 1, addr untouched,
+	 * no fallback).
+	 */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_auto_route_locked(mm, len,
 							    PROT_READ, &addr,
 							    &len, &flags),
-			0);
+			1);
 	KUNIT_EXPECT_EQ(test, addr, 0xdead0000UL);	/* untouched */
 	KUNIT_EXPECT_EQ(test,
 			corten_arena_test_stat_sum(state,
 						   CORTEN_ARENA_STAT_FALLBACKS),
-			fallbacks + 1);
+			fallbacks);
 
 	/* The declared arena is still alive: the exit's RELEASE legs read
 	 * current->mm, so the teardown runs on the op worker.
@@ -8664,8 +8668,11 @@ static void corten_arena_test_fault_window_shorts(struct kunit *test)
 			  corten_fault_window_fallback(mm,
 						       CORTEN_ARENA_TEST_WIN));
 	KUNIT_EXPECT_TRUE(test, corten_fault_window_fallback(mm, active));
-	KUNIT_EXPECT_FALSE(test,
-			   corten_fault_window_fallback(mm,
+	/* E2-V1: de-windowed -- a wl hole falls back too (the fence
+	 * diverts on the MODE gate, not the address).
+	 */
+	KUNIT_EXPECT_TRUE(test,
+			  corten_fault_window_fallback(mm,
 							CORTEN_ARENA_TEST_NOWHERE));
 
 	/* #2 end-to-end: the parked window's slow-path lookup answers
@@ -8675,7 +8682,7 @@ static void corten_arena_test_fault_window_shorts(struct kunit *test)
 			  lock_mm_and_find_vma(mm, CORTEN_ARENA_TEST_WIN,
 					       NULL));
 	f1 = corten_arena_test_fault_fallback_window();
-	KUNIT_EXPECT_EQ(test, f1 - f0, 3);
+	KUNIT_EXPECT_EQ(test, f1 - f0, 4);
 
 	/* The carve-out: an active arena keeps the walk (the probe below
 	 * is the ownership-fallback shape's legal cost -- it would find a
@@ -16436,7 +16443,7 @@ static void corten_arena_test_dirty_range_scattered(struct kunit *test)
 	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
 	struct mm_struct *mm = t->mm;
 	unsigned long win = CORTEN_ARENA_TEST_WIN;
-	unsigned long addr, len, flags;
+	unsigned long addr = 0, len, flags;
 	struct corten_ptdesc *desc;
 	pmd_t *pmdp;
 	unsigned int fflags;

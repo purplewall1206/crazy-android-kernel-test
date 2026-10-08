@@ -1,0 +1,48 @@
+[2026-10-08 16:32:05] driver started pid=193309 (checkpoint: /home/ppw/linux-6.18/project/results/r07/v1-baseline/BATTERY-STATE)
+=== PHASE P0-build 2026-10-08 16:32:05 ===
+P0 bzImage sha=c8234ee6903fff4543bd7edd112492794eb9b0ebb76f47dd4d6ec45ae04cec87 (v1-baseline launch: branch=android17-6.18 HEAD=909bccf49fb5 CONFIG_CORTEN_MM=y)
+P0 image=/home/ppw/vm/v1base.qcow2
+P0 kit complete (16 files, 8.8M)
+P0 LTP source present (mv3d/ltp.tar.gz, guest build+sample)
+DONE-PHASE P0
+=== PHASE P1-off-baseline 2026-10-08 16:32:05 ===
+p1-off BOOT_OK ssh_try=4 append=[corten=on systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M]
+share-p1-off MOUNT_RC=0 share_read_bytes=LIST_RC=0
+KIT-p1 OK (ssh-pushed to /root/kit; 9p not required)
+P1 failed-units rows=1 is-running=degraded (file: p1-failed-units.txt)
+P1 mode_probe want mode=0: Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts. mode=0 PROBE_RC=1 
+battery-off launched in-guest (setsid nohup; in-guest log /tmp/mv3d/guest-off.log)
+battery-off PROC_GONE_OR_SSH_DEAD at 1230s (partial fetch below)
+battery-off verdict lines (full: battery-off.log + art-off/):
+===SEC0 INVENTORY===
+===SEC1 BOOT===
+ISRUN_RC=1
+FAILED_RC=0
+===SEC2 LTP-BUILD===
+AUTOTOOLS_RC=0
+CONFIGURE_RC=0
+BUILD_RC=0
+INSTALL_RC=0
+PRODUCT mmap01 OK
+PRODUCT fork01 OK
+PRODUCT madvise01 OK
+PRODUCT mmapstress01 OK
+PRODUCT mtest01 OK
+===SEC3 LTP-RUN===
+LTP_SUMMAR PASS=98 FAIL=11 CONF=0 MISSING=1 OTHER=5 TOTAL=115
+===SEC4 FACES===
+SMOKE_BARE_RC=0 PASS=26 FAIL=0
+SMOKE_HOOK_RC=0 PASS=26 FAIL=0
+P1 dmesg corten_warn_bugs=Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts. integrity=0
+DONE-PHASE P1
+=== PHASE P2-on-full 2026-10-08 16:55:51 ===
+p2-on BOOT_FAIL ssh never up (console: /home/ppw/linux-6.18/project/results/r07/v1-baseline/console-p2-on.log)
+P2 boot FAIL -- recorded, continuing
+DONE-PHASE P2
+=== PHASE P3-on-journal-face 2026-10-08 17:05:55 ===
+p3-journal BOOT_FAIL ssh never up (console: /home/ppw/linux-6.18/project/results/r07/v1-baseline/console-p3-journal.log)
+P3 boot FAIL -- recorded
+DONE-PHASE P3
+=== PHASE DONE 2026-10-08 17:15:59 ===
+=== BATTERY COMPLETE 2026-10-08 17:15:59 -- verdict triage is post-hoc by team-lead
+VM left running world=p3-journal port=10031 (shell: ssh -i /home/ppw/vm/trixie.id_rsa -p 10031 root@127.0.0.1; kill: bash /home/ppw/bench/share/v1-baseline-battery.sh kill)
