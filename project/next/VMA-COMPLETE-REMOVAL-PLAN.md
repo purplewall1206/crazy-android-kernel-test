@@ -142,3 +142,13 @@ ELF_PLAT_INIT）+ wl region 布局转储。非确定性与 wl 收编布局相关
 
 **V1 完成的最后一块**: 原址臂的占用检查升级为 [C1] 等价（PTE+元数据+注册
 表三面), 或采纳前预跑 [C1]、拒时回退重定位语义。已登记, 明日首项。
+
+## 7d. 深夜二轮（01:20）: 失败点推进至 ld.so 的段映射
+
+布局转储轮: init 的 exec 本体成功（ld.so 已启动运行!）, 失败点推进到
+**ld.so 自己的段映射**: ld.so 的 mmap（MAP_FIXED 文件段, wl 域地址）收到
+-EBUSY → ld.so 报 "cannot map segment" → exit 127 → init 死。C1 内容探针
+打印未触发 → -EBUSY 来自采纳链更早的占用/状态检查点（范围已收窄至
+explicit admission → pool_prepare/validate 链）。下轮: -EBUSY 源头 Hunt
+（admission 链逐点插桩）+ 与 wl 原址采纳的语义对齐（[C1] 等价预检或
+EBUSY→重定位降级）。

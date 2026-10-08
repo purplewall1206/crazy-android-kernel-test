@@ -2261,8 +2261,10 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 		pmd = READ_ONCE(*pmdp);
 		if (!pmd_present(pmd))
 			continue;		/* no PT page: empty */
-		if (pmd_leaf(pmd))
+		if (pmd_leaf(pmd)) {
+			pr_warn("corten-dbg: C1 THP content at %lx\n", addr);
 			return -EBUSY;		/* THP content */
+		}
 
 		/* Ledger #1 (r07 mv3b, the DPA oops): the probe is the one
 		 * PT-page reader that held no descriptor lock -- the
@@ -2317,8 +2319,11 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 		pte_unmap_unlock(ptep, ptl);
 		read_unlock_bh(&desc->lock);
 		corten_ptdesc_put(desc);
-		if (!empty)
+		if (!empty) {
+			pr_warn("corten-dbg: C1 PTE content in [%lx,%lx) first=%lx\n",
+				addr, win_end, a);
 			return -EBUSY;
+		}
 	}
 
 	return 0;
@@ -12011,8 +12016,41 @@ static vm_fault_t __corten_arena_handle_mm_fault(struct mm_struct *mm,
 		 */
 		if (ctx.unshare)
 			return CORTEN_FAULT_FALLBACK_BIT | VM_FAULT_FALLBACK;
+		if (ctx.addr >= CORTEN_MODE_WINDOW_START)
+			pr_warn("corten-dbg: SIGSEGV layout dump: fault addr=%lx\n", ctx.addr);
 		return VM_FAULT_SIGSEGV;
 	case CORTEN_F_MAPERR:
+		if (ctx.addr >= CORTEN_MODE_WINDOW_START) {
+			struct corten_mm_state *st = READ_ONCE(ctx.mm->corten_state);
+			unsigned long f;
+
+			pr_warn("corten-dbg: SIGSEGV MAPERR layout dump: fault addr=%lx\n", ctx.addr);
+			if (st)
+				for (f = ctx.addr >> PMD_SHIFT;
+				     f <= ((ctx.addr + PMD_SIZE - 1) >> PMD_SHIFT); f++) {
+					void *slot = xa_load(&st->arenas, f);
+					struct corten_arena *m = slot;
+					struct corten_frame_bucket *bk;
+
+					if (!slot)
+						continue;
+					bk = corten_slot_bucket(slot);
+					if (bk) {
+						unsigned int i;
+
+						for (i = 0; i < bk->nr; i++)
+							pr_warn("corten-dbg:  frame=%lx rec[%u]=[%lx,%lx) prot=%x\n",
+								f << PMD_SHIFT, i,
+								bk->rec[i]->start,
+								bk->rec[i]->end,
+								bk->rec[i]->prot);
+					} else {
+						pr_warn("corten-dbg:  frame=%lx rec=[%lx,%lx) prot=%x\n",
+							f << PMD_SHIFT, m->start,
+							m->end, m->prot);
+					}
+				}
+		}
 		return VM_FAULT_SIGSEGV;
 	case CORTEN_F_BUS:
 		/* V-B.3: beyond EOF -- the legacy VM_FAULT_SIGBUS verdict
