@@ -479,7 +479,13 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	 * non-MODE processes pay one static-branch read plus one byte
 	 * load and are otherwise untouched.
 	 */
-	if (addr == 0) {
+	/* E2-V1: MODE mms place ALL non-MAP_FIXED mappings in the window
+	 * (the addr==0 convention and the hinted convention both land here).
+	 * The hint is advisory for the =on world: the arena's placement picks
+	 * the actual address.  MAP_FIXED shapes go to the legacy funnel
+	 * (the exact-address semantic must be honored).
+	 */
+	if (!(flags & (MAP_FIXED | MAP_FIXED_NOREPLACE))) {
 		int cret = corten_arena_auto_mmap_route(mm, file, pgoff, len,
 							prot, &addr,
 							&len, &flags);
