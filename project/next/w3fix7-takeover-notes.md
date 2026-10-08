@@ -174,3 +174,19 @@ evidence 文件未提交所致, mm/ 代码与 HEAD 严格一致。
   .config 已恢复（五 CONFIG 全 y）+ 受影响对象已重编（memory.o 9 corten 符号
   @00:18, corten.o/arena.o @00:20）+ 本次续编至 bzImage #410 完成。
 
+
+## 复跑收口（2026-10-08 13:2x, 安静窗, mode-t8 GAP 关闭）
+
+t8-rerun（同 boot 12 腿全 valid, mmbench_dyn sha 38304f06 前缀核对）:
+
+| cell | base (w3fix6) | rerun (#410) | Δ% | 配对 ratio 变化 |
+|---|---|---|---|---|
+| stock-t4 | 0.001254 | 0.001054 | −15.9%（宿主水位混杂） | — |
+| stock-t8 | 0.000604 | 0.000512 | −15.4%（同上） | — |
+| mode-t4 | 0.000836 | 0.000944 | **+12.9%** | 0.667 → 0.896 |
+| mode-t8 | 0.000232 | 0.000357 | **+53.6%** | 0.384 → 0.697 |
+
+**GAP 关闭**: 风暴窗的 mode-t8 塌缩（8.9e-6）确认为宿主载入伪读数; 真实
+post-w3fix7 mode-t8 = **+53.6%**（vs base）, 配对 ratio +81%。stock 臂的
+−15% 为水位项（与 mode 臂方向相反）, 跨窗结论一律配对 ratio。guest 门复核:
+gate_pass=1, j1_hits=0, j2_violations=0, dmesg corten 行 0。
