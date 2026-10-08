@@ -1376,6 +1376,9 @@ out_free_interp:
 	START_THREAD(elf_ex, regs, elf_entry, bprm->p);
 	retval = 0;
 out:
+	if (retval)
+		pr_warn("corten-dbg: load_elf_binary failed ret=%d file=%s\n",
+			retval, bprm->filename ?: "?");
 	return retval;
 
 	/* error cleanup */

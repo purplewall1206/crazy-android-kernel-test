@@ -102,3 +102,20 @@
 - M2（V2/V3 落地）: map_count==0 达成（零 VMA 进程诞生）。
 - M3（V5 落地）: 总闸长开零触发。
 - M4（VI 落地）: VMA 层源文件删除, 单世界, J6 终账 = 项目常驻目标达成。
+
+## 7. V1 执行状态（2026-10-08 深夜, 调试中）
+
+- **已落地机械**: 原址臂（hint 页粒度收编, exec 判别器 + 窗口外限定）、
+  fault fallback/maperr MODE 门、madvise/mincore/msync 路由门
+  （lookup/occupancy 判定, parked 窗口语义保持）、move_pages 回退（V2/V3
+  前 wl VMA 不被接管）、GUP/remote 门、bss/implant 去窗口。
+- **登记的回归**: =on 全系统 boot 非确定性失败（boot4 = init -14 ×2;
+  boot5 = init 更早 SIGSEGV）——**布局依赖型**: 每次 boot 哪些 hint 映射
+  原址收编/哪些重定位不同 → 不同 region 布局 → 不同崩法。已排除: exec
+  判别器方向（修正后仍崩）、窗口门（修正后仍崩）。
+- **下一步调试序列**: (1) exec 链全程插桩（elf_map 每段打印收编/迁移/
+  原址决策 + region 布局转储）→ 定位布局敏感交互; (2) 检查 wl region 与
+  magazine 池帧的地址干扰（wl 地址与窗口帧的 xarray 帧键冲突?）; (3)
+  load_elf 的 padzero/ELF_READ 对 wl region 页的访问面。
+- **工作树**: pr-v1 = 1d2953a + 插桩（load_elf 失败打印）; 稳定 =on 链 =
+  android17-6.18 @ 909bccf（boot 绿验证于今晨电池）。

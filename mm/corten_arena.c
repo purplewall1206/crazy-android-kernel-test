@@ -6766,12 +6766,13 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 	 * normally.  No flag rewrite, no placement: an attach failure
 	 * degrades with the caller's own hint semantics.
 	 */
-	if (*addr && current->mm == mm) {
-		/* The exec load's own segment maps carry hints too -- but
-		 * during load_elf_binary() current->mm is still the OLD mm,
-		 * so the equality above is exactly the exec-load
-		 * discriminator: the image takes the window placement (the
-		 * MV3.c exec mirror), never the in-place arm.
+	if (*addr && current->mm == mm &&
+	    !corten_addr_in_window(*addr, len)) {
+		/* Window addresses stay the placement/magazine domain's
+		 * (the pool take and the window cursor below); only a
+		 * hint OUTSIDE the window adopts in place -- the loader's
+		 * library shape maps at the mmap_base area, and the
+		 * address never moves.
 		 */
 		if (find_vma_intersection(mm, *addr, *addr + len) ||
 		    corten_arena_range_occupied_incl_idle(mm, *addr, len))
