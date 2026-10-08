@@ -1482,3 +1482,22 @@ pr0-regression/ 六份 console 原件）:
   3/3 + 金标准审计 + JThreadBench 各班 rc=0），不外推"所有 JVM 应用零缺陷"；
   syz 首轮结论对覆盖面缩限（corten=off）+ 误归因旁证撤回（§3-M7/§5.4）；M7 二轮
   coverage/corpus 数字标注采集时点，挂机未收数前不作 G6 判定**。
+
+## 13. E2 二期实删（退役轮, 2026-10-08 起草, 落地待浸泡收口）
+
+用户三裁决（浸泡即刻/分类器全删/每组一枚）批复后, 退役 PR 已起草过门挂分支:
+- **A 组（pr-e2a 8d2fe3f）**: J1 计数对与 find_vma 探针、J2 采样机械（static
+  key + 12 路由尾点 + j2_walk_every + mm_exit/fork_commit 生命周期走查）
+  退役; oracle 本体（scan/walk/walk_pid/计数器）降为 KUnit INV-MV2 锚的合成
+  驱动 + `j2_walk <pid>` 手动面。净 **−383**; KUnit 27/0/1+150/0/0+34/0/5。
+- **B 组（pr-e2b c269f37, 叠 A）**: 白名单分类器全删（classify/scan/walk
+  全族 + 13 计数器 + whitelist <pid> 触发器 + tree_entries 对 +
+  whitelist_audit 锚）; auto-mmap 采纳白名单（sec 3.1 功能合同）不动。
+  净 **−535**; KUnit 27/0/1+149/0/0+34/0/5。
+- **C 吸收于 A**（生产运行点全退）; **D 折入 A/B**（计数断言删、功能断言
+  留）; **E**= harness 零改版（电池/kit 对 audit_gate 为整文件 cat）+ J6 表
+  （本节）+ tag。
+- **J6 实测（同树 wc）**: 50,015（26,290+23,725）→ 49,095（25,683+23,412）,
+  **净 −920**（生产 −607/测试 −313）。落地序: 浸泡收口
+  （results/r07/e2-soak/, 49 检查点）→ A → B → 本节转正 + tag
+  corten-e2-phase2。窗口域 VMA 职责的"实删兑现"至此完成。
