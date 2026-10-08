@@ -6,3 +6,36 @@ P0 kit complete (16 files, 8.8M)
 P0 LTP source present (mv3d/ltp.tar.gz, guest build+sample)
 DONE-PHASE P0
 === PHASE P1-off-baseline 2026-10-09 03:54:17 ===
+battery-off launched in-guest (setsid nohup; in-guest log /tmp/mv3d/guest-off.log)
+battery-off PROC_GONE_OR_SSH_DEAD at 270s (partial fetch below)
+battery-off verdict lines (full: battery-off.log + art-off/):
+===SEC0 INVENTORY===
+===SEC1 BOOT===
+ISRUN_RC=1
+FAILED_RC=0
+===SEC2 LTP-BUILD===
+AUTOTOOLS_RC=0
+CONFIGURE_RC=0
+BUILD_RC=2
+INSTALL_RC=2
+PRODUCT mmap01 MISSING
+PRODUCT fork01 MISSING
+PRODUCT madvise01 MISSING
+PRODUCT mmapstress01 MISSING
+PRODUCT mtest01 MISSING
+===SEC3 LTP-RUN===
+LTP_SUMMAR PASS=0 FAIL=0 CONF=0 MISSING=115 OTHER=0 TOTAL=115
+===SEC4 FACES===
+SMOKE_BARE_RC=0 PASS=26 FAIL=0
+SMOKE_HOOK_RC=1 PASS=26 FAIL=0
+P1 dmesg corten_warn_bugs=Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts. integrity=0
+DONE-PHASE P1
+=== PHASE P2-on-full 2026-10-09 04:43:41 ===
+p2-on BOOT_OK ssh_try=4 append=[corten=on corten_mode_default=on systemd.mask=systemd-journald.service systemd.mask=systemd-journald.socket systemd.mask=systemd-journald-dev-log.socket systemd.mask=systemd-journal-flush.service systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M]
+share-p2-on MOUNT_RC=0 share_read_bytes=LIST_RC=0
+KIT-p2 push FAIL
+P2 kit FAIL -- phase partial
+P2 failed-units rows=1 is-running=degraded
+P2 audit_gate read rc=0 (124=hang; registered churn-read shape) file: p2-audit-gate.txt
+P2 counters rc=0: Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts. exec_default_enters 243 
+battery-on launched in-guest (setsid nohup; in-guest log /tmp/mv3d/guest-on.log)
