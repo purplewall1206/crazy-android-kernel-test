@@ -1,2 +1,57 @@
-Connection timed out during banner exchange
-Connection to 127.0.0.1 port 10031 timed out
+Warning: Permanently added '[127.0.0.1]:10031' (ED25519) to the list of known hosts.
+===SEC0 INVENTORY===
+6.18.32-g5aa85496079d
+console=ttyS0 root=/dev/vda rw net.ifnames=0 corten=on systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M
+ 23:13:33 up 0 min,  1 user,  load average: 0.26, 0.07, 0.02
+8
+               total        used        free      shared  buff/cache   available
+Mem:            3845         198        3612           8          94        3647
+/dev/root       9.8G  9.8G     0 100% /
+tmpfs           1.9G  4.0K  1.9G   1% /tmp
+gcc (Debian 14.2.0-19) 14.2.0
+GNU Make 4.4.1
+openjdk version "21.0.12.1" 2026-08-18
+graphical.target
+===SEC1 BOOT===
+Startup finished in 4.120s (kernel) + 10.007s (userspace) = 14.127s 
+graphical.target reached after 9.996s in userspace.
+degraded
+ISRUN_RC=1
+--- failed units:
+● e2scrub_reap.service loaded failed failed Remove Stale Online ext4 Metadata Check Snapshots
+● redis-server.service loaded failed failed Advanced key-value store
+FAILED_RC=0
+--- reached targets:
+Oct 08 23:13:10 syzkaller systemd[1]: Reached target multi-user.target - Multi-User System.
+Oct 08 23:13:10 syzkaller systemd[1]: Reached target graphical.target - Graphical Interface.
+--- journal lines: 1204
+===SEC2 LTP-BUILD===
+AUTOTOOLS_RC=0
+CONFIGURE_RC=0
+283
+BUILD_RC=2
+INSTALL_RC=2
+BUILD_SECS=407
+bin count: 0
+make[3]: *** [../../../include/mk/generic_trunk_target.inc:92: all] Error 2
+make[2]: *** [../../include/mk/generic_trunk_target.inc:92: all] Error 2
+make[1]: *** [../include/mk/generic_trunk_target.inc:92: all] Error 2
+make[1]: Leaving directory '/root/ltp/testcases'
+make: *** [Makefile:85: testcases-all] Error 2
+PRODUCT mmap01 MISSING
+PRODUCT fork01 MISSING
+PRODUCT madvise01 MISSING
+PRODUCT mmapstress01 MISSING
+PRODUCT mtest01 MISSING
+===SEC3 LTP-RUN===
+LTP_SUMMAR PASS=0 FAIL=0 CONF=0 MISSING=115 OTHER=0 TOTAL=115
+--- FAIL/TIMEOUT/BROK/OTHER rows:
+(none)
+--- mmap01 log head:
+head: cannot open '/tmp/mv3d/ltp-out/mmap01.log' for reading: No such file or directory
+===SEC4 FACES===
+SMOKE_BARE_RC=0 PASS=26 FAIL=0
+[smoke] SMOKE-DRIVER PASS
+SMOKE_HOOK_RC=0 PASS=26 FAIL=0
+[smoke] SMOKE-DRIVER PASS
+/root/kit/mv3d/guest-battery.sh: line 133: i_RC: unbound variable
