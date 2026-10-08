@@ -591,14 +591,12 @@ int corten_audit_j2_walk(struct mm_struct *mm);
 int corten_audit_j2_walk_locked(struct mm_struct *mm);
 
 /*
- * V-A.3c debugfs backends (mm/corten.c owns the files): the "j2_walk
- * <pid>" manual trigger and the "j2_walk_every" hot-path sampling
- * switch (a static key, default off -- the park/take/reactivate/route
- * triggers only walk when it is on; mm_exit and fork_commit always
- * walk).
+ * V-A.3c debugfs backend (mm/corten.c owns the file): the "j2_walk
+ * <pid>" manual trigger -- the E2-A retirement took the hot-path
+ * sampling switch and its route-tail hooks; the oracle walks on demand
+ * only (the INV-MV2 KUnit anchors and this trigger).
  */
 int corten_arena_j2_walk_pid(pid_t pid);
-void corten_arena_j2_sample_set(bool on);
 
 /*
  * V-E whitelist classification (MV_VMA_FREE_SPEC.md sec 1.3 J2, the
@@ -711,20 +709,19 @@ int corten_bss_declare_route(struct mm_struct *mm, unsigned long addr,
  * are written under mmap_write and read here with plain loads: a torn
  * read can only mis-bucket one call, and the metric is a ratio.
  */
-void corten_j1_slow(struct mm_struct *mm, unsigned long start,
-		    unsigned long end, struct vm_area_struct *vma);
 void corten_j1_heap_note(struct mm_struct *mm);
 
+/* E2-A: the J1 window-probe half is retired (the counting went with
+ * corten_j1_slow(); the window-lookup invariants are kept by the KUnit
+ * synthetic anchors).  What survives of the prelude is the V-E heap
+ * ledger's arm: the delegated-domain share of find_vma traffic.
+ */
 static inline void corten_j1_probe(struct mm_struct *mm, unsigned long start,
 				   unsigned long end,
 				   struct vm_area_struct *vma)
 {
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
 		return;
-	if (end > CORTEN_MODE_WINDOW_START && start < CORTEN_MODE_WINDOW_END) {
-		corten_j1_slow(mm, start, end, vma);
-		return;
-	}
 	if (start >= READ_ONCE(mm->start_brk) && start < READ_ONCE(mm->brk))
 		corten_j1_heap_note(mm);
 }
@@ -1286,10 +1283,6 @@ static inline int corten_audit_j2_walk_locked(struct mm_struct *mm)
 static inline int corten_arena_j2_walk_pid(pid_t pid)
 {
 	return -EOPNOTSUPP;
-}
-
-static inline void corten_arena_j2_sample_set(bool on)
-{
 }
 
 static inline int corten_arena_dontneed_route(struct mm_struct *mm,

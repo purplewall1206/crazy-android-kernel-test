@@ -1081,8 +1081,6 @@ struct corten_arena *corten_arena_test_record_next(struct mm_struct *mm,
 						   unsigned long *frame,
 						   unsigned int *idx);
 long corten_arena_test_auto_vgate(void);
-long corten_arena_test_j1_probes(void);
-long corten_arena_test_j1_hits(void);
 
 long corten_arena_test_pool_parks(void);
 long corten_arena_test_pool_hits(void);
