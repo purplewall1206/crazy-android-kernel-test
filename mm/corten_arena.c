@@ -6710,6 +6710,10 @@ int corten_auto_validate(struct mm_struct *mm, unsigned long len,
 	return 0;
 }
 
+static int corten_arena_mmap_punch_route(struct mm_struct *mm,
+					 unsigned long addr, unsigned long len,
+					 unsigned long flags, bool mark);
+
 int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 				 unsigned long pgoff, unsigned long len,
 				 unsigned long prot, unsigned long *addr,
@@ -6796,18 +6800,18 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 		 * library shape maps at the mmap_base area, and the
 		 * address never moves.
 		 */
-		if (find_vma_intersection(mm, *addr, *addr + len) ||
-		    corten_arena_range_occupied_incl_idle(mm, *addr, len))
+		if (find_vma_intersection(mm, *addr, *addr + len))
 			return 0;
-		/* E2-V1: the [C1]-equivalent emptiness pre-check -- a range
-		 * whose PT pages carry content WITHOUT VMA coverage (the
-		 * stack-tail pages below the stack VMA's start) must fall
-		 * to the funnel, which RELOCATES; the declare itself would
-		 * refuse -EBUSY and the mmap would fail unrelocated.
+		/* E2-V1: the punch borrow (the W-7 co-frame machinery) --
+		 * the same pre-pass the window MAP_FIXED flow runs: any
+		 * overlapping arena state (the previous segment's pages)
+		 * is erased transactionally, and the declare then
+		 * coexists page-granular.  A range with no arena state
+		 * punches as a no-op.
 		 */
-		ret = corten_arena_check_empty_locked(mm, *addr,
-						      *addr + len);
-		if (ret)
+		ret = corten_arena_mmap_punch_route(mm, *addr, len,
+						    *flagsp, false);
+		if (ret < 0)
 			return 0;
 		*lenp = len;
 		return 1;

@@ -212,3 +212,17 @@ W-7 桶式的页粒度共存判定（exec 镜像同形已由窗口机械覆盖, 
 
 **今夜成果封存**: pr-v1 = d7bc2d6（全量插桩+四轮修复+机制定性）; 稳定链
 909bccf =on 绿; E2 A/B/C 已落地; THE PLAN v2 与 J6 在案。
+
+## 7i. 机制完全闭环（05:45）: ld.so DSO 装载协议 × 采纳门
+
+**完整机制（全部插桩实证）**: ld.so 的 DSO 装载 = (1) mmap(NULL, total,
+PROT_NONE) 预订 → (2) 逐段 MAP_FIXED 进预订范围。V1 原址臂把预订收编为
+PROT_NONE region ✓; 段 1 的 MAP_FIXED = 采纳门 declare ✓; **段 2（与段 1
+页粒度重叠——ELF 段布局固有）的 MAP_FIXED → 采纳门重 declare → [C1] 检出
+段 1 的 FILE_MAPPED 标记 → -EBUSY → ld.so "cannot map segment" → 127**。
+
+**窗口机械已有同款处理**（=on exec 351 次进场、窗口内重叠段全绿为证）——
+**修复 = 采纳门移植窗口级的重叠段 declare 处理**（W-7 co-frame 的
+admission 形态）: 段 N+1 的 declare 对段 N 已标记页 = 元数据重写（新段
+赢）, 非 -EBUSY。估 1 枚 PR（admission 的 overlap 扩展 + KUnit 锚）。
+**V1 至此 = 机械全通, 唯此一片**。
