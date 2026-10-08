@@ -174,3 +174,15 @@ EBUSY→重定位降级）。
   窗口 placement"的混合语义。
 - 仓库: pr-v1 = d16e13d5→(本轮) 全部插桩与修复在案; 稳定链 909bccf
   =on boot 绿（今晨电池）。
+
+## 7f. 深夜三轮二（03:40）: 架构性 layout 修复 + C1 自相矛盾发现
+
+- **架构修复落地**: fence 重设计——MODE mm 的 legacy 域分配移到窗口上方
+  [64T, 128T)（原设计挤压在窗口起点正下方 [16T-1M, 16T) 窄带, ld.so 的
+  向下 hint 与栈页碰撞 = C1 保护性 -EBUSY 的根因）。hint 移到经典区
+  7f5f9d490000 ✓ layout 修复生效。
+- **新发现: C1 自相矛盾**: 同一 check_empty_locked——原址臂预检查空通过
+  → declare 内部 C1 报 PTE 内容 -EBUSY。微秒级窗口内状态变化或范围
+  计算差。**下轮: per-PTE 转储**（C1 内容打印已含 first= 地址; 需加
+  pre-check 与 declare-C1 的两次读数对比 + PT 页全 dump）。
+- 稳定链 909bccf =on boot 绿不受影响; pr-v1 全量在案。
