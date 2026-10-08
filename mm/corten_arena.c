@@ -3330,7 +3330,15 @@ bool corten_fault_window_maperr(struct mm_struct *mm, unsigned long addr)
 {
 	struct corten_arena *ar;
 
-	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+	/* E2-V1 NOTE: deliberately KEPT window-scoped -- a wl-domain
+	 * no-VMA fault is not necessarily a dominion violation: the
+	 * stack's GROWSDOWN expansion faults into the unmapped gap below
+	 * the VMA (create_elf_tables' auxv writes need that fault to
+	 * expand; the exec -14 regression).  The wl holes keep the
+	 * legacy bad_area verdict via the normal find_vma miss.
+	 */
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
+	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
 		return false;
 
 	rcu_read_lock();
@@ -6833,8 +6841,8 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 		atomic_long_inc(&corten_nr_pool_misses);
 	}
 
-	pr_warn("corten-dbg: auto PLACE ret_addr=%lx len=%lx\n", (unsigned long)addr2, len2);
 	ret = corten_arena_window_place(mm, state, len2, &addr2);
+	pr_warn("corten-dbg: auto PLACE ret=%d handed=%lx\n", ret, (unsigned long)addr2);
 	if (ret) {
 		/* Window exhausted or obstacle-skip ran out of window
 		 * (T0-R2): graceful degradation, the mapping goes to the

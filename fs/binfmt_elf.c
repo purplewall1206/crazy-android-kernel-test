@@ -1296,8 +1296,12 @@ out_free_interp:
 
 	retval = create_elf_tables(bprm, elf_ex, interp_load_addr,
 				   e_entry, phdr_addr);
-	if (retval < 0)
+	if (retval < 0) {
+		pr_warn("corten-dbg: create_elf_tables FAIL ret=%d\n", retval);
 		goto out;
+	}
+	pr_warn("corten-dbg: late stage OK entry=%lx interp_load=%lx\n",
+		(unsigned long)e_entry, interp_load_addr);
 
 	mm = current->mm;
 	mm->end_code = end_code;

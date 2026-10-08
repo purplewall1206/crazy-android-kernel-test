@@ -129,3 +129,16 @@ create_elf_tables auxv / start_thread 之间）。插桩已就位（load_elf 失
 下轮: 晚段三点的逐点插桩（interp map / create_elf_tables /
 ELF_PLAT_INIT）+ wl region 布局转储。非确定性与 wl 收编布局相关
 （boot4 vs boot5 崩点不同）。
+
+## 7c. 深夜推进（00:15）: exec 已深入至 wl 采纳策略洞
+
+修复 maperr 窗口域回退（栈 GROWSDOWN 扩展 fault 的 -14 根因）后, exec 前进
+到晚段 OK（entry/interp 装载完成, 第二次 placement 正确推进到 window+2M）,
+然后暴露**新洞**: ld.so 的一个 hint 映射（wl 域, 紧贴窗口下边界）走原址臂
+→ 占用检查（find_vma + incl-idle）判空闲 → 原址 declare → **[C1] 内容探针
+-EBUSY**（该范围有 PTE/元数据内容而无 VMA 覆盖——先前映射的残余或栈页）→
+整个 mmap 以 -EBUSY 失败（**未重定位**——get_unmapped_area 已按无 VMA 尊重
+了 hint）。init 三连 -16 → panic。
+
+**V1 完成的最后一块**: 原址臂的占用检查升级为 [C1] 等价（PTE+元数据+注册
+表三面), 或采纳前预跑 [C1]、拒时回退重定位语义。已登记, 明日首项。
