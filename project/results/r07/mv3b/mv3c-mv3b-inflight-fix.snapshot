@@ -1,0 +1,62 @@
+diff --git a/mm/corten_arena_test.c b/mm/corten_arena_test.c
+index 812c6017290a..5e6aea421a9c 100644
+--- a/mm/corten_arena_test.c
++++ b/mm/corten_arena_test.c
+@@ -12902,11 +12902,10 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
+ 	shorts0 = corten_arena_test_remote_shorts();
+ 
+ 	/* Seed: fault the page in through the arm (the only legal
+-	 * producer) and stamp the payload.  No FOLL_GET: the pages-array
+-	 * GUP takes no reference (is_valid_gup_args() never forces it),
+-	 * the PTE holds the only one -- so nothing to put (a put here
+-	 * drops the PTE-anchored folio to 0 and the next follow's
+-	 * try_grab_folio() -ENOMEMs it).
++	 * producer) and stamp the payload.  The pages-array GUP takes a
++	 * reference (the real __get_user_pages_locked() forces FOLL_GET
++	 * for a non-NULL pages array), so it must be put back -- the
++	 * PTE-anchored folio keeps its own.
+ 	 */
+ 	mmap_read_lock(mm);
+ 	KUNIT_ASSERT_EQ(test,
+@@ -12916,6 +12915,7 @@ static void corten_arena_test_remote_access_window(struct kunit *test)
+ 	kaddr = kmap_local_page(page);
+ 	memcpy(kaddr, &pat, sizeof(pat));
+ 	kunmap_local(kaddr);
++	put_page(page);
+ 	mmap_read_unlock(mm);
+ 
+ 	/* The cmdline face's read: FOLL_ANON remote, kernel buffer
+diff --git a/mm/memory.c b/mm/memory.c
+index 04a21925c478..9f2e1840752f 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -7051,8 +7051,18 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
+ 		 * locks), so a reader-context faultin has no lock
+ 		 * exclusivity against them; an absent slot keeps the
+ 		 * short answer (the V-A.3b contract, counted).
++		 *
++		 * FOLL_GET is forced, not inherited: the copy below
++		 * releases the page through folio_release_kmap()'s
++		 * folio_put() (the real __get_user_pages_locked() sets
++		 * FOLL_GET for a non-NULL pages array behind the same
++		 * release), so the arm's grab must carry the ref or
++		 * every window read underflows the folio -- the MV3.b
++		 * guest corruption family in full (stale PTEs, aliasing
++		 * mapcounts, PCP poison) was exactly this missing get.
+ 		 */
+-		if (corten_gup_window(mm, addr, gup_flags | FOLL_NOFAULT,
++		if (corten_gup_window(mm, addr,
++				      gup_flags | FOLL_NOFAULT | FOLL_GET,
+ 				      &page) < 0) {
+ 			corten_remote_note_window_short(mm, addr);
+ 			mmap_read_unlock(mm);
+@@ -7205,7 +7215,8 @@ static int __copy_remote_vm_str(struct mm_struct *mm, unsigned long addr,
+ 		 * vma_lookup() (the mm.h:2648 WARN face) and the reader
+ 		 * never faults the target.
+ 		 */
+-		if (corten_gup_window(mm, addr, gup_flags | FOLL_NOFAULT,
++		if (corten_gup_window(mm, addr,
++				      gup_flags | FOLL_NOFAULT | FOLL_GET,
+ 				      &page) < 0) {
+ 			*(char *)buf = '\0';
+ 			err = -EFAULT;

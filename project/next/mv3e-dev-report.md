@@ -145,13 +145,13 @@ stack/special 是 T0 合同有意保留的 legacy 住户, wl_file 是待裁决�
 | 7 | **单套件 flake（测试 83/84/85）** | filter_glob=corten_arena 下确定性失败、全套件全绿; 环境敏感（mv3c §3.3）; `corten_test_txn_uninstall_interlock` flake 同族（复跑绿姿态在案） | 一行 errno 记账定位（mv3c 移交 3）; 判据面外, 不拦门 | P2 |
 | 8 | **MADV_PAGEOUT 一行对齐** | 路由注释称与 COLD 同计数 no-op, 代码事实 default → -EOPNOTSUPP（mv3b §4.1, 注释与代码不符） | 一行并入 hints 臂; process_madvise 语义核对随行 | P2 |
 | 9 | **MADV_POPULATE_READ/WRITE populate 片** | M3 拒维持; 机械在（corten_gup_window faultin 腿）; 前置 drain 互斥 **已清**（MV3.c 参锁落地） | 独立 populate-through-arena 片; 含 KUnit populate 锚 | P2 |
-| 10 | **地板演化 bisect** | "-17~-22% → -84%" 漂移未定轮（候选 W-2/W-7/M-V）; D35 判定基线数字过时（mv3cfeat §2.1/§2.4-4） | build b9541335 + 中间点回放 mmbench_dyn 协议 | P2 |
+| 10 | **地板演化 bisect** | "-17~-22% → -84%" 漂移未定轮（候选 W-2/W-7/M-V）; D35 判定基线数字过时（mv3cfeat §2.1/§2.4-4） | build b9541335 + 中间点回放 mmbench_dyn 协议 | **P2 → 已闭（2026-10-08）**: 六锚 72 腿收数, 归因 = A5→mv-complete 坍塌 −71% 后逐锚修复至 A5 水位; 参考低端疑宿主水位压低（next/perf10-bisect-dev-report.md） |
 | 11 | **脏域 rec_lo/hi 有界 park reset（批 mark 刀 2）** | 设计节在案（mv3cfeat §2.4-1: O(512)→O(dirty), 不变式 PTE⊆已 mark 范围, INV6 支撑） | 独立性能片; 先量后动 | P2 |
-| 12 | **per-fault 簿记批化（刀 3）** | +~1.4µs/页归因（lookup/ref/tier/desc 锁/meta/stats）; desc 锁粒度+stats 合并（mv3cfeat §2.4-2） | 独立性能片, 排刀 2 后 | P2 |
-| 13 | **glibc 库非零 hint 收编（超红线裁决件）** | 库首段带非零 hint 永不达 addr==0 路由; 库段留树（wl_file ~9-70/进程主源）; 收编需"hint 迁移窗口"语义决定, 违 T0 显式地址契约（mv3cfeat §1.5-1） | **主会话裁决件**: 裁决前不动码; 裁决收编则是 WL-tree 归零的最后一大块 | P3 |
+| 12 | **per-fault 簿记批化（刀 3）** | +~1.4µs/页归因（lookup/ref/tier/desc 锁/meta/stats）; desc 锁粒度+stats 合并（mv3cfeat §2.4-2） | 独立性能片, 排刀 2 后 | **P2 → 已闭（2026-10-08）**: w3fix7 落地合并（lockless membership + 覆盖锁塌缩 + fill 免 mutex）; 门全绿, mode t4 +52.1%, mode t8 GAP 登记（w3fix7-takeover-notes.md） |
+| 13 | **glibc 库非零 hint 收编（超红线裁决件）** | 库首段带非零 hint 永不达 addr==0 路由; 库段留树（wl_file ~9-70/进程主源）; 收编需"hint 迁移窗口"语义决定, 违 T0 显式地址契约（mv3cfeat §1.5-1） | **已裁决（2026-10-06 主会话）: 选项 a——接受为永久边界**。不收编, wl_file 桶作为 D33/T0 契约内住户永续登记; "hint 迁移窗口"语义永不实施（除非未来新指令轮推翻）。终态口径 = 窗口域零 VMA + 白名单域契约保留 | **P3 → 已闭（裁决边界）** |
 | 14 | **static-PIE 对齐探针形** | 对齐 >ELF_MIN_ALIGN 的探针 map+munmap+NOREPLACE 重装会吃 -EEXIST; guest 无此形二进制（mv3cfeat §1.5-2） | 低优先; 探针 record 的 NOREPLACE 豁免小片 | P3 |
 | 15 | **bpf_iter/task_vma 窗口段（#39）** | 真保真缺口, 双源化唯一机械=BPF VMA 形对象=D28 明禁; 正典面 /proc/maps 已双源（mv3b §4.3, D28 阻断登记） | 新 BPF 面（region 迭代 kfunc/迭代器）独立设计片; 不排期 | P3 |
-| 16 | **裁剪 PR 序列 PR-0..4** | 本报告 §1.3 边界件 | PR-0（implant 退役）先行; 每枚独立 PR + 审计门 | P3（裁决后排期） |
+| 16 | **裁剪 PR 序列 PR-0..4** | 本报告 §1.3 边界件 | PR-0（implant 退役）已落（2d3febc401e1）; **已裁决（2026-10-06 主会话）: 执行删除**——PR-1..4 当夜在制（pr-deletion 分支） | **P3 → 执行中（已裁决）** |
 
 台账口径: D32 sticky-MODE / D33 判据收窄 / D34 frame-sharing 结构边界 /
 D35 基线刷新为**已决裁定**, 不占开项位; POKE-COW / journald 面 / S-3 /

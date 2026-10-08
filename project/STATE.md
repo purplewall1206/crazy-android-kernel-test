@@ -1706,3 +1706,55 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
   新 agent 交接计划（T1 P0=PR-0 =on 回归根修 / T2 w3fix7 续接 / T3 bisect
   收数 / T4 E2 二期实删裁决提案 / T5 杂项卫生；含环境快照、验收门、纪律
   陷阱清单）。接手前必读 STATE 尾部三条 + 本计划。
+
+- **[2026-10-08 修复与落地轮: T1 PR-0 根修落地 + T2 w3fix7 落地合并 + T3 bisect 收数闭账]**
+  - **★ T1 根修（P1 首项清偿）**: PR-0 =on 回归根因定罪 = **W-7 帧 KEEP_PERM
+    陈旧槽 perm × PR-0 收编 region 的新合同竞争**——exec 采纳期 zap_window 以
+    KEEP_PERM 留 (INVALID, perm=9) 槽, PR-0 bss declare（tree-zero）发布其上,
+    FRESH 门"槽带 perm 即合同"仲裁让陈旧 RO perm 赢过 declare 的 RW 界 →
+    ld.so bss 首写 ACCERR → init panic（崩溃面 = 映射于窗口基址的 ld.so,
+    偏移 0x1de6d 字节级对证; 六轮诊断 boot 全链追踪, console 存
+    results/r07/pr0-fix/）。**修复 = corten_scrub()（新协议函数）+ 
+    declare_locked anon 新合同臂槽 scrub**（!file && !adopt, 整帧拆分,
+    -EAGAIN 重试/-ENOENT·EOPNOTSUPP 跳过, 失败退化 funnel 不半洗发布;
+    commit 6dcc90d）。**门: 生产 config =on boot ×3 零 panic（10:32 轮与
+    合并后复跑）, KUnit on3 26/0/1+149/0/0+34/0/5, checkpatch 0E/0W/0C**。
+    报告 next/pr0-defentry-fix-dev-report.md。
+  - **T2 w3fix7 落地**: relay 遗产接管（WIP 保护 6f42d5d + 证据 862886f）,
+    接管门全绿（checkpatch 0E/0W/0C, =n 零符号, KUnit on3×3+off, smoke
+    26/26, metis 2d383eeed4ceb73b 精确, audit gate_pass=1）; bench-after vs
+    base: stock t4 +14.4%/t8 +69.6%, mode t4 +52.1%, **mode t8 定读 GAP
+    登记**（宿主风暴双峰, 复跑套件 project/bin/w3fix7-vm.sh|guest.sh）。
+    **合并主链 4e09dcb**（解: PR-0 块保留/Ledger#12 锚接纳）, 合并验证 KUnit
+    27/0/1+151/0/0+34/0/5 + =on boot 净。台账 #12 闭。
+  - **T3 bisect 收数闭账**: 六锚 72/72 腿, **归因 = A5→corten-mv-complete
+    ratio 0.791→0.235 坍塌 −71% 后逐锚修复至 A5 水位**; 字面问题
+    （mv3cfeat→w3fix6 +11.6% t4 mode 方向复现）, 参考低端疑宿主水位压低;
+    stock 锚 3→4 −47% = 水位混杂警示, 跨锚结论一律配对 ratio 口径。报告
+    next/perf10-bisect-dev-report.md, 工件 results/r07/perf10-bisect/。
+    台账 #10 闭。
+  - **新登记（不阻塞发运）**: P2-a = =on 世界 `BUG: non-zero pgtables_bytes
+    on freeing mm`（MV2 既有暴露, vma-less PT 退休计账不平衡）; P2-b =
+    punched-frame declare/fault 异步拆除交互（scrub 合同 KUnit 锚改挂此探针
+    片, 十轮锚形状动物园记录在案）; P2-c = mode-t8 bench 定读 GAP（T2）。
+  - **电池**: 合并工件三腿复跑 10:44 启动（结果收口于下一条; 上一轮 10:32
+    起跑的作废重跑——工件时序错误）。
+
+- **[2026-10-08 电池收口（同日续）: 合并工件三腿全绿, T1/T2 验收闭账]**
+  - **三腿电池（bzImage sha 15e1cc56 前缀 = 4e09dcb 合并工件, trixie-mv3d）**:
+    P1-off: LTP 编译全 rc=0 + **LTP_SUMMAR PASS=98 FAIL=11 = mv3d 基线逐字
+    一致**（mva results 同数 ×3）, smoke 26/26 裸/hook 双跑, dmesg
+    integrity=0; P2-on（journald 四件 mask + default=on）: **audit gate 全零
+    （j1_probes 200/hits 0, j2_walks 840/violations 0/stale 0/first_violation
+    0x0, wl 全桶零）** + smoke 26/26（含 idempotency run2）+ metis
+    2d383eeed4ceb73b 精确同值 ×2 + counters exec_default_enters 351（=on
+    世界活性）; P3-journal-face: PROBE_RC=0。**SSH banner 掉线 ×2 =
+    台账 #3 已知 flake 族（关键读数均先于掉线取得, 不重跑）**;
+    pgtables_bytes BUG 每腿 2 笔 = P2-a 已登记既有暴露。
+  - **=n 门**: =n 构建 rc=0, 17 消费对象 nm/strings 双零; .config 恢复 =y,
+    受影响对象重编（memory.o 9 corten 符号回归）。
+  - **推db 收口**: android17-6.18 与 corten-github 双推至
+    c31d5b4→（电池/addendum 后终推）, mv-a0 新分支, tag corten-r07-w3fix7
+    （4e09dcb）+ corten-report-d37（c31d5b4）。T4 裁决提案
+    next/e2-phase2-ruling-proposal.md（呈用户: 浸泡即刻 vs P2-a 先修、
+    B 组退役深度、PR 粒度三问）。

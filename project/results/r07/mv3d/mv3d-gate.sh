@@ -27,30 +27,8 @@ gssh() {
 		root@127.0.0.1 "$@" 2>/dev/null
 }
 
-# Ledger #3 (r07 mv3d): the battery leg lost its SSH session mid-run once
-# (7216s in-guest run), which truncated battery-on.log and left the
-# artifact tarball an empty shell (p2-audit-gate.txt &co).  Every remote
-# step from here on is either (a) short and retried, or (b) detached in
-# the guest and polled through short-lived sessions -- a dropped session
-# can no longer kill or truncate a run.
-
-# Short-command retry: up to $1 attempts, 5s backoff.  $2.. the command.
-gssh_retry() {
-	local n=${1:?attempts}; shift
-	local i
-	for i in $(seq 1 $n); do
-		if gssh "$@"; then
-			return 0
-		fi
-		sleep 5
-	done
-	return 1
-}
-
-# Long-haul arm for interactive phases (LTP build alone runs tens of
-# minutes); the battery leg itself no longer rides on it (vm_run runs
-# the battery detached and polls).  The 30s probe arm killed the
-# previous run's battery mid-SEC4.
+# long-haul arm for the full battery (LTP build alone runs tens of minutes);
+# the 30s probe arm killed the previous run's battery mid-SEC4.
 gssh_long() {
 	timeout 7200 ssh -i $SSHKEY -p $PORT -o StrictHostKeyChecking=no \
 		-o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
@@ -58,25 +36,56 @@ gssh_long() {
 		root@127.0.0.1 "$@" 2>/dev/null
 }
 
-# Pull one guest file with integrity verification: up to $4 attempts,
-# each fetch compared against the guest-side sha256.  Returns 0 only
-# when the local copy is byte-exact.
-scp_verified() { # $1 guest path  $2 local path  $3 label  $4 attempts
-	local g=$1 l=$2 label=$3 n=${4:-5} i gh lh
-	for i in $(seq 1 $n); do
-		gh=$(gssh "sha256sum $g 2>/dev/null | cut -d' ' -f1") || { sleep 5; continue; }
-		[ -n "$gh" ] || { sleep 5; continue; }
-		timeout 600 scp -i $SSHKEY -P $PORT -o StrictHostKeyChecking=no \
-			-o UserKnownHostsFile=/dev/null "root@127.0.0.1:$g" "$l" 2>/dev/null || { sleep 5; continue; }
-		lh=$(sha256sum "$l" 2>/dev/null | cut -d' ' -f1)
-		if [ "$gh" = "$lh" ]; then
-			say "fetch ok ($label, try $i)"
-			return 0
-		fi
-		say "fetch mismatch ($label, try $i): guest=$gh local=$lh"
-		sleep 5
+# Ledger #3 (w3fix4): the artifact fetch's SSH resilience.  The original
+# single `timeout 600 scp` died whole on one transient TLS/SSH reset (the
+# r07/mv3d first battery lost its P2 artifact fetch exactly that way -- the
+# "timeout: failed to run command 'g'" 66-byte files).  Now: direct scp with
+# 3 attempts, and on persistent failure the segmented arm -- the guest splits
+# the file into 16M parts (each part a fresh short scp, 3 attempts apiece),
+# the host reassembles and verifies the guest's md5.  $1 = guest path,
+# $2 = local destination file.
+gfetch() {
+	local GPATH="$1" LPATH="$2" try rc=1 sum
+	for try in 1 2 3; do
+		timeout 600 scp -i $SSHKEY -P $PORT \
+			-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+			"root@127.0.0.1:$GPATH" "$LPATH" 2>/dev/null && { rc=0; break; }
+		say "gfetch direct try $try failed ($(basename $GPATH))"
+		sleep 3
 	done
-	say "FAIL: fetch $label after $n attempts"
+	[ $rc -eq 0 ] && return 0
+	say "gfetch falling back to 16M segmented fetch ($(basename $GPATH))"
+	sum=$(gssh "split -b 16M '$GPATH' '$GPATH.part-' && md5sum '$GPATH' | cut -d' ' -f1 && ls '$GPATH'.part-* | wc -l" 2>/dev/null | tail -2)
+	local want_sum want_n
+	want_sum=$(echo "$sum" | head -1)
+	want_n=$(echo "$sum" | tail -1)
+	case "$want_sum" in
+	''|*[!0-9a-f]*) say "gfetch: guest split failed"; return 1 ;;
+	esac
+	: > "$LPATH"
+	local part
+	for part in $(gssh "ls -1 '$GPATH'.part-* 2>/dev/null" 2>/dev/null); do
+		local base
+		base=$(basename "$part")
+		rc=1
+		for try in 1 2 3; do
+			timeout 300 scp -i $SSHKEY -P $PORT \
+				-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+				"root@127.0.0.1:$part" "$RES/.gfetch-part" 2>/dev/null && { rc=0; break; }
+			say "gfetch part $base try $try failed"
+			sleep 3
+		done
+		[ $rc -ne 0 ] && { say "gfetch: part $base lost"; return 1; }
+		cat "$RES/.gfetch-part" >> "$LPATH" && rm -f "$RES/.gfetch-part"
+	done
+	local got_sum
+	got_sum=$(md5sum "$LPATH" | cut -d' ' -f1)
+	if [ "$got_sum" = "$want_sum" ]; then
+		gssh "rm -f '$GPATH'.part-*" 2>/dev/null
+		say "gfetch segmented OK ($(basename $GPATH), $want_n parts, md5 ${want_sum:0:12})"
+		return 0
+	fi
+	say "gfetch: md5 mismatch got=$got_sum want=$want_sum"
 	return 1
 }
 
@@ -129,78 +138,20 @@ vm_boot() { # $1 = on|off
 vm_run() { # $1 = on|off
 	local W=$1
 	local OUT=$RES/battery-$W.log
-	local i n RLOG RPOLL
-	RLOG=/tmp/mv3d/battery-$W.log
-	say "battery start world=$W (detached) -> $(basename $OUT)"
-
-	# Detached start: the battery lives in the guest, not in the SSH
-	# session.  A drop between start and the last poll costs nothing.
-	# The wrapper records the battery's exit status for the poll.  The
-	# start is idempotent (a retried attempt after a lost connection
-	# must not spawn a second battery over the same log).
-	gssh_retry 5 "if [ -f $RLOG.pid ] && kill -0 \$(cat $RLOG.pid 2>/dev/null) 2>/dev/null; then echo ALREADY-RUNNING; else rm -f $RLOG $RLOG.rc $RLOG.pid; cd /tmp && nohup bash -c 'bash /mnt/mv3d/guest-battery.sh $W; echo \$? > $RLOG.rc' > $RLOG 2>&1 < /dev/null & echo \$! > $RLOG.pid; echo STARTED; fi" \
-		|| { say "FAIL: battery start"; echo "BATTERY_RC=start-fail" >> $STATE; return 1; }
-
-	# Poll the completion marker with short, retried sessions.
-	n=""
-	for i in $(seq 1 1440); do		# 1440 * 10s = 4h ceiling
-		RPOLL=$(gssh_retry 3 "if [ -f $RLOG.rc ]; then echo DONE; cat $RLOG.rc; else if kill -0 \$(cat $RLOG.pid 2>/dev/null) 2>/dev/null; then echo RUNNING; else echo DONE; echo 1; fi; fi")
-		case "$RPOLL" in
-		*DONE*)
-			n=$(echo "$RPOLL" | grep -oE '^[0-9]+$' | head -1)
-			[ -n "$n" ] || n=0
-			break
-			;;
-		esac
-		sleep 10
-	done
-	if [ -z "$n" ]; then
-		n=1
-		say "WARN: battery poll ceiling hit or poll failed (last=$RPOLL)"
-	fi
-
-	# The battery log itself, byte-exact or loud.
-	scp_verified "$RLOG" "$OUT" "battery-$W.log" 5 \
-		|| say "WARN: battery log fetch failed; console remains the record"
-
-	# Artifact tarball, segmented: per-chunk fetches are individually
-	# retryable and hash-verified, then reassembled and checked against
-	# the guest-side whole-file sha256.
-	gssh_retry 3 "cd /tmp && tar czf mv3d-art-$W.tar.gz mv3d 2>/dev/null; split -b 16m mv3d-art-$W.tar.gz /tmp/mv3d-art-$W.part-; sha256sum mv3d-art-$W.tar.gz > /tmp/mv3d-art-$W.sha" || true
-	local parts ok=1
-	parts=$(gssh_retry 3 "ls /tmp/mv3d-art-$W.part-* 2>/dev/null | wc -l")
-	case "$parts" in ''|*[!0-9]*) parts=0 ;; esac
-	if [ "$parts" -gt 0 ]; then
-		rm -f $RES/mv3d-art-$W.tar.gz.assembled
-		for i in $(seq 0 $((parts - 1))); do
-			local P Part
-			Part=$(printf "%02d" "$i")
-			P=$RES/mv3d-art-$W.part-$Part
-			scp_verified "/tmp/mv3d-art-$W.part-$Part" "$P" \
-				"art-$W part $Part" 5 || { ok=0; break; }
-			cat $P >> $RES/mv3d-art-$W.tar.gz.assembled
-		done
-		if [ $ok = 1 ]; then
-			local gh lh
-			gh=$(gssh_retry 3 "cut -d' ' -f1 /tmp/mv3d-art-$W.sha")
-			lh=$(sha256sum $RES/mv3d-art-$W.tar.gz.assembled 2>/dev/null | cut -d' ' -f1)
-			if [ -n "$gh" ] && [ "$gh" = "$lh" ]; then
-				mv $RES/mv3d-art-$W.tar.gz.assembled $RES/mv3d-art-$W.tar.gz
-				tar xzf $RES/mv3d-art-$W.tar.gz -C $RES/ 2>/dev/null \
-					&& say "artifacts verified world=$W"
-			else
-				say "FAIL: artifact sha mismatch world=$W (guest=$gh local=$lh)"
-			fi
-		fi
-		gssh_retry 3 "rm -f /tmp/mv3d-art-$W.part-*" || true
+	say "battery start world=$W -> $(basename $OUT)"
+	gssh_long "bash /mnt/mv3d/guest-battery.sh $W" > $OUT 2>&1
+	local rc=$?
+	# artifact tarball: per-test ltp logs + smoke/metis/sweep outputs
+	# (ledger #3: resilient fetch -- 3 direct attempts, then 16M parts)
+	gssh "cd /tmp && tar czf mv3d-art-$W.tar.gz mv3d 2>/dev/null" || true
+	rm -f $RES/mv3d-art-$W.tar.gz
+	if gfetch "/tmp/mv3d-art-$W.tar.gz" "$RES/mv3d-art-$W.tar.gz"; then
+		tar xzf $RES/mv3d-art-$W.tar.gz -C $RES/ 2>/dev/null
 	else
-		# Segmentation refused (tiny/no artifacts): the direct fetch.
-		if scp_verified "/tmp/mv3d-art-$W.tar.gz" "$RES/mv3d-art-$W.tar.gz" "art-$W" 5; then
-			tar xzf $RES/mv3d-art-$W.tar.gz -C $RES/ 2>/dev/null
-		fi
+		say "WARN: artifact tarball for world=$W unfetchable"
 	fi
-	say "battery done world=$W rc=$n"
-	echo "BATTERY_RC=$n" >> $STATE
+	say "battery done world=$W rc=$rc"
+	echo "BATTERY_RC=$rc" >> $STATE
 	grep -E "^===SEC|_RC=|LTP_SUMMAR|MVA1 |S3_RC|corr_signatures|pgtables_residue" $OUT | head -40
 }
 
