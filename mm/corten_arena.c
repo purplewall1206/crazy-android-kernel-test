@@ -12002,10 +12002,10 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 
 	old_start = READ_ONCE(stack->start);
 	if (addr >= old_start) {
-			/* not a below-start miss */
-			dbg = 2;
-			goto out;
-		}
+		/* not a below-start miss */
+		dbg = 2;
+		goto out;
+	}
 	grow = (old_start - addr) >> PAGE_SHIFT;
 
 	/* The tree stock: a VMA covering @addr is the legacy funnel's
@@ -12126,9 +12126,9 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 	ret = 1;
 	goto out;
 out:
-	if (ret != 1 && printk_ratelimit())
-		pr_info("corten-dbg: stack_grow refuse stage=%d addr=%lx old=%lx\n",
-			dbg, addr, old_start);
+	if (ret != 1)
+		pr_info_ratelimited("corten-dbg: stack_grow refuse stage=%d addr=%lx old=%lx\n",
+				    dbg, addr, old_start);
 	mmap_write_unlock(mm);
 	return ret;
 }

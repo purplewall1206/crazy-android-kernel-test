@@ -128,6 +128,43 @@ create_elf_tables auxv / start_thread 之间）。插桩已就位（load_elf 失
 打印 + padzero 失败打印 + attach 失败打印 + PLACE/入口决策打印）。
 下轮: 晚段三点的逐点插桩（interp map / create_elf_tables /
 ELF_PLAT_INIT）+ wl region 布局转储。非确定性与 wl 收编布局相关
+
+## 7c. V1 收敛落点 + V2 执行状态（2026-10-09 晨）
+
+**V1 终态**（a8392b7, 电池绿 + 双分支已推送）: 全窗布局 —— :482 门从
+addr==0 加宽为一切非 MAP_FIXED 形状（hint 即弃, arena 定址入窗）;
+fence 重设计（legacy 域全部置于窗口上方 [64T,128T), loader/栈碰撞带
+消除）; C1 元数据感知（present+INVALID 元数据 = 卸载残孤儿, 非内容）。
+原址收编的 hint 臂（计划 PR-V1.2 的"非零 hint 文件映射打通"）被全窗
+布局取代: hinted 映射直接成窗内 region, 比原址收编更强。9 轮调试
+（P1 损毁发现 + 布局转储）= pr-v1 分支的完整输入档案。
+
+**V2 落地**（4f7b219 + 5aa8549）:
+- 普查仪表: brk_funnel（生长时漏斗, wl_brk 验收分母）+ 既有
+  sweep_skip_stack/special/shared/exec_time 桶（wl_stack/wl_special
+  分母）。=n 门 PASS（vmlinux+十对象零符号）。
+- 栈臂 V2.2: 转换+扩展机械完整（转换骑 sweep 匿名臂的
+  pick/手术/finish 序列; 扩展镜像 expand_downwards 合法性全集;
+  发布序 = 先插帧后降 start）。KUnit 207/0/9（taxonomy 锚换新语义）。
+  **默认关**（corten_stack_extend=on 选择进入）—— r08/r09 boot 登记
+  三个设计输入: (1) find_vma 在 rcu pre-check 的 mmap 锁断言（ud2,
+  修 = lock_vma_under_rcu + USER 门）; (2) 早退丢失时每 fault 抢
+  mmap_write → fork COW 风暴串行化 → sshd banner 超时（修 = 早退 +
+  无候选即返）; (3) 转换与 lookup 竞态的 NULL 解引用
+  （user_fault+0x4ff, 待 pieces/ownership 全程走查）。门控后 boot/ssh
+  全绿（=on 行为与 a8392b7 逐字节一致）。
+- exec-default 流不跑 sweep（enter ≠ enter_sweep）→ 栈 VMA 在默认
+  世界终宿 = fault 路径惰性转换臂（已建, 待上述走查后默认开）。
+  enter_sweep（prctl 世界）的 sweep 栈臂已落地（委托匿名臂）。
+- **brk 实测**: brk_funnel=53/183 exec（boot 读数）→ 非零: 堆生长
+  仍有漏斗形状, V2.1 的 wl_brk=0 需 bss declare 路由的去窗口化
+  （现窗域门控, 全窗布局下堆在窗内应已命中 —— 53 次漏斗 = 命中后
+  的 degrade 形状, 下轮读 degrade 原因桶）。
+
+**下一轮入点**: (1) 栈臂 pieces/ownership 全程走查 → 默认开;
+(2) brk_funnel 的 53 次 degrade 原因分桶 → wl_brk=0;
+(3) V3 special 臂（sweep_skip_special→0, 特殊页 region 形）;
+(4) V4 共享臂; (5) V5 总闸; (6) VI VMA 层删除 + J6 终账。
 （boot4 vs boot5 崩点不同）。
 
 ## 7c. 深夜推进（00:15）: exec 已深入至 wl 采纳策略洞
