@@ -1658,8 +1658,9 @@ retry:
 	 * __corten_arena_handle_mm_fault the GUP window arm drives).
 	 * A vma-less fault is a real hole/truncation: keep the -EFAULT.
 	 */
-	/* E2-V1: de-windowed -- every MODE address is arena domain. */
-	if (corten_enabled_static() && READ_ONCE(mm->corten_mode)) {
+	if (corten_enabled_static() && READ_ONCE(mm->corten_mode) &&
+	    address >= CORTEN_MODE_WINDOW_START &&
+	    address < CORTEN_MODE_WINDOW_END) {
 		unsigned int ff = fault_flags & (FAULT_FLAG_WRITE |
 				FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE |
 				FAULT_FLAG_REMOTE);
@@ -3322,10 +3323,10 @@ static int gup_fast_fallback(unsigned long start, unsigned long nr_pages,
 	 * keeps its no-slow-fallback contract here -- the lockless
 	 * partial is the answer.
 	 */
-	/* E2-V1: de-windowed. */
 	if (corten_enabled_static() && current->mm &&
 	    READ_ONCE(current->mm->corten_mode) &&
-	    !(gup_flags & FOLL_FAST_ONLY))
+	    !(gup_flags & FOLL_FAST_ONLY) &&
+	    start >= CORTEN_MODE_WINDOW_START && start < CORTEN_MODE_WINDOW_END)
 		return __get_user_pages_locked(current->mm, start, nr_pages,
 					       pages, &locked,
 					       gup_flags | FOLL_TOUCH |

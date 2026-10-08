@@ -845,16 +845,13 @@ static inline void corten_fence_unmapped_area(struct vm_unmapped_area_info *info
 	    !READ_ONCE(current->mm->corten_mode))
 		return;
 
-	/* E2-V1 layout: a MODE mm's legacy-domain allocations live ABOVE
-	 * the window ([64T, 128T)) -- the stack, the loader's
-	 * reservations and every hinted map.  The original fence squeezed
-	 * them into the band just below the window start, where the
-	 * loader's downward-walking hints collided with the stack (the
-	 * C1-protective -EBUSY exec failure).  The window's own interior
-	 * stays untouched: placements are arena-side, never through this
-	 * allocator.
-	 */
-	if (info->low_limit < CORTEN_MODE_WINDOW_END)
+	if (info->low_limit >= CORTEN_MODE_WINDOW_END ||
+	    info->high_limit <= CORTEN_MODE_WINDOW_START)
+		return;		/* no window intersection */
+
+	if (info->flags & VM_UNMAPPED_AREA_TOPDOWN)
+		info->high_limit = CORTEN_MODE_WINDOW_START;
+	else
 		info->low_limit = CORTEN_MODE_WINDOW_END;
 }
 

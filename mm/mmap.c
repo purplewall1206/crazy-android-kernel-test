@@ -1567,11 +1567,9 @@ int vm_brk_flags(unsigned long addr, unsigned long request, vm_flags_t vm_flags)
 	 * two compares.  mmap_write is held (the route's writer
 	 * convention).
 	 */
-	/* E2-V1: de-windowed -- the bss adopts wherever the exec image
-	 * landed (in-place wl adoption keeps non-PIE link-time
-	 * addresses); drivers never reach here with MODE mms.
-	 */
-	if (corten_bss_declare_route(mm, addr, len, vm_flags) == 0) {
+	if (addr >= CORTEN_MODE_WINDOW_START &&
+	    addr + len <= CORTEN_MODE_WINDOW_END &&
+	    corten_bss_declare_route(mm, addr, len, vm_flags) == 0) {
 		mmap_write_unlock(mm);
 		userfaultfd_unmap_complete(mm, &uf);
 		return 0;
@@ -1584,7 +1582,8 @@ int vm_brk_flags(unsigned long addr, unsigned long request, vm_flags_t vm_flags)
 	 * still the window's occupancy truth for this shape, so the
 	 * registry entry stays its J1/J2 exemption.
 	 */
-	if (!ret)
+	if (!ret && addr >= CORTEN_MODE_WINDOW_START &&
+	    addr + len <= CORTEN_MODE_WINDOW_END)
 		corten_implant_mark(mm, addr, len);
 #endif
 	populate = ((mm->def_flags & VM_LOCKED) != 0);

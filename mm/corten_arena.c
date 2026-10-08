@@ -1215,10 +1215,6 @@ static void corten_arena_state_free_rcu(struct rcu_head *rcu)
  * pair the acquire load with the xa_load / refcount read below without any
  * further synchronization.
  */
-static void corten_arena_zap_orphan_ptes(struct mm_struct *mm,
-						 unsigned long start,
-						 unsigned long end);
-
 static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 {
 	struct corten_mm_state *state, *raced;
@@ -2265,10 +2261,8 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 		pmd = READ_ONCE(*pmdp);
 		if (!pmd_present(pmd))
 			continue;		/* no PT page: empty */
-		if (pmd_leaf(pmd)) {
-			pr_warn("corten-dbg: C1 THP content at %lx\n", addr);
+		if (pmd_leaf(pmd))
 			return -EBUSY;		/* THP content */
-		}
 
 		/* Ledger #1 (r07 mv3b, the DPA oops): the probe is the one
 		 * PT-page reader that held no descriptor lock -- the
@@ -2317,19 +2311,14 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 		for (a = addr; a < win_end; a += PAGE_SIZE) {
 			if (pte_present(ptep[pte_index(a)])) {
 				empty = false;
-				pr_warn("corten-dbg: C1 present pte at %lx val=%llx\n",
-					a, (unsigned long long)pte_val(ptep[pte_index(a)]));
 				break;
 			}
 		}
 		pte_unmap_unlock(ptep, ptl);
 		read_unlock_bh(&desc->lock);
 		corten_ptdesc_put(desc);
-		if (!empty) {
-			pr_warn("corten-dbg: C1 PTE content in [%lx,%lx) first=%lx\n",
-				addr, win_end, a);
+		if (!empty)
 			return -EBUSY;
-		}
 	}
 
 	return 0;
@@ -2566,9 +2555,6 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	 */
 	ret = corten_arena_pool_prepare_locked(mm, state, addr, len, perm,
 					       novma, !!file);
-	if (ret < 0)
-		pr_warn("corten-dbg: pool_prepare FAIL ret=%d addr=%lx\n",
-			ret, addr);
 	if (ret <= 0) {
 		mutex_unlock(&state->ctl_lock);
 		return ret;		/* 0 = reactivated, else errno */
@@ -2608,8 +2594,6 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	 * same range.  Exclusive under ctl_lock.
 	 */
 	if (corten_arena_overlaps(state, addr, len)) {
-		pr_warn("corten-dbg: declare OVERLAP addr=%lx len=%lx\n",
-			addr, len);
 		ret = -EEXIST;
 		goto out_free_arena;
 	}
@@ -2624,37 +2608,8 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	 */
 	if (!adopt) {
 		ret = corten_arena_check_empty_locked(mm, addr, addr + len);
-		if (ret) {
-			{
-				unsigned long f;
-				void *sl;
-
-				pr_warn("corten-dbg: C1 refuse ret=%d addr=%lx len=%lx -- REGIONS:\n",
-					ret, addr, len);
-				for (f = 0; f < (1UL << (47 - PMD_SHIFT)); f++) {
-					sl = xa_load(&state->arenas, f);
-					if (sl) {
-						struct corten_arena *m = sl;
-						struct corten_frame_bucket *bk = corten_slot_bucket(sl);
-
-						if (bk) {
-							unsigned int i;
-
-							for (i = 0; i < bk->nr; i++)
-								pr_warn("corten-dbg:  f%lx r%u [%lx,%lx) p%x c%d\n",
-									f << PMD_SHIFT, i,
-									bk->rec[i]->start, bk->rec[i]->end,
-									bk->rec[i]->prot, bk->rec[i]->rclass);
-						} else if (sl != &corten_va_reserve_sentinel) {
-							pr_warn("corten-dbg:  f%lx [%lx,%lx) p%x c%d\n",
-								f << PMD_SHIFT, m->start, m->end,
-								m->prot, m->rclass);
-						}
-					}
-				}
-			}
+		if (ret)
 			goto out_free_arena;
-		}
 	}
 
 	if (novma) {
@@ -3350,8 +3305,8 @@ void corten_brk_note_slow(struct mm_struct *mm, enum corten_brk_arm arm)
  */
 bool corten_fault_window_fallback(struct mm_struct *mm, unsigned long addr)
 {
-	/* E2-V1: de-windowed -- the whole MODE address space. */
-	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
+	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
 		return false;
 
 	atomic_long_inc(&corten_nr_fault_fallback_window);
@@ -3375,13 +3330,6 @@ bool corten_fault_window_maperr(struct mm_struct *mm, unsigned long addr)
 {
 	struct corten_arena *ar;
 
-	/* E2-V1 NOTE: deliberately KEPT window-scoped -- a wl-domain
-	 * no-VMA fault is not necessarily a dominion violation: the
-	 * stack's GROWSDOWN expansion faults into the unmapped gap below
-	 * the VMA (create_elf_tables' auxv writes need that fault to
-	 * expand; the exec -14 regression).  The wl holes keep the
-	 * legacy bad_area verdict via the normal find_vma miss.
-	 */
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
 	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
 		return false;
@@ -3451,7 +3399,8 @@ bool corten_uffd_window_reject(struct mm_struct *mm,
  */
 void corten_gup_note_window_miss(struct mm_struct *mm, unsigned long addr)
 {
-	if (corten_enabled_static() && READ_ONCE(mm->corten_mode))
+	if (corten_enabled_static() && READ_ONCE(mm->corten_mode) &&
+	    addr >= CORTEN_MODE_WINDOW_START && addr < CORTEN_MODE_WINDOW_END)
 		atomic_long_inc(&corten_nr_gup_window_miss);
 }
 
@@ -3463,7 +3412,8 @@ void corten_gup_note_window_miss(struct mm_struct *mm, unsigned long addr)
  */
 void corten_remote_note_window_short(struct mm_struct *mm, unsigned long addr)
 {
-	if (corten_enabled_static() && READ_ONCE(mm->corten_mode))
+	if (corten_enabled_static() && READ_ONCE(mm->corten_mode) &&
+	    addr >= CORTEN_MODE_WINDOW_START && addr < CORTEN_MODE_WINDOW_END)
 		atomic_long_inc(&corten_nr_remote_access_window_short);
 }
 
@@ -5397,13 +5347,8 @@ int corten_gup_window(struct mm_struct *mm, unsigned long addr,
 	u8 perm = 0;
 	int tries;
 
-	/* E2-V1: de-windowed, lookup-routed -- an arena at @addr is
-	 * served by the arm; everything else (the V2/V3 legacy
-	 * residents, true holes) delegates to the tree, whose verdict
-	 * is identical (a hole EFAULTs exactly as the arena would).
-	 */
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
-	    !corten_arena_lookup_get(mm, addr))
+	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
 		return 1;
 
 	/* Implants own real tree VMAs -- find_vma() must see them. */
@@ -5682,17 +5627,9 @@ faultin:
 
 bool corten_remote_vm_window(struct mm_struct *mm, unsigned long addr)
 {
-	/* E2-V1: de-windowed, lookup-routed -- arena-owned addresses
-	 * take the arm unless an implant owns them; the V2/V3 legacy
-	 * residents delegate to the tree.
-	 */
-	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) ||
+	    addr < CORTEN_MODE_WINDOW_START || addr >= CORTEN_MODE_WINDOW_END)
 		return false;
-	if (!corten_arena_lookup_get(mm, addr)) {
-		bool covers = corten_implant_covers(mm, addr, 1);
-
-		return !covers;
-	}
 	return !corten_implant_covers(mm, addr, 1);
 }
 
@@ -6742,49 +6679,6 @@ int corten_auto_validate(struct mm_struct *mm, unsigned long len,
 	return 0;
 }
 
-static int corten_arena_mmap_punch_route(struct mm_struct *mm,
-					 unsigned long addr, unsigned long len,
-					 unsigned long flags, bool mark);
-
-/* E2-V1: the orphan-PTE zap for the in-place wl adoption -- the PTE-driven
- * clear of the teardown residue that the metadata-driven zaps can't see.
- */
-static void corten_arena_zap_orphan_ptes(struct mm_struct *mm,
-					 unsigned long start,
-					 unsigned long end)
-{
-	unsigned long addr;
-
-	mmap_assert_write_locked(mm);
-	for (addr = start; addr < end;
-	     addr = min((addr | (PMD_SIZE - 1)) + 1, end)) {
-		unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1, end);
-		pmd_t *pmdp, pmd;
-		pte_t *ptep;
-		spinlock_t *ptl;
-		unsigned long a;
-
-		pmdp = corten_arena_pmd(mm, addr);
-		if (!pmdp)
-			continue;
-		pmd = READ_ONCE(*pmdp);
-		if (!pmd_present(pmd) || pmd_leaf(pmd))
-			continue;
-		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
-		if (!ptep)
-			continue;
-		for (a = addr; a < win_end; a += PAGE_SIZE) {
-			pte_t pte = ptep[pte_index(a)];
-
-			if (pte_none(pte))
-				continue;
-			pte_clear(mm, a, ptep + pte_index(a));
-			corten_tlb_flush_page_novma(mm, a);
-		}
-		pte_unmap_unlock(ptep, ptl);
-	}
-}
-
 int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 				 unsigned long pgoff, unsigned long len,
 				 unsigned long prot, unsigned long *addr,
@@ -6849,43 +6743,6 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 		return 0;
 	}
 
-	/* E2-V1 (the in-place arm): a hinted private mapping adopts at
-	 * the hint address -- the loader's library shape (every DSO
-	 * segment maps with an explicit base hint; the migration
-	 * semantics the #13 ruling worried about are never exercised:
-	 * the address does not move).  Page-granular, the W-7
-	 * exec-mirror form -- a PMD-rounded tail would eat the next
-	 * DSO's hint, the loader packs them back to back.  The hint is
-	 * honored when the range is free of both tree VMAs and arena
-	 * occupancy (the reserve sentinel included); anything else
-	 * falls through to the legacy flow, which relocates the mapping
-	 * normally.  No flag rewrite, no placement: an attach failure
-	 * degrades with the caller's own hint semantics.
-	 */
-	if (*addr && current->mm == mm &&
-	    !corten_addr_in_window(*addr, len)) {
-		pr_warn("corten-dbg: auto IN-PLACE hint=%lx len=%lx\n", *addr, len);
-		/* Window addresses stay the placement/magazine domain's
-		 * (the pool take and the window cursor below); only a
-		 * hint OUTSIDE the window adopts in place -- the loader's
-		 * library shape maps at the mmap_base area, and the
-		 * address never moves.
-		 */
-		if (find_vma_intersection(mm, *addr, *addr + len))
-			return 0;
-		/* E2-V1: the orphan-PTE zap -- the wl range may carry the
-		 * teardown residue (present PTEs whose VMA/region owners are
-		 * gone).  The legacy MAP_FIXED semantic: map here = destroy
-		 * whatever was here.  The C1-equivalent emptiness probe finds
-		 * them (the PTE-driven, not the metadata-driven); the zap
-		 * clears them PTE-driven with the rmap/mapcount handling the
-		 * legacy clobber always had.
-		 */
-		corten_arena_zap_orphan_ptes(mm, *addr, *addr + len);
-		*lenp = len;
-		return 1;
-	}
-
 	state = corten_arena_get_state(mm);
 	if (!state) {
 		/* A5: the registry is created lazily at the first
@@ -6938,7 +6795,6 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 	}
 
 	ret = corten_arena_window_place(mm, state, len2, &addr2);
-	pr_warn("corten-dbg: auto PLACE ret=%d handed=%lx\n", ret, (unsigned long)addr2);
 	if (ret) {
 		/* Window exhausted or obstacle-skip ran out of window
 		 * (T0-R2): graceful degradation, the mapping goes to the
@@ -6998,8 +6854,6 @@ int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
 					  corten_arena_perm_from_prot(prot),
 					  NULL, 0, true, false, NULL);
 	if (ret) {
-		pr_warn("corten-dbg: auto_attach FAIL ret=%d addr=%lx len=%lx\n",
-			ret, addr, len);
 		/* T0a counted attach failures in the per-mm fallback
 		 * bucket; T0b adds the named aggregates on top.
 		 */
@@ -7046,8 +6900,6 @@ int corten_arena_file_attach(struct mm_struct *mm, unsigned long addr,
 					  corten_arena_perm_from_prot(prot),
 					  file, pgoff, true, false, NULL);
 	if (ret) {
-		pr_warn("corten-dbg: file_attach FAIL ret=%d addr=%lx len=%lx\n",
-			ret, addr, len);
 		corten_arena_auto_fallback(state);
 		atomic_long_inc(&corten_nr_auto_attach_fails);
 	} else {
@@ -12107,41 +11959,8 @@ static vm_fault_t __corten_arena_handle_mm_fault(struct mm_struct *mm,
 		 */
 		if (ctx.unshare)
 			return CORTEN_FAULT_FALLBACK_BIT | VM_FAULT_FALLBACK;
-		if (ctx.addr >= CORTEN_MODE_WINDOW_START)
-			pr_warn("corten-dbg: SIGSEGV layout dump: fault addr=%lx\n", ctx.addr);
 		return VM_FAULT_SIGSEGV;
 	case CORTEN_F_MAPERR:
-		if (ctx.addr >= CORTEN_MODE_WINDOW_START) {
-			struct corten_mm_state *st = READ_ONCE(ctx.mm->corten_state);
-			unsigned long f;
-
-			pr_warn("corten-dbg: SIGSEGV MAPERR layout dump: fault addr=%lx\n", ctx.addr);
-			if (st)
-				for (f = ctx.addr >> PMD_SHIFT;
-				     f <= ((ctx.addr + PMD_SIZE - 1) >> PMD_SHIFT); f++) {
-					void *slot = xa_load(&st->arenas, f);
-					struct corten_arena *m = slot;
-					struct corten_frame_bucket *bk;
-
-					if (!slot)
-						continue;
-					bk = corten_slot_bucket(slot);
-					if (bk) {
-						unsigned int i;
-
-						for (i = 0; i < bk->nr; i++)
-							pr_warn("corten-dbg:  frame=%lx rec[%u]=[%lx,%lx) prot=%x\n",
-								f << PMD_SHIFT, i,
-								bk->rec[i]->start,
-								bk->rec[i]->end,
-								bk->rec[i]->prot);
-					} else {
-						pr_warn("corten-dbg:  frame=%lx rec=[%lx,%lx) prot=%x\n",
-							f << PMD_SHIFT, m->start,
-							m->end, m->prot);
-					}
-				}
-		}
 		return VM_FAULT_SIGSEGV;
 	case CORTEN_F_BUS:
 		/* V-B.3: beyond EOF -- the legacy VM_FAULT_SIGBUS verdict
@@ -14149,11 +13968,8 @@ static int corten_bss_declare1(struct mm_struct *mm, unsigned long addr,
 
 	if (!READ_ONCE(mm->corten_mode) || !corten_enabled_static())
 		return 1;
-	/* E2-V1: de-windowed -- the bss adopts wherever the main exe's
-	 * segments landed (in-place wl adoption moves their addresses
-	 * nowhere; the non-PIE shape keeps its link-time addresses).
-	 */
-	if (!len)
+	if (!len || addr < CORTEN_MODE_WINDOW_START ||
+	    addr + len > CORTEN_MODE_WINDOW_END)
 		return 1;
 	if (mm->def_flags & VM_LOCKED)
 		return 1;
@@ -14810,12 +14626,19 @@ void corten_implant_mark(struct mm_struct *mm, unsigned long start,
 	 * producers were window-bound by construction, the backstop arm
 	 * is not).
 	 */
-	if (!len)
+	if (!len || start >= CORTEN_MODE_WINDOW_END ||
+	    start + len <= CORTEN_MODE_WINDOW_START)
 		return;
-	/* E2-V1: de-windowed -- no clip; the punch registry serves the
-	 * whole MODE address space.
+	/* The true end before the start clip: a range straddling the
+	 * window edge registers only its intersection.
 	 */
 	end = start + len;
+	if (start < CORTEN_MODE_WINDOW_START)
+		start = CORTEN_MODE_WINDOW_START;
+	if (end > CORTEN_MODE_WINDOW_END)
+		end = CORTEN_MODE_WINDOW_END;
+	if (end <= start)
+		return;
 
 	mutex_lock(&state->ctl_lock);
 
@@ -15473,13 +15296,8 @@ static int corten_arena_explicit_region_route(struct mm_struct *mm,
 		return 0;
 	if (!(flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)))
 		return 0;
-	/* E2-V1: de-windowed -- the admission adopts at ANY address of
-	 * a MODE mm (the loader's library shape maps with explicit base
-	 * hints; in-place, the address never moves).  Overlaps with
-	 * live content degrade to the funnel (the declare's own
-	 * verdicts).
-	 */
-	if (!len || end <= addr)
+	if (!len || end <= addr || addr >= CORTEN_MODE_WINDOW_END ||
+	    end <= CORTEN_MODE_WINDOW_START)
 		return 0;
 	/* The classify whitelist's flag form (the encodable set). */
 	if (flags & (MAP_HUGETLB | MAP_GROWSDOWN | MAP_POPULATE | MAP_LOCKED))
@@ -17165,7 +16983,9 @@ int corten_arena_madvise_route(struct mm_struct *mm, int behavior,
 		 */
 		if (!READ_ONCE(mm->corten_mode))
 			break;
-		/* E2-V1: de-windowed -- the MODE break above is the gate. */
+		if (start < CORTEN_MODE_WINDOW_START ||
+		    end > CORTEN_MODE_WINDOW_END)
+			break;		/* whitelist domain: matrix below */
 		if (!len || (len & ~PAGE_MASK) || end <= start)
 			return 0;
 		ar_start = corten_arena_lookup_get(mm, start);
@@ -17253,12 +17073,11 @@ unsigned long corten_arena_msync_skip(struct mm_struct *mm,
 	state = READ_ONCE(mm->corten_state);
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) || !state)
 		return start;
-	if (start >= end)
-		return start;
-	if (!corten_arena_range_occupied_incl_idle(mm, start, end - start))
+	if (start < CORTEN_MODE_WINDOW_START ||
+	    start >= CORTEN_MODE_WINDOW_END || start >= end)
 		return start;
 
-	fend = end;
+	fend = min(end, CORTEN_MODE_WINDOW_END);
 
 	rcu_read_lock();
 	for (f = start >> PMD_SHIFT; (f << PMD_SHIFT) < fend; f++) {
@@ -17383,16 +17202,11 @@ long corten_arena_mincore_route(struct mm_struct *mm, unsigned long addr,
 	 * PAGE_SIZE chunk, so a range crossing the window edge is served
 	 * as [window part routed][rest legacy]).
 	 */
-	/* E2-V1: de-windowed, lookup-routed -- a chunk is served when an
-	 * arena covers its first or last byte (the wl-region form); the
-	 * V2/V3 legacy residents keep the tree's answer.
-	 */
-	if (!pages ||
-	    !corten_arena_range_occupied_incl_idle(mm, addr,
-						   pages << PAGE_SHIFT))
+	if (!pages || addr < CORTEN_MODE_WINDOW_START ||
+	    addr >= CORTEN_MODE_WINDOW_END)
 		return -EAGAIN;
 	end = addr + (pages << PAGE_SHIFT);
-	fend = end;
+	fend = min(end, CORTEN_MODE_WINDOW_END);
 
 	/* Every window frame of the chunk must be registered; classify
 	 * each frame on the way (parked -> zero vector, active -> truth
