@@ -1758,3 +1758,10 @@ A.1 ✓(d40eae59ba76) | A.2a/A.2b 代码完成（worktree mva 未入库, patches
     （4e09dcb）+ corten-report-d37（c31d5b4）。T4 裁决提案
     next/e2-phase2-ruling-proposal.md（呈用户: 浸泡即刻 vs P2-a 先修、
     B 组退役深度、PR 粒度三问）。
+
+- **[2026-10-08 E2 二期裁决（用户批复）+ 浸泡启动]**: ①浸泡即刻开始（不等
+  P2-a）——=on 默认进场全系统挂机 ≥24h 驱动已起（results/r07/e2-soak/，
+  端口 10042, 工件 sha 15e1cc56 合并产物, 49×30min 周期快照）; ②B 组白名单
+  分类器**全删**（wl 桶语义由 PR-2 门控计数承担）; ③每组一枚 PR（A→C→B→D→E）
+  批准, 退役前基线冻结 = 本日电池读数。A 组（J1/J2 探针退役）起草可与浸泡
+  并行, 落地待浸泡读数收口。提案 next/e2-phase2-ruling-proposal.md §5b。
