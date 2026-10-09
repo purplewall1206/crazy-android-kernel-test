@@ -1,0 +1,284 @@
+make -C "lib" \
+	-f "/root/ltp/lib/Makefile" all
+make -C "libs" \
+	-f "/root/ltp/libs/Makefile" all
+if git describe >/dev/null 2>&1; then \
+	git describe > "Version"; \
+else \
+	cp /root/ltp/VERSION "Version"; \
+fi
+make[1]: Entering directory '/root/ltp/lib'
+GEN ltp-version.h
+make[1]: Entering directory '/root/ltp/libs'
+CC lib/get_path.o
+CC lib/cloner.o
+CC libs/ipc/tse_ipc.o
+CC lib/parse_opts.o
+CC lib/random_range.o
+CC libs/ipc/tse_msgctl.o
+In file included from safe_macros.c:25:
+safe_macros.c: In function 'safe_closedir':
+../include/old/test.h:129:17: warning: pointer 'dirp' may be used after 'closedir' [-Wuse-after-free]
+  129 |                 tst_brk_(file, lineno, flags, fmt, ##__VA_ARGS__); \
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+safe_macros.c:1064:17: note: in expansion of macro 'tst_brkm_'
+ 1064 |                 tst_brkm_(file, lineno, TBROK | TERRNO, cleanup_fn,
+      |                 ^~~~~~~~~
+safe_macros.c:1061:16: note: call to 'closedir' here
+ 1061 |         rval = closedir(dirp);
+      |                ^~~~~~~~~~~~~~
+../include/old/test.h:131:17: warning: pointer 'dirp' may be used after 'closedir' [-Wuse-after-free]
+  131 |                 tst_brkm__(file, lineno, flags, cleanup, fmt, ##__VA_ARGS__); \
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+safe_macros.c:1064:17: note: in expansion of macro 'tst_brkm_'
+ 1064 |                 tst_brkm_(file, lineno, TBROK | TERRNO, cleanup_fn,
+      |                 ^~~~~~~~~
+safe_macros.c:1061:16: note: call to 'closedir' here
+ 1061 |         rval = closedir(dirp);
+      |                ^~~~~~~~~~~~~~
+../include/old/test.h:129:17: warning: pointer 'dirp' may be used after 'closedir' [-Wuse-after-free]
+  129 |                 tst_brk_(file, lineno, flags, fmt, ##__VA_ARGS__); \
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+safe_macros.c:1067:17: note: in expansion of macro 'tst_brkm_'
+ 1067 |                 tst_brkm_(file, lineno, TBROK | TERRNO, cleanup_fn,
+      |                 ^~~~~~~~~
+safe_macros.c:1061:16: note: call to 'closedir' here
+ 1061 |         rval = closedir(dirp);
+      |                ^~~~~~~~~~~~~~
+../include/old/test.h:131:17: warning: pointer 'dirp' may be used after 'closedir' [-Wuse-after-free]
+  131 |                 tst_brkm__(file, lineno, flags, cleanup, fmt, ##__VA_ARGS__); \
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+safe_macros.c:1067:17: note: in expansion of macro 'tst_brkm_'
+ 1067 |                 tst_brkm_(file, lineno, TBROK | TERRNO, cleanup_fn,
+      |                 ^~~~~~~~~
+safe_macros.c:1061:16: note: call to 'closedir' here
+ 1061 |         rval = closedir(dirp);
+      |                ^~~~~~~~~~~~~~
+AR libltpipc.a
+In file included from safe_stdio.c:23:
+safe_stdio.c: In function 'safe_fclose':
+../include/old/test.h:129:17: warning: pointer 'f' may be used after 'fclose' [-Wuse-after-free]
+  129 |                 tst_brk_(file, lineno, flags, fmt, ##__VA_ARGS__); \
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+safe_stdio.c:47:17: note: in expansion of macro 'tst_brkm_'
+   47 |                 tst_brkm_(file, lineno, TBROK | TERRNO, cleanup_fn,
+      |                 ^~~~~~~~~
+safe_stdio.c:44:15: note: call to 'fclose' here
+   44 |         ret = fclose(f);
+      |               ^~~~~~~~~
+../include/old/test.h:131:17: warning: pointer 'f' may be used after 'fclose' [-Wuse-after-free]
+  131 |                 tst_brkm__(file, lineno, flags, cleanup, fmt, ##__VA_ARGS__); \
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+safe_stdio.c:47:17: note: in expansion of macro 'tst_brkm_'
+   47 |                 tst_brkm_(file, lineno, TBROK | TERRNO, cleanup_fn,
+      |                 ^~~~~~~~~
+safe_stdio.c:44:15: note: call to 'fclose' here
+   44 |         ret = fclose(f);
+      |               ^~~~~~~~~
+../include/old/test.h:129:17: warning: pointer 'f' may be used after 'fclose' [-Wuse-after-free]
+  129 |                 tst_brk_(file, lineno, flags, fmt, ##__VA_ARGS__); \
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+safe_stdio.c:50:17: note: in expansion of macro 'tst_brkm_'
+   50 |                 tst_brkm_(file, lineno, TBROK | TERRNO, cleanup_fn,
+      |                 ^~~~~~~~~
+safe_stdio.c:44:15: note: call to 'fclose' here
+   44 |         ret = fclose(f);
+      |               ^~~~~~~~~
+../include/old/test.h:131:17: warning: pointer 'f' may be used after 'fclose' [-Wuse-after-free]
+  131 |                 tst_brkm__(file, lineno, flags, cleanup, fmt, ##__VA_ARGS__); \
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+safe_stdio.c:50:17: note: in expansion of macro 'tst_brkm_'
+   50 |                 tst_brkm_(file, lineno, TBROK | TERRNO, cleanup_fn,
+      |                 ^~~~~~~~~
+safe_stdio.c:44:15: note: call to 'fclose' here
+   44 |         ret = fclose(f);
+      |               ^~~~~~~~~
+CC lib/safe_file_ops.o
+RANLIB libltpipc.a
+tlibio.c: In function 'lio_write_buffer':
+tlibio.c:625:17: warning: 'sigset' is deprecated: Use the signal and sigprocmask functions instead [-Wdeprecated-declarations]
+  625 |                 sigset(sig, lio_async_signal_handler);
+      |                 ^~~~~~
+In file included from /usr/include/x86_64-linux-gnu/sys/param.h:28,
+                 from tlibio.c:83:
+/usr/include/signal.h:367:23: note: declared here
+  367 | extern __sighandler_t sigset (int __sig, __sighandler_t __disp) __THROW
+      |                       ^~~~~~
+tlibio.c:708:25: warning: 'sighold' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+  708 |                         sighold(sig);
+      |                         ^~~~~~~
+/usr/include/signal.h:355:12: note: declared here
+  355 | extern int sighold (int __sig) __THROW
+      |            ^~~~~~~
+tlibio.c:715:33: warning: 'sigrelse' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+  715 |                                 sigrelse(sig);
+      |                                 ^~~~~~~~
+/usr/include/signal.h:359:12: note: declared here
+  359 | extern int sigrelse (int __sig) __THROW
+      |            ^~~~~~~~
+tlibio.c:737:25: warning: 'sighold' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+  737 |                         sighold(sig);
+      |                         ^~~~~~~
+/usr/include/signal.h:355:12: note: declared here
+  355 | extern int sighold (int __sig) __THROW
+      |            ^~~~~~~
+tlibio.c:744:33: warning: 'sigrelse' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+  744 |                                 sigrelse(sig);
+      |                                 ^~~~~~~~
+/usr/include/signal.h:359:12: note: declared here
+  359 | extern int sigrelse (int __sig) __THROW
+      |            ^~~~~~~~
+tlibio.c:773:25: warning: 'sighold' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+  773 |                         sighold(sig);
+      |                         ^~~~~~~
+/usr/include/signal.h:355:12: note: declared here
+  355 | extern int sighold (int __sig) __THROW
+      |            ^~~~~~~
+tlibio.c:780:33: warning: 'sigrelse' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+  780 |                                 sigrelse(sig);
+      |                                 ^~~~~~~~
+/usr/include/signal.h:359:12: note: declared here
+  359 | extern int sigrelse (int __sig) __THROW
+      |            ^~~~~~~~
+tlibio.c:509:22: warning: unused parameter 'wrd' [-Wunused-parameter]
+  509 |                 long wrd)       /* to allow future features, use zero for now */
+      |                 ~~~~~^~~
+CC lib/safe_stdio.o
+tlibio.c: In function 'lio_read_buffer':
+tlibio.c:1054:17: warning: 'sigset' is deprecated: Use the signal and sigprocmask functions instead [-Wdeprecated-declarations]
+ 1054 |                 sigset(sig, lio_async_signal_handler);
+      |                 ^~~~~~
+/usr/include/signal.h:367:23: note: declared here
+  367 | extern __sighandler_t sigset (int __sig, __sighandler_t __disp) __THROW
+      |                       ^~~~~~
+tlibio.c:1137:25: warning: 'sighold' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+ 1137 |                         sighold(sig);
+      |                         ^~~~~~~
+/usr/include/signal.h:355:12: note: declared here
+  355 | extern int sighold (int __sig) __THROW
+      |            ^~~~~~~
+tlibio.c:1144:33: warning: 'sigrelse' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+ 1144 |                                 sigrelse(sig);
+      |                                 ^~~~~~~~
+/usr/include/signal.h:359:12: note: declared here
+  359 | extern int sigrelse (int __sig) __THROW
+      |            ^~~~~~~~
+tlibio.c:1164:25: warning: 'sighold' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+ 1164 |                         sighold(sig);
+      |                         ^~~~~~~
+/usr/include/signal.h:355:12: note: declared here
+  355 | extern int sighold (int __sig) __THROW
+      |            ^~~~~~~
+tlibio.c:1171:33: warning: 'sigrelse' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+ 1171 |                                 sigrelse(sig);
+      |                                 ^~~~~~~~
+/usr/include/signal.h:359:12: note: declared here
+  359 | extern int sigrelse (int __sig) __THROW
+      |            ^~~~~~~~
+tlibio.c:1198:25: warning: 'sighold' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+ 1198 |                         sighold(sig);
+      |                         ^~~~~~~
+/usr/include/signal.h:355:12: note: declared here
+  355 | extern int sighold (int __sig) __THROW
+      |            ^~~~~~~
+tlibio.c:1205:33: warning: 'sigrelse' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+ 1205 |                                 sigrelse(sig);
+      |                                 ^~~~~~~~
+/usr/include/signal.h:359:12: note: declared here
+  359 | extern int sigrelse (int __sig) __THROW
+      |            ^~~~~~~~
+tlibio.c:937:22: warning: unused parameter 'wrd' [-Wunused-parameter]
+  937 |                 long wrd)       /* to allow future features, use zero for now */
+      |                 ~~~~~^~~
+tlibio.c: In function 'lio_check_asyncio':
+tlibio.c:1339:17: warning: 'sigrelse' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+ 1339 |                 sigrelse(aiocbp->aio_sigevent.sigev_signo);
+      |                 ^~~~~~~~
+/usr/include/signal.h:359:12: note: declared here
+  359 | extern int sigrelse (int __sig) __THROW
+      |            ^~~~~~~~
+tlibio.c: In function 'lio_wait4asyncio':
+tlibio.c:1479:25: warning: 'sigrelse' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+ 1479 |                         sigrelse(aiocbp->aio_sigevent.sigev_signo);
+      |                         ^~~~~~~~
+/usr/include/signal.h:359:12: note: declared here
+  359 | extern int sigrelse (int __sig) __THROW
+      |            ^~~~~~~~
+tlibio.c:1487:25: warning: 'sigrelse' is deprecated: Use the sigprocmask function instead [-Wdeprecated-declarations]
+ 1487 |                         sigrelse(aiocbp->aio_sigevent.sigev_signo);
+      |                         ^~~~~~~~
+/usr/include/signal.h:359:12: note: declared here
+  359 | extern int sigrelse (int __sig) __THROW
+      |            ^~~~~~~~
+CC lib/safe_pthread.o
+CC lib/safe_net.o
+tst_af_alg.c: In function 'init_sockaddr_alg':
+tst_af_alg.c:62:9: warning: '__builtin_strncpy' specified bound 64 equals destination size [-Wstringop-truncation]
+   62 |         strncpy((char *)addr->salg_name, algname, sizeof(addr->salg_name));
+      |         ^
+CC lib/tst_ansi_color.o
+CC libs/newipc/tse_newipc.o
+CC lib/tst_arch.o
+AR libltpnewipc.a
+CC lib/tst_af_alg.o
+RANLIB libltpnewipc.a
+CC lib/tst_assert.o
+tst_capability.c:82:6: warning: conflicting types for 'tst_cap_setup' due to enum/integer mismatch; have 'void(struct tst_cap *, unsigned int)' [-Wenum-int-mismatch]
+   82 | void tst_cap_setup(struct tst_cap *caps, unsigned int action_mask)
+      |      ^~~~~~~~~~~~~
+In file included from ../include/tst_test.h:42,
+                 from tst_capability.c:9:
+../include/tst_capability.h:135:6: note: previous declaration of 'tst_cap_setup' with type 'void(struct tst_cap *, enum tst_cap_act)'
+  135 | void tst_cap_setup(struct tst_cap *cap, enum tst_cap_act action_mask);
+      |      ^~~~~~~~~~~~~
+CC lib/tlibio.o
+CC lib/tst_buffers.o
+CC libs/numa/tse_numa.o
+CC lib/tst_bool_expr.o
+CC lib/safe_macros.o
+CC lib/tst_capability.o
+AR libltpnuma.a
+CC lib/tst_checkpoint.o
+In file included from tst_clone.c:11:
+../include/lapi/sched.h: In function 'ltp_clone3':
+../include/lapi/sched.h:94:49: warning: unused parameter 'cl_args' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                              ~~~~~~~~~~~~~~~~~~~^~~~~~~
+../include/lapi/sched.h:94:65: warning: unused parameter 'size' [-Wunused-parameter]
+   94 | static inline int ltp_clone3(struct clone_args *cl_args, size_t size,
+      |                                                          ~~~~~~~^~~~
+../include/lapi/sched.h:95:36: warning: unused parameter 'fn' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                              ~~~~~~^~~~~~~~~~~
+../include/lapi/sched.h:95:55: warning: unused parameter 'arg' [-Wunused-parameter]
+   95 |                              int (*fn)(void *), void *arg)
+      |                                                 ~~~~~~^~~
+CC lib/tst_checksum.o
+CC lib/tst_clone.o
+RANLIB libltpnuma.a
+CC lib/tst_clocks.o
+CC lib/tst_coredump.o
+CC lib/tst_cmd.o
+CC lib/tst_cpu.o
+CC lib/tst_crypto.o
+CC lib/tst_cgroup.o
+CC lib/tst_dir_is_empty.o
+CC lib/tst_epoll.o
+CC libs/sigwait/tse_sigwait.o
+CC lib/tst_fill_file.o
+CC lib/tst_fs_has_free.o
+AR libltpsigwait.a
+CC lib/tst_fill_fs.o
+RANLIB libltpsigwait.a
+CC lib/tst_fd.o
+CC lib/tst_device.o
+CC lib/tst_fs_link_count.o
+CC lib/tst_fs_type.o
+CC lib/tst_fs_setup.o
+CC lib/tst_get_bad_addr.o
+CC lib/tst_ioctl.o
+CC lib/tst_hugepage.o
+CC lib/tst_kernel.o
+CC libs/swap/tse_swap.o
+AR libltpswap.a
+CC lib/tst_kvercmp.o

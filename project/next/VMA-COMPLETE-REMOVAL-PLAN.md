@@ -563,3 +563,42 @@ conversion 工作中）, auto_legacy_class=2316（classify LEGACY 余量
 形状的收编 = 后续切片（OQ-MV-2 豁免消除）。
 
 **下一步**: V5 拒绝翻转 + smaps region 化 + 长跑零触发 → VI + J6。
+
+## 12. V4.3 EOF 三点收口 + V5 拒绝翻转落地（bc86fffa→75a6d8a, 2026-10-10）
+
+**收口三点全落地**: (1) `ar->reof` = register_file 时采样的声明时
+EOF 页界（fork 逐字继承），(2) dispatch 级 past-EOF re-dispatch 门改
+reof（原 live i_size 会把截断误判为 anon），(3) file_read 臂声明内
+越 EOF = 共享零页安装（mm_forbids_zeropage 走 -EAGAIN 重臂 anon），
+file_cow 臂 = 零源 anon 安装（fetch 跳过，prealloc folio 即全源），
+fetch 的 live-i_size 门从此只应答截断竞态。
+
+**探针驱动的第四点修正**: efsmoke2（截断裁决探针）暴露 4fb0372 的
+合成门仍用 live i_size —— 截断降级槽位（W1.b KEEP_PERM）再合成
+PRIVATE_ANON 并以零覆盖截断内容，mmap 契约要求 SIGBUS。合成门改
+reof 后截断槽位重臂 FILE_MAPPED → fetch 的 -ENODATA → BUS ✓。
+**这是整条 V4.3 调试线（10+ 轮 boot 死）的终点**: 库装载高速路的
+BSS tail 与截断契约同时在 reof 上自洽。
+
+**验收（单内核三合一）**: efsmoke PASS（越 EOF 读零/写私有/fork
+忠实/窗口路由, file_mmaps 3025→3036, file_read_faults +99,
+file_cow_copies +6）; efsmoke2 PASS（截断 SIGBUS + 尾页零）;
+smoke 26/26; 零 trap; truncate_routes 首次开火（W1.b 路由）；
+
+**电池三腿绿（bc86fffa @ fdedf584）**: P1(mode=0) smoke 26/26×2 +
+FAILED_RC=0; P2(mode=1, journald masked) metis checksum =
+基线 2d383eeed4ceb73b + smoke 26/26 + gate_pass=1; P3(journal face)
+BOOT_OK + face rows=5。读数与 pr0-fix 历史绿轮逐字一致。
+（evidence: project/results/r07/eof-battery/）
+
+**V5 拒绝翻转落地（75a6d8a）**: vma_link 的普查闸翻转 = 拒绝
+（-EPERM + 首事件 WARN），豁免面 = VM_CORTEN 阴影片 / special
+影子族 / dup_mmap fork 拷贝。武装态 boot vma_gate=0 零触发 +
+smoke PASS + redis-server（镜像预存）为唯一失败单元。r43-r44 首试
+杀 init 的前提差异 = mmap_region take 臂（普查自零）。
+**smaps region 化确认早已落地（V-C）**: maps/smaps/numa_maps 三面
+全走 region 行（corten_row_active 路由 + PT 聚合）。
+
+**链状态**: V2.1 ✓ V3 ✓ V4.1 ✓ V4.2 ✓ V4.3 EOF 收口 ✓ V5.1 普查 ✓
+**V5 翻转 ✓** 栈臂 ✓ 电池 ✓。**剩余 = VI**: VMA 层逐文件删除
+（13,408+ LoC）+ grep 零依赖门 + J6 终账。
