@@ -854,3 +854,21 @@ setup_arg_pages 的 relocate/expand 会长大载体——entry-sweep 的
 ② (a) mprotect 双写 → ③ (b) extension 双写 → ④ (c) relocate
 合成 → ⑤ adopt 校准 → 旗标 on boot+smoke+efsmoke 全套。①⑤ 不可
 拆分（分叉即栈生长损坏）。
+
+## 23. G2' ①+⑤ API 图（2026-10-10）: 下会话直接施工件
+
+- 公共 `corten_arena_declare(mm, addr, len)`（corten_arena.h:771）
+  = prctl 门自由极简入口, 无 perm/rflags/novma 形参;
+- 内部全参 declare（corten_arena.c:~2560 起: perm/rflags/novma/file
+  + pool 复用 + ADEC 印）为 **static** —— G2' 需导出包装
+  （建议形: `corten_arena_declare_carrier(mm, addr, len, prot,
+  rflags, struct vm_area_struct **out_vma)`, flag 门控由调用者
+  create_init_stack_vma 持）;
+- 载体句柄 = `ar->vma`（struct corten_arena 的 shadow 缓存, DECLARE
+  时 mmap_write 下缓存——正合序翻转的取用形）;
+- ⑤ 校准点 = entry-sweep 的 -EEXIST 分支（corten_arena.c:7994 区,
+  sweep_skip_declare 计数处）: region 已在 → 对齐载体 VMA 现形
+  （ar extent 重写 + stack extension 基线重置）, 非跳过;
+- 施工序: 导出包装 → create_init_stack_vma 序翻转（declare 先行,
+  shadow 片即 bprm->vma, 跳过手工 alloc/insert; 失败回退现路径）
+  → ⑤ 校准 → 旗标 on boot+smoke+efsmoke。①⑤ 同片不可拆。
