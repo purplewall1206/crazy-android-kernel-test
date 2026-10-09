@@ -181,6 +181,13 @@ enum corten_region_class {
  * (no VM_CORTEN) hands the fault to the legacy funnel.
  */
 #define CORTEN_RF_SPECIAL_SHADOW _BITUL(7)	/* V3 special mapping shadow */
+/*
+ * CORTEN_RF_PIN (V4.2): the record carries the mlock contract -- the
+ * VM_LOCKED/VM_LOCKONFAULT reflection.  The shrinker reads it to keep
+ * the record's pages out of the aging/eviction walks (mlock's core
+ * promise); the fork mirror replays it verbatim.
+ */
+#define CORTEN_RF_PIN		_BITUL(8)	/* V4.2 mlock pin region */
 
 /*
  * pagemap entry bits and the PSS fixed-point shift, shared between the

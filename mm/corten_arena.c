@@ -1640,6 +1640,11 @@ static u32 corten_region_rflags_from_vma(struct vm_area_struct *vma)
 		rflags |= CORTEN_RF_SEQ_READ;
 	if (vma->vm_flags & VM_RAND_READ)
 		rflags |= CORTEN_RF_RAND_READ;
+	/* V4.2: the mlock contract rides as the PIN marker -- the
+	 * shrinker keeps the record's pages out of the walks.
+	 */
+	if (vma->vm_flags & (VM_LOCKED | VM_LOCKONFAULT))
+		rflags |= CORTEN_RF_PIN;
 
 	return rflags;
 }
@@ -7749,10 +7754,12 @@ static int corten_sweep_classify(struct mm_struct *mm,
 	 * stay legacy.  VM_SEQ_READ/VM_RAND_READ ride along to keep the
 	 * mask aligned with the attach gate (hints only).
 	 */
+	/* V4.2: VM_LOCKED/VM_LOCKONFAULT adopt with CORTEN_RF_PIN (the
+	 * shrinker keeps them); the rest of the mask stays defensive.
+	 */
 	if (flags & (VM_HUGETLB | VM_IO | VM_PFNMAP | VM_MIXEDMAP |
-		     VM_SHADOW_STACK | VM_LOCKED | VM_LOCKONFAULT |
-		     VM_DONTCOPY | VM_WIPEONFORK | VM_SEQ_READ |
-		     VM_RAND_READ))
+		     VM_SHADOW_STACK | VM_DONTCOPY | VM_WIPEONFORK |
+		     VM_SEQ_READ | VM_RAND_READ))
 		return CORTEN_SWEEP_SKIP_FLAGS;
 
 #ifdef CONFIG_USERFAULTFD
@@ -19885,6 +19892,13 @@ static void corten_shrink_eval_slice(struct mm_struct *mm,
 		for (i = 0; i < npin; i++) {
 			struct corten_arena *arena = pin[i];
 
+			/* V4.2: the PIN records keep their pages out of
+			 * the walks -- mlock's core promise.
+			 */
+			if (READ_ONCE(arena->rflags) & CORTEN_RF_PIN) {
+				percpu_ref_put(&arena->active);
+				continue;
+			}
 			if (!READ_ONCE(arena->frozen) &&
 			    !READ_ONCE(arena->idle)) {
 				fstart = max(key << PMD_SHIFT,
@@ -19957,6 +19971,13 @@ static void corten_shrink_age_slice(struct mm_struct *mm,
 		for (i = 0; i < npin; i++) {
 			struct corten_arena *arena = pin[i];
 
+			/* V4.2: the PIN records keep their pages out of
+			 * the walks (site 2 -- the aging pass).
+			 */
+			if (READ_ONCE(arena->rflags) & CORTEN_RF_PIN) {
+				percpu_ref_put(&arena->active);
+				continue;
+			}
 			if (!READ_ONCE(arena->frozen) &&
 			    !READ_ONCE(arena->idle)) {
 				fstart = max(key << PMD_SHIFT,
