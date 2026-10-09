@@ -144,6 +144,16 @@ int create_init_stack_vma(struct mm_struct *mm, struct vm_area_struct **vmap,
 		}
 	}
 
+	/* The WARN-unreachable rehearsal (plan sec 35): with the flag on
+	 * and MODE entered, the manual path is the FALLBACK only -- the
+	 * window declare failed.  The soak week's deletion evidence is
+	 * this counter reading zero; the WARN makes the first hit loud.
+	 */
+	if (corten_stack_s2_enabled() && READ_ONCE(mm->corten_mode)) {
+		corten_arena_note_stack_fallback();
+		WARN_ON_ONCE(1);
+	}
+
 	vma = vm_area_alloc(mm);
 	if (!vma)
 		return -ENOMEM;

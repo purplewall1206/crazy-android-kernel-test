@@ -157,18 +157,22 @@ static struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
 	 * with no tree walk; the region pre-declares the full
 	 * MAX_ARG_STRLEN extent, so no maybe_expand is needed.
 	 */
-	if (!vma)
-		goto gup;
-
-	/*
-	 * Avoid relying on expanding the stack down in GUP (which
-	 * does not work for STACK_GROWSUP anyway), and just do it
-	 * ahead of time.
-	 */
-	if (!mmap_read_lock_maybe_expand(mm, vma, pos, write))
+	if (vma) {
+		/*
+		 * Avoid relying on expanding the stack down in GUP (which
+		 * does not work for STACK_GROWSUP anyway), and just do it
+		 * ahead of time.
+		 */
+		if (!mmap_read_lock_maybe_expand(mm, vma, pos, write))
+			return NULL;
+	} else if (mmap_read_lock_killable(mm)) {
+		/* The VMA-less form still owes GUP its read lock -- the
+		 * rwsem assert inside __get_user_pages is the contract
+		 * (the first boot warned 2893 times without it).
+		 */
 		return NULL;
+	}
 
-gup:
 	/*
 	 * We are doing an exec().  'current' is the process
 	 * doing the exec and 'mm' is the new process's mm.
@@ -176,8 +180,7 @@ gup:
 	ret = get_user_pages_remote(mm, pos, 1,
 			write ? FOLL_WRITE : 0,
 			&page, NULL);
-	if (vma)
-		mmap_read_unlock(mm);
+	mmap_read_unlock(mm);
 	if (ret <= 0)
 		return NULL;
 

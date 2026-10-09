@@ -241,6 +241,7 @@ static atomic_long_t corten_nr_bprm_mode_enters;    /* S2 G1 bprm-phase MODEs */
 static atomic_long_t corten_nr_brk_funnel;	/* MODE-mm brk funnel VMAs */
 static atomic_long_t corten_nr_sweep_stack_adopts; /* V2.2 stack adoptions */
 static atomic_long_t corten_nr_adopt_calibrations; /* G2' ⑤ extent re-aligns */
+static atomic_long_t corten_nr_stack_fallbacks; /* S3-A: flag-on manual-path hits */
 static atomic_long_t corten_nr_special_shadows; /* V3 special shadows */
 static atomic_long_t corten_nr_vma_gate;	/* V5 create_vma census */
 static atomic_long_t corten_nr_auto_legacy_class; /* V5 classify-legacy */
@@ -2963,6 +2964,14 @@ int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
 					   0, true, false, rflags, NULL);
 }
 
+/* S3-A (plan sec 35): the fallback counter's note API -- vma_exec's
+ * manual path calls it in the flag-on MODE world.
+ */
+void corten_arena_note_stack_fallback(void)
+{
+	atomic_long_inc(&corten_nr_stack_fallbacks);
+}
+
 /*
  * S3-A step 1 (plan sec 29-30): the window temp-stack declare.  The
  * exec stack's temporary bring-up extent lands IN THE WINDOW so
@@ -2984,7 +2993,10 @@ int corten_arena_stack_window_declare(struct mm_struct *mm,
 	u8 perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER;
 	int ret;
 
-	if (!mm || !out_vma || !out_end || !len || (len & ~PAGE_MASK))
+	/* @out_vma is only the carrier form's handle (NULL = the
+	 * VMA-less form); @out_end is always required.
+	 */
+	if (!mm || !out_end || !len || (len & ~PAGE_MASK))
 		return -EINVAL;
 
 	/* SELF-locking: create_init_stack_vma's arm runs BEFORE the
@@ -3047,8 +3059,8 @@ int corten_arena_stack_window_declare(struct mm_struct *mm,
 			corten_arena_release(mm, addr, len);
 			return -ENODEV;
 		}
-	} else {
-		*out_vma = NULL;
+	} else if (out_vma) {
+		*out_vma = NULL;	/* the VMA-less caller passes none */
 	}
 	mmap_write_unlock(mm);
 	return 0;
@@ -3825,6 +3837,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_bprm_mode_enters));
 	seq_printf(m, "adopt_calibrations %ld\n",
 		   atomic_long_read(&corten_nr_adopt_calibrations));
+	seq_printf(m, "stack_fallbacks     %ld\n",
+		   atomic_long_read(&corten_nr_stack_fallbacks));
 	seq_printf(m, "brk_funnel          %ld\n",
 		   atomic_long_read(&corten_nr_brk_funnel));
 	seq_printf(m, "stack_adopts        %ld\n",
@@ -8253,10 +8267,23 @@ static void corten_arena_mode_sweep(struct mm_struct *mm)
 						       stack_vma->vm_start,
 						       stack_vma->vm_end);
 
-		if (cal == 0)
+		if (cal == 0) {
+			/* G2' ⑤: region-first declared it -- the extent
+			 * is now aligned: settled.
+			 */
 			atomic_long_inc(&corten_nr_sweep_stack_adopts);
-		if (cal != -EPERM)
-			stack_vma = NULL;	/* ours: settled */
+			stack_vma = NULL;
+		} else if (cal == -ENOENT) {
+			/* The window form's transfer released the source
+			 * region and nothing declares the final extent
+			 * yet: FALL THROUGH to the adopt (it is the
+			 * declarer here).  The v2 refactor wrongly
+			 * settled -ENOENT too -- stack_adopts read 0
+			 * with the true VMA-less path live.
+			 */
+		} else {
+			stack_vma = NULL;	/* -EPERM: not ours */
+		}
 	}
 	if (stack_vma) {
 		int ret = corten_sweep_adopt_stack(mm, state, stack_vma);
