@@ -792,3 +792,26 @@ MODE/adopt 全覆盖）+ vma_gate=0 + 零 trap + 零拒绝事件。
 不阻塞旗标 on 绿态——每迁移一操作, 载体 VMA 的角色缩一分, 全数
 迁移后 S3（create_init_stack_vma/relocate_vma_down 退役 +
 vma_exec.c 全删）解锁。
+
+## 20. G3 时序修正（2026-10-10）: region-first 是真前置
+
+**核查事实**: setup_arg_pages 的三操作运行于 bprm mm, 而 region 在
+exec 完成缝的 adopt 才诞生——adopt 消费的恰是 ops 处理后的最终
+VMA 形态（relocate/expand/mprotect 的结果）。ops 时刻无 region 可
+路由。"逐操作 region 化"在 region-first 创建之前**无对象**。
+
+**修正后的栈面序列**:
+- G2'（真 G2, 下一步）: create_init_stack_vma 的 region-first
+  declare——region 与载体 VMA 共生（record 先行, VMA 为 GUP/ops
+  载体）; 三个直通旁路需钩子或预置 may_prot:
+  (a) setup_arg_pages 的 mprotect_fixup 直调（绕 mprotect 路由）,
+  (b) expand_stack_locked 直调（绕 extension 路由）,
+  (c) relocate 的页表搬迁（region 侧 = release+redeclare+内容页
+  拷贝, 或 region  extent 平移原语）;
+- G3': ops 逐一切到 region 路由（region 已在, 每操作一验收）;
+- adopt 缝: 见 region 已在 → 改为 extent 校准（对齐 ops 后形态）
+  而非新建——G4 的升级版;
+- S3: 全数 region 化后 create_init_stack_vma/relocate_vma_down
+  退役 → vma_exec.c 全删。
+**旗标 on 现形（G1+G2 豁免+G4 现行为）不受影响**: 载体 VMA 路径
+仍是绿态基线, region-first 在其上增量替换。
