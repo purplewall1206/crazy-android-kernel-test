@@ -513,3 +513,14 @@ auto_legacy_class 计数器落地: 每 boot **2103 个形状被 classify
 - **已 region 化**: 栈(默认开 189 adopts) + brk + special 影子 + shared + mlock pin + auto file (2397 auto_mmaps)
 - **漏斗 resident**: 库装载高速路 2103 VMA（V4.3 file 臂 serve 修复的精确目标）
 - **剩余链**: V4.3 file 臂 serve 修复 → 库高速路 2103 VMA 收编 → V5 拒绝翻转（census 真零前置已满足: vma_gate=0）→ smaps region 化 → VI 删除 + J6
+
+## 9. V4.3 mark-time EOF 再派发落地（4fb0372）: 库高速路 serve 修复
+
+合成门的 rclass==FILE 分支现在按 eof_pg 判定: 越 EOF 槽位在 MARK
+时刻重臂 CORTEN_PRIVATE_ANON（替代 FILE_MAPPED），使 anon 臂服务
+（零页读 / 新鲜 folio 写），fetch 的 past-EOF 路径对构造形状不可达。
+fetch 的 EOF 门仅应答截断竞态（BUS 保持正确）。
+boot: SSHOK + eth0 + auto_mmaps=2172 + stack_adopts=178 + vma_gate=0
++ 零 trap。
+**剩余**: V5 拒绝翻转（funnel 普查对齐）→ smaps region 化 →
+VI 删除 + J6 终账。
