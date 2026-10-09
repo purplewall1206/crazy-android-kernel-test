@@ -832,3 +832,25 @@ VMA 形态（relocate/expand/mprotect 的结果）。ops 时刻无 region 可
   一验——下会话首项）。
 实现顺序: 共生 declare → (a) 双写 → (b) → (c) → adopt 缝校准 →
 S3。每步过旗标 on boot + smoke + efsmoke。
+
+## 22. G2' 首项验证完成（2026-10-10）: 序翻转 + 校准强制
+
+**语义验证（本片完成）**: `corten_arena_overlaps`（:2225）只对
+region 注册表（per-mm xarray）判冲突, 不看 VMA 树 → declare-first
+无注册表障碍; 反之 declare 的 shadow 片 maple 插入会与已链接的栈
+VMA 相撞 → **共生形态 = 序翻转**: create_init_stack_vma 内先
+declare（novma=false, GROWSDOWN rflags, 1 页 @STACK_TOP_MAX-page）,
+declare 产出的 shadow 片即 bprm->vma 载体, 手工 vm_area_alloc/
+insert_vm_struct 整体跳过。VM_CORTEN 载体天生过 V5 门（G2 豁免
+退居二线）。
+
+**同片强制项**: adopt 缝 extent 校准。region 预声明于 1 页, 而
+setup_arg_pages 的 relocate/expand 会长大载体——entry-sweep 的
+-EEXIST skip 会把 record 留在旧 extent（栈生长面分叉）→ G2' 片
+内 adopt 见 region 已在 = **extent 校准对齐载体现形**, 非跳过。
+
+**G2' 完整片清单（下会话执行序）**: ① 序翻转 declare + 载体重
+接（copy_strings/acct 的 bprm->vma 解引用面以 shadow 片兑现）→
+② (a) mprotect 双写 → ③ (b) extension 双写 → ④ (c) relocate
+合成 → ⑤ adopt 校准 → 旗标 on boot+smoke+efsmoke 全套。①⑤ 不可
+拆分（分叉即栈生长损坏）。
