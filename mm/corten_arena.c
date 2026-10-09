@@ -7645,6 +7645,7 @@ static int corten_sweep_adopt_stack(struct mm_struct *mm,
 				    struct vm_area_struct *vma)
 {
 	struct corten_arena *ar;
+	unsigned long conv_start;
 	int ret;
 
 	/* The anon arm carries the body: the picks, the surgery (the
@@ -7654,12 +7655,13 @@ static int corten_sweep_adopt_stack(struct mm_struct *mm,
 	 * after publication; rflags rewrites happen only at
 	 * register/adopt time, so it lives as long as the record.
 	 */
+	conv_start = vma->vm_start;	/* captured before the adopt frees it */
 	ret = corten_sweep_adopt_anon(mm, state, vma);
 	if (ret)
 		return ret;		/* fail-open, the VMA is intact */
 
 	rcu_read_lock();
-	ar = corten_arena_lookup(mm, vma->vm_start);
+	ar = corten_arena_lookup(mm, conv_start);
 	rcu_read_unlock();
 	if (!ar)
 		return 1;
@@ -11926,25 +11928,35 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		      task_rlimit(current, RLIMIT_STACK)))
 		stack = NULL;		/* nearest stock is not a legal stack */
 	rcu_read_unlock();
+	if (!stack && !user)
+		return 0;		/* kernel misses cannot convert */
 	if (!stack && user) {
 		/* The conversion candidate: the grow-down VMA form.  The
-		 * probe is lock_vma_under_rcu -- find_vma() asserts the
-		 * mmap lock (the r08 boot's ud2) and an unchecked maple
-		 * read has no such sanction.  Without a candidate this
-		 * miss is the funnel's: RETURN, never the write lock --
-		 * every funnel-served fault would otherwise take it and
-		 * the fork COW storm serializes to a crawl (the sshd
-		 * banner timeout the r09 boot died of).
+		 * probe is a lockless maple walk under the same rcu
+		 * section -- find_vma() asserts the mmap lock (the r08
+		 * boot's ud2) and lock_vma_under_rcu() only answers
+		 * COVERING ranges (a below-start growth miss has none --
+		 * the r11 boots saw zero conversions through it).  The
+		 * walked VMA is RCU-freed, so a flag peek is safe; the
+		 * definitive checks repeat under the write lock.  Without
+		 * a candidate this miss is the funnel's: RETURN, never
+		 * the write lock -- every funnel-served fault would
+		 * otherwise take it and the fork COW storm serializes to
+		 * a crawl (the sshd banner timeout the r09 boot died of).
 		 */
-		struct vm_area_struct *vma = lock_vma_under_rcu(mm, addr);
+		struct vm_area_struct *vma;
 
-		if (vma) {
-			convert = vma->vm_start > addr &&
-				  (vma->vm_flags & VM_GROWSDOWN) &&
-				  vma->vm_end - addr <=
-				  task_rlimit(current, RLIMIT_STACK);
-			vma_end_read(vma);
-		}
+		MA_STATE(mas, &mm->mm_mt, addr, addr);
+		vma = mas_walk(&mas);
+		/* mas_walk answers the LEFT neighbour in a gap -- the
+		 * growth candidate is the first VMA ABOVE the miss.
+		 */
+		if (!vma || vma->vm_start <= addr)
+			vma = mas_next(&mas, ULONG_MAX);
+		convert = vma && vma->vm_start > addr &&
+			  (vma->vm_flags & VM_GROWSDOWN) &&
+			  vma->vm_end - addr <=
+			  task_rlimit(current, RLIMIT_STACK);
 		if (!convert)
 			return 0;
 	}
@@ -11963,6 +11975,7 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 	if (!stack && convert) {
 		struct vm_area_struct *vma, *prev;
 		struct corten_arena *ar;
+		unsigned long conv_start;
 
 		vma = find_vma_prev(mm, addr, &prev);
 		if (!vma || vma->vm_start <= addr)
@@ -11984,11 +11997,18 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		 * without them the fork mirror and reclaim see un-migrated
 		 * stock (the sshd privsep crash shape).  A refusal fails
 		 * open: the funnel keeps growing the VMA itself.
+		 *
+		 * @conv_start is captured BEFORE the adopt: on success the
+		 * arm detached, removed and freed @vma -- reading vm_start
+		 * afterwards is the freed-slab read the r09 boot crashed
+		 * from (user_fault+0x4ff).
 		 */
-		if (corten_sweep_adopt_anon(mm, state, vma))
+		conv_start = vma->vm_start;
+		ret = corten_sweep_adopt_anon(mm, state, vma);
+		if (ret)
 			goto out;
 		rcu_read_lock();
-		ar = corten_arena_lookup(mm, vma->vm_start);
+		ar = corten_arena_lookup(mm, conv_start);
 		rcu_read_unlock();
 		if (!ar)
 			goto out;
@@ -11999,6 +12019,11 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		atomic_long_inc(&corten_nr_sweep_stack_adopts);
 		stack = ar;
 	}
+	if (!stack)
+		goto out;		/* no record, no candidate: the funnel's
+				 * fault -- the r10 boot's NULL deref (a
+				 * !user miss with convert=false reached
+				 * the start read below) */
 
 	old_start = READ_ONCE(stack->start);
 	if (addr >= old_start) {
