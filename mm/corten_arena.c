@@ -11829,19 +11829,6 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		m = fresh;
 	}
 
-	/* V4.3: the library-load contract */
-	if (m.state == CORTEN_FILE_MAPPED && ctx->ar->rfile) {
-		pgoff_t eof_pg = DIV_ROUND_UP(
-			i_size_read(ctx->ar->rfile->f_mapping->host),
-			PAGE_SIZE);
-		pgoff_t f_pgoff = READ_ONCE(ctx->ar->rpoff) +
-			((ctx->addr - READ_ONCE(ctx->ar->start)) >>
-			 PAGE_SHIFT);
-
-		if (f_pgoff >= eof_pg)
-			m.state = CORTEN_PRIVATE_ANON;
-	}
-
 	disp = corten_arena_dispatch(&m, ctx->write, ctx->instruction);
 	/* A pre-allocated folio means the zero page is forbidden
 	 * (mm_forbids_zeropage, OQ-6): install a real read-only page
