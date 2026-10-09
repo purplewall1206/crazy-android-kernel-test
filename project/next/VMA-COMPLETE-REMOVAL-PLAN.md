@@ -395,3 +395,16 @@ dhcpcd-only boot 的 console 落盘即可全分析; (b) 或 gdb-stub
 (kgdb) 形状。判据不变: alone-boot SSHOK + dhcpcd-only eth0 地址
 + ssh 存活 → 默认开翻转。V4.2 mlock pin / V5 总闸 / VI + J6 =
 其后序列。
+
+## 7m. 默认开翻转（r39-r42）: 栈臂收口达成
+
+**根因 = 扫描起点**: 栈扫描从 frame+1 起 —— 刚转换栈的首个增长
+fault 落在其 start 下一页 = **转换注册的那一帧本身**; 扫描跳过它
+→ 答空 → 漏斗无 VMA → 每次转换后 60ms SIGSEGV。修复 = i 从 0 起
+（含自身帧）。
+
+**实证**: dhcpcd-only boot 双绿（adopts=1, grows=5, DHCP 租约经
+region 形态服务, eth0 配置, ssh 活）; **默认开 mass-conversion
+boot 全绿（180/180 进程栈 region 化, grows=10, 零 trap, ssh 活,
+DHCP 完成）**。M2 里程碑的栈腿达成。判据双绿 ✓。调试过滤器
+（corten_stack_convert_comm=）与 off 开关保留。
