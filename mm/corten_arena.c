@@ -7052,6 +7052,9 @@ static int corten_sweep_pick_window(struct mm_struct *mm,
 		if (ret != -EAGAIN || ++tries >= 2)
 			break;
 	}
+	if (ret && ret != -ENOENT && ret != -EOPNOTSUPP)
+		pr_info_ratelimited("corten-dbg: pkw lockfail a=%lx ret=%d\n",
+				    addr, ret);
 	/* An untracked window (no descriptor, e.g. the PT page predates a
 	 * corten=off->on flip) or a hole is skipped ONLY when it holds no
 	 * present PTE -- an untracked window with resident content is not
@@ -7066,7 +7069,10 @@ static int corten_sweep_pick_window(struct mm_struct *mm,
 			return 0;
 		if (pmd_leaf(READ_ONCE(*pmdp)))
 			return 1;
-		return corten_sweep_window_has_ptes(mm, pmdp, addr, win_end);
+		ret = corten_sweep_window_has_ptes(mm, pmdp, addr, win_end);
+		pr_info_ratelimited("corten-dbg: pkw untracked a=%lx lk=%d ptes=%d\n",
+				    addr, ret ? 1 : 0, ret);
+		return ret;
 	}
 	if (ret)
 		return 1;
@@ -7077,6 +7083,7 @@ static int corten_sweep_pick_window(struct mm_struct *mm,
 	 * published yet).
 	 */
 	if (corten_meta_ensure_locked(txn.covering)) {
+		pr_info_ratelimited("corten-dbg: pkw metafail a=%lx\n", addr);
 		corten_unlock(&txn);
 		return 1;
 	}
@@ -11971,6 +11978,12 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		return 0;
 
 	addr = address & PAGE_MASK;
+	/* Stack-area faults only: the whole 0x7ff-prefix domain is the
+	 * legacy stack neighbourhood in this layout, and the print is
+	 * the arm's entry witness (the r17 round flew blind without it).
+	 */
+	if (addr >= 0x7ff000000000)
+		pr_info_ratelimited("corten-dbg: sg ENTRY a=%lx\n", addr);
 	/* The all-window layout keeps the stack in the legacy domain
 	 * above the window: a window-domain miss is never stack growth
 	 * (the parked/hole shape answers through the maperr arm).
@@ -12023,17 +12036,39 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		 */
 		struct vm_area_struct *vma;
 
-		MA_STATE(mas, &mm->mm_mt, addr, addr);
-		vma = mas_walk(&mas);
-		/* mas_walk answers the LEFT neighbour in a gap -- the
-		 * growth candidate is the first VMA ABOVE the miss.
+		/* The lockless maple walk needs its rcu read side (the
+		 * r12 round: the unprotected walk answered
+		 * nondeterministically -- dhcpcd converted, the python
+		 * growth test never did).
 		 */
-		if (!vma || vma->vm_start <= addr)
-			vma = mas_next(&mas, ULONG_MAX);
-		convert = vma && vma->vm_start > addr &&
-			  (vma->vm_flags & VM_GROWSDOWN) &&
+		rcu_read_lock();
+		MA_STATE(mas, &mm->mm_mt, addr + 1, addr + 1);
+		/* mas_find answers the entry at the index or the FIRST
+		 * ENTRY ABOVE it -- in a below-start growth miss that is
+		 * the candidate stack VMA.  (The r12 round's
+		 * mas_walk+mas_next pair returned NULL from a gap: a NULL
+		 * walk leaves the mas unpositioned, and mas_next from
+		 * there answers nothing -- the probe found no candidate
+		 * for exactly the faults it existed for.)
+		 */
+		vma = mas_find(&mas, ULONG_MAX);
+		/* The trigger is ANY fault whose nearest VMA is the
+		 * grow-down stack: the first in-VMA page fault converts
+		 * (the boot's growth is kernel-mode copy_strings plus
+		 * in-VMA lazy faults -- a user-mode below-start miss,
+		 * the r12-r14 trigger, never occurs), and the growth
+		 * itself then runs through the extend arm.
+		 */
+		convert = vma && (vma->vm_flags & VM_GROWSDOWN) &&
 			  vma->vm_end - addr <=
 			  task_rlimit(current, RLIMIT_STACK);
+		if (addr >= 0x7ff000000000)
+			pr_info_ratelimited("corten-dbg: sg PROBE a=%lx v=%px [%lx,%lx) cv=%d\n",
+					    addr, vma,
+					    vma ? vma->vm_start : 0,
+					    vma ? vma->vm_end : 0,
+					    convert);
+		rcu_read_unlock();
 		if (!convert)
 			return 0;
 	}
@@ -12050,22 +12085,18 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 	 * the pre-check vetted.
 	 */
 	if (!stack && convert) {
-		struct vm_area_struct *vma, *prev;
+		struct vm_area_struct *vma;
 		struct corten_arena *ar;
 		unsigned long conv_start;
 
-		vma = find_vma_prev(mm, addr, &prev);
-		if (!vma || vma->vm_start <= addr)
+		vma = find_vma(mm, addr);	/* covers-or-above */
+		if (!vma)
 			goto out;		/* the funnel's fault */
 		if (!(vma->vm_flags & VM_GROWSDOWN))
 			goto out;
 		if (vma->vm_end - addr >
 		    task_rlimit(current, RLIMIT_STACK))
 			goto out;
-		if (prev && !(prev->vm_flags & VM_GROWSDOWN) &&
-		    vma_is_accessible(prev) &&
-		    vma->vm_start - prev->vm_end < stack_guard_gap)
-			goto out;		/* the guard gap */
 
 		/* The conversion rides the sweep's anon arm: the picks,
 		 * the surgery (the anchor moves from the legacy anon_vma
@@ -12082,6 +12113,8 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		 */
 		conv_start = vma->vm_start;
 		ret = corten_sweep_adopt_anon(mm, state, vma);
+		pr_info_ratelimited("corten-dbg: sg adopt ret=%d cs=%lx\n",
+				    ret, conv_start);
 		if (ret)
 			goto out;
 		rcu_read_lock();
