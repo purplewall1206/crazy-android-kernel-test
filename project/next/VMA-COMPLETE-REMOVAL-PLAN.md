@@ -680,3 +680,40 @@ eagain_leaked/desc_alloc_fail/free_untracked/drain_timeout 七计数
 呈用户裁决。
 
 **本片无删除**: 普查即交付（三文件清洁的证据面）+ E2 时钟启动。
+
+## 16. VI 片4（2026-10-10）: vma_exec.c 迁移裁决 = 栈面完整转换的序列件
+
+**逐函数评估**（163 LoC, 两函数）:
+- `create_init_stack_vma`（exec.c:278, bprm_mm_init）: exec 栈 VMA
+  的临时建立（STACK_TOP_MAX）。fs/exec.c 的 setup_arg_pages（
+  argv/env 页拷贝经 GUP）承重其 VMA 形态。arena 侧替代 = 栈面
+  转换序列项 S1。
+- `relocate_vma_down`（exec.c:694, setup_arg_pages）: 早期栈下移
+  （页表搬迁 + VMA 伸缩）。arena 侧替代 = S2。
+- 二者在**每次 exec 的关键路径**上, MODE 与否皆然（bprm mm 是新
+  mm, exec 栈 VMA 创建于 MODE 进场之前——V5 门不涉, 时序已核实:
+  exec_mmap 的 corten_exec_default_enter 在 mm 切换后 = 新 mm 的
+  最早 MODE 点, exec.c:903 守卫注释已硬化此不变量）。**今日可删
+  为零**。
+
+**时序不变量（已硬化为 exec.c 注释）**: 默认进场若上移至
+bprm_mm_init 之前 = 每次 exec 死于 V5 门 EPERM。防未来重排。
+
+**栈面完整转换 = vma_exec.c 的删除路径（三序列项）**:
+- S1: bprm 栈的 arena 侧 declare（stack route @ STACK_TOP_MAX,
+  GROWSDOWN; VMA 留作 fs/exec.c 载体, region 为记账/服务形态）
+- S2: setup_arg_pages 的 arena 侧重实现（arg/env 拷贝的 GUP 面
+  已走 arena 的 gup 承接 [corten_arena.c:5502]; 余 = expand/
+  relocate 的 region 化）
+- S3: 退役 create_init_stack_vma + relocate_vma_down → 
+  vma_exec.c 全删（163 LoC）+ vma.h 声明清理
+每项: 重接线 → grep 门 → boot+smoke → 续账。S1-S3 完成即栈面
+NovMA（V4.3 栈臂的 conversion+extension 为既有转换缝,
+stack_adopts=351/boot 全覆盖）。
+
+**insert_vm_struct 调用面核实**: mmap.c:1856（special 映射, 刻意
+绕 vma_link 的 flags 面）+ vma_exec.c:145（exec 栈）——两调用者
+皆合法, 不可去重。本片代码工件 = 时序守卫注释（无语义增量, 覆盖
+= 运行中浸泡内核的编译产物）。
+
+**E2 浸泡**: port 10034 持续运行, 每小时巡检 automation 积累时长。

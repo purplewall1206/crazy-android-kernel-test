@@ -899,6 +899,13 @@ static int exec_mmap(struct mm_struct *mm)
 	lru_gen_use_mm(mm);
 	/* MV3.a: execve default entry -- MODE on the new mm before any
 	 * load_* mapping lands (no-op unless corten_mode_default=on).
+	 *
+	 * VI invariant (V5 gate safety): this is the EARLIEST point the
+	 * new mm is MODE.  The exec stack VMA (create_init_stack_vma,
+	 * bprm_mm_init) predates it on the non-MODE bprm mm and so never
+	 * faces the vma_link refusal; every load_* mapping after this
+	 * line is a MODE-mm shape the classify routes.  Reordering the
+	 * default entry above bprm_mm_init would SIGSEGV every exec.
 	 */
 	corten_exec_default_enter(mm);
 	if (old_mm) {
