@@ -379,3 +379,19 @@ write(5) EPIPE ×3 → exit_group(1)。健康对照（zzz boot, 已存主机
 (1c) V3 阴影 rss 漂移余量核验; (2) V4.2 mlock pin 臂; (3) V5 总闸
 （create_vma WARN+拒绝, /proc smaps region 化, special 影子豁免）;
 (4) VI VMA 层删除 + J6 终账。
+
+## 7l. 9p 捕获轮（19:30）: ptrace 活锁征兆 + 通道结论
+
+9p 形状 boot + mount 成功（dh-full.trace 落主机 = 9p 通路验证）,
+但 strace 全量运行后 qemu 升至 707% CPU 且客户机串口全静默 ——
+**ptrace(strace) × 转换栈 fault 路径的活锁征兆**（tracer 的 GUP/
+ptrace 停走与被踪者的 fault 处理互旋）, 新交互面入档。反复 boot
+后串口会话退化 = 本环境（serial-only + 无 gdb-stub）不支持
+dhcpcd 切片的交互级调试。
+
+**下一会话的既定工具序**: (a) boot 带 lodging内核打印即可（放弃
+交互）: 栈臂 + MISSGATE 探针的 dmesg 已含 stage/end/门身份 全套,
+dhcpcd-only boot 的 console 落盘即可全分析; (b) 或 gdb-stub
+(kgdb) 形状。判据不变: alone-boot SSHOK + dhcpcd-only eth0 地址
++ ssh 存活 → 默认开翻转。V4.2 mlock pin / V5 总闸 / VI + J6 =
+其后序列。
