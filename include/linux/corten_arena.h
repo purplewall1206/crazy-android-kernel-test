@@ -1072,6 +1072,11 @@ int corten_gate_vma_link(struct mm_struct *mm, struct vm_area_struct *vma);
  */
 bool corten_stack_s2_enabled(void);
 void corten_bprm_mode_enter(struct mm_struct *mm);
+/* S2 G2' ①: region-first declare over an already-linked carrier VMA
+ * (novma -- no shadow piece).  Non-fatal by contract.
+ */
+int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
+				 unsigned long len, u8 perm, u32 rflags);
 
 /*
  * S8 observability renderers, called by the debugfs files in mm/corten.c
@@ -1478,6 +1483,14 @@ static inline bool corten_stack_s2_enabled(void)
 
 static inline void corten_bprm_mode_enter(struct mm_struct *mm)
 {
+}
+
+static inline int corten_arena_declare_carrier(struct mm_struct *mm,
+					       unsigned long addr,
+					       unsigned long len, u8 perm,
+					       u32 rflags)
+{
+	return -ENODEV;
 }
 
 static inline void corten_exec_default_enter(struct mm_struct *mm)

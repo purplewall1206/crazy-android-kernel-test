@@ -706,6 +706,21 @@ int setup_arg_pages(struct linux_binprm *bprm,
 	/* mprotect_fixup is overkill to remove the temporary stack flags */
 	vm_flags_clear(vma, VM_STACK_INCOMPLETE_SETUP);
 
+	/* S2 G2' ① (plan sec 22-24): region-first -- declare the stack
+	 * region at the post-relocate extent (the tree VMA is the
+	 * carrier; novma).  Preceding the entry-sweep adopt, this gives
+	 * the G3' op migrations their object; failure is non-fatal (the
+	 * adopt declares it later).
+	 */
+	if (corten_stack_s2_enabled() && READ_ONCE(mm->corten_mode))
+		corten_arena_declare_carrier(mm, vma->vm_start,
+					     vma->vm_end - vma->vm_start,
+					     CORTEN_PERM_READ |
+					     CORTEN_PERM_WRITE |
+					     (vm_flags & VM_EXEC ?
+					      CORTEN_PERM_EXEC : 0),
+					     CORTEN_RF_GROWSDOWN);
+
 	stack_expand = 131072UL; /* randomly 32*4k (or 2*64k) pages */
 	stack_size = vma->vm_end - vma->vm_start;
 	/*

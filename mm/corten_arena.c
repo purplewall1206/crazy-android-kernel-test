@@ -237,6 +237,7 @@ static atomic_long_t corten_nr_bprm_mode_enters;    /* S2 G1 bprm-phase MODEs */
  */
 static atomic_long_t corten_nr_brk_funnel;	/* MODE-mm brk funnel VMAs */
 static atomic_long_t corten_nr_sweep_stack_adopts; /* V2.2 stack adoptions */
+static atomic_long_t corten_nr_adopt_calibrations; /* G2' ⑤ extent re-aligns */
 static atomic_long_t corten_nr_special_shadows; /* V3 special shadows */
 static atomic_long_t corten_nr_vma_gate;	/* V5 create_vma census */
 static atomic_long_t corten_nr_auto_legacy_class; /* V5 classify-legacy */
@@ -2925,6 +2926,41 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
 }
 
 /*
+ * S2 G2' ① (plan sec 22-24): the region-first carrier declare --
+ * declares the stack region over an ALREADY-LINKED tree VMA (novma:
+ * that VMA is the carrier; no shadow piece is created).  Extents are
+ * page-granular (the stack's, not PMD).  @out_vma is unused today
+ * (the caller owns the carrier) and reserved for the shadow-form
+ * callers.  Failure is non-fatal by contract: the entry-sweep adopt
+ * declares the region later (today's path).
+ */
+int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
+				 unsigned long len, u8 perm, u32 rflags)
+{
+	struct corten_mm_state *state;
+
+	if (!mm || (addr & ~PAGE_MASK) || !len || (len & ~PAGE_MASK))
+		return -EINVAL;
+
+	/* Caller contract: the owner mm's mmap_write is ALREADY held --
+	 * setup_arg_pages' whole body runs under it (the first boot's
+	 * recursive take deadlocked init at its first exec).  The state
+	 * create is safe under it (the sleepable alloc the other
+	 * write-held arms use).
+	 */
+	mmap_assert_write_locked(mm);
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state) {
+		state = corten_arena_state_create(mm);
+		if (!state)
+			return -ENOMEM;
+	}
+
+	return corten_arena_declare_locked(mm, state, addr, len, perm, NULL,
+					   0, true, false, rflags, NULL);
+}
+
+/*
  * The PTE-page retirement core: drop every tracked-or-drift PTE page in
  * [start,end) through the pte_free_tlb() funnel (INV6: the funnel owns
  * the M2a descriptor uninstall and the TLB batching) against a
@@ -3574,6 +3610,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_exec_default_enters));
 	seq_printf(m, "bprm_mode_enters   %ld\n",
 		   atomic_long_read(&corten_nr_bprm_mode_enters));
+	seq_printf(m, "adopt_calibrations %ld\n",
+		   atomic_long_read(&corten_nr_adopt_calibrations));
 	seq_printf(m, "brk_funnel          %ld\n",
 		   atomic_long_read(&corten_nr_brk_funnel));
 	seq_printf(m, "stack_adopts        %ld\n",
@@ -7990,6 +8028,37 @@ static void corten_arena_mode_sweep(struct mm_struct *mm)
 	 * exec image lives in the window, but the ordering is load-
 	 * bearing for a stray legacy neighbour.
 	 */
+	if (stack_vma) {
+		/* G2' ⑤ (plan sec 22-24): region-first declared the stack
+		 * at the post-relocate extent -- before the expand.  The
+		 * carrier's final shape is grown, so calibrate FIRST
+		 * (lookup at vm_end - PAGE_SIZE: the grown start sits
+		 * BELOW the declared extent and would miss), then skip
+		 * the re-adopt -- the record is live, the re-declare
+		 * would only answer -EEXIST.
+		 */
+		struct corten_arena *ar;
+
+		rcu_read_lock();
+		ar = corten_arena_lookup(mm, stack_vma->vm_end - PAGE_SIZE);
+		if (ar && !percpu_ref_tryget_live(&ar->active))
+			ar = NULL;
+		rcu_read_unlock();
+		if (ar && ar->rflags & CORTEN_RF_GROWSDOWN &&
+		    ar->start != stack_vma->vm_start) {
+			WRITE_ONCE(ar->start, stack_vma->vm_start);
+			WRITE_ONCE(ar->end, stack_vma->vm_end);
+			atomic_long_inc(&corten_nr_adopt_calibrations);
+			atomic_long_inc(&corten_nr_sweep_stack_adopts);
+			stack_vma = NULL;	/* adopted (calibrated) */
+		}
+		if (ar) {
+			percpu_ref_put(&ar->active);
+			if (stack_vma)	/* extent already true: adopted */
+				atomic_long_inc(&corten_nr_sweep_stack_adopts);
+			stack_vma = NULL;
+		}
+	}
 	if (stack_vma) {
 		int ret = corten_sweep_adopt_stack(mm, state, stack_vma);
 
