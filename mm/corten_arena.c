@@ -7956,6 +7956,10 @@ void corten_arena_special_shadow(struct mm_struct *mm,
 
 	mmap_assert_write_locked(mm);
 
+	/* Pairs with the smp_store_release() publisher in the DECLARE
+	 * path (the state pointer and its registry contents become
+	 * visible together).
+	 */
 	state = smp_load_acquire(&mm->corten_state);
 	if (!state) {
 		state = corten_arena_state_create(mm);
@@ -11937,6 +11941,9 @@ static struct corten_arena *corten_stack_scan(struct mm_struct *mm,
 	struct corten_mm_state *state;
 	unsigned int i;
 
+	/* Pairs with the smp_store_release() publisher in the DECLARE
+	 * path: the state and its xarray contents are visible together.
+	 */
 	state = smp_load_acquire(&mm->corten_state);
 	for (i = 1; i <= CORTEN_STACK_SCAN_FRAMES; i++) {
 		struct corten_arena *m = corten_slot_lowest(
@@ -11971,6 +11978,9 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 	if (addr >= CORTEN_MODE_WINDOW_START && addr < CORTEN_MODE_WINDOW_END)
 		return 0;
 
+	/* Pairs with the smp_store_release() publisher in the DECLARE
+	 * path (the same convention as the fault hook's state read).
+	 */
 	state = smp_load_acquire(&mm->corten_state);
 	if (!state || !refcount_read(&state->nr))
 		return 0;
@@ -12086,11 +12096,13 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		atomic_long_inc(&corten_nr_sweep_stack_adopts);
 		stack = ar;
 	}
+	/*
+	 * No record and no candidate: the funnel's fault -- the r10
+	 * boot's NULL deref (a !user miss with convert=false reached
+	 * the start read below).
+	 */
 	if (!stack)
-		goto out;		/* no record, no candidate: the funnel's
-				 * fault -- the r10 boot's NULL deref (a
-				 * !user miss with convert=false reached
-				 * the start read below) */
+		goto out;
 
 	old_start = READ_ONCE(stack->start);
 	if (addr >= old_start) {
