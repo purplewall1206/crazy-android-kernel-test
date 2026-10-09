@@ -892,3 +892,13 @@ VM_CORTEN → sweep 分类 -1（"已是我们"静默, 设计内双服务）→ 2
 
 **余量**: G3' 三旁路双写（mprotect/extension/relocate）+ adopt
 缝的 frame 注册扩展 → S3（vma_exec.c 全删）。
+
+## 25. G3' (b) 落地（2026-10-10）: 共享校准核 + expand 时双写
+
+corten_arena_stack_calibrate(): 一体两用（expand 时双写 + sweep ⑤
+校准体）。(a) mprotect 由 declare 点位覆盖（perm 于 mprotect_fixup
+后录制）; (c) 于修正序下消解（declare 后于 relocate）。
+旗标 on 验收: adopt_calibrations=226 逐 exec 双写 + 探针/smoke/
+vma_gate=0/零 trap 全绿。
+**余量**: adopt 缝 frame 注册扩展（生长帧入 per-mm xarray）+
+legacy 域 region debugfs 渲染 → S3。
