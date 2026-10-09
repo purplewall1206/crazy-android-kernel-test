@@ -449,3 +449,16 @@ corten_refuse_vma_funnel 函数保留待接。
 **下轮首题**: auto 路由的 **decline-reason 计数器**（哪个门拒绝了
 init 的 hinted 文件 mmap）—— 路由应答 vs 漏斗服务的形状普查对齐
 后, 拒绝翻转才有正确的豁免面。smaps region 化同片。
+
+## 7q. V4.3 尝试回退（0a112614）: 库装载高速路的 file 臂调试轮
+
+MAP_DENYWRITE（ld.so 装库携带的无操作兼容位）准入 → 库装载高速路
+进 auto file 臂 → **init 首次 libc load 即段错误**: 该臂的
+read/COW/EOF 面从未服务过 dlopen 形状。回退恢复 r42 已证绿的
+漏斗=库高速路状态（披露 resident）。V4.3 切片 = auto file 臂的
+调试轮（strace 工具在联网 boot 上, 死亡可在 init 首次 libc load
+复现）。复现配方: classify 文件白名单 + MAP_DENYWRITE → boot。
+
+**链状态**: V2.1 ✓ V3 ✓+竞态修 ✓ V4.1 ✓ V4.2 ✓ V5.1 普查闸 ✓
+(vma_gate=0) 栈臂默认开 ✓+电池 ✓。**剩余**: V4.3 file 臂调试
+（库高速路）→ V5 拒绝翻转+smaps region 化 → VI 删除 + J6。
