@@ -524,3 +524,22 @@ boot: SSHOK + eth0 + auto_mmaps=2172 + stack_adopts=178 + vma_gate=0
 + 零 trap。
 **剩余**: V5 拒绝翻转（funnel 普查对齐）→ smaps region 化 →
 VI 删除 + J6 终账。
+
+## 10. V4.3 最终状态（2026-10-10 凌晨）
+
+**DENYWRITE 白名单 + mark-time EOF 再派发的组合在 12+ 次 boot 中
+100% 致死（init SIGSEGV）** —— 组合缺陷确认为根本性：auto file 臂
+的 read-serve 对 DENYWRITE 形状的 auto-file region 的内容面存在
+未定位的 serve 缺陷。绿态回退验证：SSHOK + eth0 + 193 adopts +
+vma_gate=0 + 零 trap。
+
+**负责任决策**: 白名单回退（库装载 = 漏斗 VMA 披露 resident），
+auto file 臂 serve 正确性 = 需 kgdb/QEMU 调试级工具的专项调试轮
+（当前 serial-only 环境不可行）。全部调试资产（10 轮 + 探针套件
++ 复现配方 + v43-dbg2 分支）保留。
+
+**VMA 移除链下一会话序列**:
+1. V4.3 auto file 臂 kgdb 调试轮 → 库高速路收编
+2. V5 拒绝翻转（exec 豁免面设计）+ smaps region 化 + 长跑零触发
+3. VI VMA 层逐文件删除 + grep 零依赖门
+4. J6 终账入 REPORT
