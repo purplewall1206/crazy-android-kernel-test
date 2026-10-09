@@ -462,3 +462,17 @@ read/COW/EOF 面从未服务过 dlopen 形状。回退恢复 r42 已证绿的
 **链状态**: V2.1 ✓ V3 ✓+竞态修 ✓ V4.1 ✓ V4.2 ✓ V5.1 普查闸 ✓
 (vma_gate=0) 栈臂默认开 ✓+电池 ✓。**剩余**: V4.3 file 臂调试
 （库高速路）→ V5 拒绝翻转+smaps region 化 → VI 删除 + J6。
+
+## 7r. V4.3 第二层（2026-10-09 深夜）: EOF 再派发 × slot 机械
+
+DENYWRITE 准入 + EOF 再派发（越 EOF 的 FILE 槽按 anon 再派发: 读 =
+共享零页无态, 写 = map_anon 永久转 PRIVATE_ANON——语义与 mmap 契约
+逐字一致）把死亡推进到 **corten_slot_remove WARNING**: meta 改写
+(FILE_MAPPED→PRIVATE_ANON) × 槽机械的未操练交互 = 第二层洋葱。
+回退恢复 r42 已证绿（boot ssh+eth0 实证）。**两层均已入档**:
+(1) classify 白名单 + DENYWRITE; (2) fault_once 的 EOF 再派发。
+V4.3 = 两层修复 + slot 机械走查的设计轮。复现: (1)+(2) 两补丁
+（本提交的父提交可寻）+ boot。
+
+**链状态不变**: V2.1/V3/V4.1/V4.2/V5.1 ✓ 栈臂默认开 ✓+电池 ✓。
+**剩余**: V4.3 设计轮 → 拒绝翻转 → smaps → VI + J6。
