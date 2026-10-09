@@ -1565,7 +1565,11 @@ S2 规格核查完成（plan sec 17, 19e20e0b）: setup_arg_pages 四操作
 的 arena 路由对应物全部在案（gup 仿真面/mprotect 臂/合成 relocate/
 extension 臂）, 四胶水点 + corten_stack_s2 旗标化发布纪律（此路径
 杀过 init 的 r43/r44 教训）入册; S3 = 旗标 on 形全绿后
-vma_exec.c 全删。VI 的前置现已全部就位（V5 翻转武装态零触发 +
+vma_exec.c 全删。
+S2 G1 脚手架落地（7e446307, plan sec 18）: corten_stack_s2 旗标 +
+bprm_phase MODE 进场（默认 off, bprm_mode_enters 计数）, 旗标 OFF
+验收全绿（探针+smoke+零触发+零 trap）; G2/G3 = 专项 boot-debug 轮
+余量。VI 的前置现已全部就位（V5 翻转武装态零触发 +
 smaps region 化已落地 + funnel 普查对齐），下一会话可安全启动
 逐文件删除（vma.c→mmap.c VMA 臂→vma.h→dup_mmap→/proc 渲染→
 memory.c→rmap→tools/testing/vma + grep 零依赖门）。
