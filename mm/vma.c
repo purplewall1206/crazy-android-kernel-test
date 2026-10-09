@@ -1899,7 +1899,13 @@ void vma_link_file(struct vm_area_struct *vma)
 
 int vma_link(struct mm_struct *mm, struct vm_area_struct *vma)
 {
-	corten_note_vma_gate(mm, vma);
+	/* V5 refusal flip: a funnel survivor entering a MODE mm's tree is
+	 * refused -- the arena routes own every non-exempt shape (see
+	 * mm/corten_arena.c).  The abort leaves the caller's error path
+	 * to unwind the mapping (mmap_region/brk free the VMA on -ve).
+	 */
+	if (corten_gate_vma_link(mm, vma))
+		return -EPERM;
 
 	VMA_ITERATOR(vmi, mm, 0);
 
