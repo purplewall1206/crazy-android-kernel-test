@@ -579,7 +579,9 @@ void vm_area_free(struct vm_area_struct *vma);
 /* vma_exec.c */
 #ifdef CONFIG_MMU
 int create_init_stack_vma(struct mm_struct *mm, struct vm_area_struct **vmap,
-			  unsigned long *top_mem_p);
+			  unsigned long *top_mem_p,
+			  unsigned long *wstack_start,
+			  unsigned long *wstack_end);
 int relocate_vma_down(struct vm_area_struct *vma, unsigned long shift);
 #endif
 

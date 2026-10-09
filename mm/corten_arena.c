@@ -2974,7 +2974,7 @@ int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
  * the caller falls back to the manual STACK_TOP_MAX path.
  */
 int corten_arena_stack_window_declare(struct mm_struct *mm,
-				      unsigned long len,
+				      unsigned long len, bool carrier,
 				      struct vm_area_struct **out_vma,
 				      unsigned long *out_end)
 {
@@ -3027,20 +3027,28 @@ int corten_arena_stack_window_declare(struct mm_struct *mm,
 		}
 	}
 
+	/* carrier=false: the pure VMA-less form (plan sec 28) -- the
+	 * region alone; copy_strings' GUP takes the window arm with no
+	 * tree VMA at all, and bprm->vma stays NULL.
+	 */
 	ret = corten_arena_declare_locked(mm, state, addr, len, perm, NULL,
-					  0, false, false,
+					  0, !carrier, false,
 					  CORTEN_RF_GROWSDOWN, &arena);
 	if (ret) {
 		mmap_write_unlock(mm);
 		return ret;
 	}
 
-	*out_vma = READ_ONCE(arena->vma);
 	*out_end = arena->end;
-	if (!*out_vma) {
-		mmap_write_unlock(mm);
-		corten_arena_release(mm, addr, len);
-		return -ENODEV;	/* no carrier: unusable as bprm->vma */
+	if (carrier) {
+		*out_vma = READ_ONCE(arena->vma);
+		if (!*out_vma) {
+			mmap_write_unlock(mm);
+			corten_arena_release(mm, addr, len);
+			return -ENODEV;
+		}
+	} else {
+		*out_vma = NULL;
 	}
 	mmap_write_unlock(mm);
 	return 0;

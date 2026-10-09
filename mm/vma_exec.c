@@ -8,6 +8,7 @@
 #include "vma_internal.h"
 #include "vma.h"
 #include <linux/corten_arena.h>
+#include <linux/binfmts.h>	/* MAX_ARG_STRLEN */
 
 #include <linux/page_size_compat.h>
 
@@ -108,10 +109,14 @@ int relocate_vma_down(struct vm_area_struct *vma, unsigned long shift)
  * system word of data).
  */
 int create_init_stack_vma(struct mm_struct *mm, struct vm_area_struct **vmap,
-			  unsigned long *top_mem_p)
+			  unsigned long *top_mem_p,
+			  unsigned long *wstack_start,
+			  unsigned long *wstack_end)
 {
 	int err;
 	struct vm_area_struct *vma;
+
+	*wstack_start = *wstack_end = 0;
 
 	/* S3-A step 1 (plan sec 29-30): the window temp stack -- the
 	 * bring-up extent declares IN THE WINDOW so copy_strings' GUP
@@ -122,21 +127,19 @@ int create_init_stack_vma(struct mm_struct *mm, struct vm_area_struct **vmap,
 	if (corten_stack_s2_enabled() && READ_ONCE(mm->corten_mode)) {
 		unsigned long wend;
 
-		/* One page: the manual form is 1 page too -- the arg
-		 * strings grow the carrier down via the legacy
-		 * maybe_expand (dual-service; the transfer at
-		 * setup_arg_pages copies whatever grew).
+		/* VMA-less form (plan sec 28): no carrier at all --
+		 * copy_strings' GUP takes the window arm with
+		 * bprm->vma NULL; the extent rides the bprm fields.
 		 */
-		err = corten_arena_stack_window_declare(mm, PAGE_SIZE,
-							&vma, &wend);
-		if (!err && vma) {
-			vm_flags_set(vma, VM_SOFTDIRTY | VM_STACK_FLAGS |
-					  VM_STACK_INCOMPLETE_SETUP);
-			vma->vm_page_prot =
-				vm_get_page_prot(vma->vm_flags);
-			mm->stack_vm = mm->total_vm = 1;
-			*vmap = vma;
+		err = corten_arena_stack_window_declare(mm,
+							MAX_ARG_STRLEN,
+							false, NULL,
+							&wend);
+		if (!err) {
+			*vmap = NULL;
 			*top_mem_p = wend - sizeof(void *);
+			*wstack_end = wend;
+			*wstack_start = wend - MAX_ARG_STRLEN;
 			return 0;
 		}
 	}

@@ -26,6 +26,10 @@ struct linux_binprm {
 #endif
 	struct mm_struct *mm;
 	unsigned long p; /* current top of mem */
+	/* S3-A path A (plan sec 28-30): the window temp-stack extent --
+	 * wstack_end == 0 when the temp stack is a plain VMA world.
+	 */
+	unsigned long wstack_start, wstack_end;
 	unsigned int
 		/* Should an execfd be passed to userspace? */
 		have_execfd:1,

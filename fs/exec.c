@@ -152,6 +152,14 @@ static struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
 	struct mm_struct *mm = bprm->mm;
 	int ret;
 
+	/* S3-A path A (plan sec 28): the window temp stack is VMA-less
+	 * (bprm->vma NULL): the GUP takes the corten_gup_window arm
+	 * with no tree walk; the region pre-declares the full
+	 * MAX_ARG_STRLEN extent, so no maybe_expand is needed.
+	 */
+	if (!vma)
+		goto gup;
+
 	/*
 	 * Avoid relying on expanding the stack down in GUP (which
 	 * does not work for STACK_GROWSUP anyway), and just do it
@@ -160,6 +168,7 @@ static struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
 	if (!mmap_read_lock_maybe_expand(mm, vma, pos, write))
 		return NULL;
 
+gup:
 	/*
 	 * We are doing an exec().  'current' is the process
 	 * doing the exec and 'mm' is the new process's mm.
@@ -167,11 +176,12 @@ static struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
 	ret = get_user_pages_remote(mm, pos, 1,
 			write ? FOLL_WRITE : 0,
 			&page, NULL);
-	mmap_read_unlock(mm);
+	if (vma)
+		mmap_read_unlock(mm);
 	if (ret <= 0)
 		return NULL;
 
-	if (write)
+	if (write && vma)
 		acct_arg_size(bprm, vma_pages(vma));
 
 	return page;
@@ -282,7 +292,9 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 #ifndef CONFIG_MMU
 	bprm->p = PAGE_SIZE * MAX_ARG_PAGES - sizeof(void *);
 #else
-	err = create_init_stack_vma(bprm->mm, &bprm->vma, &bprm->p);
+	err = create_init_stack_vma(bprm->mm, &bprm->vma, &bprm->p,
+				    &bprm->wstack_start,
+				    &bprm->wstack_end);
 	if (err)
 		goto err;
 #endif
@@ -646,6 +658,58 @@ int setup_arg_pages(struct linux_binprm *bprm,
 	stack_top = arch_align_stack(stack_top);
 	stack_top = __PAGE_ALIGN(stack_top);
 
+	/* S3-A path A (plan sec 28-30): the VMA-less window form.  The
+	 * temp stack is a window region (no VMA anywhere): create the
+	 * final legacy carrier, transfer the content, swap -- then the
+	 * shared expand tail.
+	 */
+	if (bprm->wstack_end && corten_stack_s2_enabled() &&
+	    READ_ONCE(mm->corten_mode)) {
+		unsigned long flen = bprm->wstack_end - bprm->wstack_start;
+		unsigned long fstart = stack_top - flen;
+		unsigned long wflags = VM_STACK_FLAGS | mm->def_flags;
+		struct vm_area_struct *fv;
+		long delta;
+
+		if (executable_stack == EXSTACK_ENABLE_X)
+			wflags |= VM_EXEC;
+		else if (executable_stack == EXSTACK_DISABLE_X)
+			wflags &= ~VM_EXEC;
+		if (fstart < mmap_min_addr || fstart >= stack_top)
+			return -EFAULT;
+		if (mmap_write_lock_killable(mm))
+			return -EINTR;
+		fv = vm_area_alloc(mm);
+		if (!fv) {
+			mmap_write_unlock(mm);
+			return -ENOMEM;
+		}
+		vma_set_anonymous(fv);
+		vma_set_range(fv, fstart, stack_top, 0);
+		vm_flags_init(fv, wflags | VM_STACK_INCOMPLETE_SETUP);
+		fv->vm_page_prot = vm_get_page_prot(fv->vm_flags);
+		ret = insert_vm_struct(mm, fv);
+		if (ret) {
+			vm_area_free(fv);
+			mmap_write_unlock(mm);
+			return ret;
+		}
+		delta = (long)(stack_top - bprm->wstack_end);
+		bprm->p += delta;
+		bprm->exec += delta;
+		mm->arg_start = bprm->p;
+		ret = corten_arena_stack_transfer(mm, bprm->wstack_start,
+						  bprm->wstack_end, fstart);
+		if (ret) {
+			mmap_write_unlock(mm);
+			return ret;
+		}
+		vm_flags_clear(fv, VM_STACK_INCOMPLETE_SETUP);
+		bprm->vma = vma = fv;
+		bprm->wstack_end = 0;
+		goto locked_expand;
+	}
+
 	if (unlikely(stack_top < mmap_min_addr) ||
 	    unlikely(vma->vm_end - vma->vm_start >= stack_top - mmap_min_addr))
 		return -ENOMEM;
@@ -691,57 +755,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
 			     bprm->file);
 	}
 
-	/* S3-A (plan sec 29-30): the window temp stack's transfer arm.
-	 * The temp lives in the window (16T) and the final stack in the
-	 * legacy top domain -- an UPWARD move the DOWN-only
-	 * relocate_vma_down cannot express: transfer the content to a
-	 * fresh legacy carrier at stack_top, release the window region,
-	 * munmap the window carrier, and swap.
-	 */
-	if (corten_stack_s2_enabled() && READ_ONCE(mm->corten_mode) &&
-	    vma->vm_start >= CORTEN_MODE_WINDOW_START &&
-	    vma->vm_end <= CORTEN_MODE_WINDOW_END) {
-		unsigned long flen = vma->vm_end - vma->vm_start;
-		unsigned long fstart = stack_top - flen;
-		struct vm_area_struct *fv;
-		long delta;
-
-		if (fstart < mmap_min_addr || fstart >= stack_top) {
-			ret = -EFAULT;
-			goto out_unlock;
-		}
-		fv = vm_area_alloc(mm);
-		if (!fv) {
-			ret = -ENOMEM;
-			goto out_unlock;
-		}
-		vma_set_anonymous(fv);
-		vma_set_range(fv, fstart, stack_top, 0);
-		vm_flags_init(fv, vm_flags | VM_STACK_INCOMPLETE_SETUP);
-		fv->vm_page_prot = vm_get_page_prot(fv->vm_flags);
-		ret = insert_vm_struct(mm, fv);
-		if (ret) {
-			vm_area_free(fv);
-			goto out_unlock;
-		}
-		delta = (long)(stack_top - vma->vm_end);
-		bprm->p += delta;
-		bprm->exec += delta;
-		mm->arg_start = bprm->p;
-
-		ret = corten_arena_stack_transfer(mm, vma->vm_start,
-						  vma->vm_end, fstart);
-		if (ret)
-			goto out_unlock;
-		if (do_munmap(mm, vma->vm_start, flen, NULL)) {
-			ret = -ENOMEM;
-			goto out_unlock;
-		}
-		vm_flags_clear(fv, VM_STACK_INCOMPLETE_SETUP);
-		bprm->vma = vma = fv;
-		goto expand_tail;
-	}
-
 	/* Move stack pages down in memory. */
 	if (stack_shift) {
 		/*
@@ -772,6 +785,7 @@ int setup_arg_pages(struct linux_binprm *bprm,
 					      CORTEN_PERM_EXEC : 0),
 					     CORTEN_RF_GROWSDOWN);
 
+locked_expand:
 	stack_expand = 131072UL; /* randomly 32*4k (or 2*64k) pages */
 	stack_size = vma->vm_end - vma->vm_start;
 	/*
@@ -788,8 +802,7 @@ int setup_arg_pages(struct linux_binprm *bprm,
 	stack_base = vma->vm_end - stack_expand;
 #endif
 	current->mm->start_stack = bprm->p;
-expand_tail:
-	ret = expand_stack_locked(vma, stack_base);
+ret = expand_stack_locked(vma, stack_base);
 	if (ret)
 		ret = -EFAULT;
 	else if (corten_stack_s2_enabled() && READ_ONCE(mm->corten_mode))

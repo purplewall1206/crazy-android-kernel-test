@@ -1088,7 +1088,7 @@ int corten_arena_stack_calibrate(struct mm_struct *mm, unsigned long start,
  * manual-path fallback.
  */
 int corten_arena_stack_window_declare(struct mm_struct *mm,
-				      unsigned long len,
+				      unsigned long len, bool carrier,
 				      struct vm_area_struct **out_vma,
 				      unsigned long *out_end);
 /* S3-A: the stack transfer utility (plan sec 29) -- copy the source
@@ -1522,6 +1522,7 @@ static inline int corten_arena_stack_calibrate(struct mm_struct *mm,
 
 static inline int corten_arena_stack_window_declare(struct mm_struct *mm,
 						    unsigned long len,
+						    bool carrier,
 						    struct vm_area_struct **out_vma,
 						    unsigned long *out_end)
 {
