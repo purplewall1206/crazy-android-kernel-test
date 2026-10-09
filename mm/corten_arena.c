@@ -128,6 +128,9 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
 					    unsigned long addr,
 					    unsigned long len,
 					    u8 perm, bool novma, bool no_reuse);
+static int corten_arena_window_place(struct mm_struct *mm,
+					      struct corten_mm_state *state,
+					      unsigned long len, unsigned long *addr);
 static int corten_arena_pool_take(struct mm_struct *mm,
 				  struct corten_mm_state *state,
 				  unsigned long len2, unsigned long prot,
@@ -2958,6 +2961,89 @@ int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
 
 	return corten_arena_declare_locked(mm, state, addr, len, perm, NULL,
 					   0, true, false, rflags, NULL);
+}
+
+/*
+ * S3-A step 1 (plan sec 29-30): the window temp-stack declare.  The
+ * exec stack's temporary bring-up extent lands IN THE WINDOW so
+ * copy_strings' GUP takes the corten_gup_window arm (legacy-domain GUP
+ * can never serve arena shapes).  Co-resident carrier form: novma=
+ * false, the shadow piece is bprm->vma.  Caller holds mmap_write (the
+ * create_init_stack_vma contract); placement runs pool-first then the
+ * window placer, exactly the auto route's order.  Failure bubbles --
+ * the caller falls back to the manual STACK_TOP_MAX path.
+ */
+int corten_arena_stack_window_declare(struct mm_struct *mm,
+				      unsigned long len,
+				      struct vm_area_struct **out_vma,
+				      unsigned long *out_end)
+{
+	struct corten_mm_state *state;
+	struct corten_arena *arena = NULL;
+	unsigned long addr = 0;
+	u8 perm = CORTEN_PERM_READ | CORTEN_PERM_WRITE | CORTEN_PERM_USER;
+	int ret;
+
+	if (!mm || !out_vma || !out_end || !len || (len & ~PAGE_MASK))
+		return -EINVAL;
+
+	/* SELF-locking: create_init_stack_vma's arm runs BEFORE the
+	 * manual path's mmap_write_lock_killable (the first boot's
+	 * WARNING at pool_take's assert: the lock was not held there).
+	 * The exec transfer arm (setup_arg_pages) is a different helper
+	 * with the caller-held contract.
+	 */
+	if (mmap_write_lock_killable(mm)) {
+		mmap_assert_write_locked(mm);
+		return -EINTR;
+	}
+	mmap_assert_write_locked(mm);
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state) {
+		state = corten_arena_state_create(mm);
+		if (!state)
+			return -ENOMEM;
+	}
+
+	/* Pin the temp stack to the WINDOW TOP: the interpreter loads at
+	 * the window BASE (the magazine serves low-first) and the exec
+	 * admission's overlap-takeover would destroy a low-placed stack
+	 * region -- the first boot's init segfault (the loader read the
+	 * arg pages' extents as its own code).  Fall back to the placer
+	 * only if the top span is occupied.
+	 */
+	addr = CORTEN_MODE_WINDOW_END - (PMD_SIZE << 1);
+	if (corten_arena_range_occupied(mm, addr, len))
+		addr = 0;
+	if (!addr) {
+		ret = corten_arena_pool_take(mm, state, len, perm, &addr);
+		if (ret) {
+			ret = corten_arena_window_place(mm, state, len,
+							&addr);
+			if (ret) {
+				mmap_write_unlock(mm);
+				return ret;
+			}
+		}
+	}
+
+	ret = corten_arena_declare_locked(mm, state, addr, len, perm, NULL,
+					  0, false, false,
+					  CORTEN_RF_GROWSDOWN, &arena);
+	if (ret) {
+		mmap_write_unlock(mm);
+		return ret;
+	}
+
+	*out_vma = READ_ONCE(arena->vma);
+	*out_end = arena->end;
+	if (!*out_vma) {
+		mmap_write_unlock(mm);
+		corten_arena_release(mm, addr, len);
+		return -ENODEV;	/* no carrier: unusable as bprm->vma */
+	}
+	mmap_write_unlock(mm);
+	return 0;
 }
 
 /*

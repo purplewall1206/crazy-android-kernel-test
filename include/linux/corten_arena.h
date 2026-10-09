@@ -1083,6 +1083,14 @@ int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
  */
 int corten_arena_stack_calibrate(struct mm_struct *mm, unsigned long start,
 				 unsigned long end);
+/* S3-A step 1: the window temp-stack declare (the shadow piece is the
+ * bprm carrier).  Caller holds mmap_write.  Failure = the caller's
+ * manual-path fallback.
+ */
+int corten_arena_stack_window_declare(struct mm_struct *mm,
+				      unsigned long len,
+				      struct vm_area_struct **out_vma,
+				      unsigned long *out_end);
 /* S3-A: the stack transfer utility (plan sec 29) -- copy the source
  * extent's content pages to the destination and release the source
  * region.  Caller holds mmap read.
@@ -1510,6 +1518,14 @@ static inline int corten_arena_stack_calibrate(struct mm_struct *mm,
 					       unsigned long end)
 {
 	return -ENOENT;
+}
+
+static inline int corten_arena_stack_window_declare(struct mm_struct *mm,
+						    unsigned long len,
+						    struct vm_area_struct **out_vma,
+						    unsigned long *out_end)
+{
+	return -ENODEV;
 }
 
 static inline int corten_arena_stack_transfer(struct mm_struct *mm,

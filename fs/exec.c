@@ -691,6 +691,57 @@ int setup_arg_pages(struct linux_binprm *bprm,
 			     bprm->file);
 	}
 
+	/* S3-A (plan sec 29-30): the window temp stack's transfer arm.
+	 * The temp lives in the window (16T) and the final stack in the
+	 * legacy top domain -- an UPWARD move the DOWN-only
+	 * relocate_vma_down cannot express: transfer the content to a
+	 * fresh legacy carrier at stack_top, release the window region,
+	 * munmap the window carrier, and swap.
+	 */
+	if (corten_stack_s2_enabled() && READ_ONCE(mm->corten_mode) &&
+	    vma->vm_start >= CORTEN_MODE_WINDOW_START &&
+	    vma->vm_end <= CORTEN_MODE_WINDOW_END) {
+		unsigned long flen = vma->vm_end - vma->vm_start;
+		unsigned long fstart = stack_top - flen;
+		struct vm_area_struct *fv;
+		long delta;
+
+		if (fstart < mmap_min_addr || fstart >= stack_top) {
+			ret = -EFAULT;
+			goto out_unlock;
+		}
+		fv = vm_area_alloc(mm);
+		if (!fv) {
+			ret = -ENOMEM;
+			goto out_unlock;
+		}
+		vma_set_anonymous(fv);
+		vma_set_range(fv, fstart, stack_top, 0);
+		vm_flags_init(fv, vm_flags | VM_STACK_INCOMPLETE_SETUP);
+		fv->vm_page_prot = vm_get_page_prot(fv->vm_flags);
+		ret = insert_vm_struct(mm, fv);
+		if (ret) {
+			vm_area_free(fv);
+			goto out_unlock;
+		}
+		delta = (long)(stack_top - vma->vm_end);
+		bprm->p += delta;
+		bprm->exec += delta;
+		mm->arg_start = bprm->p;
+
+		ret = corten_arena_stack_transfer(mm, vma->vm_start,
+						  vma->vm_end, fstart);
+		if (ret)
+			goto out_unlock;
+		if (do_munmap(mm, vma->vm_start, flen, NULL)) {
+			ret = -ENOMEM;
+			goto out_unlock;
+		}
+		vm_flags_clear(fv, VM_STACK_INCOMPLETE_SETUP);
+		bprm->vma = vma = fv;
+		goto expand_tail;
+	}
+
 	/* Move stack pages down in memory. */
 	if (stack_shift) {
 		/*
@@ -737,6 +788,7 @@ int setup_arg_pages(struct linux_binprm *bprm,
 	stack_base = vma->vm_end - stack_expand;
 #endif
 	current->mm->start_stack = bprm->p;
+expand_tail:
 	ret = expand_stack_locked(vma, stack_base);
 	if (ret)
 		ret = -EFAULT;

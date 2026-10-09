@@ -7,6 +7,7 @@
 
 #include "vma_internal.h"
 #include "vma.h"
+#include <linux/corten_arena.h>
 
 #include <linux/page_size_compat.h>
 
@@ -110,8 +111,37 @@ int create_init_stack_vma(struct mm_struct *mm, struct vm_area_struct **vmap,
 			  unsigned long *top_mem_p)
 {
 	int err;
-	struct vm_area_struct *vma = vm_area_alloc(mm);
+	struct vm_area_struct *vma;
 
+	/* S3-A step 1 (plan sec 29-30): the window temp stack -- the
+	 * bring-up extent declares IN THE WINDOW so copy_strings' GUP
+	 * takes the corten_gup_window arm.  The shadow piece is the
+	 * carrier; any failure falls through to the manual
+	 * STACK_TOP_MAX path.
+	 */
+	if (corten_stack_s2_enabled() && READ_ONCE(mm->corten_mode)) {
+		unsigned long wend;
+
+		/* One page: the manual form is 1 page too -- the arg
+		 * strings grow the carrier down via the legacy
+		 * maybe_expand (dual-service; the transfer at
+		 * setup_arg_pages copies whatever grew).
+		 */
+		err = corten_arena_stack_window_declare(mm, PAGE_SIZE,
+							&vma, &wend);
+		if (!err && vma) {
+			vm_flags_set(vma, VM_SOFTDIRTY | VM_STACK_FLAGS |
+					  VM_STACK_INCOMPLETE_SETUP);
+			vma->vm_page_prot =
+				vm_get_page_prot(vma->vm_flags);
+			mm->stack_vm = mm->total_vm = 1;
+			*vmap = vma;
+			*top_mem_p = wend - sizeof(void *);
+			return 0;
+		}
+	}
+
+	vma = vm_area_alloc(mm);
 	if (!vma)
 		return -ENOMEM;
 
