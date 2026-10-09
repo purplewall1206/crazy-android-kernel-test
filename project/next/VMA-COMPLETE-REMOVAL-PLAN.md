@@ -408,3 +408,18 @@ region 形态服务, eth0 配置, ssh 活）; **默认开 mass-conversion
 boot 全绿（180/180 进程栈 region 化, grows=10, 零 trap, ssh 活,
 DHCP 完成）**。M2 里程碑的栈腿达成。判据双绿 ✓。调试过滤器
 （corten_stack_convert_comm=）与 off 开关保留。
+
+## 7n. V4.2 落地（40c1ea3）: mlock pin 臂
+
+sweep 的 flags skip 掩码移除 VM_LOCKED/VM_LOCKONFAULT: 形状经 FILE/
+ANON 臂收编, mlock 契约以 CORTEN_RF_PIN（bit 8）随 rflags 反射出生。
+shrinker 两处 pin-loop 保持 PIN 记录免于 aging/eviction（mlock 的
+region 形态核心承诺）; fork mirror 逐字重放 rflags。后续余量:
+mlock()/munlock() 系统调用在 region 范围上的路由（现 legacy 路径对
+无树 VMA 的范围响亮 -ENOMEM）。KUnit 208/0/9, checkpatch 0E/0W。
+
+**V4 段至此三项落地**（V4.1 shared census=0 / V4.2 pin / THP+numa
+后置）。**下一入点**: V5 总闸 —— create_vma WARN+拒绝（MODE mm 内
+非豁免形状: 豁免 = special 影子 VMA + VM_CORTEN 阴影片）+
+/proc smaps region 化 + 总闸长跑零触发验收; 其后 VI VMA 层删除
++ J6 终账。
