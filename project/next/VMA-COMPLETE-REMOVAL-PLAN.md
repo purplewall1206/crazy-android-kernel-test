@@ -216,11 +216,20 @@ dhcpcd 仍死于一次栈写 —— fault 地址位于记录覆盖范围内、lo
 更深层状态交互。对照面保持绿: alone-boot（臂开+零转换 SSHOK）、
 KUnit converted-fork 锚、全转换 mass boot 的断链 = 同族。
 
-**下一轮入点**: (1) 栈臂 fault 上下文收口（stage=0+覆盖几何 异态
-与 frozen/mirror 交互的精确化）→ 默认开; (2) V4 共享臂（MAP_SHARED
-文件写穿 + 匿名/shmem）; (3) V5 总闸（create_vma WARN+拒绝,
-/proc smaps region 化, special 影子豁免口径）; (4) VI VMA 层删除
-+ J6 终账。
+**r26-r28 决定性捕获（2026-10-09 下午）**: heal-skip 身份探针
+示出 miss 帧的占用者 **= 栈记录本身**（[7fffe3179000,7fffe319a000)
+rf=0x60 GROWSDOWN|ADOPTED, 已注册于自身帧），死亡 fault 落在
+**end 边界附近**而服务未落地 —— 异态从"帧注册不一致"精化为
+"**覆盖内地址服务未落地**"（记录跨度正确、帧注册正确、lookup
+在边界地址 miss）。refuse 打印已补 end 字段（fbe4194），下轮首捕
+即得 [start,end) × fault addr 配对。另见 V3 阴影的 rss 记账漂移
+（+2 FILE/−2 ANON 每退出, WARN 级）待查。
+
+**下一轮入点**: (1) 栈臂 end 边界服务未落地异态（refuse+end 配对
+首捕 → 服务路径/边界语义收口）→ 默认开; (1b) V3 阴影 rss 记账;
+(2) V4 共享臂（MAP_SHARED 文件写穿 + 匿名/shmem）; (3) V5 总闸
+（create_vma WARN+拒绝, /proc smaps region 化, special 影子豁免
+口径）; (4) VI VMA 层删除 + J6 终账。
 （boot4 vs boot5 崩点不同）。
 
 ## 7c. 深夜推进（00:15）: exec 已深入至 wl 采纳策略洞
