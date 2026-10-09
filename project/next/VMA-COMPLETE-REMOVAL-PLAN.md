@@ -1051,3 +1051,22 @@ maybe_expand/acct 守卫跳过（region 预覆盖全部可写地址, 无需生�
 **至此 exec 栈的 bprm 相（创建/拷贝/搬运）零 VMA 载体**; 终栈仍
 G2' 共生形（载体 = fs/exec.c 之后的 GUP/funnel 面）。vma_exec.c
 的退役 = 旗标默认化浸泡周后随回退臂删除。
+
+## 35. 预演片战果（2026-10-10）: VMA-less 从未真活; 真路径 panic = 下会话首题
+
+**WARN-unreachable 预演立即定罪**: stack_fallbacks=219=bprm_mode
+——手工路径跑了每一次 exec, "VMA-less 绿"(sec 34) 实为全回退!
+根因: helper 的 `!out_vma` 校验拒绝 VMA-less 形的 NULL 传参。
+**修复后真路径首次运行即 init panic（exitcode=0x9, 10.7s）**——
+真 VMA-less 路径存在未定位缺陷。工作入 stash
+`s3a vmaless-true-path panic`; console =
+eof-battery/s3a-vmaless-panic.log。主链回绿 ca2a3ef1（=
+手工回退形绿, 与电池一致）。
+
+**下会话首题（诚实重排）**: 真路径 panic 调试（日志 RIP/链读全 →
+嫌疑面: 32 页 region 的 GUP 窗口臂写序列 / copy_strings 无
+maybe_expand 后的 bprm->p 边界 / 传输臂对 32 页 extents 的
+bprm->p 平移）。真路径绿之前, sec 34 的"VMA-less"结论作废（
+改为: "VMA-less 形态代码落地但由回退臂承载"）。
+预演片本身 = 本周期正资产（回退计数器 + WARN 已入树, 浸泡周
+从此积累真删除证据）。
