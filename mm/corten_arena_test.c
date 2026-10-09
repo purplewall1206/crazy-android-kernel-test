@@ -17130,6 +17130,88 @@ static void corten_arena_test_fault_stampede(struct kunit *test)
 			0);
 }
 
+
+/* S3-A (plan sec 29): the stack transfer utility's standalone anchor.
+ * A MODE test mm mmaps two window extents; known content is installed
+ * into the source through the same GUP face copy_strings uses (the
+ * window arm), the transfer copies + releases, and the destination is
+ * read back -- content, hole-as-zero, and the source region gone.
+ */
+static void corten_arena_test_stack_transfer(struct kunit *test)
+{
+	struct corten_arena_test_mm *t = corten_arena_test_mm_setup(test);
+	struct mm_struct *mm = t->mm;
+	unsigned long src, dst;
+	struct page *p;
+	char *k;
+	int i, ret;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "transfer anchor requires corten=on");
+
+	corten_exec_default_test_set(true);
+	kunit_add_action(test, corten_arena_test_exec_default_off_action,
+			 NULL);
+	corten_exec_default_enter(mm);
+	KUNIT_ASSERT_TRUE(test, READ_ONCE(mm->corten_mode));
+
+	src = do_mmap(NULL, 0, 2 * PAGE_SIZE, PROT_READ | PROT_WRITE,
+		      MAP_PRIVATE, 0, 0, NULL, NULL);
+	KUNIT_ASSERT_FALSE(test, IS_ERR_VALUE(src));
+	dst = do_mmap(NULL, 0, 2 * PAGE_SIZE, PROT_READ | PROT_WRITE,
+		      MAP_PRIVATE, 0, 0, NULL, NULL);
+	KUNIT_ASSERT_FALSE(test, IS_ERR_VALUE(dst));
+
+	/* Install known content in source page 0 through the window GUP
+	 * arm; page 1 stays a hole (zero readback expected).
+	 */
+	mmap_read_lock(mm);
+	ret = get_user_pages_remote(mm, src, 1, FOLL_WRITE, &p, NULL);
+	mmap_read_unlock(mm);
+	KUNIT_ASSERT_EQ(test, ret, 1);
+	k = kmap_local_page(p);
+	memset(k, 0x5A, PAGE_SIZE);
+	kunmap_local(k);
+	set_page_dirty_lock(p);
+	put_page(p);
+
+	/* The transfer: window -> window (the utility is domain-agnostic;
+	 * the exec call site pairs window source with a legacy carrier).
+	 */
+	mmap_read_lock(mm);
+	ret = corten_arena_stack_transfer(mm, src, src + 2 * PAGE_SIZE, dst);
+	mmap_read_unlock(mm);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+
+	/* The source region is released. */
+	rcu_read_lock();
+	KUNIT_EXPECT_NULL(test, corten_arena_lookup(mm, src));
+	rcu_read_unlock();
+
+	/* The destination carries the content and the zero hole. */
+	mmap_read_lock(mm);
+	ret = get_user_pages_remote(mm, dst, 1, 0, &p, NULL);
+	mmap_read_unlock(mm);
+	KUNIT_ASSERT_EQ(test, ret, 1);
+	k = kmap_local_page(p);
+	for (i = 0; i < PAGE_SIZE; i++)
+		if (k[i] != 0x5A)
+			break;
+	KUNIT_EXPECT_EQ(test, i, PAGE_SIZE);
+	kunmap_local(k);
+	put_page(p);
+
+	mmap_read_lock(mm);
+	ret = get_user_pages_remote(mm, dst + PAGE_SIZE, 1, 0, &p, NULL);
+	mmap_read_unlock(mm);
+	KUNIT_ASSERT_EQ(test, ret, 1);
+	k = kmap_local_page(p);
+	KUNIT_EXPECT_EQ(test, k[0], 0);
+	KUNIT_EXPECT_EQ(test, k[PAGE_SIZE - 1], 0);
+	kunmap_local(k);
+	put_page(p);
+}
+
 static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_sweep_anon_resident),
 	KUNIT_CASE(corten_arena_test_sweep_file_resident),
@@ -17154,6 +17236,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_pr0_shared_punch_whitelist),
 	/* MV3.a: the execve default entry anchors. */
 	KUNIT_CASE(corten_arena_test_exec_default_off),
+	KUNIT_CASE(corten_arena_test_stack_transfer),
 	KUNIT_CASE(corten_arena_test_exec_default_enter),
 	/* MV3.c axis 1: the exec image adoption anchors. */
 	KUNIT_CASE(corten_arena_test_exec_interp_route),

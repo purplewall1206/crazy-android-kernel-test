@@ -1083,6 +1083,12 @@ int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
  */
 int corten_arena_stack_calibrate(struct mm_struct *mm, unsigned long start,
 				 unsigned long end);
+/* S3-A: the stack transfer utility (plan sec 29) -- copy the source
+ * extent's content pages to the destination and release the source
+ * region.  Caller holds mmap read.
+ */
+int corten_arena_stack_transfer(struct mm_struct *mm, unsigned long src_start,
+				unsigned long src_end, unsigned long dst_start);
 
 /*
  * S8 observability renderers, called by the debugfs files in mm/corten.c
@@ -1504,6 +1510,14 @@ static inline int corten_arena_stack_calibrate(struct mm_struct *mm,
 					       unsigned long end)
 {
 	return -ENOENT;
+}
+
+static inline int corten_arena_stack_transfer(struct mm_struct *mm,
+					      unsigned long src_start,
+					      unsigned long src_end,
+					      unsigned long dst_start)
+{
+	return -ENODEV;
 }
 
 static inline void corten_exec_default_enter(struct mm_struct *mm)

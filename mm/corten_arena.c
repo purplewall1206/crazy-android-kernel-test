@@ -2961,6 +2961,51 @@ int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
 }
 
 /*
+ * S3-A (plan sec 29): the stack transfer utility -- copy the content
+ * pages of a source extent (region-backed; the window GUP arm serves
+ * it) into a destination extent faulted through its own service, then
+ * release the source region.  The destination's fresh pages zero-fill
+ * on the write-GUP, so a source hole reads as a destination zero.
+ * Caller holds mmap read (the GUP contract); exec's transfer arm will
+ * hold write, which nests fine.
+ */
+int corten_arena_stack_transfer(struct mm_struct *mm, unsigned long src_start,
+				unsigned long src_end, unsigned long dst_start)
+{
+	unsigned long len = src_end - src_start;
+	unsigned long off;
+	int ret = 0;
+
+	if (!mm || (src_start & ~PAGE_MASK) || (src_end & ~PAGE_MASK) ||
+	    (dst_start & ~PAGE_MASK) || src_end <= src_start)
+		return -EINVAL;
+
+	for (off = 0; off < len; off += PAGE_SIZE) {
+		struct page *sp = NULL, *dp = NULL;
+
+		ret = get_user_pages_remote(mm, src_start + off, 1, 0,
+					    &sp, NULL);
+		if (ret <= 0)
+			goto out_release;
+		ret = get_user_pages_remote(mm, dst_start + off, 1, FOLL_WRITE,
+					    &dp, NULL);
+		if (ret <= 0) {
+			put_page(sp);
+			goto out_release;
+		}
+		copy_highpage(dp, sp);
+		set_page_dirty_lock(dp);
+		put_page(dp);
+		put_page(sp);
+		cond_resched();
+	}
+
+out_release:
+	corten_arena_release(mm, src_start, len);
+	return ret < 0 ? ret : 0;
+}
+
+/*
  * G3' (b) (plan sec 25): the expand-time extension double-write core --
  * re-align a GROWSDOWN region's extent to the carrier's grown shape.
  * Also the sweep's ⑤ calibration core (one body, two call sites).
