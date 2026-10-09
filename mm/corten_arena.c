@@ -8029,25 +8029,35 @@ static int __init corten_mode_default_setup(char *s)
 __setup("corten_mode_default=", corten_mode_default_setup);
 
 /*
- * V5: the create_vma census gate.  Called from vma_link() for every
- * VMA entering a MODE mm's tree that is neither ours (VM_CORTEN
- * shadow pieces) nor the special-mapping family (the vdso/vvar
- * shadows -- their VMAs stay as the arch fault carriers by design)
- * nor a fork copy (dup_mmap context: vma_vm != current->mm).  The
- * census feeds the V5 refusal flip; the WARN is once-per-boot loud.
+ * V5: the create_vma gate (the census flipped to refusal).  Called from
+ * vma_link() for every VMA entering a MODE mm's tree that is neither
+ * ours (VM_CORTEN shadow pieces) nor the special-mapping family (the
+ * vdso/vvar shadows -- their VMAs stay as the arch fault carriers by
+ * design) nor a fork copy (dup_mmap context: vma_vm != current->mm).
+ *
+ * The flip contract: in a MODE mm the tree grows ONLY the two exempt
+ * families -- every other shape must have been taken by the routes
+ * (the classify decline arms adopt via the mmap_region take, marking
+ * VM_CORTEN).  A VMA reaching here is a funnel survivor the routes
+ * missed; it is refused (-EPERM) with a once-per-boot WARN, and the
+ * count is the funnel census (zero across every boot world so far --
+ * the flip is behavior-neutral for all observed shapes).  A refusal
+ * surfaces as the mmap/brk EPERM to the caller instead of a silent
+ * tree VMA the arena cannot see.
  */
-void corten_note_vma_gate(struct mm_struct *mm, struct vm_area_struct *vma)
+int corten_gate_vma_link(struct mm_struct *mm, struct vm_area_struct *vma)
 {
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
-		return;
+		return 0;
 	if (current->mm != mm)
-		return;				/* dup_mmap's fork copies */
+		return 0;			/* dup_mmap's fork copies */
 	if (vma->vm_flags & VM_CORTEN)
-		return;
+		return 0;
 	if (vma_is_special_mapping_family(vma))
-		return;
+		return 0;
 	atomic_long_inc(&corten_nr_vma_gate);
 	WARN_ON_ONCE(atomic_long_read(&corten_nr_vma_gate) == 1);
+	return -EPERM;
 }
 
 /*
@@ -11891,21 +11901,26 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		 * past the new EOF answers BUS on the fetch.
 		 */
 		if (READ_ONCE(ctx->ar->rclass) == CORTEN_REGION_FILE) {
-			pgoff_t eof_pg = DIV_ROUND_UP(
-				i_size_read(ctx->ar->rfile->f_mapping->host),
-				PAGE_SIZE);
+			pgoff_t reof = READ_ONCE(ctx->ar->reof);
 			pgoff_t f_pgoff = READ_ONCE(ctx->ar->rpoff) +
 				((ctx->addr - READ_ONCE(ctx->ar->start)) >>
 				 PAGE_SHIFT);
 
-			/* V4.3: the library-load contract -- a slot past
-			 * the file's last page is, by the mmap contract,
-			 * ZERO-FILLED (the loader's memsz > filesz is by
-			 * construction, the BSS tail).  The synthesis
-			 * marks those slots CORTEN_PRIVATE_ANON at MARK
-			 * time so the anon arms serve them.
+			/* V4.3: the library-load contract -- a slot at or
+			 * past the file's declare-time EOF bound (@reof) is,
+			 * by the mmap contract, ZERO-FILLED (the loader's
+			 * memsz > filesz is by construction, the BSS tail).
+			 * The synthesis marks those slots CORTEN_PRIVATE_ANON
+			 * at MARK time so the anon arms serve them.
+			 *
+			 * The gate is @reof, not the live i_size: a slot the
+			 * truncate event demoted (KEEP_PERM, WAS backed at
+			 * declare) re-arms FILE_MAPPED and answers BUS on
+			 * the fetch's live-i_size gate -- the truncation
+			 * contract (the live-i_size form here served ZERO
+			 * over a truncated page, efsmoke2's verdict).
 			 */
-			if (f_pgoff >= eof_pg)
+			if (f_pgoff >= reof)
 				fresh.state = CORTEN_PRIVATE_ANON;
 			else
 				fresh.state = CORTEN_FILE_MAPPED;

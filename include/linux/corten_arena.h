@@ -1058,8 +1058,12 @@ void corten_exec_default_enter(struct mm_struct *mm);
 void corten_arena_special_shadow(struct mm_struct *mm,
 				 struct vm_area_struct *vma);
 
-/* V5: the create_vma census gate (vma_link's non-exempt arm). */
-void corten_note_vma_gate(struct mm_struct *mm, struct vm_area_struct *vma);
+/* V5: the create_vma gate (vma_link's non-exempt arm) -- the refusal
+ * flip: returns -EPERM for a funnel survivor (see mm/corten_arena.c),
+ * 0 for the exempt families and for =n.  vma_link() aborts the link
+ * on non-zero.
+ */
+int corten_gate_vma_link(struct mm_struct *mm, struct vm_area_struct *vma);
 
 /*
  * S8 observability renderers, called by the debugfs files in mm/corten.c
@@ -1453,9 +1457,10 @@ static inline void corten_arena_special_shadow(struct mm_struct *mm,
 {
 }
 
-static inline void corten_note_vma_gate(struct mm_struct *mm,
-					struct vm_area_struct *vma)
+static inline int corten_gate_vma_link(struct mm_struct *mm,
+				       struct vm_area_struct *vma)
 {
+	return 0;
 }
 
 static inline bool corten_refuse_vma_funnel(struct mm_struct *mm,
