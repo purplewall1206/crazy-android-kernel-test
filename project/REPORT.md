@@ -1542,8 +1542,11 @@ file_cow_copies≈1k/boot 零缺陷服务。classify LEGACY 余量
 漏斗+mmap_region take 臂（VM_CORTEN 收编, vma_gate=0 为证）——
 披露 resident, 非 serve 缺陷。
 
-**VMA 层删除（VI）未启动**: 本周期 0 行 VMA 层删除。四件
-13,408 LoC 口径不变。VI 的前置现已全部就位（V5 翻转武装态零触发 +
+**VMA 层删除（VI）片1 已落地**（a9b2407b）: tools/testing/vma
+挂具 3,197 LoC 删除（grep 零依赖门 + boot + smoke + 探针零泄漏
+504→504 验收; plan sec 13）。内核侧删除面（vma.c 族/mmap.c/
+memory.c/rmap）为遗留世界承重面, 定性 = 逐钩重接线迁移工程,
+余量续账见 plan sec 13。VI 的前置现已全部就位（V5 翻转武装态零触发 +
 smaps region 化已落地 + funnel 普查对齐），下一会话可安全启动
 逐文件删除（vma.c→mmap.c VMA 臂→vma.h→dup_mmap→/proc 渲染→
 memory.c→rmap→tools/testing/vma + grep 零依赖门）。
