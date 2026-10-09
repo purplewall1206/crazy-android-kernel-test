@@ -902,3 +902,11 @@ corten_arena_stack_calibrate(): 一体两用（expand 时双写 + sweep ⑤
 vma_gate=0/零 trap 全绿。
 **余量**: adopt 缝 frame 注册扩展（生长帧入 per-mm xarray）+
 legacy 域 region debugfs 渲染 → S3。
+
+## 26. G3' 帧注册落地（2026-10-10）: 生长帧入注册表
+
+校准核扩展: 对称差帧经 corten_slot_insert 入 per-mm arenas
+xarray（生长范围 lookup 命中, 漏斗回退消除）; extent 重写入
+ctl_lock（原裸 WRITE_ONCE 对）; 失败回滚插帧+还原 extent。
+旗标 on: adopt_calibrations=239 + 探针/smoke/vma_gate=0/零 trap 全绿。
+**G3' 余项**: legacy 域 region debugfs 渲染 → S3。
