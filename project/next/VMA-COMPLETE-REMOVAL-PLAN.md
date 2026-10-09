@@ -1089,3 +1089,12 @@ corten_arena_entry_sweep_locked() = 调用者持写锁的 sweep 体, 挂
 旗标 on: stack_adopts 10→23/316; 余面 = 分类/采纳的剩余拒绝
 （下一迭代: adopt_stack 内部失败面 vs classify 拒绝面的分形计数）。
 探针/smoke/vma_gate=0/零 trap 全绿。
+
+## 38. 分形读数（2026-10-10）: skip 桶全零 → 拒绝面收敛为二选一
+
+旗标 on boot 全桶读数: **全部 sweep_skip_* 桶 = 0**（special=2 =
+vdso 族, 正确）+ stack_adopts=23 + fallbacks=0 + vma_gate=0。sweep
+不拒绝栈——293 面收敛为: (a) classify -1 静默面（终载体被某路径
+标 VM_CORTEN? 插入与 sweep 之间无标记者）或 (b) locked-sweep 体
+未达（window_form 的早期退出/标签路径）。判别 = 下一会话第一读:
+sweep 体入口计数器（sweep-ran vs classify--1 一次 boot 分形）。
