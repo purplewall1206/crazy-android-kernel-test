@@ -6044,7 +6044,7 @@ enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
 		 * disclosed residents; the arm's debugging round is the
 		 * V4.3 slice.
 		 */
-		if (flags & ~(MAP_TYPE | MAP_NORESERVE | MAP_DENYWRITE))
+		if (flags & ~(MAP_TYPE | MAP_NORESERVE))
 			return CORTEN_MMAP_LEGACY;
 		return CORTEN_MMAP_AUTO_FILE;
 	}
