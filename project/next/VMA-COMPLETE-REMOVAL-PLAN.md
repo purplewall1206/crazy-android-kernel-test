@@ -984,3 +984,28 @@ corten_arena_stack_transfer() + 独立锚（MODE test mm 双窗区, 已知
 lockdep。**下一步**: create_init_stack_vma 窗口 declare 接入 +
 setup_arg_pages 传输臂（替换 relocate）→ 两函数退役 → vma_exec.c
 全删。
+
+## 31. S3-A 接入片首 boot 回退（2026-10-10）: init panic, 证据与入口
+
+**实施内容**（已入 stash `s3a-integration wip` + 侧分支 s3a-wip 指向
+绿基线; stash 可 `git stash pop` 恢复）:
+- corten_arena_stack_window_declare()（pool_take → window_place →
+  declare_locked novma=false GROWSDOWN, shadow 片即载体, mmap_write
+  契约）;
+- create_init_stack_vma 旗标臂（窗口 declare, 失败回退手工路径）;
+- setup_arg_pages 传输臂（窗口载体检测 → 终态 legacy 载体创建 →
+  stack_transfer → munmap 窗载体 → swap; expand_tail 标签跳接）。
+
+**首 boot 结果**: init SIGSEGV（exitcode=0xb）@ 9.4-9.7s, 内核态
+RIP 在 corten_arena_pool_take+0x16b 与
+corten_arena_stack_window_declare+0x15d/0x166——pool_take 的 eject
+路径或 declare_locked 对 fresh bprm state 的某前置未满足。
+console 全文: project/results/r07/eof-battery/s3a-hang.log。
+
+**下会话调试入口**: (1) pool_take 的 eject 分支读全
+（:14740 起, xa_load 不等检查 + release machinery 对 fresh state
+的假设）; (2) 跳过 pool_take 直呼 window_place 的 A/B（fresh mm 池
+必空, pool_take 本应 -ENOENT 短路——RIP 却在其内, 优先怀疑
+state->arena_pool 的初始化时点或 eject 内的 release 前置）; (3)
+declare_locked 的 novma=false shadow 路径对 legacy... 窗口地址的
+shadow 片创建假设核对。
