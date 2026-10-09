@@ -2209,6 +2209,11 @@ static int corten_arena_validate_vma(struct vm_area_struct *vma,
  * serve re-registers over its markers); a targeted DECLARE hitting a
  * markered frame still fails -- validate_vma finds no VMA there.
  */
+/* V4.3: the registry occupancy test for the placement paths (the
+ * get_unmapped_area hint validation) -- the arena regions are
+ * invisible to the VMA tree, so the hinted placements must consult
+ * the registry or they orphan the regions' served PTEs.
+ */
 static bool corten_arena_overlaps(struct corten_mm_state *state,
 				  unsigned long addr, unsigned long len)
 {
@@ -2240,6 +2245,21 @@ static bool corten_arena_overlaps(struct corten_mm_state *state,
 	}
 
 	return false;
+}
+
+bool corten_arena_range_occupied(struct mm_struct *mm, unsigned long addr,
+				 unsigned long len)
+{
+	struct corten_mm_state *state;
+
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+		return false;
+
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state)
+		return false;
+
+	return corten_arena_overlaps(state, addr, len);
 }
 
 /*
