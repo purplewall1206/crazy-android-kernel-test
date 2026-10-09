@@ -752,3 +752,25 @@ on 形 → 再议默认。
 relocate_vma_down 在 =on 世界不可达（WARN 备）→ 退役 =
 vma_exec.c 全删（163 LoC）+ vma.h 声明清理; =off 世界仍走现路径,
 vma_exec.c 是否随 CONFIG 分离由 S3 时树态定。
+
+## 18. S2 G1 脚手架落地（7e446307, 2026-10-10）
+
+`corten_stack_s2=on`（默认 off）+ `corten_bprm_mode_enter`（G1:
+bprm mm 进 MODE, 经幂等的 corten_arena_mode_enter, 计数
+bprm_mode_enters）+ fs/exec.c bprm_mm_init 的旗标门控调用点。
+旗标 on 而无 G2 = exec 栈 VMA 必死于 V5 门——旗标即围栏, 只可在
+带 G2 的内核上翻转; =off 世界每次 exec 一个分支的代价。
+
+**验收序第一步（旗标 OFF）全绿**: 构建绿 + SSHOK + 探针双 PASS +
+smoke PASS + bprm_mode_enters=0 + vga_gate=0 + 零 trap + dmesg 无
+armed 行。
+
+**镜像锁教训**: v1base2.qcow2 被浸泡 VM 写锁时, overlay 与副本
+backing 均不可开——验证 boot 用 `cp --sparse=always` 副本
+（用后即删）, 浸泡零中断。
+
+**余量**: G2（arena 栈 declare: bprm->vma 解引用面逐一排查 +
+legacy 域 declare 路径）与 G3（setup_arg_pages 按 MODE 分流: 四
+路由合成）= 专项 boot-debug 轮（每轮旗标 on 形, init exec = 首个
+检验者）; G4（adopt 缝去重）随 G2。验收序后续步: 旗标 on boot +
+smoke + efsmoke + 登录面 → 电池 on 形。
