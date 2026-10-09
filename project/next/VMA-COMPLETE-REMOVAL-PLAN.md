@@ -1024,3 +1024,17 @@ admission 的 overlap-takeover 吞掉栈 region（init 死于 loader 的
 **余量**: 两函数退役（create_init_stack_vma 的手工路径仍为回退臂
 保留; relocate_vma_down 仅剩 =off/回退面可达——退役 = 删回退臂后
 的死码清除, 随旗标默认化决策）→ vma_exec.c 全删。
+
+## 33. S3 收尾决策 + 电池 on 形（2026-10-10, 进行中）
+
+**回退臂删除决策（定稿）**: create_init_stack_vma 的手工路径 =
+旗标 on 世界的摆入失败安全网（pool/placer 拒绝时的兜底）——旗标
+opt-in 期间**保留**。relocate_vma_down 经回退臂仍可达 = 非死码。
+**vma_exec.c 全删的门槛 = 旗标默认化**（条件: 旗标 on 三腿电池绿
++ ≥1 周旗标 on 浸泡无事件 → 默认 on → 回退臂降级为 WARN-unreachable
+→ 删除 → vma_exec.c 163 LoC 兑现）。非本次。
+
+**电池 on 形（进行中）**: s3-battery 驱动派生（P2/P3 append 加
+corten_stack_s2=on; 镜像副本 s3bat.qcow2——浸泡 VM 持 v1base2 写锁
+的教训入账: 并发电池必须用副本）。P1 绿（smoke 26/26）; P2 旗标 on
+BOOT_OK + exec_default_enters=263, in-guest LTP 构建中。
