@@ -1065,6 +1065,14 @@ void corten_arena_special_shadow(struct mm_struct *mm,
  */
 int corten_gate_vma_link(struct mm_struct *mm, struct vm_area_struct *vma);
 
+/* S2 (plan sec 17): the stack-face conversion flag and its G1 arm --
+ * MODE on the fresh bprm mm before the exec stack lands.  Default
+ * off; flag-on without G2 (the arena stack declare) dies at the V5
+ * gate by design.  =n: no-op.
+ */
+bool corten_stack_s2_enabled(void);
+void corten_bprm_mode_enter(struct mm_struct *mm);
+
 /*
  * S8 observability renderers, called by the debugfs files in mm/corten.c
  * (mm/corten_arena.c owns the arena data, corten.c owns the directory).
@@ -1461,6 +1469,15 @@ static inline int corten_gate_vma_link(struct mm_struct *mm,
 				       struct vm_area_struct *vma)
 {
 	return 0;
+}
+
+static inline bool corten_stack_s2_enabled(void)
+{
+	return false;
+}
+
+static inline void corten_bprm_mode_enter(struct mm_struct *mm)
+{
 }
 
 static inline void corten_exec_default_enter(struct mm_struct *mm)

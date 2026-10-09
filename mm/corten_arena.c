@@ -229,6 +229,7 @@ static atomic_long_t corten_arena_nr_drain_timeouts;
 static atomic_long_t corten_nr_auto_mmaps;	/* auto arenas attached */
 static atomic_long_t corten_nr_auto_attach_fails; /* DECLARE in attach failed */
 static atomic_long_t corten_nr_exec_default_enters; /* MV3.a execve default MODEs */
+static atomic_long_t corten_nr_bprm_mode_enters;    /* S2 G1 bprm-phase MODEs */
 /* V2 census (the wl_* acceptance metrics): the funnel-VMA legs a MODE mm
  * still took at the two G-phase shapes -- brk (vm_brk_flags' funnel) and
  * the exec stack (the sweep's GROWSDOWN skip).  Both read 0 at the V2
@@ -3571,6 +3572,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_auto_attach_fails));
 	seq_printf(m, "exec_default_enters %ld\n",
 		   atomic_long_read(&corten_nr_exec_default_enters));
+	seq_printf(m, "bprm_mode_enters   %ld\n",
+		   atomic_long_read(&corten_nr_bprm_mode_enters));
 	seq_printf(m, "brk_funnel          %ld\n",
 		   atomic_long_read(&corten_nr_brk_funnel));
 	seq_printf(m, "stack_adopts        %ld\n",
@@ -8027,6 +8030,46 @@ static int __init corten_mode_default_setup(char *s)
 	return 1;
 }
 __setup("corten_mode_default=", corten_mode_default_setup);
+
+/*
+ * S2 (plan sec 17): the stack-face conversion flag.  corten_stack_s2=on
+ * (default off) arms the bprm-phase MODE entry (G1); the arena-side
+ * stack declare (G2) and the setup_arg_pages split (G3) land behind
+ * the same flag.  With the flag on but G2 not yet landed, every exec
+ * dies at the V5 gate (the bprm stack VMA is a non-exempt shape in a
+ * now-MODE mm) -- the flag IS the containment; only flip it on a
+ * kernel that carries G2.
+ */
+static bool corten_stack_s2_param;
+
+static int __init corten_stack_s2_setup(char *s)
+{
+	if (s && !strcmp(s, "on")) {
+		corten_stack_s2_param = true;
+		pr_info("corten: stack-face S2 armed (bprm MODE entry)\n");
+	}
+	return 1;
+}
+__setup("corten_stack_s2=", corten_stack_s2_setup);
+
+bool corten_stack_s2_enabled(void)
+{
+	return corten_stack_s2_param;
+}
+
+/* G1: MODE on the fresh bprm mm before the exec stack lands.  Off by
+ * default; see the flag comment above.  Idempotent through
+ * corten_arena_mode_enter (a double enter with the exec_mmap default
+ * is a counted no-op there).
+ */
+void corten_bprm_mode_enter(struct mm_struct *mm)
+{
+	if (!corten_stack_s2_param || !corten_enabled_static() || !mm)
+		return;
+
+	if (!corten_arena_mode_enter(mm))
+		atomic_long_inc(&corten_nr_bprm_mode_enters);
+}
 
 /*
  * V5: the create_vma gate (the census flipped to refusal).  Called from

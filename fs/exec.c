@@ -272,6 +272,13 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 	bprm->rlim_stack = current->signal->rlim[RLIMIT_STACK];
 	task_unlock(current->group_leader);
 
+	/* S2 G1 (plan sec 17): MODE on the fresh bprm mm before the exec
+	 * stack lands, behind corten_stack_s2=on (default off).  Flag-on
+	 * without G2 (the arena stack declare) makes the stack VMA a
+	 * funnel survivor at the V5 gate -- the flag is the containment.
+	 */
+	corten_bprm_mode_enter(mm);
+
 #ifndef CONFIG_MMU
 	bprm->p = PAGE_SIZE * MAX_ARG_PAGES - sizeof(void *);
 #else
