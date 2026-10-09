@@ -11803,8 +11803,26 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		 * arm (re-read) or the COW arm (fetch + copy); a slot
 		 * past the new EOF answers BUS on the fetch.
 		 */
-		if (READ_ONCE(ctx->ar->rclass) == CORTEN_REGION_FILE)
-			fresh.state = CORTEN_FILE_MAPPED;
+		if (READ_ONCE(ctx->ar->rclass) == CORTEN_REGION_FILE) {
+			pgoff_t eof_pg = DIV_ROUND_UP(
+				i_size_read(ctx->ar->rfile->f_mapping->host),
+				PAGE_SIZE);
+			pgoff_t f_pgoff = READ_ONCE(ctx->ar->rpoff) +
+				((ctx->addr - READ_ONCE(ctx->ar->start)) >>
+				 PAGE_SHIFT);
+
+			/* V4.3: the library-load contract -- a slot past
+			 * the file's last page is, by the mmap contract,
+			 * ZERO-FILLED (the loader's memsz > filesz is by
+			 * construction, the BSS tail).  The synthesis
+			 * marks those slots CORTEN_PRIVATE_ANON at MARK
+			 * time so the anon arms serve them.
+			 */
+			if (f_pgoff >= eof_pg)
+				fresh.state = CORTEN_PRIVATE_ANON;
+			else
+				fresh.state = CORTEN_FILE_MAPPED;
+		}
 
 		if (!corten_arena_perm_ok(&gate, ctx->write,
 					  ctx->instruction)) {
