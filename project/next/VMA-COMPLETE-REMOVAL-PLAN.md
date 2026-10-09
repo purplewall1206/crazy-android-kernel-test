@@ -926,3 +926,33 @@ GROWSDOWN rflags）。先前判"缺口"的 awk 模式错了（extent 列以
 GUP 面需要它; ① 的 declare 是后置共生非替代）。S3（vma_exec.c
 全删）解锁条件 = **copy_strings 的 arena 侧重实现**（arg/env 拷贝
 脱离 VMA 载体）——这是栈面的最后一大件, 完成后两函数方真不可达。
+
+## 28. copy_strings arena 侧设计核查（2026-10-10）: GUP 依赖面分解 + S3 路径分叉
+
+**x86 get_arg_page 事实**（fs/exec.c:165-180）: 拷贝 =
+`get_user_pages_remote(mm, pos, 1, FOLL_WRITE, &page)` +
+`mmap_read_lock_maybe_expand(mm, bprm->vma, ...)`。VMA 依赖面四点:
+(1) maybe_expand 的 VMA 伸缩; (2) GUP 的 find_vma 树走查; (3)
+acct_arg_size 的 vma_pages 记账; (4) flush_arg_page 的
+flush_cache_page(bprm->vma)（x86 无操作）。
+
+**关键门限发现**: `corten_gup_window()`（corten_arena.c）首行
+`addr < WINDOW_START || addr >= WINDOW_END → return 1` —— GUP 的
+arena 臂**只服务 [16T,64T)**。bprm 栈（legacy 域）的 GUP 永走树
+走查: legacy 域 region 不获 GUP 服务（design: legacy = funnel 承
+载, 零热路径成本）。
+
+**S3 路径分叉**:
+- **路径 A（窗口栈, 建议采用）**: create_init_stack_vma 的窗内
+  替代 = 窗口域 declare 临时栈（VMA-less, copy_strings 的 GUP 命
+  中 corten_gup_window 臂 ✓）; relocate = 窗口→legacy 的
+  release+copy+final-declare（终栈落 G2' 共生形）; 两函数在旗标 on
+  世界退役。与 all-window 布局同构（MODE 世界的 binary/interp 已
+  在窗）, 不触 GUP 热路径门。
+- **路径 B（legacy 门加宽）**: gup_window 门加 legacy region 探
+  ——每次 legacy GUP 多一分支, 最热路径的性能回归风险, 违背门限
+  的零成本设计初衷。弃。
+**A 的余项清单**: 窗口临时栈的 declare/perm 面（novma=true, 无载
+体; copy_strings 直写 region 页）; relocate 的窗口→legacy 内容
+搬运（页粒度拷贝, 32 页上限）; acct_arg_size 的 region 页数记账
+替代; 最终栈的 G2' 共生 declare（已有）。
