@@ -619,9 +619,11 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			return addr;
 	}
 
-	/* V5: the funnel-leg census.  The vma_link gate reads zero for
-	 * the exempt filters, but the funnel leg itself still serves
-	 * shapes (the r43 boot's init killed by the premature flip:
+	/* V5: the funnel-leg census pending.  The vma_link gate reads
+	 * zero for its exempt filters, but the funnel leg serves the
+	 * ELF/library segment shapes the admission declines (the W-7
+	 * co-frame overlap, the 7j slice) -- the flip waits for the
+	 * funnel-shape census (the r43-r44 boots killed init twice:
 	 * init's hinted file mmap the auto route declines).  The
 	 * refusal flip waits for the funnel-shape census (this counter
 	 * with the decline reasons).

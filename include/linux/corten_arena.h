@@ -1447,6 +1447,14 @@ static inline void corten_note_vma_gate(struct mm_struct *mm,
 {
 }
 
+static inline bool corten_refuse_vma_funnel(struct mm_struct *mm,
+					    unsigned long flags,
+					    unsigned long prot,
+					    struct file *file)
+{
+	return false;
+}
+
 static inline void corten_exec_default_enter(struct mm_struct *mm)
 {
 }
