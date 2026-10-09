@@ -872,3 +872,23 @@ setup_arg_pages 的 relocate/expand 会长大载体——entry-sweep 的
 - 施工序: 导出包装 → create_init_stack_vma 序翻转（declare 先行,
   shadow 片即 bprm->vma, 跳过手工 alloc/insert; 失败回退现路径）
   → ⑤ 校准 → 旗标 on boot+smoke+efsmoke。①⑤ 同片不可拆。
+
+## 24. G2' ①+⑤ 落地（2026-10-10）: region-first 栈 declare + 校准缝
+
+**修正形实现**: ① declare 于 setup_arg_pages 的 relocate 后终态
+extent（novma=true, 树 VMA 即载体, 页粒度）; 包装持锁约定 =
+mmap_assert_write_locked（首 boot 递归类锁死 init 于首 exec——
+已修）。⑤ 校准移至 re-adopt 之前: vm_end-PAGE_SIZE lookup（扩张
+后 start 低于 declare extent, vm_start 会 miss）, extent 对齐
+载体, adopt_calibrations 计数。
+
+**运行形语义（boot 实证）**: declare 后 funnel 标记把栈 VMA 打
+VM_CORTEN → sweep 分类 -1（"已是我们"静默, 设计内双服务）→ 260/
+261 exec 栈 = declare+mark 路径; 1/261 = declare+calibrate 路径。
+旗标 on 全绿: SSHOK + 探针 + smoke + vma_gate=0 + 零 trap。
+
+**观测缺口（非正确性）**: legacy 域 region 不入 debugfs arenas
+窗口渲染——观测面补页 = G3' 附带件。
+
+**余量**: G3' 三旁路双写（mprotect/extension/relocate）+ adopt
+缝的 frame 注册扩展 → S3（vma_exec.c 全删）。
