@@ -2550,13 +2550,14 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 				       unsigned long addr, unsigned long len,
 				       u8 perm, struct file *file,
 				       unsigned long pgoff, bool novma,
-				       bool adopt, struct corten_arena **out)
+				       bool adopt, u32 rf_birth,
+				       struct corten_arena **out)
 {
 	unsigned long frame, first_frame, last_frame;
 	struct corten_arena *arena;
 	struct vm_area_struct *vma = NULL;
 	u8 may_prot;
-	u32 rflags = 0;
+	u32 rflags = rf_birth;
 	int ret;
 
 	mutex_lock(&state->ctl_lock);
@@ -2874,7 +2875,7 @@ int corten_arena_declare(struct mm_struct *mm, unsigned long addr,
 	 */
 	mmap_write_lock(mm);
 	ret = corten_arena_declare_locked(mm, state, addr, len, 0, NULL, 0,
-					  false, false, NULL);
+					  false, false, 0, NULL);
 	mmap_write_unlock(mm);
 
 	return ret;
@@ -6881,7 +6882,7 @@ int corten_arena_auto_attach(struct mm_struct *mm, unsigned long addr,
 
 	ret = corten_arena_declare_locked(mm, state, addr, len,
 					  corten_arena_perm_from_prot(prot),
-					  NULL, 0, true, false, NULL);
+					  NULL, 0, true, false, 0, NULL);
 	if (ret) {
 		/* T0a counted attach failures in the per-mm fallback
 		 * bucket; T0b adds the named aggregates on top.
@@ -6927,7 +6928,7 @@ int corten_arena_file_attach(struct mm_struct *mm, unsigned long addr,
 
 	ret = corten_arena_declare_locked(mm, state, addr, len,
 					  corten_arena_perm_from_prot(prot),
-					  file, pgoff, true, false, NULL);
+					  file, pgoff, true, false, 0, NULL);
 	if (ret) {
 		corten_arena_auto_fallback(state);
 		atomic_long_inc(&corten_nr_auto_attach_fails);
@@ -7516,7 +7517,7 @@ static int corten_sweep_adopt_anon(struct mm_struct *mm,
 	}
 
 	ret = corten_arena_declare_locked(mm, state, start, end - start,
-					  perm, NULL, 0, true, true, &arena);
+					  perm, NULL, 0, true, true, 0, &arena);
 	if (ret) {
 		corten_sweep_drop_picks(&picks);
 		mas_destroy(&vmi.mas);
@@ -7601,7 +7602,7 @@ static int corten_sweep_adopt_file(struct mm_struct *mm,
 	ret = corten_arena_declare_locked(mm, state, start,
 					  vma->vm_end - start, perm,
 					  vma->vm_file, vma->vm_pgoff,
-					  true, true, &arena);
+					  true, true, 0, &arena);
 	if (ret) {
 		mas_destroy(&vmi.mas);
 		return ret;		/* the caller buckets -EEXIST apart */
@@ -7974,18 +7975,21 @@ void corten_arena_special_shadow(struct mm_struct *mm,
 			return;
 	}
 
+	/* The marker rides rf_birth: the record is born with
+	 * CORTEN_RF_SPECIAL_SHADOW already set -- the declare-to-mark
+	 * window would otherwise let the first special-range faults (the
+	 * glibc clock reads, the first userland instructions) serve
+	 * zero-page FRESH installs and mark the slots MAPPED, corrupting
+	 * the vDSO content and leaking the -2 ANONPAGES the r26 exits
+	 * showed.
+	 */
 	if (corten_arena_declare_locked(mm, state, vma->vm_start,
 					vma->vm_end - vma->vm_start,
 					corten_arena_prot_from_vma(vma),
-					NULL, 0, true, true, &ar))
+					NULL, 0, true, true,
+					CORTEN_RF_SPECIAL_SHADOW, &ar))
 		return;
 
-	if (ar) {
-		mutex_lock(&state->ctl_lock);
-		WRITE_ONCE(ar->rflags,
-			   READ_ONCE(ar->rflags) | CORTEN_RF_SPECIAL_SHADOW);
-		mutex_unlock(&state->ctl_lock);
-	}
 	atomic_long_inc(&corten_nr_special_shadows);
 }
 
@@ -11992,13 +11996,15 @@ static struct corten_arena *corten_stack_scan(struct mm_struct *mm,
 		struct corten_arena *m = corten_slot_lowest(
 			xa_load(&state->arenas, (addr >> PMD_SHIFT) + i));
 
-		/* Frozen (the fork's mirror window) records are as
-		 * invisible as parked ones: the extend must never mutate
-		 * a start the mirror is reading (the r23 stage-2
-		 * anomaly's shape -- the lookup's frozen-miss made the
-		 * arm re-enter on a record the mirror was copying).
+		/* A parked record is lookup-invisible; a FROZEN one is
+		 * not -- the fork's mirror window needs the arm to WAIT
+		 * (the mmap_write below blocks against dup_mmap) and
+		 * then serve the post-fork state.  Skipping frozen here
+		 * handed the frozen-window faults to the funnel, whose
+		 * no-VMA answer for a converted stack is the SIGSEGV the
+		 * r24-r29 boots died of.
 		 */
-		if (!m || READ_ONCE(m->idle) || READ_ONCE(m->frozen))
+		if (!m || READ_ONCE(m->idle))
 			continue;
 		return m;
 	}
@@ -12189,6 +12195,15 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 				atomic_long_inc(&corten_nr_stack_grows);
 				ret = 1;
 			}
+		} else if (slot == stack) {
+			/* The slot already holds this record and the
+			 * record covers @addr (the stage-2 gate): the
+			 * registration is fine -- the original lookup's
+			 * gate refused (the fork's frozen window, now
+			 * cleared by the write lock we just took).
+			 * Covered: the caller re-lookups and serves.
+			 */
+			ret = 1;
 		} else {
 			struct corten_frame_bucket *b =
 				corten_slot_bucket(slot);
@@ -12368,6 +12383,31 @@ enum corten_fault_action corten_arena_user_fault(struct mm_struct *mm,
 
 	ar = corten_arena_lookup_get(mm, address);
 	if (!ar) {
+		/* The miss-witness: the raw registry answer beside the
+		 * gated one names the gate that returned NULL (frozen,
+		 * dead ref) -- the r29 death ran with the record in the
+		 * miss frame and the gates unexplained.
+		 */
+		if (corten_enabled_static() && READ_ONCE(mm->corten_mode)) {
+			struct corten_arena *raw;
+			bool frozen = false, dead = false, idle = false;
+
+			rcu_read_lock();
+			raw = corten_arena_lookup(mm, address);
+			if (raw) {
+				frozen = READ_ONCE(raw->frozen);
+				idle = READ_ONCE(raw->idle);
+				dead = !percpu_ref_tryget_live(&raw->active);
+				if (!dead)
+					percpu_ref_put(&raw->active);
+			}
+			rcu_read_unlock();
+			if (raw && (frozen || dead || idle) &&
+			    (address & PAGE_MASK) >= 0x7ff000000000)
+				pr_info_ratelimited("corten-dbg: sg MISSGATE a=%lx frozen=%d dead=%d idle=%d\n",
+						    address & PAGE_MASK,
+						    frozen, dead, idle);
+		}
 		/* V2.2: a below-start miss at a grow-down region is the
 		 * stack extension fault -- extend (expand_downwards' region
 		 * form) and serve; anything else is the funnel's fault.
@@ -14362,7 +14402,7 @@ static int corten_brk_region_seed(struct mm_struct *mm,
 	 */
 	ret = corten_arena_declare_locked(mm, state, mm->start_brk,
 					  newbrk - mm->start_brk, perm,
-					  NULL, 0, true, false, NULL);
+					  NULL, 0, true, false, 0, NULL);
 	if (ret)
 		return 1;
 
@@ -14418,7 +14458,7 @@ static int corten_brk_region_adopt(struct mm_struct *mm,
 
 	ret = corten_arena_declare_locked(mm, state, mm->start_brk,
 					  oldbrk - mm->start_brk, perm,
-					  NULL, 0, true, false, NULL);
+					  NULL, 0, true, false, 0, NULL);
 	if (ret)
 		return 1;
 
@@ -14680,7 +14720,7 @@ static int corten_bss_declare1(struct mm_struct *mm, unsigned long addr,
 	 */
 	ret = corten_arena_declare_locked(mm, state, addr, len,
 					  corten_arena_perm_from_prot(prot),
-					  NULL, 0, true, false, NULL);
+					  NULL, 0, true, false, 0, NULL);
 	if (ret)
 		return 1;
 
@@ -16848,7 +16888,7 @@ static long corten_arena_mremap_move(struct mm_struct *mm,
 	 * through the new arena's FRESH path exactly as before.
 	 */
 	ret = corten_arena_declare_locked(mm, state, addr2, len2, perm, NULL,
-					  0, true, false, NULL);
+					  0, true, false, 0, NULL);
 	if (ret) {
 		mmap_write_unlock(mm);
 		return -ENOMEM;
