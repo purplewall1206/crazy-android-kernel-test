@@ -11942,7 +11942,7 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
  * pieces/ownership interaction is walked end to end (the VMA-COMPLETE
  * plan's V2.2 slice).
  */
-static bool corten_stack_extend_param;
+static bool corten_stack_extend_param = true;
 /* The debug conversion filter: empty = convert all; else only the
  * named comm converts (the r19 round's single-process isolation).
  */
@@ -11950,8 +11950,13 @@ static char corten_stack_convert_comm[16];
 
 static int __init corten_stack_extend_setup(char *s)
 {
-	if (s && !strcmp(s, "on"))
-		corten_stack_extend_param = true;
+	/* The default flipped on (the r40 boot: the conversion plus five
+	 * extends served a real DHCP lease through the region form -- the
+	 * dhcpcd-only boot dual-green).  "off" restores the pre-V2.2
+	 * world for the debug anchors.
+	 */
+	if (s && !strcmp(s, "off"))
+		corten_stack_extend_param = false;
 	return 1;
 }
 __setup("corten_stack_extend=", corten_stack_extend_setup);
@@ -12000,7 +12005,14 @@ static struct corten_arena *corten_stack_scan(struct mm_struct *mm,
 	 * path: the state and its xarray contents are visible together.
 	 */
 	state = smp_load_acquire(&mm->corten_state);
-	for (i = 1; i <= CORTEN_STACK_SCAN_FRAMES; i++) {
+	/* i starts at ZERO: the record's own first frame can be the
+	 * fault's frame -- a just-converted stack's first growth fault
+	 * lands one page below its start, in the frame the conversion
+	 * registered.  Starting at 1 skipped exactly that frame, the
+	 * scan answered nothing, and the funnel's no-VMA SIGSEGV killed
+	 * the r39 boot's dhcpcd 60ms after its conversion.
+	 */
+	for (i = 0; i <= CORTEN_STACK_SCAN_FRAMES; i++) {
 		struct corten_arena *m = corten_slot_lowest(
 			xa_load(&state->arenas, (addr >> PMD_SHIFT) + i));
 
