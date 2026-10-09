@@ -935,7 +935,16 @@ generic_get_unmapped_area(struct file *filp, unsigned long addr,
 		 */
 		if (!corten_addr_in_window(addr, len)) {
 			vma = find_vma_prev(mm, addr, &prev);
-			if (mmap_end - len >= addr && addr >= mmap_min_addr &&
+			/* V4.3: the registry occupancy check -- the arena
+			 * regions are invisible to the VMA tree, so a hint
+			 * inside a region's span passes the gap checks and
+			 * the funnel VMA orphans the region's served PTEs
+			 * (the r44 death: init reading the zero-served
+			 * library page).  The occupied hint falls to the
+			 * fenced walker below.
+			 */
+			if (!corten_arena_range_occupied(mm, addr, len) &&
+			    mmap_end - len >= addr && addr >= mmap_min_addr &&
 			    (!vma || addr + len <= vm_start_gap(vma)) &&
 			    (!prev || addr >= vm_end_gap(prev)))
 				return addr;

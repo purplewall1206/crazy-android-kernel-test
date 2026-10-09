@@ -2614,6 +2614,10 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 	}
 
 	arena = kzalloc(sizeof(*arena), GFP_KERNEL_ACCOUNT);
+	if (adopt)
+		pr_info_ratelimited("corten-dbg: ADEC [%lx,%lx) ov=%d\n",
+				    addr, addr + len,
+				    corten_arena_overlaps(state, addr, len));
 	if (!arena) {
 		mutex_unlock(&state->ctl_lock);
 		return -ENOMEM;
@@ -6040,7 +6044,7 @@ enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
 		 * disclosed residents; the arm's debugging round is the
 		 * V4.3 slice.
 		 */
-		if (flags & ~(MAP_TYPE | MAP_NORESERVE))
+		if (flags & ~(MAP_TYPE | MAP_NORESERVE | MAP_DENYWRITE))
 			return CORTEN_MMAP_LEGACY;
 		return CORTEN_MMAP_AUTO_FILE;
 	}
@@ -11823,6 +11827,19 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 			return CORTEN_F_FALLBACK;
 		}
 		m = fresh;
+	}
+
+	/* V4.3: the library-load contract */
+	if (m.state == CORTEN_FILE_MAPPED && ctx->ar->rfile) {
+		pgoff_t eof_pg = DIV_ROUND_UP(
+			i_size_read(ctx->ar->rfile->f_mapping->host),
+			PAGE_SIZE);
+		pgoff_t f_pgoff = READ_ONCE(ctx->ar->rpoff) +
+			((ctx->addr - READ_ONCE(ctx->ar->start)) >>
+			 PAGE_SHIFT);
+
+		if (f_pgoff >= eof_pg)
+			m.state = CORTEN_PRIVATE_ANON;
 	}
 
 	disp = corten_arena_dispatch(&m, ctx->write, ctx->instruction);

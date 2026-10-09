@@ -864,6 +864,13 @@ static inline void corten_fence_unmapped_area(struct vm_unmapped_area_info *info
 		info->low_limit = CORTEN_MODE_WINDOW_END;
 }
 
+/* V4.3: the registry occupancy test for the placement paths (the
+ * hinted placements must not orphan the regions' served PTEs).  =n:
+ * always false.
+ */
+bool corten_arena_range_occupied(struct mm_struct *mm, unsigned long addr,
+				 unsigned long len);
+
 /* The matching hint check: a hinted range overlapping the window must
  * not take the fast accept path (the range is tree-free there).
  */
@@ -1575,6 +1582,13 @@ static inline void corten_fence_unmapped_area(struct vm_unmapped_area_info *info
 
 static inline bool corten_addr_in_window(unsigned long addr,
 					 unsigned long len)
+{
+	return false;
+}
+
+static inline bool corten_arena_range_occupied(struct mm_struct *mm,
+					       unsigned long addr,
+					       unsigned long len)
 {
 	return false;
 }
