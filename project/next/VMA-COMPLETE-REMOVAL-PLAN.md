@@ -1070,3 +1070,12 @@ bprm->p 平移）。真路径绿之前, sec 34 的"VMA-less"结论作废（
 改为: "VMA-less 形态代码落地但由回退臂承载"）。
 预演片本身 = 本周期正资产（回退计数器 + WARN 已入树, 浸泡周
 从此积累真删除证据）。
+
+## 36. 真路径调试轮（2026-10-10）: 三修后 VMA-less 活, sweep 覆盖 10/222 为余项
+
+三修: NULL 参写 / VMA-less GUP 补 mmap 读锁（2893 rwsem 断言 /
+get_user_pages_remote 契约与窗口臂 RCU 内部无关）/ sweep 的 -ENOENT
+分支语义（窗区已释+终栈无 region 时必须落到 adopt）。
+现状: stack_fallbacks=0 全 exec 真路径 + 探针/smoke/vma_gate=0/
+零 trap; stack_adopts=10/222 = sweep 触发/覆盖面分析为下一迭代
+（exec 完成缝的 sweep 时点 vs 212 个 mm 的栈 VMA 状态）。
