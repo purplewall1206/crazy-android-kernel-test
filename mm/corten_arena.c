@@ -238,6 +238,7 @@ static atomic_long_t corten_nr_brk_funnel;	/* MODE-mm brk funnel VMAs */
 static atomic_long_t corten_nr_sweep_stack_adopts; /* V2.2 stack adoptions */
 static atomic_long_t corten_nr_special_shadows; /* V3 special shadows */
 static atomic_long_t corten_nr_vma_gate;	/* V5 create_vma census */
+static atomic_long_t corten_nr_auto_legacy_class; /* V5 classify-legacy */
 static atomic_long_t corten_nr_stack_grows;	/* V2.2 extend-arm services */
 /* Ledger #2: the arena_stats per-mm registry walks' truncation count
  * (declared here for the stats render; the walker lives at the shrinker
@@ -3572,6 +3573,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_special_shadows));
 	seq_printf(m, "vma_gate            %ld\n",
 		   atomic_long_read(&corten_nr_vma_gate));
+	seq_printf(m, "auto_legacy_class   %ld\n",
+		   atomic_long_read(&corten_nr_auto_legacy_class));
 	seq_printf(m, "stack_grows         %ld\n",
 		   atomic_long_read(&corten_nr_stack_grows));
 	seq_printf(m, "auto_fallbacks      %ld\n",
@@ -6803,8 +6806,10 @@ int corten_arena_auto_mmap_route(struct mm_struct *mm, struct file *file,
 	}
 
 	class = corten_arena_auto_mmap_classify(*flagsp, !!file);
-	if (class == CORTEN_MMAP_LEGACY)
+	if (class == CORTEN_MMAP_LEGACY) {
+		atomic_long_inc(&corten_nr_auto_legacy_class);
 		return 0;
+	}
 
 	/* V-A.2a: the mmap_region() verification checklist (see
 	 * corten_auto_validate()).  A refusal degrades to the legacy
