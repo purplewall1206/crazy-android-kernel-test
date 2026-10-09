@@ -185,10 +185,30 @@ fence 重设计（legacy 域全部置于窗口上方 [64T,128T), loader/栈碰�
   未触发转换, adopts 保持 1）; (b) 转换后 dhcpcd 的 DHCP 腿死
   （eth0 无地址 = fork-mirror × 手术迁移锚交互, 已文档化）。
 
-**下一轮入点**: (1) 栈臂两线 → 默认开; (2) V4 共享臂
-（MAP_SHARED 文件写穿 + 匿名/shmem）; (3) V5 总闸（create_vma
-WARN+拒绝, /proc smaps region 化, special 影子豁免口径）;
-(4) VI VMA 层删除 + J6 终账。
+**栈臂两线进展（2026-10-09 午, 779d610 + d4a1ee8）**:
+- **线 1（探测非普适触发）闭合**: 根因 = below-start 触发器在真实
+  boot 从不发生（增长的构成 = exec 的内核态 copy_strings 的 !user
+  扩展 + 已扩展 VMA 内的惰性页 fault）→ 触发器改为"最近 VMA 即
+  栈则收编"（首内页 fault 即转换）; 探测修 mas_walk+mas_next →
+  mas_find(addr+1)（NULL walk 后 mas 未定位, mas_next 答空）并补
+  rcu 读侧。r19 实证: 全员普适触发。
+- **线 2（转换后 fork 断链）受控复现 + 窄化**: debug 过滤参数
+  corten_stack_convert_comm= 单进程转换（dhcpcd adopts=1 → 网断面
+  死）; 对照（零转换）干净 → 破坏者 = 转换本身。KUnit 锚
+  （fork_migrated, 147/0/3 过）: 真 sweep 栈臂 + 真 mirror 复制臂
+  全对（wrprotect/子 RO/meta 重放/INV7 双侧净）→ 断点在 fault
+  上下文转换的实机序列: **stage=2 异态**（记录 [cd9000,top) 已覆盖
+  fault 地址 cf8000, arena lookup 却未命中 = 记录范围与帧注册
+  不一致）。
+- **默认开判据**: stage-2 异态修复 + alone-boot 对照
+  （臂开+零转换 SSHOK）与全转换 boot 双绿。
+- 可复现配方: corten_stack_extend=on corten_stack_convert_comm=dhcpcd
+  → 串口手动 dhcpcd -d eth0 → segfault at sp 下方 + stage=2 打印。
+
+**下一轮入点**: (1) stage-2 帧注册一致性与 fault 上下文转换收口
+→ 栈臂默认开; (2) V4 共享臂（MAP_SHARED 文件写穿 + 匿名/shmem）;
+(3) V5 总闸（create_vma WARN+拒绝, /proc smaps region 化, special
+影子豁免口径）; (4) VI VMA 层删除 + J6 终账。
 （boot4 vs boot5 崩点不同）。
 
 ## 7c. 深夜推进（00:15）: exec 已深入至 wl 采纳策略洞
