@@ -489,3 +489,15 @@ SR MISS 身份探针捕获: 解退的"非成员"帧 0x800002 持有**邻居窗�
 **V4.3 切片精确入口**: auto FILE 臂摆放改占用感知的帧分配（或
 adopt 路径加重叠检查）→ 两层修复（DENYWRITE 白名单 + EOF 再
 派发）其上落地。探针留树。
+
+## 7t. V4.3 第二刀（e641dbe）: 哨兵障碍硬化保留, co-registration 机制更深
+
+global placer 的 sentinel 帧障碍落地（claimed cpu-local 段尾巴不得
+二次发放 = 真实硬化保留）。两层叠加 boot 仍死（同签名: SR MISS
+f=0x800002 + init 读零页死）—— **co-registration 的机制深于摆放
+障碍**: 完整 console（v49-boot.log）与两层文本在 v43-dbg2 分支。
+**已排除**: funnel 端 hint 碰撞（占用检查封死）、global placer 的
+sentinel 发放（障碍封死）、slot 机械本身（WARN = 诚实拒绝）。
+**剩余嫌疑面**: mag 的 recycle 路径 va_free 块簿记、seg_claim 的
+marker-jump 边界、或 bprm/exec 上下文的特殊 declare 形状 ——
+需插桩迭代轮（每 boot 一印, 3-4 轮预算）。
