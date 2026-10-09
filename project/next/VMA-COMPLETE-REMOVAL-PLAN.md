@@ -1079,3 +1079,13 @@ get_user_pages_remote 契约与窗口臂 RCU 内部无关）/ sweep 的 -ENOENT
 现状: stack_fallbacks=0 全 exec 真路径 + 探针/smoke/vma_gate=0/
 零 trap; stack_adopts=10/222 = sweep 触发/覆盖面分析为下一迭代
 （exec 完成缝的 sweep 时点 vs 212 个 mm 的栈 VMA 状态）。
+
+## 37. Sweep 缝迁移（2026-10-10）: exec_mmap → 传输臂尾; 覆盖 23/316 余面在案
+
+时序定案: begin_new_exec 先于 setup_arg_pages——exec_mmap 的 sweep
+永不见终载体（历史采纳的是手工临时载体; 窗口形彼时零 VMA）。
+corten_arena_entry_sweep_locked() = 调用者持写锁的 sweep 体, 挂
+窗口形尾部（expand 后）。
+旗标 on: stack_adopts 10→23/316; 余面 = 分类/采纳的剩余拒绝
+（下一迭代: adopt_stack 内部失败面 vs classify 拒绝面的分形计数）。
+探针/smoke/vma_gate=0/零 trap 全绿。
