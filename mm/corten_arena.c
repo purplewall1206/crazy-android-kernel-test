@@ -2970,7 +2970,10 @@ int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
 int corten_arena_stack_calibrate(struct mm_struct *mm, unsigned long start,
 				 unsigned long end)
 {
+	struct corten_mm_state *state;
 	struct corten_arena *ar;
+	unsigned long old_start, old_end, f;
+	int ret = 0;
 
 	mmap_assert_write_locked(mm);
 	rcu_read_lock();
@@ -2984,11 +2987,51 @@ int corten_arena_stack_calibrate(struct mm_struct *mm, unsigned long start,
 		percpu_ref_put(&ar->active);
 		return -EPERM;
 	}
+	if (READ_ONCE(ar->start) == start && READ_ONCE(ar->end) == end) {
+		percpu_ref_put(&ar->active);
+		return 0;	/* extents already true */
+	}
+
+	/* G3' frame registration (plan sec 26): the frames the
+	 * calibration ADDS to the extent join the per-mm registry via
+	 * the declare body's publish primitive, so lookups across the
+	 * grown range hit.  The extent rewrite joins the registry's own
+	 * lock (it used to be a bare pair of WRITE_ONCEs).  Failure
+	 * unwinds the inserted frames and restores the extent.
+	 */
+	state = smp_load_acquire(&mm->corten_state);
+	old_start = READ_ONCE(ar->start);
+	old_end = READ_ONCE(ar->end);
+
+	mutex_lock(&state->ctl_lock);
 	WRITE_ONCE(ar->start, start);
 	WRITE_ONCE(ar->end, end);
+	for (f = start >> PMD_SHIFT; f <= ((end - 1) >> PMD_SHIFT); f++) {
+		if (f >= (old_start >> PMD_SHIFT) &&
+		    f <= ((old_end - 1) >> PMD_SHIFT))
+			continue;	/* covered before */
+		ret = corten_slot_insert(&state->arenas, f, ar);
+		if (ret)
+			break;
+	}
+	if (ret) {
+		unsigned long uf;
+
+		for (uf = start >> PMD_SHIFT; uf < f; uf++) {
+			if (uf >= (old_start >> PMD_SHIFT) &&
+			    uf <= ((old_end - 1) >> PMD_SHIFT))
+				continue;
+			corten_slot_remove(&state->arenas, uf, ar, false);
+		}
+		WRITE_ONCE(ar->start, old_start);
+		WRITE_ONCE(ar->end, old_end);
+	}
+	mutex_unlock(&state->ctl_lock);
+
 	percpu_ref_put(&ar->active);
-	atomic_long_inc(&corten_nr_adopt_calibrations);
-	return 0;
+	if (!ret)
+		atomic_long_inc(&corten_nr_adopt_calibrations);
+	return ret;
 }
 
 /*
