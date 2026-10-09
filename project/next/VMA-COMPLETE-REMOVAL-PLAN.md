@@ -161,10 +161,34 @@ fence 重设计（legacy 域全部置于窗口上方 [64T,128T), loader/栈碰�
   （现窗域门控, 全窗布局下堆在窗内应已命中 —— 53 次漏斗 = 命中后
   的 degrade 形状, 下轮读 degrade 原因桶）。
 
-**下一轮入点**: (1) 栈臂 pieces/ownership 全程走查 → 默认开;
-(2) brk_funnel 的 53 次 degrade 原因分桶 → wl_brk=0;
-(3) V3 special 臂（sweep_skip_special→0, 特殊页 region 形）;
-(4) V4 共享臂; (5) V5 总闸; (6) VI VMA 层删除 + J6 终账。
+**V2.1 + V3 落点（2026-10-09 晨, f7408e7 + eb68326）**:
+- **V2.1 wl_brk=0 达成**: brk_funnel 49-54/boot 的根因 = 全窗布局把
+  exec 影像（连带堆）放在经典域, 而 brk declare 路由的调用门与内部
+  门双重窗域门控 → 恒走漏斗。双门去窗口化（路由 MODE 门 + C1 守卫
+  = 安全边界, 与去窗准入路由同形）。boot: brk_funnel 49→0,
+  bss_legacy=0（零 degrade）。
+- **V3 wl_special=0（census）达成**: vdso/vvar 家族在 arch 装载点
+  影子收编（corten_arena_special_shadow, map_vdso 持 mmap_write）:
+  记录拿 range（census+路由）, VMA 留树作 arch fault 载体, fault 经
+  CORTEN_RF_SPECIAL_SHADOW 的 tier-1 门跳 tier-3 放行给特殊 .fault。
+  vclock VMA 保持原形（VM_PFNMAP 无 struct page）。sweep 分类器:
+  精确跨距的 VMA = ours（部分覆盖仍走诚实 -EEXIST 桶, W-7 契约）。
+  boot: special_shadows=352=176 exec×2, sweep_skip_special=0。
+- **栈臂 r10 NULL 解引用根因修复**（19f646a）: 反汇编对齐
+  （[ar+0xb0]&0x40 = GROWSDOWN 位测试）→ 缺失的无记录 bail
+  （!user miss + convert=false 直达 start 读）。同轮修复: 双转换点
+  的 freed-VMA 读（adopt 成功即释放 VMA）、探测换 mas_walk+mas_next
+  （lock_vma_under_rcu 只答覆盖范围, 零转换）、内核态 miss 提前返
+  （不进写锁）。**首次硬件成功转换**（dhcpcd adopt+grow 存活;
+  legacy 形 fork-exec 测试过）。
+- **栈臂默认开前剩两线**: (a) 探测非普适触发（python 6000 帧增长
+  未触发转换, adopts 保持 1）; (b) 转换后 dhcpcd 的 DHCP 腿死
+  （eth0 无地址 = fork-mirror × 手术迁移锚交互, 已文档化）。
+
+**下一轮入点**: (1) 栈臂两线 → 默认开; (2) V4 共享臂
+（MAP_SHARED 文件写穿 + 匿名/shmem）; (3) V5 总闸（create_vma
+WARN+拒绝, /proc smaps region 化, special 影子豁免口径）;
+(4) VI VMA 层删除 + J6 终账。
 （boot4 vs boot5 崩点不同）。
 
 ## 7c. 深夜推进（00:15）: exec 已深入至 wl 采纳策略洞
