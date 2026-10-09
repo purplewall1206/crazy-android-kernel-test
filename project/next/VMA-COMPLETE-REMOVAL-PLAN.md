@@ -501,3 +501,15 @@ sentinel 发放（障碍封死）、slot 机械本身（WARN = 诚实拒绝）�
 **剩余嫌疑面**: mag 的 recycle 路径 va_free 块簿记、seg_claim 的
 marker-jump 边界、或 bprm/exec 上下文的特殊 declare 形状 ——
 需插桩迭代轮（每 boot 一印, 3-4 轮预算）。
+
+## 8. funnel 普查定量化（096b784）: 库装载高速路 = 2103 VMA/boot
+
+auto_legacy_class 计数器落地: 每 boot **2103 个形状被 classify
+拒绝为 LEGACY**（MAP_DENYWRITE 库装载），vs 2397 个 auto_mmaps
+成功路由。validate/file_may 门零拒绝。**2103 = V4.3 file 臂修复
+可捕获的精确 VMA 人口** —— 每进程 ~8 个库映射 × 257 进程。
+
+**VMA 移除链位置**:
+- **已 region 化**: 栈(默认开 189 adopts) + brk + special 影子 + shared + mlock pin + auto file (2397 auto_mmaps)
+- **漏斗 resident**: 库装载高速路 2103 VMA（V4.3 file 臂 serve 修复的精确目标）
+- **剩余链**: V4.3 file 臂 serve 修复 → 库高速路 2103 VMA 收编 → V5 拒绝翻转（census 真零前置已满足: vma_gate=0）→ smaps region 化 → VI 删除 + J6
