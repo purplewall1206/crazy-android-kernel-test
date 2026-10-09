@@ -627,3 +627,30 @@ corten=off, P1 腿）与豁免族（special 影子/fork 拷贝）的承重面,
 删除 = 逐钩重接线后删码的迁移工程（每片: 重定向调用者 → grep 门 →
 boot+smoke 验收）, 非机械 rm。片2 起每钩一评: vma.c 三钩
 （munmap guard / V5 gate / placement backstop）为活动接线非残留。
+
+## 14. VI 片2（d24a26bc, 2026-10-10）: 三钩裁决 = 活动接线; 零调用者死 API 清除
+
+**三钩逐评（本片主交付）**: munmap guard / V5 gate / placement
+backstop 三钩体在 mm/corten_arena.c, vma.c 内仅 1-2 行调用点——是
+arena 进 VMA 路径的接线, 非可删残留; 删任一调用即断其路由。裁决:
+保留（无重接线目标）。
+
+**死 API 普查法**（后续片的方法论）: 头文件 61 符号 × 全树调用
+计数 + vma.c 49 静态 × 引用计数 + 死宏扫。清除两面:
+vma_iter_bulk_alloc（全树引用=1, 纯定义, 8 行）+
+corten_refuse_vma_funnel（=n stub 唯一踪迹, r43/r44 首试遗留被
+corten_gate_vma_link 取代, 10 行）。合计 −18 LoC, grep 门零残留。
+
+**验收**: 构建绿 + SSHOK + 探针双 PASS + smoke 3/3 + vma_gate=0 +
+零 trap。
+
+**smoke 挂具硬化**（bench 侧, 非树内）: 全局台账比对降为 advisory
+（本 guest 常驻 nginx workers/redis 重试, exec/die 摆幅超容差）,
+泄漏裁决改内核真相计数器 free_untracked/desc_alloc_fail 非零即
+FAIL——判据更强（计数器是分配/释放路径的结构性账, 列表行数是
+观察面）。
+
+**VI 余量更新**: 内核侧承重面的删除 = 逐钩迁移工程（定性不变,
+sec 13）, 死 API 普查法是其第一类可机械推进面; E2 二期探针退役
+（五组 24 项, e2-phase2-ruling-proposal.md）为另一轨道, 用户裁决
+门控（浸泡前置）。下片候选: mmap.c/memory.c/rmap 同法普查。
