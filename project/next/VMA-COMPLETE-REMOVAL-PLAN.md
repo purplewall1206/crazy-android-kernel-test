@@ -774,3 +774,21 @@ legacy 域 declare 路径）与 G3（setup_arg_pages 按 MODE 分流: 四
 路由合成）= 专项 boot-debug 轮（每轮旗标 on 形, init exec = 首个
 检验者）; G4（adopt 缝去重）随 G2。验收序后续步: 旗标 on boot +
 smoke + efsmoke + 登录面 → 电池 on 形。
+
+## 19. S2 G2 落地（2026-10-10）: 旗标 on 形全链路绿
+
+**G2 = V5 门的 VM_STACK_INCOMPLETE_SETUP 豁免**: bprm 栈的瞬态
+内核构造形态（create_init_stack_vma 链接, setup_arg_pages 清旗,
+entry-sweep 栈臂随后整转）按 special 族逻辑豁免。G4 = adopt 缝
+现行为, 无需独立臂。
+
+**旗标 ON 验收（sec 17 序第二步）全绿**: SSHOK（完整 exec 链）+
+armed 印 + 探针双 PASS + smoke PASS + **bprm_mode_enters=245=
+exec_default_enters=stack_adopts**（三重一致: 幂等进场/无双
+MODE/adopt 全覆盖）+ vma_gate=0 + 零 trap + 零拒绝事件。
+
+**登录面**: SSH 本身即（sshd 全链 exec）。旗标 on 形 = G1+G2+G4
+齐备的可用形态; G3（setup_arg_pages 逐操作 region 化）为增量迁移,
+不阻塞旗标 on 绿态——每迁移一操作, 载体 VMA 的角色缩一分, 全数
+迁移后 S3（create_init_stack_vma/relocate_vma_down 退役 +
+vma_exec.c 全删）解锁。
