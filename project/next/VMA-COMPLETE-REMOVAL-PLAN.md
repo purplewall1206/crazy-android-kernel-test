@@ -1034,7 +1034,8 @@ opt-in 期间**保留**。relocate_vma_down 经回退臂仍可达 = 非死码。
 + ≥1 周旗标 on 浸泡无事件 → 默认 on → 回退臂降级为 WARN-unreachable
 → 删除 → vma_exec.c 163 LoC 兑现）。非本次。
 
-**电池 on 形（进行中）**: s3-battery 驱动派生（P2/P3 append 加
-corten_stack_s2=on; 镜像副本 s3bat.qcow2——浸泡 VM 持 v1base2 写锁
-的教训入账: 并发电池必须用副本）。P1 绿（smoke 26/26）; P2 旗标 on
-BOOT_OK + exec_default_enters=263, in-guest LTP 构建中。
+**电池 on 形三腿绿（COMPLETE 06:22）**: P1(mode=0) smoke 26/26
++ FAILED_RC=0; **P2(旗标 on, journald masked) metis checksum =
+基线 2d383eeed4ceb73b 精确同值** + smoke 26/26×2 + gate_pass=1;
+P3(旗标 on journal face) BOOT_OK + DONE。旗标 on 栈面在全系统
+电池下与基线行为无差——S3-A 的运行时等价成立。
