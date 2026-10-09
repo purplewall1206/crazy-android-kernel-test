@@ -1578,7 +1578,9 @@ G3 = 增量迁移余量, 全数迁移后 S3 解锁（vma_exec.c 全删）。
 G2' 首项验证（plan sec 22, 667a0c18）: 共生 declare = 序翻转
 （declare-first, shadow 片即 bprm->vma, overlaps 只查注册表）+
 adopt 缝 extent 校准为同片强制（防栈生长分叉）; G2' 五步执行序
-入册。VI 的前置现已全部就位（V5 翻转武装态零触发 +
+入册; API 图完成（plan sec 23, 7a86c320）: 内部全参 declare 为
+static 需导出包装, ar->vma = 载体句柄, ⑤ 校准点钉在 sweep 的
+EEXIST 分支——下会话按图直工。VI 的前置现已全部就位（V5 翻转武装态零触发 +
 smaps region 化已落地 + funnel 普查对齐），下一会话可安全启动
 逐文件删除（vma.c→mmap.c VMA 臂→vma.h→dup_mmap→/proc 渲染→
 memory.c→rmap→tools/testing/vma + grep 零依赖门）。
