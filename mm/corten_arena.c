@@ -12020,12 +12020,6 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		return 0;
 
 	addr = address & PAGE_MASK;
-	/* Stack-area faults only: the whole 0x7ff-prefix domain is the
-	 * legacy stack neighbourhood in this layout, and the print is
-	 * the arm's entry witness (the r17 round flew blind without it).
-	 */
-	if (addr >= 0x7ff000000000)
-		pr_info_ratelimited("corten-dbg: sg ENTRY a=%lx\n", addr);
 	/* The all-window layout keeps the stack in the legacy domain
 	 * above the window: a window-domain miss is never stack growth
 	 * (the parked/hole shape answers through the maperr arm).
@@ -12107,12 +12101,6 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		if (convert && corten_stack_convert_comm[0] &&
 		    strcmp(current->comm, corten_stack_convert_comm))
 			convert = false;
-		if (addr >= 0x7ff000000000)
-			pr_info_ratelimited("corten-dbg: sg PROBE a=%lx v=%px [%lx,%lx) cv=%d\n",
-					    addr, vma,
-					    vma ? vma->vm_start : 0,
-					    vma ? vma->vm_end : 0,
-					    convert);
 		rcu_read_unlock();
 		if (!convert)
 			return 0;
@@ -12200,6 +12188,31 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 			if (!ret) {
 				atomic_long_inc(&corten_nr_stack_grows);
 				ret = 1;
+			}
+		} else {
+			struct corten_frame_bucket *b =
+				corten_slot_bucket(slot);
+			struct corten_arena *one = slot;
+			unsigned int j;
+
+			pr_info("corten-dbg: sg HEAL-SKIP f=%lx slot=%px sent=%d nr=%d\n",
+				f, slot, slot == &corten_va_reserve_sentinel,
+				b ? b->nr : -1);
+			if (b) {
+				for (j = 0; j < b->nr; j++)
+					pr_info("  m[%u]=%px [%lx,%lx) rf=%x mm=%px\n",
+						j, b->rec[j],
+						READ_ONCE(b->rec[j]->start),
+						READ_ONCE(b->rec[j]->end),
+						READ_ONCE(b->rec[j]->rflags),
+						READ_ONCE(b->rec[j]->mm));
+			} else {
+				pr_info("  one=%px [%lx,%lx) rf=%x mm=%px idle=%d\n",
+					one, READ_ONCE(one->start),
+					READ_ONCE(one->end),
+					READ_ONCE(one->rflags),
+					READ_ONCE(one->mm),
+					READ_ONCE(one->idle));
 			}
 		}
 		goto out;
@@ -12325,8 +12338,9 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 	goto out;
 out:
 	if (ret != 1)
-		pr_info_ratelimited("corten-dbg: stack_grow refuse stage=%d addr=%lx old=%lx\n",
-				    dbg, addr, old_start);
+		pr_info_ratelimited("corten-dbg: stack_grow refuse stage=%d addr=%lx old=%lx end=%lx\n",
+				    dbg, addr, old_start,
+				    stack ? READ_ONCE(stack->end) : 0);
 	mmap_write_unlock(mm);
 	return ret;
 }
