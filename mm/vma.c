@@ -13,10 +13,9 @@
 
 #include "vma.h"
 #ifdef CONFIG_CORTEN_MM_ARENA
-/*
- * Included only for kernel builds: tools/testing/vma compiles this file
- * in userspace against vma_internal.h, where the arena layer does not
- * exist.  Every arena use site below sits inside the same ifdef.
+/* VI (J6): the userspace harness (the removed tools/testing/vma dir)
+ * that used to compile this file against its own stub vma_internal.h
+ * is gone -- the arena layer exists only in kernel builds now.
  */
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
