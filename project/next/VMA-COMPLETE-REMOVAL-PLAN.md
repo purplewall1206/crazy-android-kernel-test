@@ -1039,3 +1039,15 @@ opt-in 期间**保留**。relocate_vma_down 经回退臂仍可达 = 非死码。
 基线 2d383eeed4ceb73b 精确同值** + smoke 26/26×2 + gate_pass=1;
 P3(旗标 on journal face) BOOT_OK + DONE。旗标 on 栈面在全系统
 电池下与基线行为无差——S3-A 的运行时等价成立。
+
+## 34. S3-A path A step 2（2026-10-10）: copy_strings 完全 VMA-less 绿
+
+窗口 declare 预声明全量 MAX_ARG_STRLEN extent（novma=true 无载体,
+bprm->vma NULL, extent 走新 bprm.wstack_* 字段）; get_arg_page 的
+maybe_expand/acct 守卫跳过（region 预覆盖全部可写地址, 无需生长）;
+传输臂改 bprm->wstack_end 检测 + locked_expand 共享尾。
+旗标 on: init 全程 VMA-less copy_strings + 探针/smoke/
+242=242=242 + vma_gate=0 + 零 trap 全绿。
+**至此 exec 栈的 bprm 相（创建/拷贝/搬运）零 VMA 载体**; 终栈仍
+G2' 共生形（载体 = fs/exec.c 之后的 GUP/funnel 面）。vma_exec.c
+的退役 = 旗标默认化浸泡周后随回退臂删除。
