@@ -1080,6 +1080,18 @@ long corten_arena_test_fork_skips(void);
  */
 void corten_exec_default_test_set(bool on);
 
+/* KUnit only: the V2.2 converted-fork anchor drives the mirror's real
+ * copy arm over a surgery-migrated window.
+ */
+int corten_arena_test_fork_copy_ptes(struct mm_struct *dst_mm,
+				     struct mm_struct *src_mm,
+				     unsigned long addr, unsigned long win_end);
+
+/* KUnit only: the conversion's real arm. */
+int corten_arena_test_sweep_adopt_anon(struct mm_struct *mm,
+				       struct corten_mm_state *state,
+				       struct vm_area_struct *vma);
+
 /* M4.T1 magazine hooks (mm/corten_arena_test.c): allocate @len
  * (PMD-rounded) from @cpu's segment of @mm's magazine (caller holds the
  * mm's mmap_lock for writing), probe a frame's reserve marker, and read

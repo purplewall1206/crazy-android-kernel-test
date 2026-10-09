@@ -8019,6 +8019,7 @@ void corten_exec_default_test_set(bool on)
 {
 	corten_mode_default_param = on;
 }
+
 #endif
 
 int corten_arena_mode_enter(struct mm_struct *mm)
@@ -8964,6 +8965,28 @@ out_seq:
 	mmu_notifier_invalidate_range_end(&range);
 	return ret;
 }
+
+#ifdef CONFIG_CORTEN_MM_ARENA_KUNIT_TEST
+/* KUnit only: the V2.2 converted-fork anchor drives the mirror's real
+ * copy arm over a surgery-migrated window.
+ */
+int corten_arena_test_fork_copy_ptes(struct mm_struct *dst_mm,
+				     struct mm_struct *src_mm,
+				     unsigned long addr, unsigned long win_end)
+{
+	return corten_arena_fork_copy_ptes(dst_mm, src_mm, addr, win_end);
+}
+
+/* KUnit only: the conversion's real arm (the sweep's anon adopt) for
+ * the converted-fork anchor.
+ */
+int corten_arena_test_sweep_adopt_anon(struct mm_struct *mm,
+				       struct corten_mm_state *state,
+				       struct vm_area_struct *vma)
+{
+	return corten_sweep_adopt_anon(mm, state, vma);
+}
+#endif
 
 static int corten_arena_fork_copy_window(struct mm_struct *mm,
 					 unsigned long addr,
@@ -11908,6 +11931,10 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
  * plan's V2.2 slice).
  */
 static bool corten_stack_extend_param;
+/* The debug conversion filter: empty = convert all; else only the
+ * named comm converts (the r19 round's single-process isolation).
+ */
+static char corten_stack_convert_comm[16];
 
 static int __init corten_stack_extend_setup(char *s)
 {
@@ -11916,6 +11943,15 @@ static int __init corten_stack_extend_setup(char *s)
 	return 1;
 }
 __setup("corten_stack_extend=", corten_stack_extend_setup);
+
+static int __init corten_stack_convert_comm_setup(char *s)
+{
+	if (s && *s)
+		strscpy(corten_stack_convert_comm, s,
+			sizeof(corten_stack_convert_comm));
+	return 1;
+}
+__setup("corten_stack_convert_comm=", corten_stack_convert_comm_setup);
 
 #define CORTEN_STACK_SCAN_FRAMES 16
 
@@ -12062,6 +12098,9 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		convert = vma && (vma->vm_flags & VM_GROWSDOWN) &&
 			  vma->vm_end - addr <=
 			  task_rlimit(current, RLIMIT_STACK);
+		if (convert && corten_stack_convert_comm[0] &&
+		    strcmp(current->comm, corten_stack_convert_comm))
+			convert = false;
 		if (addr >= 0x7ff000000000)
 			pr_info_ratelimited("corten-dbg: sg PROBE a=%lx v=%px [%lx,%lx) cv=%d\n",
 					    addr, vma,

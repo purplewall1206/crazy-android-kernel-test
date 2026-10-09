@@ -11125,6 +11125,115 @@ static int corten_arena_test_fork_copy_swap_pte(struct kunit *test,
 	return 0;
 }
 
+/*
+ * V2.2: the converted-stack fork anchor -- the mirror over a
+ * surgery-migrated window.  The conversion (the sweep's anon arm)
+ * detaches the resident folios' legacy anchors (mapping=NULL) and
+ * hands them to the metadata world; the fork's copy arm must
+ * wrprotect the parent, dup the child's mapcount and rss family, and
+ * replay the metadata so the child's first write COWs -- the dhcpcd
+ * privsep shape at single-window scale.
+ */
+static void corten_arena_test_op_sweep_fault(struct corten_arena_test_op *o);
+
+static void corten_arena_test_fork_migrated(struct kunit *test)
+{
+	struct corten_arena_test_mm *t;
+	struct mm_struct *mm, *child;
+	struct vm_area_struct *vma;
+	struct corten_arena_test_op o;
+	struct corten_pte_meta m;
+	pte_t *ptep, pte;
+	spinlock_t *ptl;
+	pmd_t *pmdp;
+	unsigned long a;
+	long violated, checked;
+	unsigned long base = CORTEN_ARENA_TEST_BASE + PAGE_SIZE;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "fork mirror requires corten=on");
+
+	t = corten_arena_test_mm_setup(test);
+	mm = t->mm;
+
+	/* The funnel-shape stack: a PMD-sized grow-down VMA at START2
+	 * (frame-disjoint from the harness BASE range) with two
+	 * write-faulted resident pages -- the established resident-stock
+	 * shape (the funnel wrote plain PTEs with the legacy anon
+	 * anchor).
+	 */
+	base = CORTEN_ARENA_TEST_START2;
+	vma = corten_arena_test_mkvm(mm, base, base + PMD_SIZE,
+				     CORTEN_ARENA_TEST_FLAGS_OK |
+				     VM_GROWSDOWN);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vma);
+	a = base;
+	o = (struct corten_arena_test_op){
+		.mm = mm, .fn = corten_arena_test_op_sweep_fault,
+		.addr = a, .len = 2 * PAGE_SIZE, .flags = 0x1,
+	};
+	KUNIT_ASSERT_EQ(test, corten_arena_test_run_op_full(test, &o), 0);
+
+	/* The conversion: the REAL end-to-end path -- the entry sweep's
+	 * stack arm (the sweep creates the registry the A5 contract
+	 * leaves lazy, classifies the grow-down VMA into the stack arm,
+	 * and the arm runs the sweep's anon machinery: the picks, the
+	 * surgery, the finish windows).
+	 */
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, base));
+	{
+		struct corten_arena *ar = corten_arena_lookup(mm, base);
+
+		KUNIT_EXPECT_NOT_NULL(test, ar);
+		KUNIT_EXPECT_TRUE(test,
+				  READ_ONCE(ar->rflags) &
+				  CORTEN_RF_GROWSDOWN);
+	}
+
+	/* The surgery's mark: the metadata says MAPPED. */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, base, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+
+	/* The fork window (dup_mmap() shape): no child piece -- the
+	 * auto contract (the copy arm pte_allocs the child's tables).
+	 */
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_fork_copy_ptes(child, mm,
+							 base & PMD_MASK,
+							 (base & PMD_MASK) +
+							 PMD_SIZE), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+
+	/* The parent's translations wrprotected, the child's RO copies
+	 * installed, the metadata replayed on both sides.
+	 */
+	pmdp = corten_arena_test_pmd(mm, base);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, base, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get(ptep);
+	KUNIT_EXPECT_TRUE(test, pte_present(pte));
+	KUNIT_EXPECT_FALSE(test, pte_write(pte));
+	pte_unmap_unlock(ptep, ptl);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(mm, base, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, base, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+
+	/* INV7 both sides. */
+	corten_arena_test_inv7_walk(mm, &violated, &checked);
+	KUNIT_EXPECT_EQ(test, violated, 0);
+	corten_arena_test_inv7_walk(child, &violated, &checked);
+	KUNIT_EXPECT_EQ(test, violated, 0);
+	KUNIT_EXPECT_GE(test, checked, 1);
+
+	mmput(child);
+}
+
 /* Fork after a swap-out (the T2 replay-arm gap the M6.T3 pressure
  * channel closes): the child mirrors the CORTEN_SWAPPED slot with the
  * entry payload, both sides stay INV7-clean and both slots count in
@@ -17170,6 +17279,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_shrink_aging_two_pass),
 	KUNIT_CASE(corten_arena_test_shrink_rotation),
 	KUNIT_CASE(corten_arena_test_fork_swapped),
+	KUNIT_CASE(corten_arena_test_fork_migrated),
 	KUNIT_CASE(corten_arena_test_fork_f2_gate),
 	KUNIT_CASE(corten_arena_test_fork_drain_leak),
 	KUNIT_CASE(corten_arena_test_unshare_pin),
