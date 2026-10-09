@@ -14447,8 +14447,16 @@ static int corten_bss_declare1(struct mm_struct *mm, unsigned long addr,
 
 	if (!READ_ONCE(mm->corten_mode) || !corten_enabled_static())
 		return 1;
-	if (!len || addr < CORTEN_MODE_WINDOW_START ||
-	    addr + len > CORTEN_MODE_WINDOW_END)
+	/* V2.1: the gate is the MODE mm, not the window domain -- the
+	 * all-window layout (a8392b7) places the exec image (and with it
+	 * the heap right after the bss) in the classic domain, where the
+	 * window gate degraded every brk to the funnel (the brk_funnel
+	 * census: 49-54 per boot).  The declare's C1 is the guard: a
+	 * range with live content refuses (-EBUSY) and the funnel keeps
+	 * the shape -- the same safety boundary the de-windowed
+	 * admission route runs on.
+	 */
+	if (!len)
 		return 1;
 	if (mm->def_flags & VM_LOCKED)
 		return 1;

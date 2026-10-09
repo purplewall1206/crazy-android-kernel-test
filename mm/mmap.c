@@ -1573,9 +1573,12 @@ int vm_brk_flags(unsigned long addr, unsigned long request, vm_flags_t vm_flags)
 	 * two compares.  mmap_write is held (the route's writer
 	 * convention).
 	 */
-	if (addr >= CORTEN_MODE_WINDOW_START &&
-	    addr + len <= CORTEN_MODE_WINDOW_END &&
-	    corten_bss_declare_route(mm, addr, len, vm_flags) == 0) {
+	/* V2.1: the call gate is the route's own MODE check -- the
+	 * all-window layout puts the heap in the classic domain, so the
+	 * window range test here degraded every brk to the funnel
+	 * (brk_funnel 49-54 per boot).
+	 */
+	if (corten_bss_declare_route(mm, addr, len, vm_flags) == 0) {
 		mmap_write_unlock(mm);
 		userfaultfd_unmap_complete(mm, &uf);
 		return 0;
