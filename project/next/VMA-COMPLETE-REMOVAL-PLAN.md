@@ -975,3 +975,12 @@ release 源窗 region → 逐页 copy → 目标 declare（G2' 共生形）→
 下会话施工序: 传输工具 + KUnit 锚 → 窗口 declare 接入
 create_init_stack_vma（旗标 on 临时栈入窗）→ setup_arg_pages 的
 传输臂替换 relocate → 两函数退役 → vma_exec.c 全删。
+
+## 30. 传输工具 + KUnit 锚落地（2026-10-10）
+
+corten_arena_stack_transfer() + 独立锚（MODE test mm 双窗区, 已知
+内容经窗口 GUP 臂安装——copy_strings 同一服务面——传输后断言内容
+回读/洞为零/源 region 释放）。corten=on KUnit pass:27 fail:0 无
+lockdep。**下一步**: create_init_stack_vma 窗口 declare 接入 +
+setup_arg_pages 传输臂（替换 relocate）→ 两函数退役 → vma_exec.c
+全删。
