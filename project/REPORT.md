@@ -1556,7 +1556,11 @@ VI 片3（无删除, 普查交付）: mmap.c/memory.c/rmap.c 三文件
 （rmap.h 全符号 + 167 静态 + 死宏 + mm.h mmap/vma 面）普查判定
 零死 API 面——核心文件每符号皆有调用者, grep 零依赖门对三文件
 成立; =on 浸泡 boot 启动（E2 排期前置时钟起算, 每小时巡检自动化）,
-plan sec 15。VI 的前置现已全部就位（V5 翻转武装态零触发 +
+plan sec 15。
+VI 片4（7b4ecee）: vma_exec.c 两函数迁移裁决 = 每次 exec 关键路径
+承重（时序核实 + exec.c 守卫注释硬化）, 今日可删为零; 删除路径 =
+栈面完整转换三序列件 S1-S2-S3 入册（S3 退役即 vma_exec.c 全删
+163 LoC）; insert_vm_struct 两调用者核实合法; plan sec 16。VI 的前置现已全部就位（V5 翻转武装态零触发 +
 smaps region 化已落地 + funnel 普查对齐），下一会话可安全启动
 逐文件删除（vma.c→mmap.c VMA 臂→vma.h→dup_mmap→/proc 渲染→
 memory.c→rmap→tools/testing/vma + grep 零依赖门）。
