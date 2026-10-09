@@ -205,10 +205,22 @@ fence 重设计（legacy 域全部置于窗口上方 [64T,128T), loader/栈碰�
 - 可复现配方: corten_stack_extend=on corten_stack_convert_comm=dhcpcd
   → 串口手动 dhcpcd -d eth0 → segfault at sp 下方 + stage=2 打印。
 
-**下一轮入点**: (1) stage-2 帧注册一致性与 fault 上下文转换收口
-→ 栈臂默认开; (2) V4 共享臂（MAP_SHARED 文件写穿 + 匿名/shmem）;
-(3) V5 总闸（create_vma WARN+拒绝, /proc smaps region 化, special
-影子豁免口径）; (4) VI VMA 层删除 + J6 终账。
+**r23-r24 三度硬化 + 剩余断点精化（2026-10-09 午后）**:
+自 dhcpcd 单进程复现连出三修: (1) 帧自愈（extend 落入已覆盖但未
+注册帧时注册并服务 —— 同帧步零插值使漏注册在下降中存活）;
+(2) frozen 可见性（栈扫描对 fork mirror 窗内 frozen 记录不可见,
+与 parked 同待 —— extend 不得变异 mirror 正读的 start）;
+(3) 探测 rcu 读侧 + mas_find 原语（r12）。剩余断点精化: 转换后
+dhcpcd 仍死于一次栈写 —— fault 地址位于记录覆盖范围内、lookup 却
+未命中且服务未达（stage=0 + 覆盖几何并存）= fault 上下文转换的
+更深层状态交互。对照面保持绿: alone-boot（臂开+零转换 SSHOK）、
+KUnit converted-fork 锚、全转换 mass boot 的断链 = 同族。
+
+**下一轮入点**: (1) 栈臂 fault 上下文收口（stage=0+覆盖几何 异态
+与 frozen/mirror 交互的精确化）→ 默认开; (2) V4 共享臂（MAP_SHARED
+文件写穿 + 匿名/shmem）; (3) V5 总闸（create_vma WARN+拒绝,
+/proc smaps region 化, special 影子豁免口径）; (4) VI VMA 层删除
++ J6 终账。
 （boot4 vs boot5 崩点不同）。
 
 ## 7c. 深夜推进（00:15）: exec 已深入至 wl 采纳策略洞
