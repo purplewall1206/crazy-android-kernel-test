@@ -910,3 +910,19 @@ xarray（生长范围 lookup 命中, 漏斗回退消除）; extent 重写入
 ctl_lock（原裸 WRITE_ONCE 对）; 失败回滚插帧+还原 extent。
 旗标 on: adopt_calibrations=239 + 探针/smoke/vma_gate=0/零 trap 全绿。
 **G3' 余项**: legacy 域 region debugfs 渲染 → S3。
+
+## 27. G3' 收官（2026-10-10）: 渲染"缺口"为验证假象; S3 真门槛修正
+
+**渲染补页 = 无需代码**: arenas 渲染器走全量 obs 列表、无域过滤
+——99 行 legacy 域 region 正常渲染（[7ffa…,7ffc…] anon +
+GROWSDOWN rflags）。先前判"缺口"的 awk 模式错了（extent 列以
+`[` 开头, `^7ff` 永不命中）——观测面本就完整。
+
+**G3' 三旁路 + 帧注册 + 渲染核验 = 全部收口**。旗标 on 本 boot:
+探针双 PASS + smoke PASS + adopt_calibrations=255 + vma_gate=0。
+
+**S3 真门槛修正（诚实账）**: create_init_stack_vma/relocate_vma_down
+在旗标 on 形仍全程承重（载体 VMA 由手工路径创建, copy_strings 的
+GUP 面需要它; ① 的 declare 是后置共生非替代）。S3（vma_exec.c
+全删）解锁条件 = **copy_strings 的 arena 侧重实现**（arg/env 拷贝
+脱离 VMA 载体）——这是栈面的最后一大件, 完成后两函数方真不可达。
