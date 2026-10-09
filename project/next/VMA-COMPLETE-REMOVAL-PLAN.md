@@ -225,11 +225,29 @@ rf=0x60 GROWSDOWN|ADOPTED, 已注册于自身帧），死亡 fault 落在
 即得 [start,end) × fault addr 配对。另见 V3 阴影的 rss 记账漂移
 （+2 FILE/−2 ANON 每退出, WARN 级）待查。
 
-**下一轮入点**: (1) 栈臂 end 边界服务未落地异态（refuse+end 配对
-首捕 → 服务路径/边界语义收口）→ 默认开; (1b) V3 阴影 rss 记账;
-(2) V4 共享臂（MAP_SHARED 文件写穿 + 匿名/shmem）; (3) V5 总闸
-（create_vma WARN+拒绝, /proc smaps region 化, special 影子豁免
-口径）; (4) VI VMA 层删除 + J6 终账。
+**r29-r32 深挖 + V4.1 落地（2026-10-09 傍晚）**:
+- **V3 竞态根因与修复**: 阴影 declare→marker 窗让首批特殊范围
+  fault（glibc 时钟读）以零页 FRESH 服务并置 MAPPED（vDSO 内容
+  损坏 + 退出 -2 ANONPAGES 的来源）。修 = SPECIAL_SHADOW 标记随
+  declare 的 rf_birth 出生即带（declare_locked 加参数, 十调用点
+  机械传 0）。
+- **栈臂 frozen-wait**: r23 的 scan 跳 frozen 本身即回归 —— 冻结窗
+  内 fault 被让给漏斗（无 VMA = SIGSEGV）。修 = scan 不跳 frozen
+  （extend 的 mmap_write 对 dup_mmap 天然阻塞, 冻结后服务）+
+  自愈对"槽内即本记录且覆盖"返回 covered。
+- **V4.1 wl_shared census=0 达成**: 共享形状（vm_file 非空, 含
+  shmem）经 FILE 臂收编 —— pagecache 锚即写穿, 多映射一致性走
+  pagecache + W1.b inode 登记簿, 全程无 COW。taxonomy/mixed-frame
+  重锚（共享标本收编, 混帧出口双侧 PTE 引用经 arena zap 归还）。
+  boot: sweep_skip_shared=0。KUnit 208/0/9（interlock 偶发）。
+- **栈臂剩余断点**: dhcpcd 单进程转换已过 SIGSEGV（frozen-wait 后
+  干净早退, eth0 仍未配置）—— 剩余切片需客户机内进程调试
+  （strace/gdb）, 串口速率诊断已到极限。alone-boot 对照持续绿。
+
+**下一轮入点**: (1) 栈臂单进程切片（客户机内 strace/gdb 定位干净
+早退点）→ 默认开; (1b) V3 阴影 rss 漂移余量核验; (2) V4.2 共享
+匿名/shmem 臂余量 + mlock pin 臂; (3) V5 总闸; (4) VI VMA 层删除
++ J6 终账。
 （boot4 vs boot5 崩点不同）。
 
 ## 7c. 深夜推进（00:15）: exec 已深入至 wl 采纳策略洞
