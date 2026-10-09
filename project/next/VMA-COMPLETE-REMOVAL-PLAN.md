@@ -717,3 +717,38 @@ stack_adopts=351/boot 全覆盖）。
 = 运行中浸泡内核的编译产物）。
 
 **E2 浸泡**: port 10034 持续运行, 每小时巡检 automation 积累时长。
+
+## 17. S2 实施规格（2026-10-10）: setup_arg_pages 的 arena 侧重实现
+
+**可行性核查（本片完成）**: setup_arg_pages 的四个操作全部已有
+arena 路由对应物——
+1. copy_strings 的 arg/env 页拷贝 = GUP 面已承接: arena gup 的
+   check_vma_flags 仿真（corten_arena.c:5495 起, FOLL_ANON/perm
+   按 region record 判定）即 vma-less 拷贝的服务面;
+2. mprotect_fixup（exec 权限+def_flags）= mprotect_routes 臂
+   （444/boot 在跑）改写 may_prot;
+3. relocate_vma_down（下移）= 无独立 region-move 路由, 用
+   release+redeclare+单内容页拷贝合成（此时栈仅 1 页临时页）;
+4. expand_stack_locked（rlim 扩展）= V4.3 栈臂的 extension 路由
+   （stack_grows/stack_adopts 已在）。
+
+**四个胶水点（S2 的实际工作量）**:
+- G1: bprm_mm_init 进 MODE（提前于 exec_mmap 的默认进场; 新 mm
+  纯净, 进场无豁免面问题）;
+- G2: create_init_stack_vma 的 arena 化 = declare 1 页 GROWSDOWN
+  region（保 bprm->vma 结构为 fs/exec.c 指针载体, 不入树——
+  bprm->vma 的解引用面需逐一排查: copy_strings/页数统计/acct）;
+- G3: setup_arg_pages 分流: MODE mm 走 arena 臂（G2 的四路由合成）,
+  非 MODE 走现路径（=off 世界零改动）;
+- G4: exec 完成缝去重: 栈臂的 entry-sweep adopt 见 region 已在 =
+  no-op（stack_adopts 不再计此形）。
+
+**发布纪律（r43/r44 教训: 此路径杀过 init）**: S2 全臂锁在
+`corten_stack_s2=on`（默认 off）旗标后; 验收 = 旗标 off 三腿电池绿
+（零语义增量）→ 旗标 on boot + smoke + efsmoke + 登录面 → 电池
+on 形 → 再议默认。
+
+**S3 前置**: S2 旗标 on 形全绿后, create_init_stack_vma/
+relocate_vma_down 在 =on 世界不可达（WARN 备）→ 退役 =
+vma_exec.c 全删（163 LoC）+ vma.h 声明清理; =off 世界仍走现路径,
+vma_exec.c 是否随 CONFIG 分离由 S3 时树态定。
