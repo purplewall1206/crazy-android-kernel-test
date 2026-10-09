@@ -423,3 +423,17 @@ mlock()/munlock() 系统调用在 region 范围上的路由（现 legacy 路径�
 非豁免形状: 豁免 = special 影子 VMA + VM_CORTEN 阴影片）+
 /proc smaps region 化 + 总闸长跑零触发验收; 其后 VI VMA 层删除
 + J6 终账。
+
+## 7o. V5.1 落地（6f12aa1）: create_vma 普查闸 = 零
+
+vma_link 的非豁免臂（VM_CORTEN 阴影片 / special 影子族 / dup_mmap
+fork 拷贝之外）按 MODE mm 计数: **=on boot 读数 vma_gate=0** ——
+MODE mm 内每个 create_vma 都是自有/阴影/fork 拷贝: V1-V4 机械覆盖
+全部形状空间, **V5 拒绝翻转已证明安全**（随 smaps region 化同片
+执行）。WARN 首事件即响（boot-loud）。
+
+**V5 段余量**: 拒绝翻转 + /proc smaps region 化 + 总闸长跑零触发
+验收。**其后 = VI**: VMA 层逐文件删除（vma.c→mmap.c VMA 臂→
+vma.h→dup_mmap→/proc maps VMA 渲染→memory.c VMA 路径→rmap VMA
+位→tools/testing/vma）+ grep 零依赖门 + J6 终账（VMA 层 13,408
++ E1/E3 残面 + 白名单机械出账）。
