@@ -437,3 +437,15 @@ MODE mm 内每个 create_vma 都是自有/阴影/fork 拷贝: V1-V4 机械覆盖
 vma.h→dup_mmap→/proc maps VMA 渲染→memory.c VMA 路径→rmap VMA
 位→tools/testing/vma）+ grep 零依赖门 + J6 终账（VMA 层 13,408
 + E1/E3 残面 + 白名单机械出账）。
+
+## 7p. 拒绝翻转首试回退（r43-r44）: funnel 形状普查是前置
+
+拒绝翻转首 boot 即杀 init: **init 的 hinted 文件 mmap（2.4MB, 经
+ksys_mmap_pgoff）被 auto 路由拒绝（decline 原因未录）→ 漏斗 →
+ENOSYS → exec 死**。in_execve 豁免不足（exec_mmap 后已清）。
+回退 = WARN-only 普查态（vma_link 门保持, r42 已证绿）;
+corten_refuse_vma_funnel 函数保留待接。
+
+**下轮首题**: auto 路由的 **decline-reason 计数器**（哪个门拒绝了
+init 的 hinted 文件 mmap）—— 路由应答 vs 漏斗服务的形状普查对齐
+后, 拒绝翻转才有正确的豁免面。smaps region 化同片。

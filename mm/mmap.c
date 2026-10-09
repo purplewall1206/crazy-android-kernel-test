@@ -618,6 +618,14 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 		if (cret == 1)
 			return addr;
 	}
+
+	/* V5: the funnel-leg census.  The vma_link gate reads zero for
+	 * the exempt filters, but the funnel leg itself still serves
+	 * shapes (the r43 boot's init killed by the premature flip:
+	 * init's hinted file mmap the auto route declines).  The
+	 * refusal flip waits for the funnel-shape census (this counter
+	 * with the decline reasons).
+	 */
 #endif
 
 	if (flags & MAP_LOCKED)

@@ -7971,6 +7971,27 @@ __setup("corten_mode_default=", corten_mode_default_setup);
  * nor a fork copy (dup_mmap context: vma_vm != current->mm).  The
  * census feeds the V5 refusal flip; the WARN is once-per-boot loud.
  */
+/* V5: the refusal flip.  True = the MODE mm's funnel leg must refuse
+ * loudly (-ENOSYS at do_mmap, before mmap_region): the census proved
+ * nothing reaches it on a healthy boot, so any hit is a new shape
+ * needing a route -- the disclosure, never a silent degradation.
+ */
+bool corten_refuse_vma_funnel(struct mm_struct *mm)
+{
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+		return false;
+	/* The exec machinery's own funnel shapes (setup_arg_pages' stack
+	 * mmap, the bprm-adjacent maps) are legitimate: the exec context
+	 * hands the stock to the sweep/stack arms after the switch.
+	 * The r43 boot's first refusal killed pid 1's exec exactly here.
+	 */
+	if (current->in_execve)
+		return false;
+	atomic_long_inc(&corten_nr_vma_gate);
+	WARN_ON_ONCE(atomic_long_read(&corten_nr_vma_gate) == 1);
+	return true;
+}
+
 void corten_note_vma_gate(struct mm_struct *mm, struct vm_area_struct *vma)
 {
 	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
