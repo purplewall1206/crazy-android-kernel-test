@@ -14106,7 +14106,7 @@ static void corten_arena_test_sweep_skip_taxonomy(struct kunit *test)
 	struct mm_struct *mm = t->mm;
 	struct corten_arena_test_op o;
 	struct file *file;
-	long sspec, sshared, swin;
+	long sspec, swin;
 	loff_t pos = 0;
 	u64 pat = 0;
 	struct vm_area_struct *vma;
@@ -14150,22 +14150,31 @@ static void corten_arena_test_sweep_skip_taxonomy(struct kunit *test)
 	mmap_write_unlock(mm);
 
 	sspec = corten_arena_test_sweep(3);
-	sshared = corten_arena_test_sweep(4);
 	swin = corten_arena_test_sweep(5);
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
-	/* V2.2: the grow-down specimen no longer skips -- it adopts as
-	 * the grow-down region form (the VMA leaves the tree, the record
-	 * carries the marker).  The shared and window specimens skip.
+	/* V2.2 + V4.1: the grow-down specimen adopts as the grow-down
+	 * region form and the SHARED FILE specimen adopts through the
+	 * file arm (the pagecache anchor is the write-through) -- both
+	 * VMAs leave the tree.  The window specimen skips.
 	 */
-	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(4), sshared + 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(5), swin + 1);
 	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(3), sspec);
 
-	/* The tree kept the two skips; the stack specimen's VMA left. */
+	/* The tree kept the window skip; the stack and shared
+	 * specimens' VMAs left.
+	 */
 	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_START2));
-	KUNIT_EXPECT_NOT_NULL(test,
-			      vma_lookup(mm, CORTEN_ARENA_TEST_NOWHERE));
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_NOWHERE));
 	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm, CORTEN_ARENA_TEST_WIN));
+
+	/* The shared specimen's region form: the file record exists. */
+	{
+		struct corten_arena *ar =
+			corten_arena_lookup(mm, CORTEN_ARENA_TEST_NOWHERE);
+
+		KUNIT_EXPECT_NOT_NULL(test, ar);
+		KUNIT_EXPECT_NOT_NULL(test, READ_ONCE(ar->rfile));
+	}
 
 	/* The stack's region form: the record exists at the swept range
 	 * and carries the growth marker.
@@ -14840,13 +14849,20 @@ static void corten_arena_test_sweep_mixed_frame_exit(struct kunit *test)
 
 	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter_sweep(mm), 0);
 
-	/* The private side adopted; the co-tenant VMA untouched. */
-	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(1), fadopts + 1);
+	/* V4.1: both sides adopt (the private through the anon-classified
+	 * file arm, the shared co-tenant through the same file arm -- the
+	 * pagecache anchor is the write-through).  Both VMAs leave the
+	 * tree; each file's registry carries its own record.
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_sweep(1), fadopts + 2);
 	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_NOWHERE);
 	KUNIT_ASSERT_NOT_NULL(test, ar);
-	KUNIT_EXPECT_NOT_NULL(test, vma_lookup(mm,
-					       CORTEN_ARENA_TEST_NOWHERE +
-					       PAGE_SIZE));
+	ar = corten_arena_test_region_of(mm, CORTEN_ARENA_TEST_NOWHERE +
+					 PAGE_SIZE);
+	KUNIT_ASSERT_NOT_NULL(test, ar);
+	KUNIT_EXPECT_NULL(test, vma_lookup(mm,
+					   CORTEN_ARENA_TEST_NOWHERE +
+					   PAGE_SIZE));
 	KUNIT_EXPECT_EQ(test, corten_arena_test_registry_size(mapping), 1);
 
 	fpriv = filemap_get_folio(mapping, 0);
@@ -14869,7 +14885,8 @@ static void corten_arena_test_sweep_mixed_frame_exit(struct kunit *test)
 	 * page's PTE reference (mapcount 0) BEFORE the pagecache layer
 	 * ever sees the eviction -- the pre-fix wholesale skip left it
 	 * mapped forever (mapcount 1, rss leaked, the later evict BUG).
-	 * The co-tenant's page rides the legacy unmap of its tree VMA.
+	 * The co-tenant's page (V4.1: its own region form) returns its
+	 * PTE reference through the arena exit zap the same way.
 	 */
 	mmput(mm);
 	kunit_release_action(test, corten_arena_test_mmput_action, mm);

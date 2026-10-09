@@ -7765,7 +7765,15 @@ static int corten_sweep_classify(struct mm_struct *mm,
 	if (vma->vm_userfaultfd_ctx.ctx)
 		return CORTEN_SWEEP_SKIP_UFFD;
 #endif
-	if (flags & VM_SHARED)
+	/* V4.1: the SHARED shapes adopt through the FILE arm -- every
+	 * real shared mapping carries a file (MAP_SHARED|ANONYMOUS is
+	 * shmem-backed, vm_file non-NULL), and the file region's
+	 * pagecache anchor IS the write-through: the multi-mapper
+	 * consistency rides the pagecache and the W1.b inode registry,
+	 * no COW anywhere.  The skip stays for the file-less shapes
+	 * (none today; the defensive residue).
+	 */
+	if ((flags & VM_SHARED) && !vma->vm_file)
 		return CORTEN_SWEEP_SKIP_SHARED;
 
 	if (vma->vm_file) {
