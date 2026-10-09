@@ -654,3 +654,29 @@ FAIL——判据更强（计数器是分配/释放路径的结构性账, 列表�
 sec 13）, 死 API 普查法是其第一类可机械推进面; E2 二期探针退役
 （五组 24 项, e2-phase2-ruling-proposal.md）为另一轨道, 用户裁决
 门控（浸泡前置）。下片候选: mmap.c/memory.c/rmap 同法普查。
+
+## 15. VI 片3（2026-10-10）: mmap.c/memory.c/rmap.c 普查判定 = 零死 API 面
+
+**普查执行（片2 方法, 三文件全覆盖）**:
+- include/linux/rmap.h 全符号 × 全树调用计数: **零零调用者符号**
+- 三文件 167 个静态函数 × 引用计数: **全活**（最小引用 >1）
+- mm/internal.h + rmap.h 死宏扫: NODE_RECLAIM_SOME/SUCCESS 为
+  vm.node_reclaim_mode 的 ABI 文档值（保留）; 余全活
+- include/linux/mm.h 的 mmap/vma 面 × 零外部调用者初筛 5 命中,
+  逐一核实全为排除法误报（interval_tree 宏生成/调用者在被排除的
+  mmap.c/memory.c 内/跨架构使用者 arm64+x86+powerpc）
+
+**判定**: 核心三文件被上游重度审计, 每 declared 符号皆有调用者——
+VI 的机械死码面在这三文件**为零**。其删除只能走逐钩迁移工程
+（sec 13/14 定性）或上游同步。grep 零依赖门对三文件**成立**
+（无未引用面即无未声明依赖）。
+
+**E2 前置推进**: =on 浸泡 boot 启动（v1base2 @ 片2 内核,
+port 10034, /tmp/e2soak-boot.log）, 每小时巡检自动化挂载
+（soak-hourly.log, vma_gate/auto_fallbacks/rearm_failed/
+eagain_leaked/desc_alloc_fail/free_untracked/drain_timeout 七计数
++ trap 计数, 异常 ALERT）。浸泡 ≥1 天满即满足 E2 探针退役
+（五组 24 项）的排期前置, 届时按 e2-phase2-ruling-proposal.md
+呈用户裁决。
+
+**本片无删除**: 普查即交付（三文件清洁的证据面）+ E2 时钟启动。
