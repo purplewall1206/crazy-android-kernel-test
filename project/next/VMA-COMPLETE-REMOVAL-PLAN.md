@@ -956,3 +956,22 @@ arena 臂**只服务 [16T,64T)**。bprm 栈（legacy 域）的 GUP 永走树
 体; copy_strings 直写 region 页）; relocate 的窗口→legacy 内容
 搬运（页粒度拷贝, 32 页上限）; acct_arg_size 的 region 页数记账
 替代; 最终栈的 G2' 共生 declare（已有）。
+
+## 29. S3-A 第一步实施核查（2026-10-10）: 向上传输是真实第一块
+
+**依赖链曝光**: VMA-less copy_strings ⟹ arena-GUP ⟹ 窗口域 ⟹ 临时
+栈在窗（16T）⟹ 终栈在 legacy（140T）= **向上搬运**——
+`relocate_vma_down` 是 DOWN-only（temp 在 final 之上的前提）。
+窗口形不可复用现有 relocate; 必须走 copy-based 传输（32 页循环:
+源页在窗 region, 目标页分配于 legacy 终栈, copy_page + 双侧 PTE
+安装, bprm->p/mm->arg_start 指针面按 window→final 差值平移）。
+
+**第一块可落地件 = 传输工具**（可独立验证: KUnit 锚 或 旗标 on
+guest 探针; 不依赖 exec 全链）:
+`corten_arena_stack_transfer(mm, src_start, src_end, dst_start)`:
+release 源窗 region → 逐页 copy → 目标 declare（G2' 共生形）→
+返回目标 extent。**novma=true 无载体形在此件之后**（copy_strings
+的 bprm->vma=NULL 改造依赖传输先通）。
+下会话施工序: 传输工具 + KUnit 锚 → 窗口 declare 接入
+create_init_stack_vma（旗标 on 临时栈入窗）→ setup_arg_pages 的
+传输臂替换 relocate → 两函数退役 → vma_exec.c 全删。
