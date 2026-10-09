@@ -11992,7 +11992,13 @@ static struct corten_arena *corten_stack_scan(struct mm_struct *mm,
 		struct corten_arena *m = corten_slot_lowest(
 			xa_load(&state->arenas, (addr >> PMD_SHIFT) + i));
 
-		if (!m || READ_ONCE(m->idle))
+		/* Frozen (the fork's mirror window) records are as
+		 * invisible as parked ones: the extend must never mutate
+		 * a start the mirror is reading (the r23 stage-2
+		 * anomaly's shape -- the lookup's frozen-miss made the
+		 * arm re-enter on a record the mirror was copying).
+		 */
+		if (!m || READ_ONCE(m->idle) || READ_ONCE(m->frozen))
 			continue;
 		return m;
 	}
@@ -12178,8 +12184,24 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 
 	old_start = READ_ONCE(stack->start);
 	if (addr >= old_start) {
-		/* not a below-start miss */
-		dbg = 2;
+		/* The record covers @addr but the lookup missed it:
+		 * the start descended into a frame whose slot was never
+		 * registered (the same-frame extend steps insert
+		 * nothing, so a missed registration survives).  Self-
+		 * heal: register the frame and let the fault serve --
+		 * the fork mirror walks [start, end) and must see a
+		 * fully-registered range (the r23 dhcpcd shape).
+		 */
+		unsigned long f = addr >> PMD_SHIFT;
+		void *slot = xa_load(&state->arenas, f);
+
+		if (!slot) {
+			ret = corten_slot_insert(&state->arenas, f, stack);
+			if (!ret) {
+				atomic_long_inc(&corten_nr_stack_grows);
+				ret = 1;
+			}
+		}
 		goto out;
 	}
 	grow = (old_start - addr) >> PAGE_SHIFT;
