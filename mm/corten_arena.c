@@ -236,6 +236,7 @@ static atomic_long_t corten_nr_exec_default_enters; /* MV3.a execve default MODE
  */
 static atomic_long_t corten_nr_brk_funnel;	/* MODE-mm brk funnel VMAs */
 static atomic_long_t corten_nr_sweep_stack_adopts; /* V2.2 stack adoptions */
+static atomic_long_t corten_nr_special_shadows; /* V3 special shadows */
 static atomic_long_t corten_nr_stack_grows;	/* V2.2 extend-arm services */
 /* Ledger #2: the arena_stats per-mm registry walks' truncation count
  * (declared here for the stats render; the walker lives at the shrinker
@@ -3531,6 +3532,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_brk_funnel));
 	seq_printf(m, "stack_adopts        %ld\n",
 		   atomic_long_read(&corten_nr_sweep_stack_adopts));
+	seq_printf(m, "special_shadows     %ld\n",
+		   atomic_long_read(&corten_nr_special_shadows));
 	seq_printf(m, "stack_grows         %ld\n",
 		   atomic_long_read(&corten_nr_stack_grows));
 	seq_printf(m, "auto_fallbacks      %ld\n",
@@ -7701,6 +7704,20 @@ static int corten_sweep_classify(struct mm_struct *mm,
 		return CORTEN_SWEEP_SKIP_STACK;	/* non-x86 growth: legacy */
 	if (flags & VM_GROWSDOWN)
 		return CORTEN_SWEEP_ADOPT_STACK;
+	/* V3: a VMA EXACTLY spanned by a region record (the special-
+	 * mapping shadows -- the mixed world's identity) is ours: never
+	 * counted, never adopted.  A partial overlap is NOT ours: the
+	 * adopt attempt runs and the declare's -EEXIST lands in its
+	 * honest bucket (the W-7 frame-share contract).
+	 */
+	{
+		struct corten_arena *sh = corten_region_lookup(mm,
+							       vma->vm_start);
+
+		if (sh && READ_ONCE(sh->start) == vma->vm_start &&
+		    READ_ONCE(sh->end) == vma->vm_end)
+			return -1;
+	}
 	if (arch_vma_name(vma) || vma_is_special_mapping_family(vma))
 		return CORTEN_SWEEP_SKIP_SPECIAL;
 	/* The W-3 brk route owns the heap: the first post-entry GROW
@@ -7919,6 +7936,47 @@ static int __init corten_mode_default_setup(char *s)
 	return 1;
 }
 __setup("corten_mode_default=", corten_mode_default_setup);
+
+/*
+ * V3: shadow-adopt a special-mapping VMA (the vdso/vvar family).  The
+ * record takes the range for the census and the routes; the VMA stays
+ * in the tree as the arch fault carrier (the special pages' content
+ * lives behind the special .fault) and the fault path passes through
+ * (the CORTEN_RF_SPECIAL_SHADOW tier-1 gate).  Fail-open: a refused
+ * declare leaves the plain special VMA, the historical shape.
+ */
+void corten_arena_special_shadow(struct mm_struct *mm,
+				 struct vm_area_struct *vma)
+{
+	struct corten_mm_state *state;
+	struct corten_arena *ar = NULL;
+
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode) || !vma)
+		return;
+
+	mmap_assert_write_locked(mm);
+
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state) {
+		state = corten_arena_state_create(mm);
+		if (!state)
+			return;
+	}
+
+	if (corten_arena_declare_locked(mm, state, vma->vm_start,
+					vma->vm_end - vma->vm_start,
+					corten_arena_prot_from_vma(vma),
+					NULL, 0, true, true, &ar))
+		return;
+
+	if (ar) {
+		mutex_lock(&state->ctl_lock);
+		WRITE_ONCE(ar->rflags,
+			   READ_ONCE(ar->rflags) | CORTEN_RF_SPECIAL_SHADOW);
+		mutex_unlock(&state->ctl_lock);
+	}
+	atomic_long_inc(&corten_nr_special_shadows);
+}
 
 /**
  * corten_exec_default_enter - the exec_mmap() gate (fs/exec.c calls this
@@ -9418,8 +9476,16 @@ bool corten_arena_fault_owned(struct corten_arena *ar, struct mm_struct *mm,
 	 * construction), so the zero-walk fast path is pure metadata for
 	 * both shapes (an auto arena has no anchor object at all).
 	 */
-	if (addr >= READ_ONCE(ar->start) && addr < READ_ONCE(ar->end))
+	if (addr >= READ_ONCE(ar->start) && addr < READ_ONCE(ar->end)) {
+		/* V3: a special-mapping shadow never serves -- the
+		 * special pages' content lives behind the arch's .fault;
+		 * tier 3's covering-VMA test hands the fault to the
+		 * legacy funnel.
+		 */
+		if (READ_ONCE(ar->rflags) & CORTEN_RF_SPECIAL_SHADOW)
+			goto tier3;
 		return true;
+	}
 
 	/* Tier 2: the frame's residency -- a punched or tearing-down
 	 * arena's slot is not this arena's any more.
@@ -9438,6 +9504,7 @@ bool corten_arena_fault_owned(struct corten_arena *ar, struct mm_struct *mm,
 	/* Tier 3: rare -- the surviving piece must still cover the
 	 * address (the tree walk the old tier 2 ran).
 	 */
+tier3:
 	vma = NULL;
 	rcu_read_lock();
 	vma = corten_vma_find(mm, addr, addr + 1);

@@ -172,6 +172,15 @@ enum corten_region_class {
  * contract: within RLIMIT_STACK, clear of the nearest lower stock).
  */
 #define CORTEN_RF_GROWSDOWN	_BITUL(6)	/* V2.2 stack region growth */
+/*
+ * CORTEN_RF_SPECIAL_SHADOW (V3): the record shadows a special-mapping
+ * VMA (the vdso/vvar family) that stays in the tree as the arch fault
+ * carrier.  The fault path's tier-1 bounds check must skip these --
+ * the special pages' content lives behind the special .fault, not in
+ * the FRESH anon arm -- and fall to tier 3, whose covering-VMA test
+ * (no VM_CORTEN) hands the fault to the legacy funnel.
+ */
+#define CORTEN_RF_SPECIAL_SHADOW _BITUL(7)	/* V3 special mapping shadow */
 
 /*
  * pagemap entry bits and the PSS fixed-point shift, shared between the
@@ -1022,6 +1031,16 @@ int corten_prctl_mode(unsigned int op, unsigned long arg3,
 void corten_exec_default_enter(struct mm_struct *mm);
 
 /*
+ * V3: shadow-adopt a special-mapping VMA (the vdso/vvar family) --
+ * called by the arch vdso install (arch/x86/entry/vdso/vma.c) under
+ * mmap_write.  The record takes the range for the census and the
+ * routes; the VMA stays as the arch fault carrier and the fault path
+ * passes through to the special .fault.  =n: no-op.
+ */
+void corten_arena_special_shadow(struct mm_struct *mm,
+				 struct vm_area_struct *vma);
+
+/*
  * S8 observability renderers, called by the debugfs files in mm/corten.c
  * (mm/corten_arena.c owns the arena data, corten.c owns the directory).
  */
@@ -1394,6 +1413,11 @@ static inline int corten_prctl_mode(unsigned int op, unsigned long arg3,
 				    unsigned long arg4, unsigned long arg5)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline void corten_arena_special_shadow(struct mm_struct *mm,
+					       struct vm_area_struct *vma)
+{
 }
 
 static inline void corten_exec_default_enter(struct mm_struct *mm)

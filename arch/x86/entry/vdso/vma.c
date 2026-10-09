@@ -20,6 +20,7 @@
 #include <asm/vgtod.h>
 #include <asm/proto.h>
 #include <asm/vdso.h>
+#include <linux/corten_arena.h>
 #include <asm/tlb.h>
 #include <asm/page.h>
 #include <asm/desc.h>
@@ -168,6 +169,7 @@ static int map_vdso(const struct vdso_image *image, unsigned long addr)
 		ret = PTR_ERR(vma);
 		goto up_fail;
 	}
+	corten_arena_special_shadow(mm, vma);
 
 	vma = vdso_install_vvar_mapping(mm, addr);
 	if (IS_ERR(vma)) {
@@ -175,6 +177,13 @@ static int map_vdso(const struct vdso_image *image, unsigned long addr)
 		do_munmap(mm, text_start, image->size, NULL);
 		goto up_fail;
 	}
+
+	/* V3: the vdso text and the vvar shadow-adopt (the records take
+	 * the census and the routes; the VMAs stay as the arch fault
+	 * carriers).  The vclock VMA stays plain -- its VM_PFNMAP pages
+	 * have no struct page for the metadata world.
+	 */
+	corten_arena_special_shadow(mm, vma);
 
 	vma = _install_special_mapping(mm,
 				       VDSO_VCLOCK_PAGES_START(addr),
