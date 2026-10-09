@@ -11852,6 +11852,29 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		m = fresh;
 	}
 
+	/* V4.3: the past-EOF re-dispatch.  A FILE_MAPPED slot past the
+	 * file's last page is, by the mmap contract, ZERO-FILLED on
+	 * reads and PRIVATE ANONYMOUS on writes (the loader's
+	 * memsz > filesz is by construction, the BSS tail).  This check
+	 * runs at DISPATCH time -- after the synthesis -- because the
+	 * blanket FILE_MAPPED premark sets ALL slots to FILE_MAPPED
+	 * regardless of their file offset, and the synthesis (the
+	 * INVALID gate) is skipped for pre-marked slots.  Without this
+	 * re-dispatch, the past-EOF reads would hit the fetch's EOF
+	 * gate and answer BUS (SIGSEGV for the library loads).
+	 */
+	if (m.state == CORTEN_FILE_MAPPED && ctx->ar->rfile) {
+		pgoff_t eof_pg = DIV_ROUND_UP(
+			i_size_read(ctx->ar->rfile->f_mapping->host),
+			PAGE_SIZE);
+		pgoff_t f_pgoff = READ_ONCE(ctx->ar->rpoff) +
+			((ctx->addr - READ_ONCE(ctx->ar->start)) >>
+			 PAGE_SHIFT);
+
+		if (f_pgoff >= eof_pg)
+			m.state = CORTEN_PRIVATE_ANON;
+	}
+
 	disp = corten_arena_dispatch(&m, ctx->write, ctx->instruction);
 	/* A pre-allocated folio means the zero page is forbidden
 	 * (mm_forbids_zeropage, OQ-6): install a real read-only page
