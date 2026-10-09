@@ -355,6 +355,17 @@ struct corten_arena {
 	u32			rflags;	  /* CORTEN_RF_* (sec 2.6) */
 	struct file		*rfile;	  /* FILE class: refcounted */
 	loff_t			rpoff;	  /* FILE class: start page offset */
+	/* V4.3: the declare-time exclusive EOF page bound -- the file's
+	 * i_size rounded to pages, sampled when the FILE stamp lands.
+	 * The EOF gates read this instead of the live i_size: a slot at
+	 * or past @reof was NEVER file-backed (the loader's memsz >
+	 * filesz BSS tail) and serves ZERO-FILLED on reads / a fresh
+	 * zeroed private page on writes per the mmap contract, while a
+	 * slot below @reof that the fetch's live-i_size gate rejects is
+	 * a truncation race and keeps the SIGBUS verdict.  FILE class
+	 * only; 0 elsewhere.
+	 */
+	pgoff_t			reof;
 	unsigned int		npieces;  /* >1 = punched multi-piece */
 	struct list_head	rpieces;  /* piece list; empty if <=1 */
 	/* MV2 W-2: the detached carrier is retired -- an auto arena is

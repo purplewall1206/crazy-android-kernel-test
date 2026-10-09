@@ -1730,6 +1730,7 @@ void corten_region_register(struct corten_arena *ar,
 		ar->rfile = NULL;
 	}
 	ar->rpoff = 0;
+	ar->reof = 0;
 	ar->npieces = 1;
 	INIT_LIST_HEAD(&ar->rpieces);
 
@@ -1769,6 +1770,11 @@ void corten_region_register_file(struct corten_arena *ar, u8 may_prot,
 
 	WRITE_ONCE(ar->rfile, get_file(file));
 	WRITE_ONCE(ar->rpoff, pgoff);
+	/* V4.3: the declare-time EOF bound -- the baseline every
+	 * in-declaration past-EOF test reads (see @reof).
+	 */
+	WRITE_ONCE(ar->reof, DIV_ROUND_UP(i_size_read(file->f_mapping->host),
+					  PAGE_SIZE));
 	WRITE_ONCE(ar->rclass, CORTEN_REGION_FILE);
 	WRITE_ONCE(ar->may_prot, may_prot | ar->prot);
 	WRITE_ONCE(ar->rflags, rflags);
@@ -8703,11 +8709,17 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	 * precede it.
 	 */
 	WRITE_ONCE(child->vma, cvma);
-	if (rfile)
+	if (rfile) {
 		corten_region_register_file(child, READ_ONCE(ar->may_prot),
 					    READ_ONCE(ar->rflags), rfile,
 					    READ_ONCE(ar->rpoff));
-	else
+		/* V4.3: the EOF bound is the parent's declare-time
+		 * sample, not a fresh i_size read -- the child's
+		 * past-EOF verdicts must answer exactly what the
+		 * parent's would have at the same instant.
+		 */
+		WRITE_ONCE(child->reof, READ_ONCE(ar->reof));
+	} else
 		corten_region_register(child, READ_ONCE(ar->rclass),
 				       READ_ONCE(ar->may_prot),
 				       READ_ONCE(ar->rflags));
@@ -11232,6 +11244,14 @@ static struct folio *corten_arena_file_fetch(struct corten_arena *ar,
 	struct folio *folio;
 	int ret;
 
+	/* V4.3: the live-i_size EOF gates in here are the TRUNCATION
+	 * verdict only.  The never-file-backed slots (at or past the
+	 * declare-time bound @reof) are pre-filtered upstream -- the
+	 * dispatch-level re-dispatch re-arms them anonymous and both
+	 * file arms serve them zero/anon without fetching -- so an
+	 * -ENODATA out of this function means the file shrank under a
+	 * slot that WAS backed at declare: the mmap contract's SIGBUS.
+	 */
 	if (pgoff >= DIV_ROUND_UP(i_size_read(mapping->host), PAGE_SIZE))
 		return ERR_PTR(-ENODATA);
 
@@ -11377,6 +11397,46 @@ static int corten_arena_file_read(struct corten_fault_ctx *ctx,
 
 	pgoff = ar->rpoff + ((ctx->addr - ar->start) >> PAGE_SHIFT);
 
+	/* V4.3: the in-declaration past-EOF serve.  A slot at or past the
+	 * declare-time EOF bound (@reof) was never file-backed (the
+	 * loader's memsz > filesz BSS tail): the mmap contract says
+	 * ZERO-FILLED, so install the shared zero page instead of
+	 * fetching -- the fetch would answer its live-i_size gate with
+	 * the BUS verdict that killed the library loads.  This is the
+	 * belt to the dispatch-level re-dispatch's braces: it fires only
+	 * when this arm was reached before the re-dispatch's stale-view
+	 * check caught the slot (a racing reof/rpoff reader).  Meta stays
+	 * FILE_MAPPED, exactly the pair the re-dispatch path leaves; a
+	 * later write fault re-arms through the same reof gate into the
+	 * anon COW arm.
+	 *
+	 * mm_forbids_zeropage re-arms via -EAGAIN: the retry's
+	 * re-dispatch (reof-gated) sends the slot through
+	 * CORTEN_DISP_MAP_ANON, which installs the real read-only page.
+	 *
+	 * A truncation race (pgoff < reof, past the live i_size) is NOT
+	 * handled here -- it keeps the fetch's BUS verdict below.
+	 */
+	if (pgoff >= READ_ONCE(ar->reof)) {
+		if (mm_forbids_zeropage(mm))
+			return -EAGAIN;
+		ret = corten_lock_range(mm, ctx->addr, PAGE_SIZE, &txn);
+		if (ret)
+			return ret == -ENOMEM ? -ENOMEM : -EAGAIN;
+		if (corten_query(&txn, ctx->addr, &m2) ||
+		    m2.state != CORTEN_FILE_MAPPED || m2.perm != m->perm) {
+			/* The slot moved while we held no lock (the
+			 * truncate demote, a COW, mprotect): the retry
+			 * re-dispatches from the query.
+			 */
+			corten_unlock(&txn);
+			return -EAGAIN;
+		}
+		ret = corten_arena_zero_page(ctx, &txn, &m2);
+		corten_unlock(&txn);
+		return ret;
+	}
+
 	folio = corten_arena_file_fetch(ar, pgoff);
 	if (IS_ERR(folio))
 		return PTR_ERR(folio);
@@ -11499,9 +11559,14 @@ out_put:
  *   the lock, then copy into the fault path's speculative allocation
  *   and commit PTE + rmap + metadata in one re-locked transaction.
  *
- * EOF on the fetch is -ENODATA (the caller's CORTEN_F_BUS): legacy
- * answers a write past i_size with do_cow_fault()'s SIGBUS, not a
- * zeroed private page.
+ * EOF splits two cases (V4.3): a slot at or past the declare-time EOF
+ * bound (@reof) was never file-backed -- the loader's memsz > filesz
+ * BSS tail -- and the mmap contract gives the write a ZERO-FILLED
+ * private page (the fetch is skipped, the fresh prealloc folio is the
+ * whole source).  A slot below @reof that the fetch's live-i_size gate
+ * rejects is a truncation race and stays -ENODATA (the caller's
+ * CORTEN_F_BUS): legacy answers a write past the shrunk i_size with
+ * do_cow_fault()'s SIGBUS, not a zeroed private page.
  */
 static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 				 const struct corten_pte_meta *m)
@@ -11509,10 +11574,10 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 	struct mm_struct *mm = ctx->mm;
 	struct corten_arena *ar = ctx->ar;
 	struct vm_area_struct *vma;
-	struct folio *folio;
+	struct folio *folio = NULL;
 	struct corten_txn txn;
 	struct corten_pte_meta m2;
-	struct page *page;
+	struct page *page = NULL;
 	pmd_t *pmdp;
 	pte_t *ptep, cur, entry;
 	spinlock_t *ptl;	/* nests below the desc write lock (R2) */
@@ -11568,17 +11633,25 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 	if (!pte_none(cur))
 		return -EAGAIN;		/* swap entry &c.: re-dispatch */
 
-	/* Fetch outside the lock, then commit under a fresh transaction. */
-	folio = corten_arena_file_fetch(ar, pgoff);
-	if (IS_ERR(folio))
-		return PTR_ERR(folio);
-	page = folio_file_page(folio, pgoff);
+	/* Fetch outside the lock, then commit under a fresh transaction.
+	 * V4.3: the in-declaration past-EOF write skips the fetch -- the
+	 * fresh prealloc folio is the whole (zero) source; see the
+	 * header comment.  @folio stays NULL for it, and every
+	 * folio_put() below is guarded on that.
+	 */
+	if (pgoff < READ_ONCE(ar->reof)) {
+		folio = corten_arena_file_fetch(ar, pgoff);
+		if (IS_ERR(folio))
+			return PTR_ERR(folio);
+		page = folio_file_page(folio, pgoff);
+	}
 
 	if (!ctx->folio) {
 		/* The prealloc was consumed by a lost race: retry
 		 * re-arms it (the fault_once epilogue).
 		 */
-		folio_put(folio);
+		if (folio)
+			folio_put(folio);
 		return -EAGAIN;
 	}
 
@@ -11628,13 +11701,18 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 	 * pte_none(), so no CPU can hold a cached translation.  MV2 W-2:
 	 * the vma-less shapes copy through folio_copy() (the cache
 	 * policy term copy_user_highpage() takes is the vma's; an arena
-	 * whitelist admits no exotic policy).
+	 * whitelist admits no exotic policy).  V4.3: the never-backed
+	 * source (@page NULL) just zeroes the private page.
 	 */
-	if (vma)
-		copy_user_highpage(folio_page(ctx->folio, 0), page,
-				   ctx->addr, vma);
-	else
-		folio_copy(ctx->folio, page_folio(page));
+	if (page) {
+		if (vma)
+			copy_user_highpage(folio_page(ctx->folio, 0), page,
+					   ctx->addr, vma);
+		else
+			folio_copy(ctx->folio, page_folio(page));
+	} else {
+		clear_highpage(folio_page(ctx->folio, 0));
+	}
 	__folio_mark_uptodate(ctx->folio);
 
 	entry = folio_mk_pte(ctx->folio,
@@ -11670,7 +11748,8 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 		 * PTE reference (no put of ctx->folio).
 		 */
 		corten_unlock(&txn);
-		folio_put(folio);
+		if (folio)
+			folio_put(folio);
 		return -EFAULT;
 	}
 
@@ -11682,14 +11761,17 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 	atomic_long_inc(&corten_nr_file_cow_copies);
 	corten_unlock(&txn);
 
-	folio_put(folio);		/* the fetch reference */
+	if (folio)
+		folio_put(folio);	/* the fetch reference; the zero
+					 * source (V4.3) holds none */
 	ctx->folio = NULL;		/* became the PTE reference */
 	return 0;
 
 out_unlock:
 	corten_unlock(&txn);
 out_put:
-	folio_put(folio);
+	if (folio)
+		folio_put(folio);
 	return ret;
 }
 
@@ -11852,26 +11934,29 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		m = fresh;
 	}
 
-	/* V4.3: the past-EOF re-dispatch.  A FILE_MAPPED slot past the
-	 * file's last page is, by the mmap contract, ZERO-FILLED on
-	 * reads and PRIVATE ANONYMOUS on writes (the loader's
-	 * memsz > filesz is by construction, the BSS tail).  This check
-	 * runs at DISPATCH time -- after the synthesis -- because the
-	 * blanket FILE_MAPPED premark sets ALL slots to FILE_MAPPED
-	 * regardless of their file offset, and the synthesis (the
-	 * INVALID gate) is skipped for pre-marked slots.  Without this
-	 * re-dispatch, the past-EOF reads would hit the fetch's EOF
+	/* V4.3: the past-EOF re-dispatch.  A FILE_MAPPED slot at or past
+	 * the file's declare-time EOF bound (@reof) is, by the mmap
+	 * contract, ZERO-FILLED on reads and PRIVATE ANONYMOUS on writes
+	 * (the loader's memsz > filesz is by construction, the BSS tail).
+	 * This check runs at DISPATCH time -- after the synthesis --
+	 * because the blanket FILE_MAPPED premark sets ALL slots to
+	 * FILE_MAPPED regardless of their file offset, and the synthesis
+	 * (the INVALID gate) is skipped for pre-marked slots.  Without
+	 * this re-dispatch, the past-EOF reads would hit the fetch's EOF
 	 * gate and answer BUS (SIGSEGV for the library loads).
+	 *
+	 * The gate is @reof, not the live i_size: a slot that WAS
+	 * file-backed at declare and has since been truncated stays
+	 * FILE_MAPPED and keeps the fetch's SIGBUS verdict (the mmap
+	 * contract for truncation); only never-backed slots re-arm.
 	 */
 	if (m.state == CORTEN_FILE_MAPPED && ctx->ar->rfile) {
-		pgoff_t eof_pg = DIV_ROUND_UP(
-			i_size_read(ctx->ar->rfile->f_mapping->host),
-			PAGE_SIZE);
+		pgoff_t reof = READ_ONCE(ctx->ar->reof);
 		pgoff_t f_pgoff = READ_ONCE(ctx->ar->rpoff) +
 			((ctx->addr - READ_ONCE(ctx->ar->start)) >>
 			 PAGE_SHIFT);
 
-		if (f_pgoff >= eof_pg)
+		if (f_pgoff >= reof)
 			m.state = CORTEN_PRIVATE_ANON;
 	}
 
