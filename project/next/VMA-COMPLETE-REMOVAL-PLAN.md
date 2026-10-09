@@ -543,3 +543,23 @@ auto file 臂 serve 正确性 = 需 kgdb/QEMU 调试级工具的专项调试轮
 2. V5 拒绝翻转（exec 豁免面设计）+ smaps region 化 + 长跑零触发
 3. VI VMA 层逐文件删除 + grep 零依赖门
 4. J6 终账入 REPORT
+
+## 11. DENYWRITE-filter boot 全绿（r63 轮, 00:00+）
+
+**首次 DENYWRITE-filter boot 全绿**: SSHOK + eth0 地址（DHCP 完成）
++ 零 trap + 8 个 dhcpcd 进程运行。dispatch-level past-EOF
+re-dispatch + mark-time EOF 再派发组合修复生效。
+
+**计数器**: auto_mmaps=2502（全 transit 高）, stack_adopts=1（栈
+conversion 工作中）, auto_legacy_class=2316（classify LEGACY 余量
+= MAP_FIXED 文件形状 + 非 DENYWRITE 非 WHITE 位形状）, vma_gate=0。
+
+**auto_legacy_class 余量的构成**: MAP_FIXED 文件形状（ld.so 段
+加载 = OQ-MV-2 设计豁免）+ 非白名单位形状。**这些 = 漏斗 VMA
+= 正常服务（页缓存内容正确）**, 不是 serve 缺陷。
+
+**V4.3 状态**: **库装载高速路（DENYWRITE 白名单形状）serve 修复
+完成**——eth0 地址 = DHCP 通过 file 臂区域形态完成。MAP_FIXED
+形状的收编 = 后续切片（OQ-MV-2 豁免消除）。
+
+**下一步**: V5 拒绝翻转 + smaps region 化 + 长跑零触发 → VI + J6。
