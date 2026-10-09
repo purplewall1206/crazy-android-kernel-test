@@ -602,3 +602,28 @@ smoke PASS + redis-server（镜像预存）为唯一失败单元。r43-r44 首�
 **链状态**: V2.1 ✓ V3 ✓ V4.1 ✓ V4.2 ✓ V4.3 EOF 收口 ✓ V5.1 普查 ✓
 **V5 翻转 ✓** 栈臂 ✓ 电池 ✓。**剩余 = VI**: VMA 层逐文件删除
 （13,408+ LoC）+ grep 零依赖门 + J6 终账。
+
+## 13. VI 启动: 片1 = tools/testing/vma 删除（a9b2407b, 2026-10-10）
+
+**删除面**: 挂具五件 3,197 LoC（vma.c 1715 + vma_internal.h 1415 +
+mmzone.h 38 + Makefile 18 + .gitignore）。它是 mm/vma.c 在用户态的
+唯一编译消费者（stub vma_internal.h）, 也是 mm/vma.c 里
+CONFIG_CORTEN_MM_ARENA ifdef 拆分存在的唯一理由。
+
+**grep 零依赖门**: 树内零引用残留（mm/vma.c 注释同步更新; 
+mm/vma_internal.h 为内核侧内部头——mm/vma.c/vma_exec.c/vma_init.c
+引用的是它, 与挂具 stub 同名不同文件, 保留）。
+
+**验收**: 构建绿（bzImage 2ea8c835）+ SSHOK + smoke PASS +
+efsmoke/efsmoke2 PASS + vma_gate=0 + 零 trap。**探针泄漏判别**:
+arena 台账探针前后 504→504（零泄漏）; smoke 台账检查的连跑抖动 =
+并发 ssh 会话自身的 MODE loader arena 搅动（每 ssh 会话即 MODE
+进程）, 挂具检查加 settle-wait 后仍受会话搅动影响——已知挂具限,
+非内核缺陷（先于本片即存在）。
+
+**VI 余量与工程定性**: 余下删除面（mm/vma.c 族 4,381 / mmap.c VMA
+臂 / dup_mmap / proc 渲染 / memory.c / rmap）= 内核遗留世界（
+corten=off, P1 腿）与豁免族（special 影子/fork 拷贝）的承重面,
+删除 = 逐钩重接线后删码的迁移工程（每片: 重定向调用者 → grep 门 →
+boot+smoke 验收）, 非机械 rm。片2 起每钩一评: vma.c 三钩
+（munmap guard / V5 gate / placement backstop）为活动接线非残留。
