@@ -740,6 +740,13 @@ int setup_arg_pages(struct linux_binprm *bprm,
 	ret = expand_stack_locked(vma, stack_base);
 	if (ret)
 		ret = -EFAULT;
+	else if (corten_stack_s2_enabled() && READ_ONCE(mm->corten_mode))
+		/* G3' (b): the extension double-write -- the record
+		 * follows the carrier immediately, not at the adopt
+		 * seam (the sweep then finds the extents already true).
+		 */
+		corten_arena_stack_calibrate(mm, vma->vm_start,
+					     vma->vm_end);
 
 out_unlock:
 	mmap_write_unlock(mm);

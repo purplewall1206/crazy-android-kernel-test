@@ -1077,6 +1077,12 @@ void corten_bprm_mode_enter(struct mm_struct *mm);
  */
 int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
 				 unsigned long len, u8 perm, u32 rflags);
+/* G3' (b): the expand-time extension double-write core (also the
+ * sweep's calibration body).  Caller holds mmap_write.  -ENOENT =
+ * not region-backed; -EPERM = not a stack region.
+ */
+int corten_arena_stack_calibrate(struct mm_struct *mm, unsigned long start,
+				 unsigned long end);
 
 /*
  * S8 observability renderers, called by the debugfs files in mm/corten.c
@@ -1491,6 +1497,13 @@ static inline int corten_arena_declare_carrier(struct mm_struct *mm,
 					       u32 rflags)
 {
 	return -ENODEV;
+}
+
+static inline int corten_arena_stack_calibrate(struct mm_struct *mm,
+					       unsigned long start,
+					       unsigned long end)
+{
+	return -ENOENT;
 }
 
 static inline void corten_exec_default_enter(struct mm_struct *mm)

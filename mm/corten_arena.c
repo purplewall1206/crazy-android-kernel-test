@@ -2961,6 +2961,37 @@ int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
 }
 
 /*
+ * G3' (b) (plan sec 25): the expand-time extension double-write core --
+ * re-align a GROWSDOWN region's extent to the carrier's grown shape.
+ * Also the sweep's ⑤ calibration core (one body, two call sites).
+ * Caller holds mmap_write.  -ENOENT: not region-backed (nothing to
+ * calibrate); -EPERM: region-backed but not a stack region.
+ */
+int corten_arena_stack_calibrate(struct mm_struct *mm, unsigned long start,
+				 unsigned long end)
+{
+	struct corten_arena *ar;
+
+	mmap_assert_write_locked(mm);
+	rcu_read_lock();
+	ar = corten_arena_lookup(mm, end - PAGE_SIZE);
+	if (ar && !percpu_ref_tryget_live(&ar->active))
+		ar = NULL;
+	rcu_read_unlock();
+	if (!ar)
+		return -ENOENT;
+	if (!(READ_ONCE(ar->rflags) & CORTEN_RF_GROWSDOWN)) {
+		percpu_ref_put(&ar->active);
+		return -EPERM;
+	}
+	WRITE_ONCE(ar->start, start);
+	WRITE_ONCE(ar->end, end);
+	percpu_ref_put(&ar->active);
+	atomic_long_inc(&corten_nr_adopt_calibrations);
+	return 0;
+}
+
+/*
  * The PTE-page retirement core: drop every tracked-or-drift PTE page in
  * [start,end) through the pte_free_tlb() funnel (INV6: the funnel owns
  * the M2a descriptor uninstall and the TLB batching) against a
@@ -8029,35 +8060,21 @@ static void corten_arena_mode_sweep(struct mm_struct *mm)
 	 * bearing for a stray legacy neighbour.
 	 */
 	if (stack_vma) {
-		/* G2' ⑤ (plan sec 22-24): region-first declared the stack
-		 * at the post-relocate extent -- before the expand.  The
-		 * carrier's final shape is grown, so calibrate FIRST
-		 * (lookup at vm_end - PAGE_SIZE: the grown start sits
-		 * BELOW the declared extent and would miss), then skip
-		 * the re-adopt -- the record is live, the re-declare
-		 * would only answer -EEXIST.
+		/* G2' ⑤ via the shared calibration core (G3' (b)): the
+		 * region-first declare preceded the expand, so the
+		 * record needs the final extent here.  0 or -ENOENT
+		 * both mean the sweep's adopt work is settled (0 =
+		 * calibrated now; -ENOENT = the expand-time double-write
+		 * kept it true all along).
 		 */
-		struct corten_arena *ar;
+		int cal = corten_arena_stack_calibrate(mm,
+						       stack_vma->vm_start,
+						       stack_vma->vm_end);
 
-		rcu_read_lock();
-		ar = corten_arena_lookup(mm, stack_vma->vm_end - PAGE_SIZE);
-		if (ar && !percpu_ref_tryget_live(&ar->active))
-			ar = NULL;
-		rcu_read_unlock();
-		if (ar && ar->rflags & CORTEN_RF_GROWSDOWN &&
-		    ar->start != stack_vma->vm_start) {
-			WRITE_ONCE(ar->start, stack_vma->vm_start);
-			WRITE_ONCE(ar->end, stack_vma->vm_end);
-			atomic_long_inc(&corten_nr_adopt_calibrations);
+		if (cal == 0)
 			atomic_long_inc(&corten_nr_sweep_stack_adopts);
-			stack_vma = NULL;	/* adopted (calibrated) */
-		}
-		if (ar) {
-			percpu_ref_put(&ar->active);
-			if (stack_vma)	/* extent already true: adopted */
-				atomic_long_inc(&corten_nr_sweep_stack_adopts);
-			stack_vma = NULL;
-		}
+		if (cal != -EPERM)
+			stack_vma = NULL;	/* ours: settled */
 	}
 	if (stack_vma) {
 		int ret = corten_sweep_adopt_stack(mm, state, stack_vma);
