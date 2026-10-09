@@ -1546,7 +1546,12 @@ file_cow_copies≈1k/boot 零缺陷服务。classify LEGACY 余量
 挂具 3,197 LoC 删除（grep 零依赖门 + boot + smoke + 探针零泄漏
 504→504 验收; plan sec 13）。内核侧删除面（vma.c 族/mmap.c/
 memory.c/rmap）为遗留世界承重面, 定性 = 逐钩重接线迁移工程,
-余量续账见 plan sec 13。VI 的前置现已全部就位（V5 翻转武装态零触发 +
+余量续账见 plan sec 13。
+VI 片2（d24a26bc）: 三钩（munmap guard/V5 gate/backstop）裁决 =
+活动接线保留; 零调用者死 API 普查法清除 vma_iter_bulk_alloc +
+corten_refuse_vma_funnel stub（−18 LoC, grep 门零残留, boot+smoke
+3/3+探针验收）; smoke 挂具泄漏裁决硬化为内核计数器口径
+（free_untracked/desc_alloc_fail）; 续账 plan sec 14。VI 的前置现已全部就位（V5 翻转武装态零触发 +
 smaps region 化已落地 + funnel 普查对齐），下一会话可安全启动
 逐文件删除（vma.c→mmap.c VMA 臂→vma.h→dup_mmap→/proc 渲染→
 memory.c→rmap→tools/testing/vma + grep 零依赖门）。
