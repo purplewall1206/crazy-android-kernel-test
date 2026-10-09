@@ -1551,7 +1551,12 @@ VI 片2（d24a26bc）: 三钩（munmap guard/V5 gate/backstop）裁决 =
 活动接线保留; 零调用者死 API 普查法清除 vma_iter_bulk_alloc +
 corten_refuse_vma_funnel stub（−18 LoC, grep 门零残留, boot+smoke
 3/3+探针验收）; smoke 挂具泄漏裁决硬化为内核计数器口径
-（free_untracked/desc_alloc_fail）; 续账 plan sec 14。VI 的前置现已全部就位（V5 翻转武装态零触发 +
+（free_untracked/desc_alloc_fail）; 续账 plan sec 14。
+VI 片3（无删除, 普查交付）: mmap.c/memory.c/rmap.c 三文件
+（rmap.h 全符号 + 167 静态 + 死宏 + mm.h mmap/vma 面）普查判定
+零死 API 面——核心文件每符号皆有调用者, grep 零依赖门对三文件
+成立; =on 浸泡 boot 启动（E2 排期前置时钟起算, 每小时巡检自动化）,
+plan sec 15。VI 的前置现已全部就位（V5 翻转武装态零触发 +
 smaps region 化已落地 + funnel 普查对齐），下一会话可安全启动
 逐文件删除（vma.c→mmap.c VMA 臂→vma.h→dup_mmap→/proc 渲染→
 memory.c→rmap→tools/testing/vma + grep 零依赖门）。
