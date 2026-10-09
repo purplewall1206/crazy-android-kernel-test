@@ -128,6 +128,7 @@ static int corten_arena_pool_prepare_locked(struct mm_struct *mm,
 					    unsigned long addr,
 					    unsigned long len,
 					    u8 perm, bool novma, bool no_reuse);
+static void corten_arena_mode_sweep(struct mm_struct *mm);
 static int corten_arena_window_place(struct mm_struct *mm,
 					      struct corten_mm_state *state,
 					      unsigned long len, unsigned long *addr);
@@ -3064,6 +3065,20 @@ int corten_arena_stack_window_declare(struct mm_struct *mm,
 	}
 	mmap_write_unlock(mm);
 	return 0;
+}
+
+/*
+ * S3-A (plan sec 37): the entry sweep under a caller-held mmap write.
+ * The window-form transfer arm's tail runs inside setup_arg_pages'
+ * write section, AFTER the final carrier exists -- the exec_mmap sweep
+ * cannot see it (begin_new_exec precedes setup_arg_pages).
+ */
+void corten_arena_entry_sweep_locked(struct mm_struct *mm)
+{
+	mmap_assert_write_locked(mm);
+	if (!READ_ONCE(mm->corten_mode))
+		return;
+	corten_arena_mode_sweep(mm);
 }
 
 /*
@@ -8473,6 +8488,18 @@ void corten_exec_default_enter(struct mm_struct *mm)
 {
 	if (!corten_mode_default_param || !corten_enabled_static() || !mm)
 		return;
+
+	/* S3-A: the bprm-phase G1 (corten_stack_s2) enters MODE early --
+	 * by exec_mmap the final carrier exists and the bare enter is
+	 * an idempotent no-sweep, so the entry sweep (the stock the
+	 * exec brought in is judged at completion) must run HERE.  The
+	 * sweep variant is idempotent on the mode bit.
+	 */
+	if (READ_ONCE(mm->corten_mode)) {
+		corten_arena_mode_enter_sweep(mm);
+		atomic_long_inc(&corten_nr_exec_default_enters);
+		return;
+	}
 
 	if (!corten_arena_mode_enter(mm))
 		atomic_long_inc(&corten_nr_exec_default_enters);

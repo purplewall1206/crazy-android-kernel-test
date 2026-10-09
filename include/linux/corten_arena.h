@@ -1083,6 +1083,9 @@ int corten_arena_declare_carrier(struct mm_struct *mm, unsigned long addr,
  */
 int corten_arena_stack_calibrate(struct mm_struct *mm, unsigned long start,
 				 unsigned long end);
+/* S3-A (plan sec 35): the manual fallback path's flag-on counter. */
+void corten_arena_note_stack_fallback(void);
+
 /* S3-A step 1: the window temp-stack declare (the shadow piece is the
  * bprm carrier).  Caller holds mmap_write.  Failure = the caller's
  * manual-path fallback.
@@ -1091,6 +1094,9 @@ int corten_arena_stack_window_declare(struct mm_struct *mm,
 				      unsigned long len, bool carrier,
 				      struct vm_area_struct **out_vma,
 				      unsigned long *out_end);
+/* S3-A (plan sec 37): the entry sweep under a held mmap write. */
+void corten_arena_entry_sweep_locked(struct mm_struct *mm);
+
 /* S3-A: the stack transfer utility (plan sec 29) -- copy the source
  * extent's content pages to the destination and release the source
  * region.  Caller holds mmap read.
@@ -1520,6 +1526,10 @@ static inline int corten_arena_stack_calibrate(struct mm_struct *mm,
 	return -ENOENT;
 }
 
+static inline void corten_arena_note_stack_fallback(void)
+{
+}
+
 static inline int corten_arena_stack_window_declare(struct mm_struct *mm,
 						    unsigned long len,
 						    bool carrier,
@@ -1527,6 +1537,10 @@ static inline int corten_arena_stack_window_declare(struct mm_struct *mm,
 						    unsigned long *out_end)
 {
 	return -ENODEV;
+}
+
+static inline void corten_arena_entry_sweep_locked(struct mm_struct *mm)
+{
 }
 
 static inline int corten_arena_stack_transfer(struct mm_struct *mm,

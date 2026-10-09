@@ -666,6 +666,8 @@ int setup_arg_pages(struct linux_binprm *bprm,
 	 * final legacy carrier, transfer the content, swap -- then the
 	 * shared expand tail.
 	 */
+	bool window_form = false;
+
 	if (bprm->wstack_end && corten_stack_s2_enabled() &&
 	    READ_ONCE(mm->corten_mode)) {
 		unsigned long flen = bprm->wstack_end - bprm->wstack_start;
@@ -710,6 +712,7 @@ int setup_arg_pages(struct linux_binprm *bprm,
 		vm_flags_clear(fv, VM_STACK_INCOMPLETE_SETUP);
 		bprm->vma = vma = fv;
 		bprm->wstack_end = 0;
+		window_form = true;
 		goto locked_expand;
 	}
 
@@ -790,6 +793,7 @@ int setup_arg_pages(struct linux_binprm *bprm,
 
 locked_expand:
 	stack_expand = 131072UL; /* randomly 32*4k (or 2*64k) pages */
+
 	stack_size = vma->vm_end - vma->vm_start;
 	/*
 	 * Align this down to a page boundary as expand_stack
@@ -816,6 +820,11 @@ ret = expand_stack_locked(vma, stack_base);
 		corten_arena_stack_calibrate(mm, vma->vm_start,
 					     vma->vm_end);
 
+	if (window_form)
+		/* sec 37: the entry sweep HERE -- the only point the
+		 * final carrier exists under this write lock.
+		 */
+		corten_arena_entry_sweep_locked(mm);
 out_unlock:
 	mmap_write_unlock(mm);
 	return ret;
