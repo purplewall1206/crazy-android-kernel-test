@@ -1899,6 +1899,8 @@ void vma_link_file(struct vm_area_struct *vma)
 
 int vma_link(struct mm_struct *mm, struct vm_area_struct *vma)
 {
+	corten_note_vma_gate(mm, vma);
+
 	VMA_ITERATOR(vmi, mm, 0);
 
 	vma_iter_config(&vmi, vma->vm_start, vma->vm_end);

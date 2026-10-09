@@ -1047,6 +1047,9 @@ void corten_exec_default_enter(struct mm_struct *mm);
 void corten_arena_special_shadow(struct mm_struct *mm,
 				 struct vm_area_struct *vma);
 
+/* V5: the create_vma census gate (vma_link's non-exempt arm). */
+void corten_note_vma_gate(struct mm_struct *mm, struct vm_area_struct *vma);
+
 /*
  * S8 observability renderers, called by the debugfs files in mm/corten.c
  * (mm/corten_arena.c owns the arena data, corten.c owns the directory).
@@ -1436,6 +1439,11 @@ static inline int corten_prctl_mode(unsigned int op, unsigned long arg3,
 
 static inline void corten_arena_special_shadow(struct mm_struct *mm,
 					       struct vm_area_struct *vma)
+{
+}
+
+static inline void corten_note_vma_gate(struct mm_struct *mm,
+					struct vm_area_struct *vma)
 {
 }
 

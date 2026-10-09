@@ -237,6 +237,7 @@ static atomic_long_t corten_nr_exec_default_enters; /* MV3.a execve default MODE
 static atomic_long_t corten_nr_brk_funnel;	/* MODE-mm brk funnel VMAs */
 static atomic_long_t corten_nr_sweep_stack_adopts; /* V2.2 stack adoptions */
 static atomic_long_t corten_nr_special_shadows; /* V3 special shadows */
+static atomic_long_t corten_nr_vma_gate;	/* V5 create_vma census */
 static atomic_long_t corten_nr_stack_grows;	/* V2.2 extend-arm services */
 /* Ledger #2: the arena_stats per-mm registry walks' truncation count
  * (declared here for the stats render; the walker lives at the shrinker
@@ -3540,6 +3541,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_sweep_stack_adopts));
 	seq_printf(m, "special_shadows     %ld\n",
 		   atomic_long_read(&corten_nr_special_shadows));
+	seq_printf(m, "vma_gate            %ld\n",
+		   atomic_long_read(&corten_nr_vma_gate));
 	seq_printf(m, "stack_grows         %ld\n",
 		   atomic_long_read(&corten_nr_stack_grows));
 	seq_printf(m, "auto_fallbacks      %ld\n",
@@ -7959,6 +7962,28 @@ static int __init corten_mode_default_setup(char *s)
 	return 1;
 }
 __setup("corten_mode_default=", corten_mode_default_setup);
+
+/*
+ * V5: the create_vma census gate.  Called from vma_link() for every
+ * VMA entering a MODE mm's tree that is neither ours (VM_CORTEN
+ * shadow pieces) nor the special-mapping family (the vdso/vvar
+ * shadows -- their VMAs stay as the arch fault carriers by design)
+ * nor a fork copy (dup_mmap context: vma_vm != current->mm).  The
+ * census feeds the V5 refusal flip; the WARN is once-per-boot loud.
+ */
+void corten_note_vma_gate(struct mm_struct *mm, struct vm_area_struct *vma)
+{
+	if (!corten_enabled_static() || !READ_ONCE(mm->corten_mode))
+		return;
+	if (current->mm != mm)
+		return;				/* dup_mmap's fork copies */
+	if (vma->vm_flags & VM_CORTEN)
+		return;
+	if (vma_is_special_mapping_family(vma))
+		return;
+	atomic_long_inc(&corten_nr_vma_gate);
+	WARN_ON_ONCE(atomic_long_read(&corten_nr_vma_gate) == 1);
+}
 
 /*
  * V3: shadow-adopt a special-mapping VMA (the vdso/vvar family).  The
