@@ -1518,3 +1518,37 @@ exec 失败诊断；落地序 a8392b7，=on 布局收敛的正确性增量，非
 历史口径对照：W-6 测 44,334（生产 23,761 + 测试 20,573）为 mv3e 时点值。
 
 后续 VI（VMA 层删除）落地后追加终账。
+
+## 15. J6 续账（2026-10-10, V4.3 EOF 收口 + V5 拒绝翻转轮）
+
+本周期（dcb433f→7c32007）净内核增量, 非删除轮:
+
+| 项 | 提交 | 内容 |
+|---|---|---|
+| V4.3 EOF 三点收口 | bc86fffa | reof 声明时 EOF 界 + dispatch 门 + file_read 零页臂 + file_cow 零源臂; fetch 门 = 截断专属 |
+| 合成门 reof 修正 | 94fb64c | efsmoke2 暴露的截断契约破坏（live i_size 把截断槽位零服务）→ reof; SIGBUS 契约恢复 |
+| V5 拒绝翻转 | 75a6d8a | vma_link 普查闸 → -EPERM 拒绝（豁免: VM_CORTEN/special/fork）; 武装态 vma_gate=0 零触发 |
+| 计划+证据 | 7c32007 | plan sec 12 + eof-battery 三腿证据 + 双探针源码 |
+
+**验收面**: 电池三腿绿（metis 基线 2d383eeed4ceb73b + smoke 26/26×2 +
+gate_pass=1）; efsmoke/efsmoke2 功能探针全过（越 EOF 读零/写私有/
+fork 忠实/窗口路由/截断 SIGBUS/尾页零）; 零 trap;
+truncate_routes 首次开火（W1.b 截断路由自此有覆盖）。
+
+**库高速路状态**: V4.3 serve 修复后 auto file 臂承接
+file_mmaps≈2282-3036/boot, file_read_faults≈55-67k/boot,
+file_cow_copies≈1k/boot 零缺陷服务。classify LEGACY 余量
+（auto_legacy_class≈2.4-5k/boot, MAP_FIXED 库段等）仍走
+漏斗+mmap_region take 臂（VM_CORTEN 收编, vma_gate=0 为证）——
+披露 resident, 非 serve 缺陷。
+
+**VMA 层删除（VI）未启动**: 本周期 0 行 VMA 层删除。四件
+13,408 LoC 口径不变。VI 的前置现已全部就位（V5 翻转武装态零触发 +
+smaps region 化已落地 + funnel 普查对齐），下一会话可安全启动
+逐文件删除（vma.c→mmap.c VMA 臂→vma.h→dup_mmap→/proc 渲染→
+memory.c→rmap→tools/testing/vma + grep 零依赖门）。
+
+**已知余量（WARN 级, 非阻塞）**: V3 特殊影子 rss 记账漂移
+（mm exit 时 +2 MM_FILEPAGES / -2 MM_ANONPAGES, dhcpcd/
+systemd-journal 面）仍待专项核验; 镜像态偶发 boot 挂死
+（30+ boot 累积, 干净重建即绿）为环境项。
