@@ -5997,14 +5997,23 @@ enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
 		return CORTEN_MMAP_LEGACY;
 
 	if (file) {
-		/* V-B.1: the file mirror of the anon whitelist -- at most
-		 * MAP_NORESERVE may accompany the type bits.  MAP_ANONYMOUS
-		 * is absent by construction (a file request never carries
-		 * it) and also rejects defensively.  Every other bit keeps
-		 * the mapping legacy; MAP_FIXED file stays with the D-G''
-		 * punch route (the OQ-MV-2 implant exception -- a region
-		 * needs full i_mmap write-side semantics to host a forced
-		 * file mapping, deliberately out of scope).
+		/* V-B.1: at most MAP_NORESERVE may accompany the type
+		 * bits.  MAP_ANONYMOUS is absent by construction (a file
+		 * request never carries it) and also rejects
+		 * defensively.  Every other bit keeps the mapping
+		 * legacy; MAP_FIXED file stays with the D-G'' punch
+		 * route (the OQ-MV-2 implant exception -- a region needs
+		 * full i_mmap write-side semantics to host a forced file
+		 * mapping, deliberately out of scope).
+		 *
+		 * V4.3 attempt (reverted): admitting MAP_DENYWRITE (the
+		 * no-op compat flag the ld.so library loads carry)
+		 * routed the LIBRARY-LOAD HIGHWAY into the auto file arm
+		 * -- and init died on its first libc load: the arm's
+		 * read/COW/EOF faces have never served a dlopen-shaped
+		 * load.  The library highway stays the funnel's
+		 * disclosed residents; the arm's debugging round is the
+		 * V4.3 slice.
 		 */
 		if (flags & ~(MAP_TYPE | MAP_NORESERVE))
 			return CORTEN_MMAP_LEGACY;
