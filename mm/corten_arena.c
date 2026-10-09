@@ -1072,8 +1072,13 @@ static void corten_slot_remove(struct xarray *xa, unsigned long frame,
 	n = b->nr;
 	for (i = 0; i < n && b->rec[i] != ar; i++)
 		;
-	if (WARN_ON_ONCE(i == n))
+	if (WARN_ON_ONCE(i == n)) {
+		pr_info("corten-dbg: SR MISS f=%lx ar=%px [%lx,%lx) rf=%x b0=%px\n",
+			frame, ar, READ_ONCE(ar->start), READ_ONCE(ar->end),
+			READ_ONCE(ar->rflags),
+			n ? READ_ONCE(b->rec[0]) : NULL);
 		return;		/* not a member: kernel bug */
+	}
 
 	if (n == 2) {
 		ret = xa_err(xa_store(xa, frame, b->rec[i ^ 1], GFP_KERNEL));
@@ -6015,7 +6020,10 @@ enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
 		 * disclosed residents; the arm's debugging round is the
 		 * V4.3 slice.
 		 */
-		if (flags & ~(MAP_TYPE | MAP_NORESERVE))
+		/* V4.3: MAP_DENYWRITE admitted (the no-op compat flag the
+		 * ld.so library loads carry).
+		 */
+		if (flags & ~(MAP_TYPE | MAP_NORESERVE | MAP_DENYWRITE))
 			return CORTEN_MMAP_LEGACY;
 		return CORTEN_MMAP_AUTO_FILE;
 	}
@@ -11782,6 +11790,22 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 			return CORTEN_F_FALLBACK;
 		}
 		m = fresh;
+	}
+
+	/* V4.3: the library-load contract -- the FILE_MAPPED slots past
+	 * the file's last page re-dispatch as the anon form (the zero
+	 * reads, the private-anon writes; the mmap contract's BSS tail).
+	 */
+	if (m.state == CORTEN_FILE_MAPPED && ctx->ar->rfile) {
+		pgoff_t eof_pg = DIV_ROUND_UP(
+			i_size_read(ctx->ar->rfile->f_mapping->host),
+			PAGE_SIZE);
+		pgoff_t f_pgoff = READ_ONCE(ctx->ar->rpoff) +
+			((ctx->addr - READ_ONCE(ctx->ar->start)) >>
+			 PAGE_SHIFT);
+
+		if (f_pgoff >= eof_pg)
+			m.state = CORTEN_PRIVATE_ANON;
 	}
 
 	disp = corten_arena_dispatch(&m, ctx->write, ctx->instruction);
