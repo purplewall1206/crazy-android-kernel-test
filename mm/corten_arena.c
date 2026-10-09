@@ -6626,6 +6626,22 @@ static int corten_arena_window_place_global(struct mm_struct *mm,
 				obstacle_end = vma->vm_end;
 		}
 
+		/* V4.3: the sentinel-marked frames are obstacles too.
+		 * The registry lookup skips them (the sentinels are not
+		 * records), so a global placement over a claimed
+		 * cpu-local segment's unconsumed tail handed the span to
+		 * two owners -- the r44 collision (the second library's
+		 * overlapping co-registration).
+		 */
+		if (!obstacle_end) {
+			void *slot = xa_load(&state->arenas,
+					     a2 >> PMD_SHIFT);
+
+			if (slot)
+				obstacle_end = ((a2 >> PMD_SHIFT) + 1) <<
+					       PMD_SHIFT;
+		}
+
 		if (!obstacle_end)
 			break;
 
