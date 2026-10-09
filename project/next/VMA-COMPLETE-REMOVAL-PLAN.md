@@ -815,3 +815,20 @@ VMA 形态（relocate/expand/mprotect 的结果）。ops 时刻无 region 可
   退役 → vma_exec.c 全删。
 **旗标 on 现形（G1+G2 豁免+G4 现行为）不受影响**: 载体 VMA 路径
 仍是绿态基线, region-first 在其上增量替换。
+
+## 21. G2' 载体核查（2026-10-10）: 实现面已定位, 下会话开工件
+
+- 旁路 (a) mprotect_fixup 直调的 region 侧对应 =
+  `corten_arena_mprotect_route`（corten_arena.c:16943, 现成路由:
+  对既有 region 改写 perm, mprotect_routes 444/boot 的同一入口）——
+  G2' 落地后 setup_arg_pages 的直调改为旗标门控双写（VMA 面照旧 +
+  region 面走此路由）;
+- 旁路 (b) expand_stack_locked 直调 → V4.3 栈臂 extension 路由
+  （stack_grows 计数面, 入口在 corten_arena.c 的 stack_grow 族）;
+- 旁路 (c) relocate 页表搬迁 → release+redeclare+单内容页拷贝合成
+  （此时栈 = 1 页临时内容）;
+- 共生 declare 原语: corten_arena_declare 的 novma=false 语义或
+  mmap_region take 臂（二者择一, 需对已链接 VMA 的 overlap 语义
+  一验——下会话首项）。
+实现顺序: 共生 declare → (a) 双写 → (b) → (c) → adopt 缝校准 →
+S3。每步过旗标 on boot + smoke + efsmoke。
