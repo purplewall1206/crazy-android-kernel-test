@@ -1009,3 +1009,18 @@ console 全文: project/results/r07/eof-battery/s3a-hang.log。
 state->arena_pool 的初始化时点或 eject 内的 release 前置）; (3)
 declare_locked 的 novma=false shadow 路径对 legacy... 窗口地址的
 shadow 片创建假设核对。
+
+## 32. S3-A 接入片调试绿（2026-10-10）: 两个根因修完, 全链路通
+
+根因 1: helper 在手工路径取锁前调用 → 自取锁形
+（mmap_write_lock_killable 内置; pool_take 的 rwsem WARNING 为指
+纹）。根因 2: 窗口摆入器把临时栈放窗口基座——解释器后到, exec
+admission 的 overlap-takeover 吞掉栈 region（init 死于 loader 的
+窗口映射内）→ 临时栈钉窗口高位, 顶段占用才回退 placer。
+传输臂: 窗口载体检测 → 终态 legacy 载体（INCOMPLETE 门豁免, 传输
+后清除）→ stack_transfer（内容+release）→ munmap 窗载体 → swap。
+旗标 on: bprm_mode=250=exec_default=adopt_calibrations 全链逐 exec
++ 探针/smoke/vma_gate=0/零 trap 全绿。
+**余量**: 两函数退役（create_init_stack_vma 的手工路径仍为回退臂
+保留; relocate_vma_down 仅剩 =off/回退面可达——退役 = 删回退臂后
+的死码清除, 随旗标默认化决策）→ vma_exec.c 全删。
