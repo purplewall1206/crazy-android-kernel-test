@@ -1569,7 +1569,12 @@ vma_exec.c 全删。
 S2 G1 脚手架落地（7e446307, plan sec 18）: corten_stack_s2 旗标 +
 bprm_phase MODE 进场（默认 off, bprm_mode_enters 计数）, 旗标 OFF
 验收全绿（探针+smoke+零触发+零 trap）; G2/G3 = 专项 boot-debug 轮
-余量。VI 的前置现已全部就位（V5 翻转武装态零触发 +
+余量。
+S2 G2 落地（7328cd50, plan sec 19）: V5 门的
+VM_STACK_INCOMPLETE_SETUP 豁免（bprm 栈瞬态形态, G4=adopt 现行为）
+—— 旗标 ON 形全链路绿: bprm_mode_enters=245=exec_default_enters=
+stack_adopts 三重一致 + vma_gate=0 + 探针/smoke/登录面全过;
+G3 = 增量迁移余量, 全数迁移后 S3 解锁（vma_exec.c 全删）。VI 的前置现已全部就位（V5 翻转武装态零触发 +
 smaps region 化已落地 + funnel 普查对齐），下一会话可安全启动
 逐文件删除（vma.c→mmap.c VMA 臂→vma.h→dup_mmap→/proc 渲染→
 memory.c→rmap→tools/testing/vma + grep 零依赖门）。
