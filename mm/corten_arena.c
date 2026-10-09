@@ -243,6 +243,8 @@ static atomic_long_t corten_nr_brk_funnel;	/* MODE-mm brk funnel VMAs */
 static atomic_long_t corten_nr_sweep_stack_adopts; /* V2.2 stack adoptions */
 static atomic_long_t corten_nr_adopt_calibrations; /* G2' ⑤ extent re-aligns */
 static atomic_long_t corten_nr_stack_fallbacks; /* S3-A: flag-on manual-path hits */
+static atomic_long_t corten_nr_sweep_runs;      /* sec 39: mode_sweep entries */
+static atomic_long_t corten_nr_sweep_ours;      /* sec 39: classify -1 hits */
 static atomic_long_t corten_nr_special_shadows; /* V3 special shadows */
 static atomic_long_t corten_nr_vma_gate;	/* V5 create_vma census */
 static atomic_long_t corten_nr_auto_legacy_class; /* V5 classify-legacy */
@@ -3854,6 +3856,10 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_adopt_calibrations));
 	seq_printf(m, "stack_fallbacks     %ld\n",
 		   atomic_long_read(&corten_nr_stack_fallbacks));
+	seq_printf(m, "sweep_runs          %ld\n",
+		   atomic_long_read(&corten_nr_sweep_runs));
+	seq_printf(m, "sweep_ours          %ld\n",
+		   atomic_long_read(&corten_nr_sweep_ours));
 	seq_printf(m, "brk_funnel          %ld\n",
 		   atomic_long_read(&corten_nr_brk_funnel));
 	seq_printf(m, "stack_adopts        %ld\n",
@@ -8056,8 +8062,10 @@ static int corten_sweep_classify(struct mm_struct *mm,
 	/* Our own anchors (targeted-DECLARE shadow pieces, W-2 survivors)
 	 * are not legacy stock: never counted, never migrated.
 	 */
-	if (flags & VM_CORTEN)
+	if (flags & VM_CORTEN) {
+		atomic_long_inc(&corten_nr_sweep_ours);
 		return -1;
+	}
 
 	/* The window domain is the implants' world (W-5's target). */
 	if (vma->vm_end > CORTEN_MODE_WINDOW_START &&
@@ -8166,6 +8174,8 @@ static int corten_sweep_classify(struct mm_struct *mm,
  */
 static void corten_arena_mode_sweep(struct mm_struct *mm)
 {
+	atomic_long_inc(&corten_nr_sweep_runs);
+
 	struct corten_mm_state *state;
 	struct vm_area_struct **cand, *vma, *stack_vma = NULL;
 	unsigned int n = 0, i;
