@@ -8096,6 +8096,16 @@ int corten_gate_vma_link(struct mm_struct *mm, struct vm_area_struct *vma)
 		return 0;			/* dup_mmap's fork copies */
 	if (vma->vm_flags & VM_CORTEN)
 		return 0;
+	/* S2 G1+G2 (plan sec 17/18): the exec stack's transitory bring-up
+	 * shape.  With corten_stack_s2=on the bprm mm is MODE when
+	 * create_init_stack_vma links it; setup_arg_pages clears the flag
+	 * after the relocate/expand, and the entry-sweep stack adopt then
+	 * converts the VMA whole (G4: the sweep's existing path, no
+	 * separate dedup).  A kernel-constructed, task-invisible
+	 * transient -- the special family's exemption logic.
+	 */
+	if (vma->vm_flags & VM_STACK_INCOMPLETE_SETUP)
+		return 0;
 	if (vma_is_special_mapping_family(vma))
 		return 0;
 	atomic_long_inc(&corten_nr_vma_gate);
