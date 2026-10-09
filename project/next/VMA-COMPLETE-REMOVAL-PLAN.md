@@ -358,3 +358,24 @@ C1 的 present PTE 值解码 = 物理地址超出 VM 内存的垃圾四元组 �
 
 **用户可见状态保护**: android17-6.18 @ 909bccf = 稳定 =on 链（boot 绿,
 电池绿, E2 退役含）——未受 V1 实验影响。V1 全部工作在 pr-v1 分支封存。
+
+## 7k. strace 阶段（2026-10-09 晚, r33-r38）: 栈臂单进程切片的最终数据
+
+strace 已在镜像。frozen-wait 后 dhcpcd 的死亡形态从 SIGSEGV 变为
+干净早退。strace -f 捕获（dhcpcd-only boot）: **uid=100 的特权子
+进程 345/346 以 exit(0) 即刻退出为首因**（fork 后不 exec、继续以
+特权角色运行的同一二进制 —— 其 mm = mirror 副本），随后父的
+write(5) EPIPE ×3 → exit_group(1)。健康对照（zzz boot, 已存主机
+/tmp/dh-good.trace, 155 行）: edge 长活为常态。子进程 loop 早退的
+驱动 = 下一轮的第一问题。
+
+**下轮工具与判据**: boot 形状直接带 9p（trace 全量落主机, 串口
+反复 boot 后退化不可靠）; MISSGATE 探针已在树（lookup miss 的门
+身份: frozen/dead-ref, 变量修正后的构建未上机）; 默认开双绿判据
+不变（alone-boot SSHOK + dhcpcd-only eth0 获地址 + ssh 存活）。
+
+**下一轮入点**: (1) 栈臂单进程切片续（9p + strace 全量 → master
+首错/子 loop 驱动定位）→ 默认开; (1b) MISSGATE 上机首捕;
+(1c) V3 阴影 rss 漂移余量核验; (2) V4.2 mlock pin 臂; (3) V5 总闸
+（create_vma WARN+拒绝, /proc smaps region 化, special 影子豁免）;
+(4) VI VMA 层删除 + J6 终账。
