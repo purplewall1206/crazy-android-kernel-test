@@ -1230,10 +1230,14 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 			return err ? err : 1;
 		}
 		rss[MM_ANONPAGES]++;
+		if (READ_ONCE(dst_vma->vm_mm->corten_mode))
+			corten_note_tree_copy(1, false);
 		VM_WARN_ON_FOLIO(PageAnonExclusive(page), folio);
 	} else {
 		folio_dup_file_rmap_pte(folio, page, dst_vma);
 		rss[mm_counter_file(folio)]++;
+		if (READ_ONCE(dst_vma->vm_mm->corten_mode))
+			corten_note_tree_copy(1, true);
 	}
 
 copy_pte:
