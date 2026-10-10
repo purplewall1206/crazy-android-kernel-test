@@ -258,6 +258,8 @@ static atomic_long_t corten_nr_exit_snap_anon;   /* sec 61: last-exit rss anon *
 static atomic_long_t corten_nr_exit_snaps;       /* sec 61: mode exits snapped */
 static atomic_long_t corten_nr_post_walk_file;   /* sec 66: post-arena-walk rss file */
 static atomic_long_t corten_nr_post_walk_anon;   /* sec 66: post-arena-walk rss anon */
+static atomic_long_t corten_nr_zrel_anon;        /* sec 68: zap release anon decs */
+static atomic_long_t corten_nr_zrel_file;        /* sec 68: zap release file decs */
 static atomic_long_t corten_nr_wz_anon;          /* sec 62: window found anon */
 static atomic_long_t corten_nr_wz_file;          /* sec 62: window found file */
 static atomic_long_t corten_nr_lz_anon;          /* sec 62: legacy found anon */
@@ -3904,6 +3906,10 @@ void corten_arena_stats_report(struct seq_file *m)
 			   atomic_long_read(&corten_nr_post_walk_file));
 	seq_printf(m, "post_walk_anon      %ld\n",
 			   atomic_long_read(&corten_nr_post_walk_anon));
+	seq_printf(m, "zrel_anon           %ld\n",
+		   atomic_long_read(&corten_nr_zrel_anon));
+	seq_printf(m, "zrel_file           %ld\n",
+		   atomic_long_read(&corten_nr_zrel_file));
 	seq_printf(m, "lz_anon             %ld\n",
 		   atomic_long_read(&corten_nr_lz_anon));
 	seq_printf(m, "lz_file             %ld\n",
@@ -13729,6 +13735,10 @@ static void corten_zap_release_page(struct mm_struct *mm,
 	 * producing the +2 FILE / -2 ANON exit drift.
 	 */
 	add_mm_counter(mm, mm_counter_file(folio), -1);
+	if (mm_counter_file(folio) == MM_FILEPAGES)
+		atomic_long_inc(&corten_nr_zrel_file);
+	else
+		atomic_long_inc(&corten_nr_zrel_anon);
 }
 
 /*
