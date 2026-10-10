@@ -1555,3 +1555,20 @@ chg_tree_anon/file（copy_present_ptes）+ rel_legacy_anon/file
 34/0（off 7/0）。**教训**: 电池绿判据此前只看 Totals 尾行, 嵌套
 not-ok 行（基线同有, 非回归）掩盖了真实失败 —— 修复后 Totals 与
 基线逐字一致。
+
+## 73. 静默 boot 单 child 复现 + 测量协议定版（2026-10-11 凌晨）
+
+init=/bin/bash 静默 boot（无 systemd/journald/服务循环）: **val:34
+仍复现**（82s/136s/261s 多次, 纯 bash 形）—— 幻影与用户态环境完全
+无关, 是内核 arena 记账自身的确定性残差。全内建测量协议定版（防
+fork+exec 监控命令自身污染窗口）: exec 9< + while read -u9 + eval
+存 P_/Q_ 变量, 窗口内仅一个 bash -c 'exit'（builtin exit, 不 exec）。
+
+干净画像（与 systemd 形逐项一致）: chg_map_anon 1 + cow_write 16 +
+fork_copy 129 = 146 charge; zrel_anon 127 + cow_old 16 = 143 扣减;
+tree/legacy 面 0/0（legacy 无辜双重确认）。残差 +34 与 counted 差
+= 31 —— 存在一个未计数的 arena 侧扣减/计数臂, 位于 zap_window 走
+查自身流程（batch overflow 续走/metadata-only 分支已排查, 双释放
+与零页面均排除）。幻影定性不变: 零孤儿、零泄漏、有界 34 页/exit、
+纯计数。17 臂仪器 + 全内建协议已就位, 剩最后一步 = zap_window 流
+程级逐页 trace（下轮首题, 一次 boot 可收敛）。
