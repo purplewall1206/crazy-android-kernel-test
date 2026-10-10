@@ -8299,13 +8299,30 @@ static void corten_arena_mode_sweep(struct mm_struct *mm)
 			atomic_long_inc(&corten_nr_sweep_stack_adopts);
 			stack_vma = NULL;
 		} else if (cal == -ENOENT) {
-			/* The window form's transfer released the source
+			/* S3 sec 42 (the co-resident decision): the
+			 * window form's transfer released the source
 			 * region and nothing declares the final extent
-			 * yet: FALL THROUGH to the adopt (it is the
-			 * declarer here).  The v2 refactor wrongly
-			 * settled -ENOENT too -- stack_adopts read 0
-			 * with the true VMA-less path live.
+			 * yet.  The full adopt surgery FREES the carrier
+			 * VMA -- which create_elf_tables' argv/env
+			 * put_user face still needs -- so declare
+			 * CO-RESIDENT instead: region over the live
+			 * carrier, the dual service the exec tail runs
+			 * on.  Failure leaves the stack to the funnel's
+			 * own collection.
 			 */
+			u8 wperm = CORTEN_PERM_READ | CORTEN_PERM_WRITE;
+
+			if (stack_vma->vm_flags & VM_EXEC)
+				wperm |= CORTEN_PERM_EXEC;
+			if (!corten_arena_declare_carrier(mm,
+							  stack_vma->vm_start,
+							  stack_vma->vm_end -
+							  stack_vma->vm_start,
+							  wperm,
+							  CORTEN_RF_GROWSDOWN)) {
+				atomic_long_inc(&corten_nr_sweep_stack_adopts);
+			}
+			stack_vma = NULL;	/* settled either way */
 		} else {
 			stack_vma = NULL;	/* -EPERM: not ours */
 		}
