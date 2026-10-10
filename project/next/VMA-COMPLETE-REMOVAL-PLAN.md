@@ -1125,3 +1125,13 @@ argv/env put_user 面在转换后立刻写栈——服务链在 bprm 相断裂
 采纳必须 co-resident（novma=false, 载体保留到 exec 完成）或
 adopt 延后至 create_elf_tables 之后——两者都是 next-session 设计
 决策, 非快修。
+
+## 42. co-resident 栈声明落地（2026-10-10）: 采纳手术退役, 3/184 余面在案
+
+sweep 栈臂的 -ENOENT 分支改 co-resident declare（region 覆盖活载
+体; 完整采纳手术释放载体 VMA 与 create_elf_tables 的 put_user 面
+冲突 = sec 41 定案）。旗标 on: stack_adopts=3/184 + 探针/smoke/
+vma_gate=0/零 trap; 失败回退 = 漏斗自有收集（无害）。
+**余面**: declare 的 181 失败（首要嫌疑: C1' overlap 对未释放的
+窗口 region——transfer 的 release 时序 vs sweep 的 declare 时序）
+= 下一迭代首查。
