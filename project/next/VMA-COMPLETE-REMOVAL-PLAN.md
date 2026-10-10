@@ -1722,3 +1722,11 @@ chg 195 / rel 131）。电池 on 腿绿（27/0/1）。
 帧数）。park 清 PTE + 擦帧的计数处理 = 终局审计点: pool park/flush
 zap 是否逐页 release_page 扣减。仪表（reg vs walk）已就位, 一次
 boot 验证。
+
+**sec 84 勘误（同晨）**: sweep_released=0 复核后, v-survivors 的高读
+数（125-129）须重新解读 —— CoW 翻转清除老 PTE 时不经 release_page
+（走 rel_cow_old 臂, 计数正确但无 VA 擦除）, 故 v-survivors 含
+CoW 工件而非纯残差人口。**残差 34 的页面级归属仍未闭合**; 下轮首
+动作 = cow_write 的老 PTE 清除处补 corten_trace_release_va →
+v-survivors 即真残差 VA 集 → 按臂补释放 → 验归零。仪器链完整,
+每步一次 boot。
