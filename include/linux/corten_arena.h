@@ -656,7 +656,8 @@ struct corten_mm_state {
 	 * hook adds here) -- chg minus rel equals the exit residual by
 	 * construction on the mm that owns them. */
 	atomic_long_t		mm_chg_total;
-	atomic_long_t		mm_rel_total;	/* sec 78: the charged-page trace set (corten_trace_charge=on
+	atomic_long_t		mm_rel_total;	long			reg_frames;	/* sec 83: frames inserted */
+	long			walk_frames;	/* sec 83: frames iterated at exit */	/* sec 78: the charged-page trace set (corten_trace_charge=on
 	 * boots only) -- page-indexed, charge stores, release erases;
 	 * the exit survivors ARE the unreleased population. */
 	struct xarray		trace_xa;	struct xarray		trace_vxa;	/* sec 79: VA-keyed trace */

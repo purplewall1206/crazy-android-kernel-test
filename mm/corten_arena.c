@@ -449,6 +449,8 @@ static const char *const corten_arm_name[CORTEN_ARM_NR] = {
 
 static atomic_long_t corten_nr_arm_last[CORTEN_ARM_NR];
 static atomic_long_t corten_nr_chg_total_last;
+static atomic_long_t corten_nr_walk_frames_last;
+static atomic_long_t corten_nr_reg_frames_last;
 static atomic_long_t corten_nr_rel_total_last;
 
 static void corten_arms_snapshot(struct corten_mm_state *state)
@@ -4188,6 +4190,10 @@ void corten_arena_stats_report(struct seq_file *m)
 	{
 		int ai;
 
+		seq_printf(m, "last_walk_frames %ld\n",
+			   atomic_long_read(&corten_nr_walk_frames_last));
+		seq_printf(m, "last_reg_frames %ld\n",
+			   atomic_long_read(&corten_nr_reg_frames_last));
 		seq_printf(m, "last_chg_TOTAL_mm %ld\n",
 			   atomic_long_read(&corten_nr_chg_total_last));
 		seq_printf(m, "last_rel_TOTAL_mm %ld\n",
@@ -5371,6 +5377,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 	struct mmu_gather tlb_;
 	struct mmu_gather *tlb = &tlb_;
 	unsigned long frame, run_start = 0, run_frame = 0, run_end = 0;
+	unsigned long walk_frames = 0;
 	unsigned long done_pmd_seg = 0, done_pud_seg = 0;
 	unsigned long seg;
 	void *slot;
@@ -5399,6 +5406,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 		struct corten_frame_bucket *b;
 		unsigned long win = frame << PMD_SHIFT;
 
+		walk_frames++;
 		if (slot == &corten_va_reserve_sentinel)
 			continue;
 
@@ -5708,6 +5716,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 			READ_ONCE(state->stale_skip_last));
 
 	tlb_finish_mmu(tlb);
+	state->walk_frames = walk_frames;
 	mmap_write_unlock(mm);
 }
 
@@ -5894,6 +5903,10 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				atomic_long_read(&state->mm_chg_total));
 		atomic_long_set(&corten_nr_rel_total_last,
 				atomic_long_read(&state->mm_rel_total));
+		atomic_long_set(&corten_nr_walk_frames_last,
+				state->walk_frames);
+		atomic_long_set(&corten_nr_reg_frames_last,
+				state->reg_frames);
 		/* sec 70c: this child's own per-arm profile -- the global
 		 * counters minus its birth snapshot, rendered as the
 		 * last-exit scalars. */
@@ -9844,6 +9857,7 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 		ret = corten_slot_insert(&state->arenas, frame, child);
 		if (ret)
 			goto out_unwind;
+		state->reg_frames++;
 	}
 	refcount_set(&state->nr, refcount_read(&state->nr) + 1);
 
