@@ -1113,3 +1113,15 @@ create_elf_tables EFAULT（cand 生命周期处理错误, /bin/sh exec 死）
 与电池一致）。**下会话正确修法**: n==0 && stack_vma 时
 `kfree(cand); cand = NULL;`（栈路径不触 cand）而非 krealloc hack,
 然后旗标 on boot → stack_adopts 全覆盖验证 → 电池复验。
+
+## 41. n=0 早退修复第二试回退（2026-10-10）: adopt 释放 bprm->vma 是设计冲突
+
+正确修法落地（kfree(cand)+cand=NULL）→ n=0 路径首次真跑 →
+**create_elf_tables EFAULT 重现**（同 -14）: adopt_stack 的 novma
+手术**释放终载体 VMA**（转 region），而 create_elf_tables 的
+argv/env put_user 面在转换后立刻写栈——服务链在 bprm 相断裂
+（fault 面对刚采纳的 region 的 GUP/put_user 服务未就绪）。
+主链回绿（git checkout, 回退臂形态）。**正确设计**: 窗口形的栈
+采纳必须 co-resident（novma=false, 载体保留到 exec 完成）或
+adopt 延后至 create_elf_tables 之后——两者都是 next-session 设计
+决策, 非快修。
