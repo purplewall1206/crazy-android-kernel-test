@@ -1821,3 +1821,14 @@ exit 崩溃（irqs disabled, CR2 fffff461.../fffff2c4...）—— 这些 PT
 **终局修复方向**: 主遍早停的根因（xa_for_each 迭代中被 walk 自身
 的 slot_remove/retire 打断游标）—— 修复早停后残差按构造归零,
 freepte_present 双重验证。
+
+**sec 91 终局补注（审计最终形态, 07:5x）**: post-walk 检查升级为
+mirror 帧全列表（帧号 + 桶占用）。静默 boot 画像: fork child
+reg=14/walk=9/lost=0 —— **lost=0 为假阴性**（register_child 的
+out_unwind 回退 xa 帧但不回退 trace_frames 条目, 也不回退
+reg_frames 之外的存储）; mirror 列表含 bucket=2 共租帧; exec child
+walk=516/517 全量走查正常。**归因最终态**: fork_copy 计费 VA 集落
+在部分镜像（fail-open/unwind）帧 —— 修复 = register_child 失败路
+径的 charge 回退（fork_copy 在 register_child 之后运行, 失败 arena
+的已计费 PTE 需随 unwind 释放）或 mirror 全成功才计费。一次 boot
+可验。
