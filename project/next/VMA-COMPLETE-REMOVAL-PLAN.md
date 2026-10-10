@@ -1098,3 +1098,18 @@ vdso 族, 正确）+ stack_adopts=23 + fallbacks=0 + vma_gate=0。sweep
 标 VM_CORTEN? 插入与 sweep 之间无标记者）或 (b) locked-sweep 体
 未达（window_form 的早期退出/标签路径）。判别 = 下一会话第一读:
 sweep 体入口计数器（sweep-ran vs classify--1 一次 boot 分形）。
+
+## 40. 判别读数 + 早退修复首试回退（2026-10-10）
+
+**判别读数（判别版内核, 9e85a800）**: sweep_runs=374（≈2/exec:
+exec_mmap 幂等臂 + 传输尾）, **sweep_ours=0**（-1 静默面排除）,
+全部 skip 桶=0, stack_adopts=0——分形落定: **exec mm 无 anon/file
+候选时 sweep 的 `if (!n) return` 在栈处理之前早退**（窗口形的唯一
+树 VMA 就是终载体, n=0 恒真）——293 面归属此早退。
+
+**早退修复首试回退**: krealloc(cand,0) hack 引发
+create_elf_tables EFAULT（cand 生命周期处理错误, /bin/sh exec 死）
+—— 已 `git checkout` 回退, 主链回绿（回退臂形态=手工载体绿,
+与电池一致）。**下会话正确修法**: n==0 && stack_vma 时
+`kfree(cand); cand = NULL;`（栈路径不触 cand）而非 krealloc hack,
+然后旗标 on boot → stack_adopts 全覆盖验证 → 电池复验。
