@@ -1333,3 +1333,20 @@ legacy 域 PT 页）→ +2 FILE 残留不走 span free 路径; span_free_window
 (b) _install_special_mapping 的 insert_pages 记账（+2 FILE 来源侧）;
 (c) exit legacy zap 对阴影 PTE 的类型判定。下轮: (a)(c) 两侧各一
 计数器即分形。保留 span 计数器（观测资产）。
+
+## 59. V3 漂移排除法推进（2026-10-10）: 三面排除, 剩余嫌疑=declare takeover zap / fork mirror / drain
+
+**本轮排除（读码定案, 无需 boot）**:
+- declare_scrub: corten_scrub 只重置元数据（INVALID 校验 + memset）,
+  **不触 PTE 不动 rss**——(a) 面排除;
+- 特殊阴影 tier-1 gate: goto tier3 从不 serve（corten_arena_fault_
+  owned :10120）——阴影服务臂不存在, 该面排除;
+- span_free_legacy=0（sec 58 实测）——出口 span 释放面排除。
+
+**剩余嫌疑三面（下轮分形计数器落点）**:
+1. declare takeover zap: V3 declare（ADEC adopt 形）对预装
+   vdso/vvar PTE 的擦除步——若按元数据类型（INVALID→ANON）而非页
+   类型扣减, +2 FILE/-2 ANON 一次成立（install +2 FILE 孤儿化 +
+   zap 误扣 -2 ANON）;
+2. V3 fork mirror（dup_mmap 侧）: 子副本的 FILE 记账继承/缺失;
+3. exit drain 路径对阴影 descriptor 的 free（drain→free 的 zap 面）。
