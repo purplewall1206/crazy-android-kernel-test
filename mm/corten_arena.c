@@ -253,6 +253,9 @@ static atomic_long_t corten_nr_dc_eother;       /* sec 45: other */
 static atomic_long_t corten_nr_span_free_calls;  /* sec 57: exit PT frees */
 static atomic_long_t corten_nr_span_free_window; /* sec 57: window frames freed */
 static atomic_long_t corten_nr_span_free_legacy; /* sec 57: legacy frames freed */
+static atomic_long_t corten_nr_exit_snap_file;   /* sec 61: last-exit rss file */
+static atomic_long_t corten_nr_exit_snap_anon;   /* sec 61: last-exit rss anon */
+static atomic_long_t corten_nr_exit_snaps;       /* sec 61: mode exits snapped */
 static atomic_long_t corten_nr_sh_exit_anon;     /* sec 57b: shadow exit anon PTEs */
 static atomic_long_t corten_nr_sh_exit_file;     /* sec 57b: shadow exit file PTEs */
 static atomic_long_t corten_nr_sh_exit_spec;     /* sec 57b: shadow exit special/none */
@@ -5404,6 +5407,21 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	state = smp_load_acquire(&mm->corten_state);
 	if (!state)
 		return;
+
+	/* sec 61: the drift-localization snapshot -- the exiting MODE
+	 * mm's rss counters, taken BEFORE the arena walk (and so before
+	 * the legacy walk in exit_mmap).  Pair the rendered snapshot
+	 * with any check_mm BUG: drift present in the snapshot = the
+	 * origin is pre-legacy (the arena face); snapshot clean + BUG
+	 * = the origin is the legacy walk itself.
+	 */
+	if (READ_ONCE(mm->corten_mode)) {
+		atomic_long_set(&corten_nr_exit_snap_file,
+				get_mm_counter(mm, MM_FILEPAGES));
+		atomic_long_set(&corten_nr_exit_snap_anon,
+				get_mm_counter(mm, MM_ANONPAGES));
+		atomic_long_inc(&corten_nr_exit_snaps);
+	}
 
 	/* sec 57b: the V3 drift census -- at exit, walk every special
 	 * shadow's carrier VMA and count the PTE page types, so the
