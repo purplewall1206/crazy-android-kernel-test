@@ -1168,3 +1168,12 @@ sec 40 正确形（kfree+NULL）重apply + sec 42 co-resident -ENOENT 臂
 **栈面语义终态**: 每 exec 的终载体 = G2' 共生形 + sweep 时
 co-resident declare（双服务, 载体保留）。vma_exec.c 退役 = 旗标
 默认化浸泡周后随回退臂删除（sec 33 门槛不变）。
+
+## 46. 双钟合并（2026-10-10）: 浸泡 VM 升级到全栈面内核
+
+E2 浸泡 VM 重建于当前构建（soak2.qcow2 副本, port 10034, 旗标 on
+cmdline）: 栈面全部十八片 + 判别器在跑（boot 实证 bprm_mode=187=
+stack_adopts 全覆盖, vma_gate=0）。**E2 ≥1 天钟与旗标 on ≥1 周钟
+同源积累**（同一 VM 同一内核, 每小时巡检 automation 指向不变）。
+满期: E2 → 探针退役裁决; 旗标 → 默认化 → 回退臂删 → vma_exec.c
+全删 → J6 终账。
