@@ -1361,3 +1361,13 @@ sh_exit_spec=6804(vvar+vclock PFN 面)——**特殊阴影 VMA 内零 anon 页**
 **漂移真来源收窄**: 窗口 arena 的 exit 记账（anon 页 install/清
 不对称）或 legacy 非】 阴影面。下一轮: exit_mmap 的 arena span
 清段与 legacy walk 各上 anon/file 扣减计数器一次 boot 分形。
+
+## 61. 判别版 census 修正 + 快照计数器（2026-10-10, 1a4d5468 后继）
+
+census 载体修正（vma_lookup 按 range）后读数: sh_exit_anon=0 /
+file=756 全 charged / spec=6804——**特殊阴影面整体洗清**（+2/-2 皆非
+阴影残留）。exit_snap_file/anon 快照计数器落地（corten_arena_mm_exit
+入口、legacy walk 前）——下次 check_mm BUG 与快照配对即一次 boot 分
+形 arena 面 vs legacy 面归属。**下一轮**: 快照配对定位 → 修复 → syz
+假 crash 消失 → 有效 fuzzing 解锁。syz 管理器持续运行（假 crash 池
+= 漂移复现样本）。
