@@ -391,6 +391,31 @@ void corten_trace_release(struct mm_struct *mm, struct page *page)
 }
 EXPORT_SYMBOL_GPL(corten_trace_release);
 
+void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm)
+{
+	struct corten_mm_state *state;
+
+	if (!corten_trace_charge_param)
+		return;
+	state = smp_load_acquire(&mm->corten_state);
+	if (state)
+		xa_store(&state->trace_vxa, addr >> PAGE_SHIFT,
+			 (void *)(long)arm, GFP_NOWAIT);
+}
+EXPORT_SYMBOL_GPL(corten_trace_charge_va);
+
+void corten_trace_release_va(struct mm_struct *mm, unsigned long addr)
+{
+	struct corten_mm_state *state;
+
+	if (!corten_trace_charge_param)
+		return;
+	state = smp_load_acquire(&mm->corten_state);
+	if (state)
+		xa_erase(&state->trace_vxa, addr >> PAGE_SHIFT);
+}
+EXPORT_SYMBOL_GPL(corten_trace_release_va);
+
 void corten_note_legacy_zap(bool file, int nr)
 {
 	atomic_long_add(nr, file ? &corten_nr_rel_legacy_file :
@@ -1431,6 +1456,7 @@ static void corten_va_lists_free(struct corten_mm_state *state)
 static void corten_arena_state_free(struct corten_mm_state *state)
 {
 	xa_destroy(&state->trace_xa);
+	xa_destroy(&state->trace_vxa);
 	xa_destroy(&state->arenas);
 	/* Pass-1 aging flags: xa_store(GFP_NOWAIT) by the shrinker
 	 * leaves xarray nodes behind for every mm that ever ran a
@@ -1521,6 +1547,7 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 		return NULL;
 	}
 	xa_init(&state->trace_xa);
+	xa_init(&state->trace_vxa);
 	/* sec 70c: a fresh exec mm's arm baseline is its state-create
 	 * moment (the exec image's own charges all land after it). */
 	corten_arms_snapshot(state);
@@ -5826,6 +5853,26 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 			}
 		}
 		pr_info("corten: trace survivors=%d\n", left);
+		{
+			void *vent;
+			unsigned long vidx = 0;
+			int vshown = 0, vleft = 0;
+
+			xa_for_each(&state->trace_vxa, vidx, vent) {
+				int varm = (int)(long)vent;
+
+				vleft++;
+				if (vshown < 12) {
+					pr_info("corten: trace v-survivor va=%lx arm=%s\n",
+						vidx << PAGE_SHIFT,
+						varm > 0 && varm <
+						(int)ARRAY_SIZE(corten_trace_arm_name) ?
+						corten_trace_arm_name[varm] : "?");
+					vshown++;
+				}
+			}
+			pr_info("corten: trace v-survivors=%d\n", vleft);
+		}
 	}
 
 	corten_arena_exit_walk(mm, state);
@@ -10091,6 +10138,8 @@ retry:
 				atomic_long_inc(&corten_nr_chg_fork_copy);
 				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
 				corten_trace_charge_arm(dst_mm, page, CORTEN_TRACE_FORK_COPY);
+				corten_trace_charge_va(dst_mm, a,
+						       CORTEN_TRACE_FORK_COPY);
 			}
 		} else {
 			/* A pagecache folio: dup is a bare mapcount bump
@@ -14224,6 +14273,7 @@ static void corten_zap_release_page(struct mm_struct *mm,
 		      !folio_mapping(folio));
 
 	corten_trace_release(mm, page);
+	corten_trace_release_va(mm, addr);
 
 	if (file)
 		folio_remove_file_rmap_novma(folio);

@@ -571,6 +571,8 @@ void corten_note_legacy_anon_charge(int nr);
 void corten_note_anon_counter(struct mm_struct *mm, long val);
 void corten_trace_charge_arm(struct mm_struct *mm, struct page *page, int arm);
 void corten_trace_charge(struct mm_struct *mm, struct page *page);
+void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm);
+void corten_trace_release_va(struct mm_struct *mm, unsigned long addr);
 void corten_trace_release(struct mm_struct *mm, struct page *page);
 void corten_note_legacy_zap(bool file, int nr);
 
@@ -657,7 +659,7 @@ struct corten_mm_state {
 	atomic_long_t		mm_rel_total;	/* sec 78: the charged-page trace set (corten_trace_charge=on
 	 * boots only) -- page-indexed, charge stores, release erases;
 	 * the exit survivors ARE the unreleased population. */
-	struct xarray		trace_xa;
+	struct xarray		trace_xa;	struct xarray		trace_vxa;	/* sec 79: VA-keyed trace */
 	/* w3fix4: the deferred free's second hop -- the RCU callback only
 	 * schedules this work, and the actual teardown (xa_destroy et
 	 * al) runs in kworker task context.  Running the teardown in the
