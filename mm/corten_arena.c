@@ -5941,10 +5941,25 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 			int plost = 0;
 
 			xa_for_each(&state->trace_frames, fidx, fent) {
-				if (!xa_load(&state->arenas, fidx))
+				void *ent2 = xa_load(&state->arenas, fidx);
+
+				if (!ent2) {
 					plost++;
+					pr_info("corten: frame LOST f=%lx\n",
+						fidx);
+				} else if (corten_yield_print_exits < 2) {
+					int bn = ent2 ==
+					    &corten_va_reserve_sentinel ? -1 :
+					    (corten_slot_bucket(ent2) ?
+					     (int)corten_slot_bucket(ent2)->nr :
+					     1);
+
+					pr_info("corten: mirror-frame f=%lx ents=%px bucket=%d\n",
+						fidx, ent2, bn);
+				}
 			}
-			pr_info("corten: POST-WALK lost=%d\n", plost);
+			pr_info("corten: POST-WALK lost=%d walk=%ld reg=%ld\n",
+				plost, state->walk_frames, state->reg_frames);
 		}
 		/* sec 70c: this child's own per-arm profile -- the global
 		 * counters minus its birth snapshot, rendered as the
