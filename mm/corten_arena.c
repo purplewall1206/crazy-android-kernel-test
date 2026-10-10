@@ -14225,6 +14225,87 @@ static bool corten_zap_drop_present_page(struct mm_struct *mm,
 	return __tlb_remove_page_size(tlb, page, false, PAGE_SIZE);
 }
 
+/*
+ * sec 76: the survivor sweep -- the exit's last accounting pass.  The
+ * arena walk covers registry frames, the legacy funnel covers tree
+ * VMAs; pages outside both (the below-carrier stack growth, any
+ * shape the coverage contracts miss) die in free_pgtables' bare PT
+ * teardown with their charges still held -- the per-child exit
+ * residual (the sec 74b probe: pre 82 -> post 48, residual 34).
+ * Called from exit_mmap after unmap_vmas and before free_pgtables
+ * (mmap_write held, mm_users 0): every surviving present PTE takes
+ * the counted release funnel, so chg - rel closes to zero by
+ * construction.  Post-unmap the sweep is sparse (VMA-ranged PTEs are
+ * already none).
+ */
+void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm)
+{
+	unsigned long addr;
+	pgd_t *pgd;
+
+	mmap_assert_write_locked(mm);
+
+	for (addr = FIRST_USER_ADDRESS, pgd = pgd_offset(mm, addr);
+	     addr < TASK_SIZE; addr = (addr + PGDIR_SIZE) & PGDIR_MASK,
+	     pgd++) {
+		p4d_t *p4d;
+		pud_t *pud;
+		pmd_t *pmd;
+		unsigned long pmd_addr;
+
+		if (pgd_none(READ_ONCE(*pgd)) || pgd_bad(READ_ONCE(*pgd)))
+			continue;
+		p4d = p4d_offset(pgd, addr);
+		if (p4d_none(READ_ONCE(*p4d)) || p4d_bad(READ_ONCE(*p4d)))
+			continue;
+		pud = pud_offset(p4d, addr);
+		if (pud_none(READ_ONCE(*pud)) || pud_bad(READ_ONCE(*pud)))
+			continue;
+		pmd = pmd_offset(pud, addr);
+		pmd_addr = addr;
+		for (; pmd_addr < (addr | (PGDIR_SIZE - 1)) + 1 &&
+		     pmd_addr < TASK_SIZE;
+		     pmd_addr += PMD_SIZE, pmd++) {
+			pte_t *ptep;
+			spinlock_t *ptl;
+			unsigned long pa;
+
+			if (!pmd_present(READ_ONCE(*pmd)) ||
+			    pmd_bad(READ_ONCE(*pmd)))
+				continue;
+			ptep = pte_offset_map_lock(mm, pmd, pmd_addr, &ptl);
+			if (!ptep)
+				continue;
+			for (pa = pmd_addr;
+			     pa < pmd_addr + PMD_SIZE; pa += PAGE_SIZE) {
+				pte_t pt = ptep_get(ptep +
+						    ((pa - pmd_addr) >>
+						     PAGE_SHIFT));
+				struct page *page;
+
+				if (pte_none(pt) || !pte_present(pt) ||
+				    pte_special(pt))
+					continue;
+				page = pte_page(pt);
+				ptep_get_and_clear(mm, pa, ptep +
+						   ((pa - pmd_addr) >>
+						    PAGE_SHIFT));
+				corten_zap_release_page(mm, NULL, page, pa);
+				if (__tlb_remove_page_size(tlb, page, false,
+							   PAGE_SIZE)) {
+					/* Batch overflow: flush and retry
+					 * this page's slot (its PTE is
+					 * already cleared; the reference
+					 * rides the tlb batch). */
+					tlb_flush_mmu(tlb);
+				}
+			}
+			pte_unmap_unlock(ptep, ptl);
+		}
+	}
+	tlb_flush_mmu(tlb);
+}
+
 static int corten_arena_zap_window(struct mm_struct *mm,
 				   struct vm_area_struct *vma,
 				   struct corten_txn *txn,

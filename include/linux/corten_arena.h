@@ -575,6 +575,11 @@ void corten_note_legacy_zap(bool file, int nr);
  * legacy funnel's release for the tree VMAs the arena walk left). */
 void corten_exit_unmap_probe(struct mm_struct *mm, bool pre);
 
+/* sec 76: the survivor sweep -- counted release for every PTE that
+ * survived both exit coverages (MODE mm, exit_mmap, pre-free_pgtables). */
+struct mmu_gather;
+void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm);
+
 struct corten_mm_state {
 	struct xarray		arenas;
 	refcount_t		nr;
