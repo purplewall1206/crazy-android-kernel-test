@@ -569,7 +569,7 @@ enum {
 void corten_note_tree_copy(int nr, bool file);
 void corten_note_legacy_anon_charge(int nr);
 void corten_note_anon_counter(struct mm_struct *mm, long val);
-void corten_trace_charge_arm(struct mm_struct *mm, struct page *page, int arm);
+void corten_trace_charge_arm(struct mm_struct *mm, unsigned long addr, int arm);
 void corten_trace_charge(struct mm_struct *mm, struct page *page);
 void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm);
 void corten_trace_release_va(struct mm_struct *mm, unsigned long addr);
@@ -661,6 +661,11 @@ struct corten_mm_state {
 	 * boots only) -- page-indexed, charge stores, release erases;
 	 * the exit survivors ARE the unreleased population. */
 	struct xarray		trace_xa;	struct xarray		trace_vxa;	/* sec 79: VA-keyed trace */
+	/* sec 89: the deferred trace ring -- (va-page, arm|release-bit)
+	 * appended lock-free at the hooks, replayed into the survivor
+	 * set once at exit (the inline xarray ops wedged under ptl). */
+	u32			trace_ring[4096];
+	atomic_long_t		trace_pos;
 	struct xarray		trace_frames;	/* sec 85: registered frame set */	atomic_long_t		trace_n;	/* sec 87: stored entries (capped) */
 	/* w3fix4: the deferred free's second hop -- the RCU callback only
 	 * schedules this work, and the actual teardown (xa_destroy et

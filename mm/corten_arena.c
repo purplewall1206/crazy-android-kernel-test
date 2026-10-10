@@ -354,51 +354,41 @@ static const char *const corten_trace_arm_name[] = {
 	"sweep_adopt"
 };
 #define CORTEN_TRACE_CAP 8192
-static bool corten_trace_charge_param; /* sec 78: charged-page trace (param-gated) */
+static bool corten_trace_charge_param = true; /* sec 89: ring trace, bounded */
 module_param_named(trace_charge, corten_trace_charge_param, bool, 0);
 
 /* sec 78: the charged-page trace set.  Charge sites store the page,
  * release sites erase it; the exit survivors are the unreleased
  * population, printed once per boot. */
-void corten_trace_charge_arm(struct mm_struct *mm, struct page *page,
+void corten_trace_charge_arm(struct mm_struct *mm, unsigned long addr,
 			     int arm)
 {
 	struct corten_mm_state *state;
-	void *old;
 
 	if (!corten_trace_charge_param)
 		return;
 	state = smp_load_acquire(&mm->corten_state);
 	if (!state)
 		return;
-	/* sec 87 guards: bounded population + GFP_NOWAIT failure
-	 * tolerance (a failed store neither counts nor corrupts). */
-	if (atomic_long_read(&state->trace_n) >= CORTEN_TRACE_CAP)
-		return;
-	old = xa_store(&state->trace_xa, (unsigned long)page >> PAGE_SHIFT,
-		       (void *)(long)arm, GFP_NOWAIT);
-	if (IS_ERR(old))
-		return;
-	if (!old)
-		atomic_long_inc(&state->trace_n);
+	{
+		long pos = atomic_long_fetch_add(1, &state->trace_pos);
+
+		state->trace_ring[pos & 4095] =
+			((addr >> PAGE_SHIFT) & 0xFFFFFF) | (arm << 24);
+	}
 }
 
 void corten_trace_charge(struct mm_struct *mm, struct page *page)
 {
-	corten_trace_charge_arm(mm, page, CORTEN_TRACE_MAP_ANON);
+	corten_trace_charge_arm(mm, (unsigned long)page << PAGE_SHIFT,
+				CORTEN_TRACE_MAP_ANON);
 }
 EXPORT_SYMBOL_GPL(corten_trace_charge);
 
 void corten_trace_release(struct mm_struct *mm, struct page *page)
 {
-	struct corten_mm_state *state;
-
-	if (!corten_trace_charge_param)
-		return;
-	state = smp_load_acquire(&mm->corten_state);
-	if (state && xa_erase(&state->trace_xa,
-			      (unsigned long)page >> PAGE_SHIFT))
-		atomic_long_dec(&state->trace_n);
+	corten_trace_charge_arm(mm, (unsigned long)page << PAGE_SHIFT,
+				CORTEN_TRACE_FORK_PIN | 0x40);
 }
 EXPORT_SYMBOL_GPL(corten_trace_release);
 
@@ -425,13 +415,7 @@ EXPORT_SYMBOL_GPL(corten_trace_charge_va);
 
 void corten_trace_release_va(struct mm_struct *mm, unsigned long addr)
 {
-	struct corten_mm_state *state;
-
-	if (!corten_trace_charge_param)
-		return;
-	state = smp_load_acquire(&mm->corten_state);
-	if (state && xa_erase(&state->trace_vxa, addr >> PAGE_SHIFT))
-		atomic_long_dec(&state->trace_n);
+	corten_trace_charge_arm(mm, addr, CORTEN_TRACE_FORK_PIN | 0x40);
 }
 EXPORT_SYMBOL_GPL(corten_trace_release_va);
 
@@ -5430,15 +5414,11 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 	 * member's byte clip is zapped under its own anchor and the PT
 	 * page is left to the legacy pass unless it has gone all-empty.
 	 */
-	/* sec 86: stability re-run -- a frame erased mid-iteration (the
-	 * W-4 retire, a release racing the walk) makes xa_for_each skip
-	 * its successor; the skipped frames carried the charged-but-
-	 * unreleased pages (the +34 residual).  Re-run until a pass
-	 * yields no new frames.
-	 */
-	for (;;) {
-	unsigned long prev_frames = walk_frames;
-
+	/* sec 89: the main zap pass runs ONCE.  (The two-pass "stability
+	 * re-run" form crashed: pass two re-processed frames pass one
+	 * had already retired and died with irqs disabled at exit --
+	 * the 13-vs-8 read that motivated it was a cross-child
+	 * measurement artifact, see the sec 80b ledger.) */
 	frame = 0;
 	xa_for_each(&state->arenas, frame, slot) {
 		struct corten_frame_bucket *b;
@@ -5513,12 +5493,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 		have_run = false;
 		corten_arena_exit_run(mm, tlb, run_start, run_end);
 	}
-	/* sec 86: one stable pass is enough -- a re-run only when the
-	 * previous pass advanced (the mid-iteration erase skip). */
-	if (walk_frames == prev_frames)
-		break;
-	walk_frames -= prev_frames;
-	}
+
 
 	/* B) upper-table self-teardown, one ascending frame pass per
 	 * level (frame-keyed since W-7: a bucket slot is one frame like
@@ -5887,62 +5862,43 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 * fault or transaction can appear, and the descriptor trees' own
 	 * locks fence the walk against everything dead.
 	 */
-	/* sec 78: the charged-page trace survivors -- the unreleased
-	 * population, printed once per boot. */
+	/* sec 78/89: replay the trace ring -- charged VAs stored,
+	 * released VAs erased; the survivors are the unreleased
+	 * population with their installing arms. */
 	if (corten_trace_charge_param) {
-		void *entry;
-		unsigned long idx = 0;
+		DEFINE_XARRAY(vset);
+		long n = atomic_long_read(&state->trace_pos);
+		long i;
+		void *vent;
+		unsigned long vidx = 0;
 		int shown = 0, left = 0;
 
-		xa_for_each(&state->trace_xa, idx, entry) {
-			int arm = (int)(long)entry;
+		for (i = 0; i < n; i++) {
+			u32 e = state->trace_ring[i & 4095];
+			unsigned long va = (e & 0xFFFFFF) << PAGE_SHIFT;
+			int arm = (e >> 24) & 0xFF;
+
+			if (arm & 0x40)
+				xa_erase(&vset, va >> PAGE_SHIFT);
+			else
+				xa_store(&vset, va >> PAGE_SHIFT, (void *)(long)arm,
+					 GFP_NOWAIT);
+		}
+		xa_for_each(&vset, vidx, vent) {
+			int arm = (int)(long)vent;
 
 			left++;
 			if (shown < 12) {
-				pr_info("corten: trace survivor pfn=%lx arm=%s\n",
-					idx, arm > 0 &&
+				pr_info("corten: v-survivor va=%lx arm=%s\n",
+					vidx << PAGE_SHIFT,
+					arm > 0 &&
 					arm < (int)ARRAY_SIZE(corten_trace_arm_name) ?
 					corten_trace_arm_name[arm] : "?");
 				shown++;
 			}
 		}
-		pr_info("corten: trace survivors=%d\n", left);
-		{
-			void *fent;
-			unsigned long fidx = 0;
-			int lost = 0;
-
-			xa_for_each(&state->trace_frames, fidx, fent) {
-				if (!xa_load(&state->arenas, fidx)) {
-					lost++;
-					if (lost <= 8)
-						pr_info("corten: frame LOST f=%lx\n",
-							fidx);
-				}
-			}
-			pr_info("corten: frames lost=%d walk=%ld reg=%ld\n",
-				lost, state->walk_frames, state->reg_frames);
-		}
-		{
-			void *vent;
-			unsigned long vidx = 0;
-			int vshown = 0, vleft = 0;
-
-			xa_for_each(&state->trace_vxa, vidx, vent) {
-				int varm = (int)(long)vent;
-
-				vleft++;
-				if (vshown < 12) {
-					pr_info("corten: trace v-survivor va=%lx arm=%s\n",
-						vidx << PAGE_SHIFT,
-						varm > 0 && varm <
-						(int)ARRAY_SIZE(corten_trace_arm_name) ?
-						corten_trace_arm_name[varm] : "?");
-					vshown++;
-				}
-			}
-			pr_info("corten: trace v-survivors=%d\n", vleft);
-		}
+		pr_info("corten: v-survivors=%d\n", left);
+		xa_destroy(&vset);
 	}
 
 	corten_arena_exit_walk(mm, state);
@@ -10198,8 +10154,7 @@ retry:
 				folio_add_anon_rmap_novma(newfolio);
 				atomic_long_inc(&corten_nr_chg_fork_pin);
 				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
-				corten_trace_charge_arm(dst_mm, &newfolio->page,
-						       CORTEN_TRACE_FORK_PIN);
+				corten_trace_charge_arm(dst_mm, a, CORTEN_TRACE_FORK_PIN);
 				/* The copy's writable bit follows the
 				 * parent's encoding (the recorded perm):
 				 * a RO parent's copy re-arms on the
@@ -10228,7 +10183,7 @@ retry:
 				folio_dup_anon_rmap_novma(folio, page);
 				atomic_long_inc(&corten_nr_chg_fork_copy);
 				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
-				corten_trace_charge_arm(dst_mm, page, CORTEN_TRACE_FORK_COPY);
+				corten_trace_charge_arm(dst_mm, a, CORTEN_TRACE_FORK_COPY);
 				corten_trace_charge_va(dst_mm, a,
 						       CORTEN_TRACE_FORK_COPY);
 			}
@@ -11475,7 +11430,7 @@ static int corten_arena_map_anon(struct corten_fault_ctx *ctx,
 	 */
 	atomic_long_inc(&corten_nr_chg_map_anon);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
-	corten_trace_charge_arm(mm, &arena_folio->page, CORTEN_TRACE_MAP_ANON);
+	corten_trace_charge_arm(mm, ctx->addr, CORTEN_TRACE_MAP_ANON);
 	/* MV2 W-2 (R1 flip): the anon window page's mapcount is exact
 	 * bookkeeping on every shape now -- the auto (vma-less) shapes
 	 * through the W1.a novma wrapper, the shadow shapes through the
@@ -11842,7 +11797,7 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 	 */
 	atomic_long_inc(&corten_nr_chg_cow_write);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
-	corten_trace_charge_arm(mm, &ctx->folio->page, CORTEN_TRACE_COW_WRITE);
+	corten_trace_charge_arm(mm, ctx->addr, CORTEN_TRACE_COW_WRITE);
 	if (vma)
 		folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr,
 					RMAP_EXCLUSIVE);
@@ -12295,7 +12250,7 @@ retry:
 
 	atomic_long_inc(&corten_nr_chg_swap_in);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
-	corten_trace_charge_arm(mm, &folio->page, CORTEN_TRACE_SWAP_IN);
+	corten_trace_charge_arm(mm, ctx->addr, CORTEN_TRACE_SWAP_IN);
 	add_mm_counter(mm, MM_SWAPENTS, -1);
 
 	newpte = mk_pte(page, vma ? corten_arena_perm_pgprot(vma, m2.perm) :
@@ -12931,7 +12886,7 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 
 	atomic_long_inc(&corten_nr_chg_file_cow);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
-	corten_trace_charge_arm(mm, &ctx->folio->page, CORTEN_TRACE_FILE_COW);
+	corten_trace_charge_arm(mm, ctx->addr, CORTEN_TRACE_FILE_COW);
 	if (vma)
 		folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr,
 					RMAP_EXCLUSIVE);
@@ -20420,7 +20375,7 @@ static int corten_arena_unuse_cache_pull(struct mm_struct *mm,
 
 	atomic_long_inc(&corten_nr_chg_unuse_pull);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
-	corten_trace_charge_arm(mm, &folio->page, CORTEN_TRACE_UNUSE_PULL);
+	corten_trace_charge_arm(mm, addr, CORTEN_TRACE_UNUSE_PULL);
 	add_mm_counter(mm, MM_SWAPENTS, -1);
 	folio_get(folio);
 
