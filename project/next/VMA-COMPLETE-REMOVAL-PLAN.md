@@ -1284,3 +1284,11 @@ soak2（全栈面内核 + 旗标 on, port 10034）起算 = 首次 init 运行时
 每小时巡检 automation 的 soak-hourly.log 为累积证据流; 满期判据
 = 日志时间戳差, 可审计。等待期实作件维持待命（region host 改判
 件 / 双服务细化, 每片 grep 门+旗标 on boot+smoke）。
+
+## 55. 等待期 steady-state 核（2026-10-10）: 一小时连续无事件
+
+soak2 运行 1 小时整: bprm_mode=357=stack_adopts 全覆盖 + fallbacks=0
++ vma_gate=0 + 零 trap——真路径 + 全覆盖形态在持续负载下零事件,
+双钟干净积累。E2 满期 2026-10-11 10:09; 旗标 on 满期 2026-10-17
+10:09。等待期实作件（region host 改判件/双服务细化）维持待命——
+当前栈面已无未细化项（双服务即终态语义, sec 45）。
