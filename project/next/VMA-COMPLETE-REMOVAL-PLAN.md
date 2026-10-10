@@ -1533,3 +1533,25 @@ MODE 下双侧不计数——finish_fault 跳过 charge + release_page 跳过
 臂与 drain 臂在 fork child 生命期外的形态）。sec 68 三类型失衡
 至此: SHMEM 面 sec 69 修 ✓, FILE 面 sec 71 修 ✓, ANON 幻影
 （零泄漏纯计数）为最后一项, 工具全就位。
+
+## 72. 逐 child 臂画像 + 渲染缓冲修复（2026-10-11 凌晨）
+
+sec 70c（ebe6868f7b3f）: 每 MODE mm 出生时快照 17 臂全局计数器
+（fork_begin 的 child 在镜像前; state_create 为 fresh exec 形）,
+exit 渲染 last_* 差值 —— 一个 bash -c exit 的 diff = 该 child 完整
+逐臂 charge/release 画像。新增两 census 臂闭 tree-VMA 面:
+chg_tree_anon/file（copy_present_ptes）+ rel_legacy_anon/file
+（zap_present_folio_ptes）。
+
+**首个 child 画像（fork 子壳）**: chg_tree_* = 0, rel_legacy_* = 0
+—— **legacy 面对幻影彻底无辜**, child 记账 100% arena 侧（charge
+145 = fork_copy 129 + cow_write 15 + map_anon 1; arena 扣减 142）。
+窗口算术差值 31 来自 smoke 宿主 journald 崩溃循环的污染（journal
+995.1M 满 → 磁盘压力重启循环）。干净单 child 实验需 init=/bin/bash
+静默 boot —— 下轮一项。
+
+**电池五失败修复**: S8 渲染 helper 的单页缓冲被 census 渲染撑爆
+（-ENOSPC, 五测试 assert-fail 于 helper 本身）→ 两页。电池恢复
+34/0（off 7/0）。**教训**: 电池绿判据此前只看 Totals 尾行, 嵌套
+not-ok 行（基线同有, 非回归）掩盖了真实失败 —— 修复后 Totals 与
+基线逐字一致。
