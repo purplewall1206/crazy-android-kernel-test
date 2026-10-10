@@ -1709,8 +1709,10 @@ static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
 		/* We don't need up-to-date accessed/dirty bits. */
 		clear_full_ptes(mm, addr, pte, nr, tlb->fullmm);
 		rss[MM_ANONPAGES] -= nr;
-		if (READ_ONCE(mm->corten_mode))
+		if (READ_ONCE(mm->corten_mode)) {
 			corten_note_legacy_zap(false, nr);
+			corten_trace_release_va(mm, addr);
+		}
 	}
 	/* Checking a single PTE in a batch is sufficient. */
 	arch_check_zapped_pte(vma, ptent);

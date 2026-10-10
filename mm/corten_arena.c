@@ -11368,6 +11368,7 @@ static int corten_arena_map_anon(struct corten_fault_ctx *ctx,
 			return -EAGAIN;
 		}
 		corten_pte_clear_flush(vma, mm, ctx->addr, ptep);
+		corten_trace_release_va(mm, ctx->addr);
 	}
 
 	/* ③ mm stability check + accounting (memory.c:5248/5259-5263).
@@ -11736,6 +11737,7 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 	 * read-only translation may be cached in any CPU's TLB.
 	 */
 	corten_pte_clear_flush(vma, mm, ctx->addr, ptep);
+		corten_trace_release_va(mm, ctx->addr);
 
 	entry = folio_mk_pte(ctx->folio,
 			     vma ? corten_arena_perm_pgprot(vma, m->perm) :
