@@ -1510,3 +1510,26 @@ charge → 190 驻留 → 273 正常扣减 → **34 幻影**（life 内释放无
 corten_folio_is_filemap（mapping 门）, 未拄锚老 folio → ANON ✓
 平衡。**下轮**: 给 fork 镜像父侧释放臂/transfer 释放臂/drain 补
 release 侧逐臂计数, 与七 charge 臂做逐臂对账（一次 boot 收敛）。
+
+## 71. 逐臂对账收敛 + vdso/vvar 家族对齐: -2 FILE 归零（2026-10-11 凌晨）
+
+sec 70 补齐释放侧逐臂计数（rel_cow_old/rel_file_unmap/rel_swap_out,
+61f8acf538ae）后对账: cow_write 双侧精确配对（41==41）;
+rel_file_unmap/rel_swap_out 窗口内零增量。kpage 身份链钉死:
+释放页 = **[vdso] 文本 VMA 真实页 PTE**（one-shot: vma flags
+0x40075 无 PFNMAP; PTE 位 P|USER|A 只读**无 special 位**,
+finish_fault/do_set_pte 标准故障漏斗安装）。实测每 exit 对:
+fault_kpage_chg ≈ 1/exit vs zrel_kpage = 2/exit → -1~-2 FILEPAGES
+残差/exit。
+
+**修复（2d32fca8c552）**: kernel-image 家族（无 mapping file 页）在
+MODE 下双侧不计数——finish_fault 跳过 charge + release_page 跳过
+扣减（对称 corten_mode 门, legacy 保持上游两侧平衡的偶然记账）。
+收敛 boot 判决: 漂移签名**仅剩 +34 ANON 纯幻影**（零 FILE 项、
+零 SHMEM 项）。电池双腿绿（7/0, 34/0）。
+
++34 幻影现状: 所有生产扣减臂已带计数, 下轮 diff 逐臂即定位
+（fork 镜像三臂均带 charge ✓, cow_write 配对 ✓——剩 transfer 释放
+臂与 drain 臂在 fork child 生命期外的形态）。sec 68 三类型失衡
+至此: SHMEM 面 sec 69 修 ✓, FILE 面 sec 71 修 ✓, ANON 幻影
+（零泄漏纯计数）为最后一项, 工具全就位。
