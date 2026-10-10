@@ -14311,7 +14311,7 @@ struct corten_zap_win {
  * discriminator is the folio's own state (corten_folio_is_filemap):
  * an unanchored anon folio has no mapping and would read as file.
  */
-static void corten_zap_release_page(struct mm_struct *mm,
+void corten_zap_release_page(struct mm_struct *mm,
 				    struct vm_area_struct *vma,
 				    struct page *page, unsigned long addr)
 {

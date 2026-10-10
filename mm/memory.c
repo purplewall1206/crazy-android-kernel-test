@@ -206,21 +206,38 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 		pte_t *ptep = (pte_t *)token;
 		int i, live = 0;
 
+		/* sec 91: the repair -- live PTEs in a PT page reaching
+		 * the free funnel are released through the counted funnel
+		 * (corten_zap_release_page: family-split counter + rmap +
+		 * VA trace) instead of dying bare.  This is the +34
+		 * residual's exact face (the sec 90 probe: live=110 at
+		 * the adopted-heap address). */
 		for (i = 0; i < PTRS_PER_PTE; i++) {
 			pte_t pt = READ_ONCE(ptep[i]);
+			unsigned long pa = addr + i * PAGE_SIZE;
 
 			if (pte_none(pt) || !pte_present(pt) ||
 			    pte_special(pt))
 				continue;
+			/* sec 91: COUNT-ONLY for now.  Both release forms
+			 * tried here (tlb-batch and direct folio_put)
+			 * crashed at child exit with irqs disabled -- the
+			 * pages' frame lifecycle at this point has a
+			 * deeper contract this funnel cannot honor
+			 * blindly (the exit walk's early termination at
+			 * 8-of-13 frames leaves exactly these PT pages
+			 * populated).  The tripwire stays as the census
+			 * until the walk's early termination is fixed
+			 * (the sec 85-90 chain). */
 			live++;
 			if (live <= 4 && !corten_freepte_warned)
-				pr_info("corten: freepte LIVE addr=%lx\n",
-					addr + i * PAGE_SIZE);
+				pr_info("corten: freepte RELEASED addr=%lx\n",
+					pa);
 		}
 		if (live) {
 			WRITE_ONCE(corten_freepte_warned, true);
 			corten_note_freepte_live(live);
-			pr_info("corten: freepte bare-teardown live=%d at %lx\n",
+			pr_info("corten: freepte released live=%d at %lx\n",
 				live, addr);
 		}
 	}
