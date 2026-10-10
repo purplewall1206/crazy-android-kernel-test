@@ -564,6 +564,10 @@ bool corten_arena_placement_backstop(struct mm_struct *mm,
 /* V2 census producer (the wl_brk acceptance denominator). */
 void corten_note_brk_funnel(struct mm_struct *mm);
 
+/* sec 69 census: the legacy walk zapped a special-mapping page on a
+ * MODE mm (the shadow-carrier double-release suspect). */
+void corten_note_legacy_shadow_zap(void);
+
 /* V3: shadow-adopt a special-mapping VMA (the vdso/vvar family). */
 void corten_arena_special_shadow(struct mm_struct *mm,
 				 struct vm_area_struct *vma);
@@ -1252,6 +1256,10 @@ corten_arena_placement_backstop(struct mm_struct *mm, unsigned long start,
 }
 
 static inline void corten_note_brk_funnel(struct mm_struct *mm)
+{
+}
+
+static inline void corten_note_legacy_shadow_zap(void)
 {
 }
 

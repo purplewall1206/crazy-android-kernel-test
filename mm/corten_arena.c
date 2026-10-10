@@ -270,6 +270,17 @@ static atomic_long_t corten_nr_sh_exit_anon;     /* sec 57b: shadow exit anon PT
 static atomic_long_t corten_nr_sh_exit_file;     /* sec 57b: shadow exit file PTEs */
 static atomic_long_t corten_nr_sh_exit_spec;     /* sec 57b: shadow exit special/none */
 static atomic_long_t corten_nr_sh_exit_charged;  /* sec 57b: shadow exit mapped (charged) */
+static atomic_long_t corten_nr_exit_nostate;     /* sec 69: registry-free MODE exits */
+static atomic_long_t corten_nr_exit_nostate_anon;/* sec 69: their residual anon */
+static atomic_long_t corten_nr_exit_nostate_file;/* sec 69: their residual file */
+static atomic_long_t corten_nr_zrel_kpage;       /* sec 69: mapping-less file releases */
+static atomic_long_t corten_nr_lshadow_zap;      /* sec 69: legacy special-VMA zaps, MODE */
+
+void corten_note_legacy_shadow_zap(void)
+{
+	atomic_long_inc(&corten_nr_lshadow_zap);
+}
+EXPORT_SYMBOL_GPL(corten_note_legacy_shadow_zap);
 
 static void corten_dc_note(int ret)
 {
@@ -3910,6 +3921,16 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_zrel_anon));
 	seq_printf(m, "zrel_file           %ld\n",
 		   atomic_long_read(&corten_nr_zrel_file));
+	seq_printf(m, "zrel_kpage          %ld\n",
+		   atomic_long_read(&corten_nr_zrel_kpage));
+	seq_printf(m, "exit_nostate        %ld\n",
+		   atomic_long_read(&corten_nr_exit_nostate));
+	seq_printf(m, "exit_nostate_anon   %ld\n",
+		   atomic_long_read(&corten_nr_exit_nostate_anon));
+	seq_printf(m, "exit_nostate_file   %ld\n",
+		   atomic_long_read(&corten_nr_exit_nostate_file));
+	seq_printf(m, "lshadow_zap         %ld\n",
+		   atomic_long_read(&corten_nr_lshadow_zap));
 	seq_printf(m, "lz_anon             %ld\n",
 		   atomic_long_read(&corten_nr_lz_anon));
 	seq_printf(m, "lz_file             %ld\n",
@@ -5435,8 +5456,25 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 
 	/* Pairs with the store in corten_arena_state_create(). */
 	state = smp_load_acquire(&mm->corten_state);
-	if (!state)
+	if (!state) {
+		/* sec 69: a registry-free MODE exit skips the arena walk
+		 * below entirely; any window pages the fork mirror (or an
+		 * earlier registry teardown) left behind are invisible to
+		 * the legacy walk too (no VMA in the window domain) and
+		 * stay charged forever.  Census the face: count these
+		 * exits and sum their residual rss so one boot separates
+		 * "stateless exits carry the drift" from the walk's own
+		 * misses.
+		 */
+		if (READ_ONCE(mm->corten_mode)) {
+			atomic_long_inc(&corten_nr_exit_nostate);
+			atomic_long_add(get_mm_counter(mm, MM_ANONPAGES),
+					&corten_nr_exit_nostate_anon);
+			atomic_long_add(get_mm_counter(mm, MM_FILEPAGES),
+					&corten_nr_exit_nostate_file);
+		}
 		return;
+	}
 
 	/* sec 61: the drift-localization snapshot -- the exiting MODE
 	 * mm's rss counters, taken BEFORE the arena walk (and so before
@@ -13719,7 +13757,20 @@ static void corten_zap_release_page(struct mm_struct *mm,
 				    struct page *page, unsigned long addr)
 {
 	struct folio *folio = page_folio(page);
-	bool file = !folio_test_anon(folio);
+	/* sec 69: the family discriminator cannot be folio_test_anon()
+	 * alone -- every vma-less arena install leaves mapping == NULL by
+	 * design (the W1.a novma rmap contract), so an arena anon folio
+	 * reads "not anon" until something anchors it, and the arena's
+	 * swap-out shape (deliberately swapbacked) then misfiles the
+	 * release into the shmem family (+ANON / -SHMEM paired exit
+	 * drift, the sec 68 signature).  The unanchored arena-anon mark
+	 * is swapbacked with no mapping: real pagecache (file or shmem)
+	 * carries its mapping behind a live PTE, and the mapping-less
+	 * kernel-image pages (the vdso) are not swapbacked.
+	 */
+	bool file = !folio_test_anon(folio) &&
+		    !(folio_test_swapbacked(folio) &&
+		      !folio_mapping(folio));
 
 	if (file)
 		folio_remove_file_rmap_novma(folio);
@@ -13727,18 +13778,28 @@ static void corten_zap_release_page(struct mm_struct *mm,
 		folio_remove_rmap_pte(folio, page, vma);
 	else
 		folio_remove_anon_rmap_novma(folio);
-	/* sec 63 fix: the counter selector matches mm_counter_file()
-	 * (!PageAnon → FILE, same as insert_pages' charge) instead of
-	 * corten_folio_is_filemap() which additionally requires
-	 * folio_mapping() != NULL -- kernel-allocated pages (the vdso
-	 * image) have mapping == NULL and were misclassified as ANON,
-	 * producing the +2 FILE / -2 ANON exit drift.
+	/* sec 69: the counter split mirrors the rmap split above -- the
+	 * file family is mm_counter_file()'s (shmem-backed folios are
+	 * MM_SHMEMPAGES, the vdso image's mapping-less pages are
+	 * MM_FILEPAGES), the anon family is MM_ANONPAGES.  The sec 65
+	 * rework dropped the anon arm entirely -- every anon release
+	 * decremented the file family instead (+ANON / -FILEFAM paired
+	 * exit drift, the sec 68 signature).
 	 */
-	add_mm_counter(mm, mm_counter_file(folio), -1);
-	if (mm_counter_file(folio) == MM_FILEPAGES)
+	if (file) {
+		/* sec 69 census: the mapping-less file-family release is
+		 * the kernel-image (vdso/vvar) shape -- count it so the
+		 * -2 FILE residual's face (arena walk vs legacy zap of
+		 * the same pages) is one-boot attributable.
+		 */
+		if (!folio_mapping(folio))
+			atomic_long_inc(&corten_nr_zrel_kpage);
+		add_mm_counter(mm, mm_counter_file(folio), -1);
 		atomic_long_inc(&corten_nr_zrel_file);
-	else
+	} else {
+		add_mm_counter(mm, MM_ANONPAGES, -1);
 		atomic_long_inc(&corten_nr_zrel_anon);
+	}
 }
 
 /*

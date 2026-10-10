@@ -1756,6 +1756,15 @@ static inline int zap_present_ptes(struct mmu_gather *tlb,
 		return 1;
 	}
 
+	/* sec 69 census: a special-mapping (vdso/vvar shadow carrier)
+	 * page zap on a MODE mm is the legacy face's claim on pages the
+	 * arena walk may also release -- the -2 FILE residual's
+	 * double-release suspect.  Counted, not gated.
+	 */
+	if (READ_ONCE(mm->corten_mode) &&
+	    vma_is_special_mapping_family(vma))
+		corten_note_legacy_shadow_zap();
+
 	/*
 	 * Make sure that the common "small folio" case is as fast as possible
 	 * by keeping the batching logic separate.
