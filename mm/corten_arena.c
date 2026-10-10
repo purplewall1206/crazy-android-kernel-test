@@ -448,6 +448,7 @@ static const char *const corten_arm_name[CORTEN_ARM_NR] = {
 };
 
 static atomic_long_t corten_nr_arm_last[CORTEN_ARM_NR];
+static atomic_long_t corten_nr_sweep_released;
 static atomic_long_t corten_nr_chg_total_last;
 static atomic_long_t corten_nr_walk_frames_last;
 static atomic_long_t corten_nr_reg_frames_last;
@@ -4190,7 +4191,9 @@ void corten_arena_stats_report(struct seq_file *m)
 	{
 		int ai;
 
-		seq_printf(m, "last_walk_frames %ld\n",
+		seq_printf(m, "sweep_released     %ld\n",
+		   atomic_long_read(&corten_nr_sweep_released));
+	seq_printf(m, "last_walk_frames %ld\n",
 			   atomic_long_read(&corten_nr_walk_frames_last));
 		seq_printf(m, "last_reg_frames %ld\n",
 			   atomic_long_read(&corten_nr_reg_frames_last));
@@ -9880,8 +9883,10 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 	return 0;
 
 out_unwind:
-	while (frame > first)
+	while (frame > first) {
 		corten_slot_remove(&state->arenas, --frame, child, false);
+		state->reg_frames--;
+	}
 	mutex_unlock(&state->ctl_lock);
 	percpu_ref_exit(&child->active);
 out_put_child:
@@ -14438,6 +14443,7 @@ void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm)
 						   ((pa - pmd_addr) >>
 						    PAGE_SHIFT));
 				corten_zap_release_page(mm, NULL, page, pa);
+				atomic_long_inc(&corten_nr_sweep_released);
 				if (__tlb_remove_page_size(tlb, page, false,
 							   PAGE_SIZE)) {
 					/* Batch overflow: flush and retry

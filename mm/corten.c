@@ -1900,12 +1900,12 @@ char *corten_test_render_dbg(enum corten_dbg_file which)
 	 * (the sec 69-70c instrument lines); the one-page buffer
 	 * ENOSPC'd the assertion helper (five battery tests).
 	 */
-	buf = kmalloc(2 * PAGE_SIZE, GFP_KERNEL);
+	buf = kmalloc(4 * PAGE_SIZE, GFP_KERNEL);
 	if (!buf)
 		return ERR_PTR(-ENOMEM);
 
 	m.buf = buf;
-	m.size = 2 * PAGE_SIZE - 1;	/* room for the terminator */
+	m.size = 4 * PAGE_SIZE - 1;	/* room for the terminator */
 	mutex_init(&m.lock);
 
 	show(&m, NULL);
