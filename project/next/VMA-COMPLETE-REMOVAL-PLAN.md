@@ -1572,3 +1572,24 @@ tree/legacy 面 0/0（legacy 无辜双重确认）。残差 +34 与 counted 差
 与零页面均排除）。幻影定性不变: 零孤儿、零泄漏、有界 34 页/exit、
 纯计数。17 臂仪器 + 全内建协议已就位, 剩最后一步 = zap_window 流
 程级逐页 trace（下轮首题, 一次 boot 可收敛）。
+
+## 74. +34 幻影机制闭合（2026-10-11 凌晨）: 单 PTE fork-copy 臂 + 退出侧无扣减
+
+静默 boot + 单 PTE 慢路径挂钩后, 画像补全: **last_chg_tree_anon =
+62** —— generic fork copy 的单 PTE 臂（copy_present_pte 慢路径,
+此前只挂了批量臂）就是缺失的 charge 臂: bash 栈 carrier VMA（tree
+VMA, 常规域）的页经它 fork 拷贝入 child, 每页 +1 ANON 计入 child。
+同 child: **rel_legacy_anon = 0** —— 退出侧 legacy zap 从未处理这
+些页（exit_mmap 的 arena 收割序把共租 tree VMA 交 arena 面, PT 页
+裸退, 无 mm counter 扣减; folio 引用走 SHARED mapcount 由存活侧承
+载, 故零泄漏）。
+
+**机制**: fork 时 +1（未计数臂）× exit 时 −0（未计数释放）= 每
+child +N ANON 纯计数残差（N ≈ 栈 carrier 驻留页数, 典型 34）。三
+面幻影至此全机制化: SHMEM（sec 69 判别器）、FILE（sec 71 家族对
+齐）、ANON（本条: 单 PTE fork-copy charge + 收割序裸退）。
+
+**修复方向（下轮首题, 一次收敛）**: exit 收割序对 MODE mm 的共租
+tree VMA 页走 zap 漏斗补扣减（或在 fork 单 PTE 臂镜像 arena 语义
+不计费 —— 择一, 与 sec 71 的双侧对齐同形）。仪器全部就位, 一次
+boot 可验证。
