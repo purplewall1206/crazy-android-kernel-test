@@ -569,6 +569,8 @@ enum {
 void corten_note_tree_copy(int nr, bool file);
 void corten_note_legacy_anon_charge(int nr);
 void corten_note_anon_counter(struct mm_struct *mm, long val);
+void corten_trace_charge(struct mm_struct *mm, struct page *page);
+void corten_trace_release(struct mm_struct *mm, struct page *page);
 void corten_note_legacy_zap(bool file, int nr);
 
 /* sec 74 census: the first MODE exit's pre/post-unmap rss pair (the
@@ -651,7 +653,10 @@ struct corten_mm_state {
 	 * hook adds here) -- chg minus rel equals the exit residual by
 	 * construction on the mm that owns them. */
 	atomic_long_t		mm_chg_total;
-	atomic_long_t		mm_rel_total;
+	atomic_long_t		mm_rel_total;	/* sec 78: the charged-page trace set (corten_trace_charge=on
+	 * boots only) -- page-indexed, charge stores, release erases;
+	 * the exit survivors ARE the unreleased population. */
+	struct xarray		trace_xa;
 	/* w3fix4: the deferred free's second hop -- the RCU callback only
 	 * schedules this work, and the actual teardown (xa_destroy et
 	 * al) runs in kworker task context.  Running the teardown in the

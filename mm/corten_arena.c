@@ -343,6 +343,37 @@ void corten_note_anon_counter(struct mm_struct *mm, long val)
 }
 EXPORT_SYMBOL_GPL(corten_note_anon_counter);
 
+static bool corten_trace_charge_param = true; /* sec 78: charged-page trace (debug default on) */
+module_param_named(trace_charge, corten_trace_charge_param, bool, 0);
+
+/* sec 78: the charged-page trace set.  Charge sites store the page,
+ * release sites erase it; the exit survivors are the unreleased
+ * population, printed once per boot. */
+void corten_trace_charge(struct mm_struct *mm, struct page *page)
+{
+	struct corten_mm_state *state;
+
+	if (!corten_trace_charge_param)
+		return;
+	state = smp_load_acquire(&mm->corten_state);
+	if (state)
+		xa_store(&state->trace_xa, (unsigned long)page >> PAGE_SHIFT,
+			 (void *)1, GFP_NOWAIT);
+}
+EXPORT_SYMBOL_GPL(corten_trace_charge);
+
+void corten_trace_release(struct mm_struct *mm, struct page *page)
+{
+	struct corten_mm_state *state;
+
+	if (!corten_trace_charge_param)
+		return;
+	state = smp_load_acquire(&mm->corten_state);
+	if (state)
+		xa_erase(&state->trace_xa, (unsigned long)page >> PAGE_SHIFT);
+}
+EXPORT_SYMBOL_GPL(corten_trace_release);
+
 void corten_note_legacy_zap(bool file, int nr)
 {
 	atomic_long_add(nr, file ? &corten_nr_rel_legacy_file :
@@ -1382,6 +1413,7 @@ static void corten_va_lists_free(struct corten_mm_state *state)
 
 static void corten_arena_state_free(struct corten_mm_state *state)
 {
+	xa_destroy(&state->trace_xa);
 	xa_destroy(&state->arenas);
 	/* Pass-1 aging flags: xa_store(GFP_NOWAIT) by the shrinker
 	 * leaves xarray nodes behind for every mm that ever ran a
@@ -1471,6 +1503,7 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 		corten_arena_state_free(state);
 		return NULL;
 	}
+	xa_init(&state->trace_xa);
 	/* sec 70c: a fresh exec mm's arm baseline is its state-create
 	 * moment (the exec image's own charges all land after it). */
 	corten_arms_snapshot(state);
@@ -5756,6 +5789,24 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 * fault or transaction can appear, and the descriptor trees' own
 	 * locks fence the walk against everything dead.
 	 */
+	/* sec 78: the charged-page trace survivors -- the unreleased
+	 * population, printed once per boot. */
+	if (corten_trace_charge_param) {
+		void *entry;
+		unsigned long idx = 0;
+		int shown = 0, left = 0;
+
+		xa_for_each(&state->trace_xa, idx, entry) {
+			left++;
+			if (shown < 8) {
+				pr_info("corten: trace survivor page=%lx\n",
+					idx << PAGE_SHIFT);
+				shown++;
+			}
+		}
+		pr_info("corten: trace survivors=%d\n", left);
+	}
+
 	corten_arena_exit_walk(mm, state);
 
 	/* sec 66: post-arena-walk snapshot -- pairs with the entry
@@ -9988,6 +10039,7 @@ retry:
 				folio_add_anon_rmap_novma(newfolio);
 				atomic_long_inc(&corten_nr_chg_fork_pin);
 				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
+				corten_trace_charge(dst_mm, &newfolio->page);
 				/* The copy's writable bit follows the
 				 * parent's encoding (the recorded perm):
 				 * a RO parent's copy re-arms on the
@@ -10016,6 +10068,7 @@ retry:
 				folio_dup_anon_rmap_novma(folio, page);
 				atomic_long_inc(&corten_nr_chg_fork_copy);
 				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
+				corten_trace_charge(dst_mm, page);
 			}
 		} else {
 			/* A pagecache folio: dup is a bare mapcount bump
@@ -11259,6 +11312,7 @@ static int corten_arena_map_anon(struct corten_fault_ctx *ctx,
 	 */
 	atomic_long_inc(&corten_nr_chg_map_anon);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
+	corten_trace_charge(mm, &arena_folio->page);
 	/* MV2 W-2 (R1 flip): the anon window page's mapcount is exact
 	 * bookkeeping on every shape now -- the auto (vma-less) shapes
 	 * through the W1.a novma wrapper, the shadow shapes through the
@@ -11624,6 +11678,7 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 	 */
 	atomic_long_inc(&corten_nr_chg_cow_write);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
+	corten_trace_charge(mm, &ctx->folio->page);
 	if (vma)
 		folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr,
 					RMAP_EXCLUSIVE);
@@ -12711,6 +12766,7 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 
 	atomic_long_inc(&corten_nr_chg_file_cow);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
+	corten_trace_charge(mm, &ctx->folio->page);
 	if (vma)
 		folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr,
 					RMAP_EXCLUSIVE);
@@ -14143,6 +14199,8 @@ static void corten_zap_release_page(struct mm_struct *mm,
 	bool file = !folio_test_anon(folio) &&
 		    !(folio_test_swapbacked(folio) &&
 		      !folio_mapping(folio));
+
+	corten_trace_release(mm, page);
 
 	if (file)
 		folio_remove_file_rmap_novma(folio);
