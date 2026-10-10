@@ -1147,3 +1147,14 @@ entry_sweep_locked 的 mmap_assert 竟未响（需核 assert 的旗标下
 **下会话**: 窗口分支重排为标准形（取锁 → 传输/insert/声明 →
 解锁），以锁流统一后重测 stack_adopts 全覆盖。当前态 3/184 + 漏
 斗回退无害, 主链绿。
+
+## 44. 锁流重读修正（2026-10-10）: sec 43 的"缺口"系误读; 181 面指向 declare 内部
+
+复读定案: 窗口分支**自取锁**（分支内 mmap_write_lock_killable +
+成对解锁）, `goto locked_expand` **正确携锁**跳入共享尾（外层
+out_unlock 解锁）——锁流自洽, sec 43 的"预锁执行/跳过取锁"系误读,
+不重排（重排反而搅动已验证流）。**真实 181 面 = declare_carrier
+的内部拒绝**, 嫌疑面收敛: (1) declare_locked 的 C1' overlap（窗口
+region 释放的真正时点/成败——transfer 的 release 返回值未核）,
+(2) PMD 对齐/长度校验, (3) state 创建路径。
+下会话: declare_carrier 返回码分errno 计数器（一次 boot 定位）。
