@@ -1448,3 +1448,35 @@ release_page（有正确扣减）。若存在旁路（如 tlB finish 后的残�
 clear 或 drain 路径的页释放不走 release_page），则补齐扣减。
 此为独立大件修复（涉及 arena exit 路径全域审计），已锁定为下一
 session 首题。
+
+## 69. V3 漂移主面修复落地（2026-10-10）: release_page 家族判别双重修复, SHMEM 漂移消灭
+
+sec 68 的三类型失衡 (+ANON/-SHMEM/-2 FILE) 根因在
+corten_zap_release_page 的家族判别, 两处独立缺陷:
+
+**(1) sec 65 回归 (009c82357bca)**: 该提交本意只改 file 家族选择器,
+却把 `if (file) mm_counter_file else MM_ANONPAGES` 双分支整体替换成
+单行 `mm_counter_file(folio)` -- ANON 扣减臂彻底消失, 每个 anon
+释放页 +1 ANON / -1 file 家族。电池在 sec 65 提交后未复跑 (提交只
+登记了 instrument), 故漏网。修复: 分支恢复, 与 rmap 分支镜像。
+
+**(2) folio_test_anon() 判别器本身对未拄锚 novma arena anon 页失真**:
+W1.a novma 安装按设计 mapping==NULL (corten_folio_is_arena_anon 的
+存在即为此), arena anon 页又刻意 swapbacked ("full swap-out shape")
+-- folio_test_anon 读 false + swapbacked true → 释放走 file 分支扣
+MM_SHMEMPAGES。这正是配对 +ANON/-SHMEM 的主源 (sec 68 的 -65/-66)。
+修复: 判别器改为 `!anon && !(swapbacked && !folio_mapping)` --
+无 mapping 的 swapbacked 页 = arena 未拄锚 anon; 真 pagecache 活
+PTE 必带 mapping; 无 mapping 非 swapbacked = vdso 内核镜像页。
+
+**真机验证 (smoke VM + soak3 重部署)**: 配对 SHMEM 项归零 (soak3
+boot 后 187+187 干净配对, SHMEM 1 杂线 vs 修复前数百)。电池双腿绿
+(off 7/0, on 34/0) -- 319/341 跳过项为 =off 形与 OVERCOMMIT 门。
+提交 4efdd0e282aa 已推 github。
+
+**残余 +34 ANON / -2 FILE (有界, 每壳族 exit 恒定)**: census 已落
+(同提交): exit_nostate=5/残差0 (registry-free MODE exit 无辜),
+lshadow_zap=0 (legacy 特殊 VMA 双扣面无辜), zrel_kpage=2/exit (vdso
+族经 release_page file 分支)。+34 = 32 (sec 64 传递臂纯漏, 未变) +
+2 (vdso install/release 家族错配)。下轮首题: transfer 臂 release
+路径补扣减 + vdso install 侧家族对齐。

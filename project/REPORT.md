@@ -1589,3 +1589,16 @@ memory.c→rmap→tools/testing/vma + grep 零依赖门）。
 （mm exit 时 +2 MM_FILEPAGES / -2 MM_ANONPAGES, dhcpcd/
 systemd-journal 面）仍待专项核验; 镜像态偶发 boot 挂死
 （30+ boot 累积, 干净重建即绿）为环境项。
+
+## 16. J6 续账（2026-10-10 晚, sec 69: V3 漂移主面修复）
+
+V3 漂移（J6 已知余量首项）主面修复落地, 提交 4efdd0e282aa:
+corten_zap_release_page 家族判别双重修复 -- (a) sec 65 提交意外
+删除的 MM_ANONPAGES 扣减臂恢复; (b) 判别器补上未拄锚 novma arena
+anon 形（mapping==NULL + swapbacked, W1.a 设计形）, 此前被误判 file
+族扣 SHMEM。真机配对 SHMEM 漂移归零; sec 68 三类型失衡收敛为有界
+残余 +34 ANON / -2 FILE 每壳族 exit（32 = sec 64 传递臂纯漏, 2 =
+vdso install/release 家族错配, census 计数器已锁定两面的归局面）。
+电池双腿绿（off 7/0, on 34/0）。soak3 已重部署修复内核续积累旗标
+on 钟 + 干净 census; soak2 (E2 钟) 不动。V3 专项剩余: 传递臂补扣 +
+vdso 家族对齐, 已锁定为下轮首题。
