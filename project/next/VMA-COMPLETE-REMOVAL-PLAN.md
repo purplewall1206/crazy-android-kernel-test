@@ -1252,3 +1252,13 @@ resident（fixed 文件形 + shared 面）。收编下一阶段 = OQ-MV-2 豁免
 （E2 约 7h/1440s 需求, 旗标 on 约 3h/10080m 需求）, 每小时巡检
 automation 运行; 下一片 = 原案序列的等待期内核侧迁移
 （sec 48/49 的 decline-vs-take 持续观测 + 栈面双服务细化）。
+
+## 52. 等待期观测读数（2026-10-10）: 比率稳定, 覆盖证书持续
+
+soak2（23 分钟负载）: bprm=271=stack_adopts 全覆盖 + vma_gate=0 +
+零 trap; declines 2980 / punches 271 / takes 813——sec 49 定案的
+比率关系在负载增长下稳定（decline 事件级 vs take 路由级口径,
+vma_gate=0 持续为收编完备证书）。10036 普查 VM 已收（普查轮毕,
+计数器口径已在树）。**等待期观测=每周巡检 automation 的既定读
+数, 无新代码面**; 下一实作片维持待命（栈面双服务细化或用户改判
+的 region host）。
