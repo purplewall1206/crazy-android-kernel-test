@@ -1273,3 +1273,14 @@ sec 34 的重立条件更新: 真路径（stack_fallbacks=0）+ 全覆盖
 （stack_adopts=186/186）+ 电池复验（本次）三项齐备——"VMA-less
 形态由回退臂承载"的历史重述可升级为"真路径为旗标 on 执行路径,
 回退臂为摆入失败安全网"。
+
+## 54. 双钟起算审计（2026-10-10）
+
+soak2（全栈面内核 + 旗标 on, port 10034）起算 = 首次 init 运行时
+点（soak2-boot.log 首条 Run /sbin/init 时间戳 = 墙钟起算零点）。
+**E2 钟**: ≥1 天 = 该点 +24h → 满期呈递探针退役五组 24 项裁决
+（e2-phase2-ruling-proposal.md）。**旗标 on 钟**: ≥1 周 = 该点
++168h → 满期呈递默认化→回退臂删→vma_exec.c 全删→J6 终账序列。
+每小时巡检 automation 的 soak-hourly.log 为累积证据流; 满期判据
+= 日志时间戳差, 可审计。等待期实作件维持待命（region host 改判
+件 / 双服务细化, 每片 grep 门+旗标 on boot+smoke）。
