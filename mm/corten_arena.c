@@ -354,6 +354,7 @@ static const char *const corten_trace_arm_name[] = {
 	"legacy_anon", "swap_in", "unuse_pull", "transfer_dst",
 	"sweep_adopt"
 };
+#define CORTEN_TRACE_CAP 8192
 static bool corten_trace_charge_param; /* sec 78: charged-page trace (param-gated) */
 module_param_named(trace_charge, corten_trace_charge_param, bool, 0);
 
@@ -364,13 +365,23 @@ void corten_trace_charge_arm(struct mm_struct *mm, struct page *page,
 			     int arm)
 {
 	struct corten_mm_state *state;
+	void *old;
 
 	if (!corten_trace_charge_param)
 		return;
 	state = smp_load_acquire(&mm->corten_state);
-	if (state)
-		xa_store(&state->trace_xa, (unsigned long)page >> PAGE_SHIFT,
-			 (void *)(long)arm, GFP_NOWAIT);
+	if (!state)
+		return;
+	/* sec 87 guards: bounded population + GFP_NOWAIT failure
+	 * tolerance (a failed store neither counts nor corrupts). */
+	if (atomic_long_read(&state->trace_n) >= CORTEN_TRACE_CAP)
+		return;
+	old = xa_store(&state->trace_xa, (unsigned long)page >> PAGE_SHIFT,
+		       (void *)(long)arm, GFP_NOWAIT);
+	if (IS_ERR(old))
+		return;
+	if (!old)
+		atomic_long_inc(&state->trace_n);
 }
 
 void corten_trace_charge(struct mm_struct *mm, struct page *page)
@@ -386,21 +397,30 @@ void corten_trace_release(struct mm_struct *mm, struct page *page)
 	if (!corten_trace_charge_param)
 		return;
 	state = smp_load_acquire(&mm->corten_state);
-	if (state)
-		xa_erase(&state->trace_xa, (unsigned long)page >> PAGE_SHIFT);
+	if (state && xa_erase(&state->trace_xa,
+			      (unsigned long)page >> PAGE_SHIFT))
+		atomic_long_dec(&state->trace_n);
 }
 EXPORT_SYMBOL_GPL(corten_trace_release);
 
 void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm)
 {
 	struct corten_mm_state *state;
+	void *old;
 
 	if (!corten_trace_charge_param)
 		return;
 	state = smp_load_acquire(&mm->corten_state);
-	if (state)
-		xa_store(&state->trace_vxa, addr >> PAGE_SHIFT,
-			 (void *)(long)arm, GFP_NOWAIT);
+	if (!state)
+		return;
+	if (atomic_long_read(&state->trace_n) >= CORTEN_TRACE_CAP)
+		return;
+	old = xa_store(&state->trace_vxa, addr >> PAGE_SHIFT,
+		       (void *)(long)arm, GFP_NOWAIT);
+	if (IS_ERR(old))
+		return;
+	if (!old)
+		atomic_long_inc(&state->trace_n);
 }
 EXPORT_SYMBOL_GPL(corten_trace_charge_va);
 
@@ -411,8 +431,8 @@ void corten_trace_release_va(struct mm_struct *mm, unsigned long addr)
 	if (!corten_trace_charge_param)
 		return;
 	state = smp_load_acquire(&mm->corten_state);
-	if (state)
-		xa_erase(&state->trace_vxa, addr >> PAGE_SHIFT);
+	if (state && xa_erase(&state->trace_vxa, addr >> PAGE_SHIFT))
+		atomic_long_dec(&state->trace_n);
 }
 EXPORT_SYMBOL_GPL(corten_trace_release_va);
 
