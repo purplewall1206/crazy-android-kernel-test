@@ -1648,3 +1648,16 @@ per-mm xarray（页 pfn 键）: 计费臂存入、释放臂擦除、mm_exit 打�
 （复跑 ×2 全绿 27/0/1）。35751efe。
 **下轮**: 挂最后两臂 → 幸存者 = 34 全域 → 按安装臂补释放侧 →
 单 child 验归零。
+
+## 79. 臂 ID 追踪: 元凶点名 fork_copy（2026-10-11 凌晨）
+
+trace 值携带安装臂号, exit 逐幸存者点名。静默 boot 判决: **全部
+可追踪幸存者 arm=fork_copy** —— fork 镜像拷贝页在 child 退出时未
+获释放（8 页可追踪; 34 的其余 = state 前计费窗口, 同机制在 mm
+生命更早段, trace 不可达）。**循环签名确证**: 同批 pfn 在下一个
+child 被重充 map_anon —— 页确实释放了, 只是计数对 broken
+（fork-copied 人口的释放侧扣减缺失）。电池 on 腿绿（27/0/1）。
+9db81f7d。
+**下轮（归零最后一步）**: fork_copy 页的 VA 记录（charge 时存
+地址）+ 地址级差集 → 找出其 PTE 的 in-life 清除臂 → 补扣减 →
+单 child 验归零。
