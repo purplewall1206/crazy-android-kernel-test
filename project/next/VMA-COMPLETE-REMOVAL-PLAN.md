@@ -1480,3 +1480,16 @@ lshadow_zap=0 (legacy 特殊 VMA 双扣面无辜), zrel_kpage=2/exit (vdso
 族经 release_page file 分支)。+34 = 32 (sec 64 传递臂纯漏, 未变) +
 2 (vdso install/release 家族错配)。下轮首题: transfer 臂 release
 路径补扣减 + vdso install 侧家族对齐。
+
+**sec 69b 残余归局（2026-10-10 晚, 三段式首次全通）**: exit_snap 渲染
+补齐（2c4a3d9e0ace）后单 boot 三分一个 fork 子壳 exit: 入口快照
+ANON 190 → arena walk 释放 128 → post_walk 62 → legacy walk 释放
+28 → 残余 +34。**+34 页位于子 registry 未覆盖的窗口帧**（孤儿跨:
+无 VMA、有 charge、双 walk 均不可见）, 恒定 34 页跨进程
+（ifup/run-parts/systemd/dhcpcd 同值）, fresh exec 形（/bin/true×8,
+python3）零漂移 —— fork 镜像 PTE 拷贝与子 registry extent 的覆盖差
+是唯一候选面。-2 FILE 每exit 2 页经 zrel_kpage 计数（vdso 族,
+install charge FILE +2, release FILE -2 平衡）, 额外 -2 的第三方
+扣减源未定位（lshadow_zap=0 已排除 legacy 特殊 VMA zap）。
+**下轮首题 instrument**: exit 时窗口域全 PTE 走 vs registry 帧覆盖
+差值计数（孤儿帧 census）, 一次 boot 即钉死孤儿跨的来源帧。
