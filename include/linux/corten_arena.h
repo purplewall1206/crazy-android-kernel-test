@@ -661,6 +661,7 @@ struct corten_mm_state {
 	 * boots only) -- page-indexed, charge stores, release erases;
 	 * the exit survivors ARE the unreleased population. */
 	struct xarray		trace_xa;	struct xarray		trace_vxa;	/* sec 79: VA-keyed trace */
+	struct xarray		trace_frames;	/* sec 85: registered frame set */
 	/* w3fix4: the deferred free's second hop -- the RCU callback only
 	 * schedules this work, and the actual teardown (xa_destroy et
 	 * al) runs in kworker task context.  Running the teardown in the

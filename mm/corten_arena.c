@@ -1335,11 +1335,15 @@ static void corten_slot_remove(struct xarray *xa, unsigned long frame,
 		return;		/* already punched away: legal since D-G'' */
 
 	if (old == ar) {
-		if (restore)
+		if (restore) {
 			xa_store(xa, frame, &corten_va_reserve_sentinel,
 				 GFP_KERNEL);
-		else
+		} else {
 			xa_erase(xa, frame);
+			if (corten_trace_charge_param)
+				pr_info("corten: frame-erase f=%lx xa=%px\n",
+					frame, xa);
+		}
 		return;
 	}
 
@@ -1460,6 +1464,7 @@ static void corten_arena_state_free(struct corten_mm_state *state)
 {
 	xa_destroy(&state->trace_xa);
 	xa_destroy(&state->trace_vxa);
+	xa_destroy(&state->trace_frames);
 	xa_destroy(&state->arenas);
 	/* Pass-1 aging flags: xa_store(GFP_NOWAIT) by the shrinker
 	 * leaves xarray nodes behind for every mm that ever ran a
@@ -1551,6 +1556,7 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 	}
 	xa_init(&state->trace_xa);
 	xa_init(&state->trace_vxa);
+	xa_init(&state->trace_frames);
 	/* sec 70c: a fresh exec mm's arm baseline is its state-create
 	 * moment (the exec image's own charges all land after it). */
 	corten_arms_snapshot(state);
@@ -5866,6 +5872,22 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		}
 		pr_info("corten: trace survivors=%d\n", left);
 		{
+			void *fent;
+			unsigned long fidx = 0;
+			int lost = 0;
+
+			xa_for_each(&state->trace_frames, fidx, fent) {
+				if (!xa_load(&state->arenas, fidx)) {
+					lost++;
+					if (lost <= 8)
+						pr_info("corten: frame LOST f=%lx\n",
+							fidx);
+				}
+			}
+			pr_info("corten: frames lost=%d walk=%ld reg=%ld\n",
+				lost, state->walk_frames, state->reg_frames);
+		}
+		{
 			void *vent;
 			unsigned long vidx = 0;
 			int vshown = 0, vleft = 0;
@@ -5910,6 +5932,17 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				state->walk_frames);
 		atomic_long_set(&corten_nr_reg_frames_last,
 				state->reg_frames);
+		{
+			void *fent;
+			unsigned long fidx = 0;
+			int plost = 0;
+
+			xa_for_each(&state->trace_frames, fidx, fent) {
+				if (!xa_load(&state->arenas, fidx))
+					plost++;
+			}
+			pr_info("corten: POST-WALK lost=%d\n", plost);
+		}
 		/* sec 70c: this child's own per-arm profile -- the global
 		 * counters minus its birth snapshot, rendered as the
 		 * last-exit scalars. */
@@ -9861,6 +9894,9 @@ static int corten_arena_fork_register_child(struct mm_struct *mm,
 		if (ret)
 			goto out_unwind;
 		state->reg_frames++;
+		if (corten_trace_charge_param)
+			xa_store(&state->trace_frames, frame, (void *)1,
+				 GFP_NOWAIT);
 	}
 	refcount_set(&state->nr, refcount_read(&state->nr) + 1);
 
