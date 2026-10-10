@@ -276,6 +276,10 @@ static void corten_dc_note(int ret)
 static atomic_long_t corten_nr_special_shadows; /* V3 special shadows */
 static atomic_long_t corten_nr_vma_gate;	/* V5 create_vma census */
 static atomic_long_t corten_nr_auto_legacy_class; /* V5 classify-legacy */
+static atomic_long_t corten_nr_cl_nonprivate;   /* sec 49: MAP_TYPE != PRIVATE */
+static atomic_long_t corten_nr_cl_fixed_file;   /* sec 49: file + extra flag bits */
+static atomic_long_t corten_nr_cl_nonanon;      /* sec 49: !MAP_ANONYMOUS plain */
+static atomic_long_t corten_nr_cl_flagword;     /* sec 49: anon + extra bits */
 static atomic_long_t corten_nr_stack_grows;	/* V2.2 extend-arm services */
 /* Ledger #2: the arena_stats per-mm registry walks' truncation count
  * (declared here for the stats render; the walker lives at the shrinker
@@ -3908,6 +3912,14 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_vma_gate));
 	seq_printf(m, "auto_legacy_class   %ld\n",
 		   atomic_long_read(&corten_nr_auto_legacy_class));
+	seq_printf(m, "cl_nonprivate       %ld\n",
+		   atomic_long_read(&corten_nr_cl_nonprivate));
+	seq_printf(m, "cl_fixed_file       %ld\n",
+		   atomic_long_read(&corten_nr_cl_fixed_file));
+	seq_printf(m, "cl_nonanon          %ld\n",
+		   atomic_long_read(&corten_nr_cl_nonanon));
+	seq_printf(m, "cl_flagword         %ld\n",
+		   atomic_long_read(&corten_nr_cl_flagword));
 	seq_printf(m, "stack_grows         %ld\n",
 		   atomic_long_read(&corten_nr_stack_grows));
 	seq_printf(m, "auto_fallbacks      %ld\n",
@@ -6358,8 +6370,10 @@ enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
 	 * the MAP_DROPPABLE alias bit (0x08 lives inside the MAP_TYPE
 	 * nibble).
 	 */
-	if ((flags & MAP_TYPE) != MAP_PRIVATE)
+	if ((flags & MAP_TYPE) != MAP_PRIVATE) {
+		atomic_long_inc(&corten_nr_cl_nonprivate);
 		return CORTEN_MMAP_LEGACY;
+	}
 
 	if (file) {
 		/* V-B.1: at most MAP_NORESERVE may accompany the type
@@ -6380,13 +6394,20 @@ enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
 		 * disclosed residents; the arm's debugging round is the
 		 * V4.3 slice.
 		 */
-		if (flags & ~(MAP_TYPE | MAP_NORESERVE))
+		if (flags & ~(MAP_TYPE | MAP_NORESERVE)) {
+			/* The D-G'' punch-route family: MAP_FIXED file
+			 * shapes land here (the OQ-MV-2 exception).
+			 */
+			atomic_long_inc(&corten_nr_cl_fixed_file);
 			return CORTEN_MMAP_LEGACY;
+		}
 		return CORTEN_MMAP_AUTO_FILE;
 	}
 
-	if (!(flags & MAP_ANONYMOUS))
+	if (!(flags & MAP_ANONYMOUS)) {
+		atomic_long_inc(&corten_nr_cl_nonanon);
 		return CORTEN_MMAP_LEGACY;
+	}
 
 	/* Single-bit whitelist: any other flag-word bit -- MAP_FIXED,
 	 * MAP_FIXED_NOREPLACE, MAP_HUGETLB, MAP_GROWSDOWN, MAP_POPULATE,
@@ -6402,8 +6423,10 @@ enum corten_mmap_class corten_arena_auto_mmap_classify(unsigned long flags,
 	 * routed EXACT/pool arm, and the fork mirror carries the record.
 	 * A MODE mm's thread stacks are vma-less regions since this flip.
 	 */
-	if (flags & ~(MAP_TYPE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_STACK))
+	if (flags & ~(MAP_TYPE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_STACK)) {
+		atomic_long_inc(&corten_nr_cl_flagword);
 		return CORTEN_MMAP_LEGACY;
+	}
 
 	return CORTEN_MMAP_AUTO;
 }

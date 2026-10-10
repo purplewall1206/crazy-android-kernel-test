@@ -1201,3 +1201,17 @@ MAP_FIXED 落位支持）——设计核查入 next 片; 每片过 grep 门 +
 （2498）vs mmap_region_routes 的 take 读数（1055）的差值面分形
 （哪类 decline 形未被 take 臂覆盖 = punch/take 的真实缺口清单）,
 一次 boot 的分形计数定案。此为纯读数轮, 非新路由。
+
+## 49. 覆盖普查定案（2026-10-10）: 双路无缺口, 差值系计数器口径假象
+
+旗标 on boot 分形（decline 2139 全解）: **cl_fixed_file=1992**
+（93%, ld.so 段加载 = D-G'' punch 族的设计内 resident）+
+cl_nonprivate=147（7%, MAP_SHARED/VALIDATE = 规范 3.2.1 的
+VM_SHARED 窗口排除面）; cl_nonanon=0 cl_flagword=0。
+punch=189/rejects=0（窗口目标 fixed 全数路由）; **vma_gate=0 =
+收编完备证书**（每个树 VMA 皆自有/豁免）——"2498 vs 1055 差值"
+系 decline 计数（事件级）与 take 计数（路由触发级）口径不同的
+假象, 非覆盖缺口。
+**漏斗余量定案**: 双路（punch+take）无缺口; 余量 = 设计内披露
+resident（fixed 文件形 + shared 面）。收编下一阶段 = OQ-MV-2 豁免
+的 i_mmap 写侧语义工程（独立大件, 需设计裁决）。
