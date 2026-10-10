@@ -1715,3 +1715,10 @@ chg 195 / rel 131）。电池 on 腿绿（27/0/1）。
 **终局**: 生命期内可跑的 xa_erase 位点排查（slot_remove 的 release
 路、共租桶清空、drain）对只 parse+exit 的 child —— 一次 boot 钉死
 补释放验归零。
+
+**sec 83 补注（帧擦除候选锁定）**: 只 parse+exit 的 child 唯一可能
+的 in-life 帧擦除 = **brk 收缩的 heap 区 release/park 路**（glibc
+早期 malloc trim 会收缩 fork 继承的 heap —— 5 帧量级吻合 heap 区
+帧数）。park 清 PTE + 擦帧的计数处理 = 终局审计点: pool park/flush
+zap 是否逐页 release_page 扣减。仪表（reg vs walk）已就位, 一次
+boot 验证。
