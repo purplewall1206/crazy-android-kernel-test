@@ -3900,6 +3900,10 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_wz_anon));
 	seq_printf(m, "wz_file             %ld\n",
 		   atomic_long_read(&corten_nr_wz_file));
+	seq_printf(m, "post_walk_file      %ld\n",
+			   atomic_long_read(&corten_nr_post_walk_file));
+	seq_printf(m, "post_walk_anon      %ld\n",
+			   atomic_long_read(&corten_nr_post_walk_anon));
 	seq_printf(m, "lz_anon             %ld\n",
 		   atomic_long_read(&corten_nr_lz_anon));
 	seq_printf(m, "lz_file             %ld\n",
