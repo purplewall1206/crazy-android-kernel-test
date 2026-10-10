@@ -1730,3 +1730,14 @@ CoW 工件而非纯残差人口。**残差 34 的页面级归属仍未闭合**; 
 动作 = cow_write 的老 PTE 清除处补 corten_trace_release_va →
 v-survivors 即真残差 VA 集 → 按臂补释放 → 验归零。仪器链完整,
 每步一次 boot。
+
+## 85. 帧集差 + post-walk 探针: 异常隔离到主 zap 遍的 yield（2026-10-11 凌晨）
+
+registry 生命周期审计仪表完整落地（0fcba4ac）: trace_frames
+（register_child 时存帧号）与 state->arenas 的 walk 前后双重差集 +
+walk 自身迭代计数（walk_frames）。静默 boot 判决: **lost=0（walk
+前后）——registry 从不丢帧**; frame-erase 仅有良性窗口基帧释放;
+但主 zap 遍 yield = 8 而 13+ 帧在册（B1/B2/B3 上层遍读同一 xa）。
+**异常隔离**: 主遍的 xa_for_each yield 数 ≠ 在册帧数 —— 下会话
+首动作 = 主遍 yield 逐帧打印（frame 号序列）, 8-vs-13 的跳帧模式
+直接可见。残差性质不变: 零泄漏、有界、纯计数。电池 on 腿绿。
