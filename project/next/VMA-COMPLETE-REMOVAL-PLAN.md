@@ -1593,3 +1593,15 @@ child +N ANON 纯计数残差（N ≈ 栈 carrier 驻留页数, 典型 34）。�
 tree VMA 页走 zap 漏斗补扣减（或在 fork 单 PTE 臂镜像 arena 语义
 不计费 —— 择一, 与 sec 71 的双侧对齐同形）。仪器全部就位, 一次
 boot 可验证。
+
+## 75. exit_mmap 前后探针: 裸退页 = 无 VMA 覆盖的栈扩展页（2026-10-11 凌晨）
+
+exit_mmap 的 unmap_vmas 前后 rss 对（前 8 个 MODE exit, 一次性）:
+静默 boot 实测 bash child 形 **pre 82 → post 48**（legacy 释放 34,
+剩 48 计费; 终局 check_mm 残差 34）——裸退页 = **退出时无 VMA 覆盖
+的页**: arena stack_grow 臂只扩展 region 记录 + 注册帧, 不移
+carrier VMA 的 vm_start, below-carrier 生长页由镜像整帧拷贝计费、
+退出时落在 unmap_vmas 的 VMA 范围外, PT 拆除裸退。修复形（sec 71
+同构双侧对齐）: below-VMA 生长页在 exit 获得计费释放（走查帧覆盖
+或 carrier 扩展契约二择一）。电池双腿绿。另: sec-70c 钩子原型位
+置纠正（include/linux 头现为全包含者可见）。
