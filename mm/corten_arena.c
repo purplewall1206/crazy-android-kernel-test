@@ -245,6 +245,34 @@ static atomic_long_t corten_nr_adopt_calibrations; /* G2' ⑤ extent re-aligns *
 static atomic_long_t corten_nr_stack_fallbacks; /* S3-A: flag-on manual-path hits */
 static atomic_long_t corten_nr_sweep_runs;      /* sec 39: mode_sweep entries */
 static atomic_long_t corten_nr_sweep_ours;      /* sec 39: classify -1 hits */
+static atomic_long_t corten_nr_dc_einval;       /* sec 45: declare_carrier -EINVAL */
+static atomic_long_t corten_nr_dc_enomem;       /* sec 45: -ENOMEM */
+static atomic_long_t corten_nr_dc_eexist;       /* sec 45: -EEXIST */
+static atomic_long_t corten_nr_dc_enospc;       /* sec 45: -ENOSPC */
+static atomic_long_t corten_nr_dc_eother;       /* sec 45: other */
+
+static void corten_dc_note(int ret)
+{
+	switch (ret) {
+	case 0:
+		return;
+	case -EINVAL:
+		atomic_long_inc(&corten_nr_dc_einval);
+		break;
+	case -ENOMEM:
+		atomic_long_inc(&corten_nr_dc_enomem);
+		break;
+	case -EEXIST:
+		atomic_long_inc(&corten_nr_dc_eexist);
+		break;
+	case -ENOSPC:
+		atomic_long_inc(&corten_nr_dc_enospc);
+		break;
+	default:
+		atomic_long_inc(&corten_nr_dc_eother);
+		break;
+	}
+}
 static atomic_long_t corten_nr_special_shadows; /* V3 special shadows */
 static atomic_long_t corten_nr_vma_gate;	/* V5 create_vma census */
 static atomic_long_t corten_nr_auto_legacy_class; /* V5 classify-legacy */
@@ -3860,6 +3888,16 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_sweep_runs));
 	seq_printf(m, "sweep_ours          %ld\n",
 		   atomic_long_read(&corten_nr_sweep_ours));
+	seq_printf(m, "dc_einval           %ld\n",
+		   atomic_long_read(&corten_nr_dc_einval));
+	seq_printf(m, "dc_enomem           %ld\n",
+		   atomic_long_read(&corten_nr_dc_enomem));
+	seq_printf(m, "dc_eexist           %ld\n",
+		   atomic_long_read(&corten_nr_dc_eexist));
+	seq_printf(m, "dc_enospc           %ld\n",
+		   atomic_long_read(&corten_nr_dc_enospc));
+	seq_printf(m, "dc_eother           %ld\n",
+		   atomic_long_read(&corten_nr_dc_eother));
 	seq_printf(m, "brk_funnel          %ld\n",
 		   atomic_long_read(&corten_nr_brk_funnel));
 	seq_printf(m, "stack_adopts        %ld\n",
@@ -8241,9 +8279,17 @@ static void corten_arena_mode_sweep(struct mm_struct *mm)
 		}
 	}
 
-	if (!n) {
+	if (!n && !stack_vma) {
 		kfree(cand);
 		return;		/* nothing adoptable: stay allocation-free */
+	}
+	if (!n) {
+		/* sec 40's verdict: an all-stack mm (the window form's
+		 * only tree VMA is the final carrier) has n == 0 -- the
+		 * stack path below never touches @cand.
+		 */
+		kfree(cand);
+		cand = NULL;
 	}
 
 	state = corten_arena_get_state(mm);
@@ -8314,13 +8360,18 @@ static void corten_arena_mode_sweep(struct mm_struct *mm)
 
 			if (stack_vma->vm_flags & VM_EXEC)
 				wperm |= CORTEN_PERM_EXEC;
-			if (!corten_arena_declare_carrier(mm,
-							  stack_vma->vm_start,
-							  stack_vma->vm_end -
-							  stack_vma->vm_start,
-							  wperm,
-							  CORTEN_RF_GROWSDOWN)) {
-				atomic_long_inc(&corten_nr_sweep_stack_adopts);
+			{
+				int dret =
+				  corten_arena_declare_carrier(mm,
+					stack_vma->vm_start,
+					stack_vma->vm_end -
+					stack_vma->vm_start,
+					wperm,
+					CORTEN_RF_GROWSDOWN);
+
+				corten_dc_note(dret);
+				if (!dret)
+					atomic_long_inc(&corten_nr_sweep_stack_adopts);
 			}
 			stack_vma = NULL;	/* settled either way */
 		} else {
