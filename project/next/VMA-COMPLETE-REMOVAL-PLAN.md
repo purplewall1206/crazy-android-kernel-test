@@ -1435,3 +1435,16 @@ legacy walk 前）+ arena_stats 渲染落地。配合 exit_snap 入口快照
 和 check_mm 的 BUG 输出，一次旗标 on boot 即三段式分形：
 entry_snap（arena walk 前）→ post_walk（arena walk 后/legacy 前）
 → check_mm BUG（legacy 后）。
+
+## 68. 漂移签名升级发现（2026-10-10）: 三类型并发失衡
+
+soak3 判别版内核 boot 漂移签名: MM_ANONPAGES +99 / MM_SHMEMPAGES
+-65 / MM_FILEPAGES -2（bash 进程 exit）。三类型并发失衡说明非单一
+bug 而是 **arena exit 路径的系统性记账缺口**——窗口 arena 页的
+fault 安装 charge ✓ 但 exit 释放路径的 counter decrement 覆盖不全。
+**下轮修复方向**: exit_walk 的 zap_window 释放路径逐页审计——确认
+每个 zapped PTE 都走 corten_zap_drop_present_page → corten_zap_
+release_page（有正确扣减）。若存在旁路（如 tlB finish 后的残余
+clear 或 drain 路径的页释放不走 release_page），则补齐扣减。
+此为独立大件修复（涉及 arena exit 路径全域审计），已锁定为下一
+session 首题。
