@@ -549,6 +549,25 @@ struct corten_implant_range {
  * removed while the mm lives (exit_mmap() takes it down when no fault can
  * be in flight); readers pair it with smp_load_acquire().
  */
+/* sec 70c: the per-child reconciliation arms (charge + release). */
+enum {
+	CORTEN_ARM_CHG_MAP_ANON, CORTEN_ARM_CHG_COW_WRITE,
+	CORTEN_ARM_CHG_SWAP_IN, CORTEN_ARM_CHG_FILE_COW,
+	CORTEN_ARM_CHG_UNUSE_PULL, CORTEN_ARM_CHG_FORK_COPY,
+	CORTEN_ARM_CHG_FORK_PIN, CORTEN_ARM_REL_ZREL_ANON,
+	CORTEN_ARM_REL_ZREL_FILE, CORTEN_ARM_REL_KPAGE,
+	CORTEN_ARM_REL_COW_OLD, CORTEN_ARM_REL_FILE_UNMAP,
+	CORTEN_ARM_REL_SWAP_OUT, CORTEN_ARM_CHG_TREE_ANON,
+	CORTEN_ARM_CHG_TREE_FILE, CORTEN_ARM_REL_LEGACY_ANON,
+	CORTEN_ARM_REL_LEGACY_FILE, CORTEN_ARM_NR
+};
+
+/* sec 70c census producers (memory.c hooks, MODE-gated): the generic
+ * fork-copy charges and the legacy zap decrements -- the tree-VMA face
+ * the arena arm table cannot see. */
+void corten_note_tree_copy(int nr, bool file);
+void corten_note_legacy_zap(bool file, int nr);
+
 struct corten_mm_state {
 	struct xarray		arenas;
 	refcount_t		nr;
@@ -608,6 +627,15 @@ struct corten_mm_state {
 	struct xarray		shrink_aged;
 	unsigned long __percpu	*stats;
 	struct rcu_head		rcu;
+	/* sec 70c: the per-child arm reconciliation snapshot -- the global
+	 * rss-arm counters (charge + release arms) sampled when this mm
+	 * began its life (fork_begin's child, or the state-create moment
+	 * of a fresh exec mm).  corten_arena_mm_exit renders the deltas as
+	 * last-exit scalars: one bash -c exit's diff is that child's full
+	 * per-arm charge/release profile, and the +34 ANON phantom's arm
+	 * is whichever delta fails to close.  Purely observational.
+	 */
+	long			arm_snap[CORTEN_ARM_NR];
 	/* w3fix4: the deferred free's second hop -- the RCU callback only
 	 * schedules this work, and the actual teardown (xa_destroy et
 	 * al) runs in kworker task context.  Running the teardown in the

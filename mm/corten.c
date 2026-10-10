@@ -1896,12 +1896,16 @@ char *corten_test_render_dbg(enum corten_dbg_file which)
 		return ERR_PTR(-EINVAL);
 	}
 
-	buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	/* Two pages: the S8 render keeps growing with the census ledger
+	 * (the sec 69-70c instrument lines); the one-page buffer
+	 * ENOSPC'd the assertion helper (five battery tests).
+	 */
+	buf = kmalloc(2 * PAGE_SIZE, GFP_KERNEL);
 	if (!buf)
 		return ERR_PTR(-ENOMEM);
 
 	m.buf = buf;
-	m.size = PAGE_SIZE - 1;		/* room for the terminator */
+	m.size = 2 * PAGE_SIZE - 1;	/* room for the terminator */
 	mutex_init(&m.lock);
 
 	show(&m, NULL);

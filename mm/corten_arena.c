@@ -300,6 +300,56 @@ static atomic_long_t corten_nr_chg_fork_pin;     /* sec 69c: fork pinned-copy ch
 static atomic_long_t corten_nr_rel_cow_old;      /* sec 70: cow_write old-folio release */
 static atomic_long_t corten_nr_rel_file_unmap;   /* sec 70: try_to_unmap file-branch release */
 static atomic_long_t corten_nr_rel_swap_out;     /* sec 70: swap-out driver release */
+static atomic_long_t corten_nr_chg_tree_anon;    /* sec 70c: generic fork copy, anon */
+static atomic_long_t corten_nr_chg_tree_file;    /* sec 70c: generic fork copy, file */
+static atomic_long_t corten_nr_rel_legacy_anon;  /* sec 70c: legacy zap, anon */
+static atomic_long_t corten_nr_rel_legacy_file;  /* sec 70c: legacy zap, file */
+
+void corten_note_tree_copy(int nr, bool file)
+{
+	atomic_long_add(nr, file ? &corten_nr_chg_tree_file :
+				   &corten_nr_chg_tree_anon);
+}
+EXPORT_SYMBOL_GPL(corten_note_tree_copy);
+
+void corten_note_legacy_zap(bool file, int nr)
+{
+	atomic_long_add(nr, file ? &corten_nr_rel_legacy_file :
+				   &corten_nr_rel_legacy_anon);
+}
+EXPORT_SYMBOL_GPL(corten_note_legacy_zap);
+
+static atomic_long_t *const corten_arm_ctr[CORTEN_ARM_NR] = {
+	&corten_nr_chg_map_anon, &corten_nr_chg_cow_write,
+	&corten_nr_chg_swap_in, &corten_nr_chg_file_cow,
+	&corten_nr_chg_unuse_pull, &corten_nr_chg_fork_copy,
+	&corten_nr_chg_fork_pin, &corten_nr_zrel_anon,
+	&corten_nr_zrel_file, &corten_nr_zrel_kpage,
+	&corten_nr_rel_cow_old, &corten_nr_rel_file_unmap,
+	&corten_nr_rel_swap_out, &corten_nr_chg_tree_anon,
+	&corten_nr_chg_tree_file, &corten_nr_rel_legacy_anon,
+	&corten_nr_rel_legacy_file,
+};
+
+static const char *const corten_arm_name[CORTEN_ARM_NR] = {
+	"chg_map_anon", "chg_cow_write", "chg_swap_in", "chg_file_cow",
+	"chg_unuse_pull", "chg_fork_copy", "chg_fork_pin",
+	"rel_zrel_anon", "rel_zrel_file", "rel_kpage",
+	"rel_cow_old", "rel_file_unmap", "rel_swap_out",
+	"chg_tree_anon", "chg_tree_file",
+	"rel_legacy_anon", "rel_legacy_file",
+};
+
+static atomic_long_t corten_nr_arm_last[CORTEN_ARM_NR];
+
+static void corten_arms_snapshot(struct corten_mm_state *state)
+{
+	int i;
+
+	for (i = 0; i < CORTEN_ARM_NR; i++)
+		WRITE_ONCE(state->arm_snap[i],
+			   atomic_long_read(corten_arm_ctr[i]));
+}
 
 void corten_note_legacy_shadow_zap(void)
 {
@@ -1367,6 +1417,9 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 		corten_arena_state_free(state);
 		return NULL;
 	}
+	/* sec 70c: a fresh exec mm's arm baseline is its state-create
+	 * moment (the exec image's own charges all land after it). */
+	corten_arms_snapshot(state);
 
 	mutex_lock(&corten_arena_alloc_lock);
 	/* Pairs with the stores below and in corten_arena_mm_exit(). */
@@ -4001,6 +4054,14 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_chg_fork_copy));
 	seq_printf(m, "chg_fork_pin        %ld\n",
 		   atomic_long_read(&corten_nr_chg_fork_pin));
+	{
+		int ai;
+
+		for (ai = 0; ai < CORTEN_ARM_NR; ai++)
+			seq_printf(m, "last_%s %ld\n",
+				   corten_arm_name[ai],
+				   atomic_long_read(&corten_nr_arm_last[ai]));
+	}
 	seq_printf(m, "rel_cow_old         %ld\n",
 		   atomic_long_read(&corten_nr_rel_cow_old));
 	seq_printf(m, "rel_file_unmap      %ld\n",
@@ -5644,10 +5705,19 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 * the legacy walk.
 	 */
 	if (READ_ONCE(mm->corten_mode)) {
+		int ai;
+
 		atomic_long_set(&corten_nr_post_walk_file,
 				get_mm_counter(mm, MM_FILEPAGES));
 		atomic_long_set(&corten_nr_post_walk_anon,
 				get_mm_counter(mm, MM_ANONPAGES));
+		/* sec 70c: this child's own per-arm profile -- the global
+		 * counters minus its birth snapshot, rendered as the
+		 * last-exit scalars. */
+		for (ai = 0; ai < CORTEN_ARM_NR; ai++)
+			atomic_long_set(&corten_nr_arm_last[ai],
+					atomic_long_read(corten_arm_ctr[ai]) -
+					READ_ONCE(state->arm_snap[ai]));
 	}
 
 	/* sec 69b: the orphan-frame census.  A window-domain PTE that
@@ -9307,6 +9377,10 @@ int corten_arena_fork_begin(struct mm_struct *mm, struct mm_struct *oldmm)
 
 		if (!state)
 			return -ENOMEM;
+		/* sec 70c: the child's arm baseline -- before the mirror
+		 * loop (its charges are the child's own, inside this
+		 * dup_mmap). */
+		corten_arms_snapshot(state);
 		state->next_va = READ_ONCE(old_state->next_va);
 		if (READ_ONCE(old_state->nr_implants)) {
 			state->implants = kmemdup(old_state->implants,
