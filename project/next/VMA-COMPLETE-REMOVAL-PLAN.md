@@ -1371,3 +1371,10 @@ file=756 全 charged / spec=6804——**特殊阴影面整体洗清**（+2/-2 �
 形 arena 面 vs legacy 面归属。**下一轮**: 快照配对定位 → 修复 → syz
 假 crash 消失 → 有效 fuzzing 解锁。syz 管理器持续运行（假 crash 池
 = 漂移复现样本）。
+
+## 62. 漂移普查采样化（2026-10-10）: 未采样 region walk RCU 楔死教训
+
+v2 census（region iter + 全 span PTE 走查每 exit）在 exit churn 下
+楔死盒子（rcu_preempt stall t=15min）→ v3 采样形：每 4096 次 mode
+exit 采样一次，attribution 证据以有界成本累积。旗标 on boot 健康
+（counters 全零起始，570 Bad rss-counter = 漂移按采样率累积中）。
