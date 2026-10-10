@@ -1700,10 +1700,17 @@ static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
 		if (pte_young(ptent) && likely(vma_has_recency(vma)))
 			folio_mark_accessed(folio);
 		rss[mm_counter(folio)] -= nr;
+		if (READ_ONCE(mm->corten_mode)) {
+			corten_note_legacy_zap(!folio_test_anon(folio), nr);
+			corten_trace_release_va(mm, addr);
+			corten_trace_release(mm, &folio->page);
+		}
 	} else {
 		/* We don't need up-to-date accessed/dirty bits. */
 		clear_full_ptes(mm, addr, pte, nr, tlb->fullmm);
 		rss[MM_ANONPAGES] -= nr;
+		if (READ_ONCE(mm->corten_mode))
+			corten_note_legacy_zap(false, nr);
 	}
 	/* Checking a single PTE in a batch is sufficient. */
 	arch_check_zapped_pte(vma, ptent);
