@@ -1427,3 +1427,11 @@ corten_zap_release_page，来源在窗口 arena 的 exit 记账链 elsewhere
 **下轮**: 在 exit_walk 的 unmap_chunk 前后加 mm rss 计数器差值
 计数器（pre-zap vs post-zap per exit），一次 boot 即分形漏扣在
 arena walk 内还是 legacy walk 内。
+
+## 67. post-arena-walk rss 快照 + 渲染补齐（2026-10-10）
+
+post_walk_file/anon 快照（corten_arena_mm_exit 内 arena walk 后、
+legacy walk 前）+ arena_stats 渲染落地。配合 exit_snap 入口快照
+和 check_mm 的 BUG 输出，一次旗标 on boot 即三段式分形：
+entry_snap（arena walk 前）→ post_walk（arena walk 后/legacy 前）
+→ check_mm BUG（legacy 后）。
