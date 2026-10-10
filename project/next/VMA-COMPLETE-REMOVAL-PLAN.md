@@ -1135,3 +1135,15 @@ vma_gate=0/零 trap; 失败回退 = 漏斗自有收集（无害）。
 **余面**: declare 的 181 失败（首要嫌疑: C1' overlap 对未释放的
 窗口 region——transfer 的 release 时序 vs sweep 的 declare 时序）
 = 下一迭代首查。
+
+## 43. 181 面首查（2026-10-10）: 锁流缺口深于时序假设
+
+**核查发现（深于 sec 42 的 C1' 假设）**: 窗口分支在
+`mmap_write_lock_killable` 取锁点**之前**执行（传输的 release 自取
+锁 ✓ 不死锁; 但 fv 创建 + insert_vm_struct 全程无写锁 = 契约缺
+口），且 `goto locked_expand` 跳过取锁点后尾部
+entry_sweep_locked 的 mmap_assert 竟未响（需核 assert 的旗标下
+编译与实际锁态）——declare 的 181 失败与这些锁态异常同源概率高。
+**下会话**: 窗口分支重排为标准形（取锁 → 传输/insert/声明 →
+解锁），以锁流统一后重测 stack_adopts 全覆盖。当前态 3/184 + 漏
+斗回退无害, 主链绿。
