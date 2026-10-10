@@ -1399,3 +1399,18 @@ corten_zap_release_page（页级扣减）或 corten_unmap（元数据 only），
 若后者则在 release 的 zap 驱动中补扣减或在 transfer 前显式
 uncharge。soak2 的 FILE+2/ANON-2 对为不同子签名（阴影 carrier 的
 dual-service 记账），待本轮修复后复查。
+
+## 64. val:32 漂移定性（2026-10-10）: 窗口 anon 页 exit 未扣, exit-walk 仪器化为下轮首题
+
+**签名**（soak3, 每进程一致）: bash/sshd-session MM_ANONPAGES val:32
+= 32 窗口驻留 anon 页在 exit 时未被扣减（charge ✓ 于 fault 安装;
+decrement ✗ 于 exit zap）。val:32 = MAX_ARG_STRLEN 页对齐不是巧合
+（栈/参数驻留的典型量级）。
+**exit-walk 扣减面分析**: exit_walk → unmap_chunk_flags →
+zap_window → corten_zap_release_page（-1 扣减 ✓ 存在）——但 mixed-
+frame clip 面的 corten_unmap（元数据 only, 无 rss 扣减）+ free_ptes
+_span（PT 页退役, 无页扣减）的组合可能跳过部分页的扣减。需要下轮
+在 exit_walk 的 unmap_chunk 与 free_ptes_span 交界处加 anon/file
+扣减计数器，一次 boot 分形漏扣的精确位置。
+**相关**: soak2 的 FILE+2/ANON-2 对 = 不同签名（阴影 carrier 双服
+务记账差），修复本轮后独立复查。
