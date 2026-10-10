@@ -250,6 +250,9 @@ static atomic_long_t corten_nr_dc_enomem;       /* sec 45: -ENOMEM */
 static atomic_long_t corten_nr_dc_eexist;       /* sec 45: -EEXIST */
 static atomic_long_t corten_nr_dc_enospc;       /* sec 45: -ENOSPC */
 static atomic_long_t corten_nr_dc_eother;       /* sec 45: other */
+static atomic_long_t corten_nr_span_free_calls;  /* sec 57: exit PT frees */
+static atomic_long_t corten_nr_span_free_window; /* sec 57: window frames freed */
+static atomic_long_t corten_nr_span_free_legacy; /* sec 57: legacy frames freed */
 
 static void corten_dc_note(int ret)
 {
@@ -3256,7 +3259,9 @@ static void corten_arena_free_ptes_span(struct mm_struct *mm,
 					unsigned long start,
 					unsigned long end)
 {
-	unsigned long addr;
+		bool legacy = start < CORTEN_MODE_WINDOW_START;
+	int nfreed = 0;
+unsigned long addr;
 
 	for (addr = start; addr < end;
 	     addr = min((addr | (PMD_SIZE - 1)) + 1, end)) {
@@ -3281,6 +3286,14 @@ static void corten_arena_free_ptes_span(struct mm_struct *mm,
 		pte_free_tlb(tlb, pmd_pgtable(READ_ONCE(*pmdp)), addr);
 		pmd_clear(pmdp);
 		mm_dec_nr_ptes(mm);
+		nfreed++;
+	}
+	if (nfreed) {
+		if (legacy)
+			atomic_long_add(nfreed, &corten_nr_span_free_legacy);
+		else
+			atomic_long_add(nfreed, &corten_nr_span_free_window);
+		atomic_long_inc(&corten_nr_span_free_calls);
 	}
 }
 
@@ -3904,6 +3917,12 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_dc_eother));
 	seq_printf(m, "brk_funnel          %ld\n",
 		   atomic_long_read(&corten_nr_brk_funnel));
+	seq_printf(m, "span_free_calls     %ld\n",
+			   atomic_long_read(&corten_nr_span_free_calls));
+	seq_printf(m, "span_free_window    %ld\n",
+			   atomic_long_read(&corten_nr_span_free_window));
+	seq_printf(m, "span_free_legacy    %ld\n",
+			   atomic_long_read(&corten_nr_span_free_legacy));
 	seq_printf(m, "stack_adopts        %ld\n",
 		   atomic_long_read(&corten_nr_sweep_stack_adopts));
 	seq_printf(m, "special_shadows     %ld\n",

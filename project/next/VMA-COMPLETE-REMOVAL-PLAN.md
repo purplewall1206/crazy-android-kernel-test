@@ -1320,3 +1320,16 @@ anon→file 记账。两个嫌疑面:
     与安装侧记账类型不一致 → -2 ANON）。
 **仪器化方案**: 在特殊阴影 pass-through 臂与 .fault 返回处加
 install 类型计数器一次 boot 分形。
+
+## 58. V3 漂移仪器化首轮（2026-10-10）: span_free_legacy=0, 嫌疑面收窄
+
+span 计数器落地（span_free_calls/window/legacy 入 arena_stats）。
+旗标 on boot 读数: **span_free_legacy=0**（arena 出口走查从不释放
+legacy 域 PT 页）→ +2 FILE 残留不走 span free 路径; span_free_window
+=5555（窗域正常）。同 boot 577 条 Bad rss-counter（boot 负载下漂移
+高发, 与 syz 325 次同源）。
+**嫌疑面收窄为三**: (a) special_shadow declare 的 scrub zap 扣减
+类型（declare_scrub_one 对预装 vdso 页的 -FILE/-ANON 判定）;
+(b) _install_special_mapping 的 insert_pages 记账（+2 FILE 来源侧）;
+(c) exit legacy zap 对阴影 PTE 的类型判定。下轮: (a)(c) 两侧各一
+计数器即分形。保留 span 计数器（观测资产）。
