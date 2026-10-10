@@ -1703,3 +1703,15 @@ acd6aa42。
 **终局审计（下会话首题）**: fork-commit registry 生命周期 ——
 child xa 在其 exit 时是否真持有镜像帧（register_child 计数 vs
 exit walk 帧迭代计数仪表）→ 补释放 → 单 child 验归零。
+
+## 83. registry 生命周期审计仪表: 13 注册 vs 8 走查（2026-10-11 凌晨）
+
+per-mm 帧审计落地（ae777157）: register_child 插入计数
+（state->reg_frames）vs exit walk 迭代计数（state->walk_frames）,
+渲染 last_reg_frames / last_walk_frames。静默 boot 判决: fork
+child **13 注册 vs 8 走查 —— 5 个镜像帧在 fork_commit 后、exit
+walk 前从 child xa 消失**, 计费未释放人口正居其上（同 child
+chg 195 / rel 131）。电池 on 腿绿（27/0/1）。
+**终局**: 生命期内可跑的 xa_erase 位点排查（slot_remove 的 release
+路、共租桶清空、drain）对只 parse+exit 的 child —— 一次 boot 钉死
+补释放验归零。
