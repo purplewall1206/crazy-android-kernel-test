@@ -1215,3 +1215,21 @@ punch=189/rejects=0（窗口目标 fixed 全数路由）; **vma_gate=0 =
 **漏斗余量定案**: 双路（punch+take）无缺口; 余量 = 设计内披露
 resident（fixed 文件形 + shared 面）。收编下一阶段 = OQ-MV-2 豁免
 的 i_mmap 写侧语义工程（独立大件, 需设计裁决）。
+
+## 50. OQ-MV-2 i_mmap 写侧设计核查定案（2026-10-10）: 最小成员面 = 零
+
+**消费方→覆盖矩阵**（region 承载强制文件映射所需面）:
+| 消费方 | i_mmap 依赖 | region 覆盖面 |
+|---|---|---|
+| truncate/invalidate | unmap_mapping_pages/range | W1.b registry 臂 ✓ (sec 49 前置) |
+| reclaim TTU (压力回收) | __rmap_walk_file 的 i_mmap 走查 | **corten_rmap_ttu 臂 ✓** (rmap.c:2467) |
+| migration/unmap_one | rmap_walk_file | **corten_rmap_unmap_one ✓** (rmap.c:2042/2510) |
+| mapping_wrprotect_range | rmap_walk_file | OQ-M6-3 拒绝+计数面 ✓ |
+| page_mkwrite | vma->vm_ops | region fault 臂 ✓ |
+**定案**: 最小 i_mmap 成员面 = **零**——每个消费方已有 corten 臂
+或登记披露。OQ-MV-2 的"需完整 i_mmap 写侧语义"谨慎注记被现有
+机械覆盖; hosting 强制文件映射为 region 的实现不再是 i_mmap 依赖
+件, 而是纯决策件（punch 路线的 region host 形 vs 现行擦除形）。
+**下阶段决策件入册**: 固定文件形的 region host（新路由 vs 擦除
+维持）——收益 = auto_legacy_class 的 1992 cl_fixed_file 面收编;
+成本 = 新 host 路由的验收面。需用户裁决。
