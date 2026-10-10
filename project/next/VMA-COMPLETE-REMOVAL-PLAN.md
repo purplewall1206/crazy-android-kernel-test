@@ -1661,3 +1661,17 @@ child 被重充 map_anon —— 页确实释放了, 只是计数对 broken
 **下轮（归零最后一步）**: fork_copy 页的 VA 记录（charge 时存
 地址）+ 地址级差集 → 找出其 PTE 的 in-life 清除臂 → 补扣减 →
 单 child 验归零。
+
+## 80. VA 级差集: 未释放人口按域绘出（2026-10-11 凌晨）
+
+fork_copy 站点记录 VA, release_page 按 VA 擦除, exit 打印 VA 键幸
+存者。静默 boot 首图: 探针 child **127 个未释放 VA 横跨三域**——
+exec 早期窗口页（100000035xxx）、窗口上段杂志段（3fffffc1f000）、
+**就地收编 heap 的 legacy 地址**（560bf5a8xxx —— sweep adopt 原地
+收编, registry 覆盖常规域帧, 镜像在该处同样 fork 计费）; 而下一个
+child 读数 **0**。逐 child 方差（127 vs 0）= in-life 清除臂的判别
+面: 一部分 child 的退出经 walk 释放全部 fork VA, 另一部分整体遗
+留。电池 on 腿绿（27/0/1）。cde464f9。
+**下轮（终局）**: 用 127-vs-0 判别面对照两类 child 的退出路径差
+（state 快照时点/pool flush/fork 顺序）→ 钉死释放跳空的臂 → 补
+扣减 → 验归零。
