@@ -1493,3 +1493,20 @@ install charge FILE +2, release FILE -2 平衡）, 额外 -2 的第三方
 扣减源未定位（lshadow_zap=0 已排除 legacy 特殊 VMA zap）。
 **下轮首题 instrument**: exit 时窗口域全 PTE 走 vs registry 帧覆盖
 差值计数（孤儿帧 census）, 一次 boot 即钉死孤儿跨的来源帧。
+
+## 70. 孤儿帧 census + 逐臂 charge 计数落地（2026-10-10 深夜）: +34 为纯计数幻影
+
+sec 69b instrument（bc15d75e009e）一次 boot 判决: **孤儿 = 0**
+（256 exit × 1/16 采样, 窗口域全 PTE 走, 含 registry 帧逐成员
+extent 精查）—— +34 残余**无驻留页**, 是纯计数幻影（无内存泄漏,
+仅 counter 漂移）。kpage_addr 钉死 -2 FILE 面在常规域 vdso/vvar
+区间（如 7f89b44d2000, 非窗口）。
+
+sec 69c: 七个 MM_ANONPAGES charge 臂逐臂计数 + 渲染。单 fork 子壳
+exit delta: fork_copy +386 / map_anon +61 / cow_write +41 /
+file_cow +9（swap_in/unuse_pull/fork_pin = 0）。life 内算术: 497
+charge → 190 驻留 → 273 正常扣减 → **34 幻影**（life 内释放无扣减,
+或 charge 无 PTE 落地）。cow_write 的 old 释放已查: old_is_file 走
+corten_folio_is_filemap（mapping 门）, 未拄锚老 folio → ANON ✓
+平衡。**下轮**: 给 fork 镜像父侧释放臂/transfer 释放臂/drain 补
+release 侧逐臂计数, 与七 charge 臂做逐臂对账（一次 boot 收敛）。
