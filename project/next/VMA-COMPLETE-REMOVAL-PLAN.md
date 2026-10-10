@@ -1794,3 +1794,17 @@ disabled + preempt_count 1" + RCU 读侧警告 = 两遍重触已退役帧。
 残差 +34 不变。电池 on 腿绿（27/0/1）。65101637。
 **归零最后一步（下会话）**: fork_copy VA 集的 in-life 清除臂定位
 （环已稳定, 可加 VA 全量记录）→ 补释放 → 验归零。
+
+## 90. 裸拆现行捕获: 残差机制代码级闭合（2026-10-11 凌晨）
+
+free_pte_range 裸拆绊线（b310d772）: MODE mm 的 PT 页释放前扫描
+—— **铁证: 'freepte bare-teardown live=110 at 56385b800000'**
+（收编 heap 帧地址, LIVE VA 56385b802000/80a000/80d000/819000 全为
+heap 域）—— exit walk 的帧退役把**仍有 present 计费 PTE 的 PT 页
+裸拆**, zap 漏斗从未到访。人口与残差面精确吻合（收编 heap 页,
+fork 拷贝计费, 从未 zap 释放）。freepte_present 累计（6068）为修
+复回归度量。电池 on 腿绿（27/0/1）。
+**归零修复（下会话首动作, 一体两面）**: 帧退役重排——先对帧做
+全内容 zap（走 release_page 漏斗计费释放）再判退役, 或退役门改用
+free 时刻的全量 live 扫描（绊线已给出语义）。修复后
+freepte_present 停止增长 + val:34 归零 = 双重验收。
