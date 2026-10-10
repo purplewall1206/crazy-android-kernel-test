@@ -1621,3 +1621,18 @@ exec-child 37 页, 此前不可见）; 单 PTE fork-copy 臂实测确认
 的释放缺口在别处, per-page charge-address trace（计费地址记录,
 exit 时差集）为归零修复的首题。电池双腿绿（7/0, 34/0）。
 363d5ab7c214。
+
+## 77. 幸存者清扫落地 + 归属判定: 释放缺口在生命期内（2026-10-11 凌晨）
+
+sec 76b（3889d858）: exit_mmap 在 unmap_vmas 后、free_pgtables 前
+对 MODE mm 全页表镜像走查, 残存 present PTE 逐页走计费释放漏斗
+（release_page + tlb; unmap 后构造稀疏）。**判定结果: 残差仍 +34**
+—— 清扫看不到它们的 PTE, 即释放跳空发生在 **mm 生命期内**（某次
+in-life 清 PTE 未扣减）, 而非退出尾部。per-mm 恒等式限定现象域:
+exit 时计费未释放 64 页, 其中 34 存活至 check_mm。
+
+**下轮首题（归零修复的最后一步）**: in-life 清除点归属 —— 生命期
+内对 child mm 的 PTE 清除臂逐一挂钩（unmap/munmap/CoW 替换/exec
+swap 的旧 mm 清理）, 找出"清 PTE 不扣减"的那个臂后补扣减, 静默
+boot 单 child 协议验归零。仪器完备（恒等式 + 20 臂 + 探针对）,
+一次 boot 收敛。电池绿（off 28/0, on 27/0/1, 尾套件口径）。
