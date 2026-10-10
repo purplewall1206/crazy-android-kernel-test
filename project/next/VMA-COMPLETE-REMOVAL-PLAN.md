@@ -1158,3 +1158,13 @@ out_unlock 解锁）——锁流自洽, sec 43 的"预锁执行/跳过取锁"系
 region 释放的真正时点/成败——transfer 的 release 返回值未核）,
 (2) PMD 对齐/长度校验, (3) state 创建路径。
 下会话: declare_carrier 返回码分errno 计数器（一次 boot 定位）。
+
+## 45. 栈收编全覆盖达成（2026-10-10）: 186/186, dc 全零
+
+sec 40 正确形（kfree+NULL）重apply + sec 42 co-resident -ENOENT 臂
+合流: stack_adopts=186/186 全覆盖, dc_* 全零（declare 184/184 全
+成——C1' overlap 假设证伪: 释放时序从来不是问题, 问题只是早退）。
+旗标 on: 探针/smoke/vma_gate=0/零 trap 全绿。
+**栈面语义终态**: 每 exec 的终载体 = G2' 共生形 + sweep 时
+co-resident declare（双服务, 载体保留）。vma_exec.c 退役 = 旗标
+默认化浸泡周后随回退臂删除（sec 33 门槛不变）。
