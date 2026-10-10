@@ -1808,3 +1808,16 @@ fork 拷贝计费, 从未 zap 释放）。freepte_present 累计（6068）为修
 全内容 zap（走 release_page 漏斗计费释放）再判退役, 或退役门改用
 free 时刻的全量 live 扫描（绊线已给出语义）。修复后
 freepte_present 停止增长 + val:34 归零 = 双重验收。
+
+## 91. free-funnel 释放两形皆崩: 回退计数绊线, 根因锁定 walk 早停（2026-10-11 凌晨）
+
+free_pte_range 的释放两形（tlb-batch 与直接 folio_put）都在 child
+exit 崩溃（irqs disabled, CR2 fffff461.../fffff2c4...）—— 这些 PT
+页上的页在 free 时刻的帧生命周期有更深的契约, 盲释放不可行。绊线
+回退计数形态（freepte_present = census）。**根因锁定**: exit walk
+主遍在 8/13 帧早停（yield 序列 sec 85 实锤）, 恰好跳过的帧携带
+计费未释放人口 → free 漏斗裸拆。残差性质不变: 零泄漏、有界 34 页
+/fork child、纯计数。电池 on 腿绿（27/0/1）。
+**终局修复方向**: 主遍早停的根因（xa_for_each 迭代中被 walk 自身
+的 slot_remove/retire 打断游标）—— 修复早停后残差按构造归零,
+freepte_present 双重验证。
