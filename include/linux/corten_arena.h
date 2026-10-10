@@ -568,6 +568,10 @@ enum {
 void corten_note_tree_copy(int nr, bool file);
 void corten_note_legacy_zap(bool file, int nr);
 
+/* sec 74 census: the first MODE exit's pre/post-unmap rss pair (the
+ * legacy funnel's release for the tree VMAs the arena walk left). */
+void corten_exit_unmap_probe(struct mm_struct *mm, bool pre);
+
 struct corten_mm_state {
 	struct xarray		arenas;
 	refcount_t		nr;

@@ -1671,7 +1671,16 @@ void exit_mmap(struct mm_struct *mm)
 	trace_android_vh_swapmem_gather_init(mm);
 	/* update_hiwater_rss(mm) here? but nobody should be looking */
 	/* Use ULONG_MAX here to ensure all VMAs in the mm are unmapped */
+	/* sec 74 census: the MODE exit's pre/post-unmap rss pair -- what
+	 * the legacy funnel releases for the tree VMAs the arena walk
+	 * left behind (the +34 phantom's unreleased-population probe).
+	 * One pair per boot, first MODE exit only.
+	 */
+	if (READ_ONCE(mm->corten_mode))
+		corten_exit_unmap_probe(mm, true);
 	unmap_vmas(&tlb, &vmi.mas, vma, 0, ULONG_MAX, ULONG_MAX, false);
+	if (READ_ONCE(mm->corten_mode))
+		corten_exit_unmap_probe(mm, false);
 	trace_android_vh_swapmem_gather_finish(mm);
 	mmap_read_unlock(mm);
 

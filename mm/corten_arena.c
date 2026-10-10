@@ -357,6 +357,23 @@ void corten_note_legacy_shadow_zap(void)
 }
 EXPORT_SYMBOL_GPL(corten_note_legacy_shadow_zap);
 
+static long corten_exit_probe_seq;
+
+void corten_exit_unmap_probe(struct mm_struct *mm, bool pre)
+{
+	if (READ_ONCE(corten_exit_probe_seq) >= 8)
+		return;
+	pr_info("corten: exit %s-unmap[%ld] mm=%d anon=%ld file=%ld shmem=%ld\n",
+		pre ? "pre" : "post", READ_ONCE(corten_exit_probe_seq),
+		READ_ONCE(mm->corten_mode),
+		get_mm_counter(mm, MM_ANONPAGES),
+		get_mm_counter(mm, MM_FILEPAGES),
+		get_mm_counter(mm, MM_SHMEMPAGES));
+	if (!pre)
+		atomic_long_inc((atomic_long_t *)&corten_exit_probe_seq);
+}
+EXPORT_SYMBOL_GPL(corten_exit_unmap_probe);
+
 static void corten_dc_note(int ret)
 {
 	switch (ret) {

@@ -1267,6 +1267,10 @@ static inline void corten_note_legacy_shadow_zap(void)
 {
 }
 
+static inline void corten_exit_unmap_probe(struct mm_struct *mm, bool pre)
+{
+}
+
 static inline void corten_note_fault_kpage_charge(int nr)
 {
 }
