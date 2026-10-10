@@ -1350,3 +1350,14 @@ legacy 域 PT 页）→ +2 FILE 残留不走 span free 路径; span_free_window
    zap 误扣 -2 ANON）;
 2. V3 fork mirror（dup_mmap 侧）: 子副本的 FILE 记账继承/缺失;
 3. exit drain 路径对阴影 descriptor 的 free（drain→free 的 zap 面）。
+
+## 60. V3 漂移判定性分形（2026-10-10）: 阴影面洗清, 漂移在别处
+
+**census 修正后读数**（vma_lookup 按 range 取载体）:
+sh_exit_anon=0 / sh_exit_file=756(全 charged/mapped) /
+sh_exit_spec=6804(vvar+vclock PFN 面)——**特殊阴影 VMA 内零 anon 页**,
+-2 ANON 不在阴影 PTE; 756 file 页全部 charged/mapped, +2 FILE 亦非
+阴影残留。**特殊阴影面整体洗清。**
+**漂移真来源收窄**: 窗口 arena 的 exit 记账（anon 页 install/清
+不对称）或 legacy 非】 阴影面。下一轮: exit_mmap 的 arena span
+清段与 legacy walk 各上 anon/file 扣减计数器一次 boot 分形。

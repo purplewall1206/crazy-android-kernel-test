@@ -253,6 +253,10 @@ static atomic_long_t corten_nr_dc_eother;       /* sec 45: other */
 static atomic_long_t corten_nr_span_free_calls;  /* sec 57: exit PT frees */
 static atomic_long_t corten_nr_span_free_window; /* sec 57: window frames freed */
 static atomic_long_t corten_nr_span_free_legacy; /* sec 57: legacy frames freed */
+static atomic_long_t corten_nr_sh_exit_anon;     /* sec 57b: shadow exit anon PTEs */
+static atomic_long_t corten_nr_sh_exit_file;     /* sec 57b: shadow exit file PTEs */
+static atomic_long_t corten_nr_sh_exit_spec;     /* sec 57b: shadow exit special/none */
+static atomic_long_t corten_nr_sh_exit_charged;  /* sec 57b: shadow exit mapped (charged) */
 
 static void corten_dc_note(int ret)
 {
@@ -3923,6 +3927,14 @@ void corten_arena_stats_report(struct seq_file *m)
 			   atomic_long_read(&corten_nr_span_free_window));
 	seq_printf(m, "span_free_legacy    %ld\n",
 			   atomic_long_read(&corten_nr_span_free_legacy));
+	seq_printf(m, "sh_exit_anon        %ld\n",
+		   atomic_long_read(&corten_nr_sh_exit_anon));
+	seq_printf(m, "sh_exit_file        %ld\n",
+		   atomic_long_read(&corten_nr_sh_exit_file));
+	seq_printf(m, "sh_exit_spec        %ld\n",
+		   atomic_long_read(&corten_nr_sh_exit_spec));
+	seq_printf(m, "sh_exit_charged     %ld\n",
+		   atomic_long_read(&corten_nr_sh_exit_charged));
 	seq_printf(m, "stack_adopts        %ld\n",
 		   atomic_long_read(&corten_nr_sweep_stack_adopts));
 	seq_printf(m, "special_shadows     %ld\n",
@@ -5392,6 +5404,70 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	state = smp_load_acquire(&mm->corten_state);
 	if (!state)
 		return;
+
+	/* sec 57b: the V3 drift census -- at exit, walk every special
+	 * shadow's carrier VMA and count the PTE page types, so the
+	 * +2 FILE / -2 ANON drift attributes to the shadow's own
+	 * resident pages.  Runs before any drain/zap: mm_users is 0 and
+	 * the teardown is single-threaded, so the census walks the PTEs
+	 * without the locks (a frozen picture).
+	 */
+	{
+		struct corten_region_iter sit;
+		struct corten_arena *sar;
+
+		corten_region_iter_init(&sit);
+		while ((sar = corten_region_next(mm, &sit))) {
+			struct vm_area_struct *sv;
+			unsigned long a;
+
+			if (!(READ_ONCE(sar->rflags) &
+			      CORTEN_RF_SPECIAL_SHADOW))
+				continue;
+			/* V3 declares novma=true: the anchor is not
+			 * cached -- recover the carrier by range.
+			 */
+			sv = vma_lookup(mm, READ_ONCE(sar->start));
+			if (!sv || sv->vm_start != READ_ONCE(sar->start))
+				continue;
+			for (a = sv->vm_start; a < sv->vm_end;
+			     a += PAGE_SIZE) {
+				pgd_t *pgd = pgd_offset(mm, a);
+				p4d_t *p4d = p4d_offset(pgd, a);
+				pud_t *pud = pud_offset(p4d, a);
+				pmd_t *pmd = pmd_offset(pud, a);
+				pte_t *pte;
+				struct page *pg;
+
+				if (!pmd_present(READ_ONCE(*pmd))) {
+					atomic_long_inc(&corten_nr_sh_exit_spec);
+					continue;
+				}
+				pte = pte_offset_map(pmd, a);
+				if (!pte) {
+					atomic_long_inc(&corten_nr_sh_exit_spec);
+					continue;
+				}
+				if (pte_none(ptep_get(pte))) {
+					pte_unmap(pte);
+					atomic_long_inc(&corten_nr_sh_exit_spec);
+					continue;
+				}
+				pg = vm_normal_page(sv, a, ptep_get(pte));
+				pte_unmap(pte);
+				if (!pg) {
+					atomic_long_inc(&corten_nr_sh_exit_spec);
+					continue;
+				}
+				if (PageAnon(pg))
+					atomic_long_inc(&corten_nr_sh_exit_anon);
+				else
+					atomic_long_inc(&corten_nr_sh_exit_file);
+				if (page_mapped(pg))
+					atomic_long_inc(&corten_nr_sh_exit_charged);
+			}
+		}
+	}
 
 	/* V-A.3c lifecycle trigger (j2-audit hook list): the INV-MV2 exit
 	 * audit runs first, before any drain or zap mutates the picture --
