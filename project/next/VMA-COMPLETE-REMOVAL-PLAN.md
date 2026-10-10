@@ -1690,3 +1690,16 @@ registry 生命周期**（fork_commit 的镜像注册在 child 侧何处丢失/
 **终局路径**: fork_begin/fork_commit 的 child registry 生命周期
 审计（register_child 的帧是否真的进了 child xa / exit 前是否被
 pool flush 或 drain 清空）→ 补释放 → 验归零。
+
+## 82. VA 擦除覆盖补齐 + 幸存者集合跨 boot 确定（2026-10-11 凌晨）
+
+VA 擦除补到两个绕过 release_page 的清除臂（arena 零页 CoW 的
+corten_pte_clear_flush 双点 + legacy 退出 zap 的 clear_full_ptes
+fullmm 主臂）。静默 boot 判决: 幸存者 VA 集合**跨 boot 完全确定**
+（100000035000/37000/200000/201000/601000 + 3fffffc1f000 + 收编
+heap 页）—— exec 时代确定性页, 其 child 侧 PTE 不经任何计费 zap
+消失; 首探针 child 125 幸存 vs 次child 0。电池 on 腿绿（27/0/1）。
+acd6aa42。
+**终局审计（下会话首题）**: fork-commit registry 生命周期 ——
+child xa 在其 exit 时是否真持有镜像帧（register_child 计数 vs
+exit walk 帧迭代计数仪表）→ 补释放 → 单 child 验归零。
