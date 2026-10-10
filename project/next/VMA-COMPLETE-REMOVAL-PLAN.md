@@ -1385,3 +1385,17 @@ v2 census（region iter + 全 span PTE 走查每 exit）在 exit churn 下
 楔死盒子（rcu_preempt stall t=15min）→ v3 采样形：每 4096 次 mode
 exit 采样一次，attribution 证据以有界成本累积。旗标 on boot 健康
 （counters 全零起始，570 Bad rss-counter = 漂移按采样率累积中）。
+
+## 63. 漂移签名定位（2026-10-10）: val:32 ANON = 窗口临时栈/参数页漏扣
+
+soak3 漂移签名: **MM_ANONPAGES val:32** (bash/sshd-session, 每进程一
+致)——32 页 = S3-A 窗口临时栈在 copy_strings GUP 后的驻留 anon 页
+（bprm 参数/env 写入经窗口 GUP 臂安装并 charge +ANON ✓）。transfer
+臂的 window region release：release 的 zap 路径（vma-less 窗口区域
+的 arena zap）若经 corten_unmap（元数据 only）而非
+corten_zap_release_page（-1 扣减），则这些 charged 页漏扣 → val:32
+✓✓。**修复方向**: 确认 release 路径的 zap 是否走
+corten_zap_release_page（页级扣减）或 corten_unmap（元数据 only），
+若后者则在 release 的 zap 驱动中补扣减或在 transfer 前显式
+uncharge。soak2 的 FILE+2/ANON-2 对为不同子签名（阴影 carrier 的
+dual-service 记账），待本轮修复后复查。
