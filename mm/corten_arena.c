@@ -282,7 +282,6 @@ static unsigned long corten_nr_orphan_addr;      /* sec 69b: last orphan address
 static unsigned long corten_nr_kpage_addr;       /* sec 69b: last kpage release address */
 static unsigned long corten_kpage_log[8];        /* sec 70: first 8 kpage addrs */
 static unsigned int corten_kpage_log_n;          /* sec 70: slots used */
-static bool corten_kpage_warned;                 /* sec 70: one-shot vma identity */
 static atomic_long_t corten_nr_fault_kpage_chg;  /* sec 70: fault install kpage charges */
 
 void corten_note_fault_kpage_charge(int nr)
@@ -14399,17 +14398,7 @@ static void corten_zap_release_page(struct mm_struct *mm,
 				WRITE_ONCE(corten_kpage_log[kn], addr);
 				WRITE_ONCE(corten_kpage_log_n, kn + 1);
 			}
-			if (!READ_ONCE(corten_kpage_warned)) {
-				struct vm_area_struct *kv = find_vma(mm, addr);
 
-				WRITE_ONCE(corten_kpage_warned, true);
-				pr_info("corten: kpage release %lx vma=[%lx,%lx) flags=%lx pgoff=%lx file=%pd\n",
-					addr, kv ? kv->vm_start : 0UL,
-					kv ? kv->vm_end : 0UL,
-					kv ? (unsigned long)kv->vm_flags : 0UL,
-					kv ? kv->vm_pgoff : 0UL,
-					kv ? kv->vm_file : NULL);
-			}
 		}
 		/* sec 70: the kernel-image family (mapping-less file pages,
 		 * the vdso image) skips the file-family decrement on MODE
@@ -14440,12 +14429,6 @@ static bool corten_zap_drop_present_page(struct mm_struct *mm,
 {
 	struct page *page = pte_page(oldpte);
 
-	if (!READ_ONCE(corten_kpage_warned) && !folio_mapping(page_folio(page)) &&
-	    !folio_test_swapbacked(page_folio(page))) {
-		WRITE_ONCE(corten_kpage_warned, true);
-		pr_info("corten: kpage pte %lx pteval=%lx pfn=%lx\n",
-			addr, pte_val(oldpte), (unsigned long)pte_pfn(oldpte));
-	}
 	corten_zap_release_page(mm, vma, page, addr);
 	return __tlb_remove_page_size(tlb, page, false, PAGE_SIZE);
 }
@@ -14762,15 +14745,6 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 				if (pte_present(oldpte) &&
 				    !pte_special(oldpte)) {
 					page = pte_page(oldpte);
-
-					if (!READ_ONCE(corten_kpage_warned) &&
-					    !folio_mapping(page_folio(page)) &&
-					    !folio_test_swapbacked(page_folio(page))) {
-						WRITE_ONCE(corten_kpage_warned, true);
-						pr_info("corten: kpage pte %lx pteval=%lx pfn=%lx\n",
-							addr, pte_val(oldpte),
-							(unsigned long)pte_pfn(oldpte));
-					}
 
 					/* [T3] Observability only: a pinned
 					 * folio survives the zap on its pin
