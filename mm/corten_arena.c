@@ -256,6 +256,8 @@ static atomic_long_t corten_nr_span_free_legacy; /* sec 57: legacy frames freed 
 static atomic_long_t corten_nr_exit_snap_file;   /* sec 61: last-exit rss file */
 static atomic_long_t corten_nr_exit_snap_anon;   /* sec 61: last-exit rss anon */
 static atomic_long_t corten_nr_exit_snaps;       /* sec 61: mode exits snapped */
+static atomic_long_t corten_nr_post_walk_file;   /* sec 66: post-arena-walk rss file */
+static atomic_long_t corten_nr_post_walk_anon;   /* sec 66: post-arena-walk rss anon */
 static atomic_long_t corten_nr_wz_anon;          /* sec 62: window found anon */
 static atomic_long_t corten_nr_wz_file;          /* sec 62: window found file */
 static atomic_long_t corten_nr_lz_anon;          /* sec 62: legacy found anon */
@@ -5512,6 +5514,17 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 * locks fence the walk against everything dead.
 	 */
 	corten_arena_exit_walk(mm, state);
+
+	/* sec 66: post-arena-walk snapshot -- pairs with the entry
+	 * snapshot to split the exit drift between the arena walk and
+	 * the legacy walk.
+	 */
+	if (READ_ONCE(mm->corten_mode)) {
+		atomic_long_set(&corten_nr_post_walk_file,
+				get_mm_counter(mm, MM_FILEPAGES));
+		atomic_long_set(&corten_nr_post_walk_anon,
+				get_mm_counter(mm, MM_ANONPAGES));
+	}
 
 	/* MV3.c (the drain takes the lock): the unpublish and the drain
 	 * below run under this mm's mmap_write, restoring the W-7
