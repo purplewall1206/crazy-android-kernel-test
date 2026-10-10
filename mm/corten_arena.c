@@ -275,6 +275,18 @@ static atomic_long_t corten_nr_exit_nostate_anon;/* sec 69: their residual anon 
 static atomic_long_t corten_nr_exit_nostate_file;/* sec 69: their residual file */
 static atomic_long_t corten_nr_zrel_kpage;       /* sec 69: mapping-less file releases */
 static atomic_long_t corten_nr_lshadow_zap;      /* sec 69: legacy special-VMA zaps, MODE */
+static atomic_long_t corten_nr_orphan_exits;     /* sec 69b: exits with orphan frames */
+static atomic_long_t corten_nr_orphan_anon;      /* sec 69b: orphan anon pages */
+static atomic_long_t corten_nr_orphan_file;      /* sec 69b: orphan file pages */
+static unsigned long corten_nr_orphan_addr;      /* sec 69b: last orphan address */
+static unsigned long corten_nr_kpage_addr;       /* sec 69b: last kpage release address */
+static atomic_long_t corten_nr_chg_map_anon;     /* sec 69c: map_anon arm charges */
+static atomic_long_t corten_nr_chg_cow_write;    /* sec 69c: cow_write arm charges */
+static atomic_long_t corten_nr_chg_swap_in;      /* sec 69c: swap_in arm charges */
+static atomic_long_t corten_nr_chg_file_cow;     /* sec 69c: file_cow arm charges */
+static atomic_long_t corten_nr_chg_unuse_pull;   /* sec 69c: unuse_cache_pull charges */
+static atomic_long_t corten_nr_chg_fork_copy;    /* sec 69c: fork mirror copy charges */
+static atomic_long_t corten_nr_chg_fork_pin;     /* sec 69c: fork pinned-copy charges */
 
 void corten_note_legacy_shadow_zap(void)
 {
@@ -3942,6 +3954,30 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_exit_nostate_file));
 	seq_printf(m, "lshadow_zap         %ld\n",
 		   atomic_long_read(&corten_nr_lshadow_zap));
+	seq_printf(m, "orphan_exits        %ld\n",
+		   atomic_long_read(&corten_nr_orphan_exits));
+	seq_printf(m, "orphan_anon         %ld\n",
+		   atomic_long_read(&corten_nr_orphan_anon));
+	seq_printf(m, "orphan_file         %ld\n",
+		   atomic_long_read(&corten_nr_orphan_file));
+	seq_printf(m, "orphan_addr         %lx\n",
+		   READ_ONCE(corten_nr_orphan_addr));
+	seq_printf(m, "kpage_addr          %lx\n",
+		   READ_ONCE(corten_nr_kpage_addr));
+	seq_printf(m, "chg_map_anon        %ld\n",
+		   atomic_long_read(&corten_nr_chg_map_anon));
+	seq_printf(m, "chg_cow_write       %ld\n",
+		   atomic_long_read(&corten_nr_chg_cow_write));
+	seq_printf(m, "chg_swap_in         %ld\n",
+		   atomic_long_read(&corten_nr_chg_swap_in));
+	seq_printf(m, "chg_file_cow        %ld\n",
+		   atomic_long_read(&corten_nr_chg_file_cow));
+	seq_printf(m, "chg_unuse_pull      %ld\n",
+		   atomic_long_read(&corten_nr_chg_unuse_pull));
+	seq_printf(m, "chg_fork_copy       %ld\n",
+		   atomic_long_read(&corten_nr_chg_fork_copy));
+	seq_printf(m, "chg_fork_pin        %ld\n",
+		   atomic_long_read(&corten_nr_chg_fork_pin));
 	seq_printf(m, "lz_anon             %ld\n",
 		   atomic_long_read(&corten_nr_lz_anon));
 	seq_printf(m, "lz_file             %ld\n",
@@ -5583,6 +5619,108 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				get_mm_counter(mm, MM_FILEPAGES));
 		atomic_long_set(&corten_nr_post_walk_anon,
 				get_mm_counter(mm, MM_ANONPAGES));
+	}
+
+	/* sec 69b: the orphan-frame census.  A window-domain PTE that
+	 * survives the exit walk names a charged page neither walk can
+	 * release: the frame carries no registry record (the arena
+	 * walk's coverage) and no tree VMA covers the address (the
+	 * legacy walk's coverage, the window is tree-zero).  Sampled
+	 * 1/16 mode exits (the sec 62 RCU-stall lesson) and post-walk
+	 * (registry frames' PT pages are already retired, so the sweep
+	 * is sparse); counted, never gated.  The last orphan address is
+	 * recorded for the frame/region lookup.
+	 */
+	if (READ_ONCE(mm->corten_mode) &&
+	    (atomic_long_read(&corten_nr_exit_snaps) & 0xF) == 0) {
+		unsigned long wa;
+		bool orphaned = false;
+
+		mmap_read_lock(mm);
+		for (wa = CORTEN_MODE_WINDOW_START;
+		     wa < CORTEN_MODE_WINDOW_END; wa += PMD_SIZE) {
+			pgd_t *opgd = pgd_offset(mm, wa);
+			p4d_t *op4d;
+			pud_t *opud;
+			pmd_t *opmd;
+			pte_t *opte;
+			void *oslot;
+
+			if (pgd_none(READ_ONCE(*opgd)))
+				continue;
+			op4d = p4d_offset(opgd, wa);
+			if (p4d_none(READ_ONCE(*op4d)))
+				continue;
+			opud = pud_offset(op4d, wa);
+			if (pud_none(READ_ONCE(*opud)) ||
+			    pud_bad(READ_ONCE(*opud)))
+				continue;
+			opmd = pmd_offset(opud, wa);
+			if (!pmd_present(READ_ONCE(*opmd)) ||
+			    pmd_bad(READ_ONCE(*opmd)))
+				continue;
+			oslot = xa_load(&state->arenas, wa >> PMD_SHIFT);
+
+			opte = pte_offset_map(opmd, wa);
+			if (!opte) {
+				continue;
+			}
+			{
+				unsigned long fa;
+				struct corten_frame_bucket *ob =
+					oslot && oslot !=
+					&corten_va_reserve_sentinel ?
+					corten_slot_bucket(oslot) : NULL;
+				unsigned int onr = ob ? ob->nr :
+					(oslot ? 1 : 0);
+
+				for (fa = 0; fa < PMD_SIZE; fa += PAGE_SIZE) {
+					pte_t pt = ptep_get(opte +
+							    (fa >> PAGE_SHIFT));
+					struct page *opg;
+					unsigned long pa = wa + fa;
+					unsigned int oi;
+					bool covered = false;
+
+					if (pte_none(pt) || !pte_present(pt) ||
+					    pte_special(pt))
+						continue;
+					/* Registry frames: the walk zaps
+					 * member clips only -- a PTE inside
+					 * the frame but outside every
+					 * member's extent is as orphaned
+					 * as an unregistered frame's.
+					 */
+					for (oi = 0; oi < onr; oi++) {
+						struct corten_arena *om =
+							ob ? READ_ONCE(ob->rec[oi]) :
+							corten_slot_arena(oslot);
+
+						if (pa >= READ_ONCE(om->start) &&
+						    pa < READ_ONCE(om->end)) {
+							covered = true;
+							break;
+						}
+					}
+					if (covered)
+						continue;
+					if (find_vma(mm, pa))
+						continue;	/* VMA-covered */
+					opg = vm_normal_page(NULL, pa, pt);
+					if (!opg)
+						continue;
+					orphaned = true;
+					atomic_long_inc(PageAnon(opg) ?
+							&corten_nr_orphan_anon :
+							&corten_nr_orphan_file);
+					WRITE_ONCE(corten_nr_orphan_addr, pa);
+				}
+			}
+			pte_unmap(opte);
+		}
+		mmap_read_unlock(mm);
+		if (orphaned)
+			atomic_long_inc(&corten_nr_orphan_exits);
 	}
 
 	/* MV3.c (the drain takes the lock): the unpublish and the drain
@@ -9681,6 +9819,7 @@ retry:
 				folio_copy(newfolio, folio);
 				__folio_mark_uptodate(newfolio);
 				folio_add_anon_rmap_novma(newfolio);
+				atomic_long_inc(&corten_nr_chg_fork_pin);
 				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
 				/* The copy's writable bit follows the
 				 * parent's encoding (the recorded perm):
@@ -9708,6 +9847,7 @@ retry:
 				copied = true;
 			} else {
 				folio_dup_anon_rmap_novma(folio, page);
+				atomic_long_inc(&corten_nr_chg_fork_copy);
 				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
 			}
 		} else {
@@ -10950,6 +11090,7 @@ static int corten_arena_map_anon(struct corten_fault_ctx *ctx,
 	/* order-0: the single alloc reference becomes the PTE reference;
 	 * no folio_ref_add() (legacy nr_pages - 1 == 0).
 	 */
+	atomic_long_inc(&corten_nr_chg_map_anon);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
 	/* MV2 W-2 (R1 flip): the anon window page's mapcount is exact
 	 * bookkeeping on every shape now -- the auto (vma-less) shapes
@@ -11314,6 +11455,7 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 	 * (order-0); the old folio's PTE reference is released only after
 	 * the flush, in the zap ordering.
 	 */
+	atomic_long_inc(&corten_nr_chg_cow_write);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
 	if (vma)
 		folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr,
@@ -11764,6 +11906,7 @@ retry:
 	 */
 	arch_swap_restore(entry, folio);
 
+	atomic_long_inc(&corten_nr_chg_swap_in);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
 	add_mm_counter(mm, MM_SWAPENTS, -1);
 
@@ -12398,6 +12541,7 @@ static int corten_arena_file_cow(struct corten_fault_ctx *ctx,
 	entry = pte_mkyoung(entry);
 	entry = corten_pte_mkwrite(pte_mkdirty(entry), vma);
 
+	atomic_long_inc(&corten_nr_chg_file_cow);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
 	if (vma)
 		folio_add_new_anon_rmap(ctx->folio, vma, ctx->addr,
@@ -13801,10 +13945,13 @@ static void corten_zap_release_page(struct mm_struct *mm,
 		/* sec 69 census: the mapping-less file-family release is
 		 * the kernel-image (vdso/vvar) shape -- count it so the
 		 * -2 FILE residual's face (arena walk vs legacy zap of
-		 * the same pages) is one-boot attributable.
+		 * the same pages) is one-boot attributable.  The release
+		 * address is recorded for the frame/region lookup.
 		 */
-		if (!folio_mapping(folio))
+		if (!folio_mapping(folio)) {
 			atomic_long_inc(&corten_nr_zrel_kpage);
+			WRITE_ONCE(corten_nr_kpage_addr, addr);
+		}
 		add_mm_counter(mm, mm_counter_file(folio), -1);
 		atomic_long_inc(&corten_nr_zrel_file);
 	} else {
@@ -19729,6 +19876,7 @@ static int corten_arena_unuse_cache_pull(struct mm_struct *mm,
 	if (exclusive)
 		rmap_flags |= RMAP_EXCLUSIVE;
 
+	atomic_long_inc(&corten_nr_chg_unuse_pull);
 	add_mm_counter(mm, MM_ANONPAGES, 1);
 	add_mm_counter(mm, MM_SWAPENTS, -1);
 	folio_get(folio);
