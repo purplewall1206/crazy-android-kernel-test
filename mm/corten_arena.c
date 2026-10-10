@@ -354,7 +354,7 @@ static const char *const corten_trace_arm_name[] = {
 	"legacy_anon", "swap_in", "unuse_pull", "transfer_dst",
 	"sweep_adopt"
 };
-static bool corten_trace_charge_param = true; /* sec 78: charged-page trace (debug default on) */
+static bool corten_trace_charge_param; /* sec 78: charged-page trace (param-gated) */
 module_param_named(trace_charge, corten_trace_charge_param, bool, 0);
 
 /* sec 78: the charged-page trace set.  Charge sites store the page,
@@ -449,6 +449,7 @@ static const char *const corten_arm_name[CORTEN_ARM_NR] = {
 
 static atomic_long_t corten_nr_arm_last[CORTEN_ARM_NR];
 static atomic_long_t corten_nr_sweep_released;
+static int corten_yield_print_exits; /* sec 86: per-frame yield print, first exits */
 static atomic_long_t corten_nr_chg_total_last;
 static atomic_long_t corten_nr_walk_frames_last;
 static atomic_long_t corten_nr_reg_frames_last;
@@ -5410,6 +5411,15 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 	 * member's byte clip is zapped under its own anchor and the PT
 	 * page is left to the legacy pass unless it has gone all-empty.
 	 */
+	/* sec 86: stability re-run -- a frame erased mid-iteration (the
+	 * W-4 retire, a release racing the walk) makes xa_for_each skip
+	 * its successor; the skipped frames carried the charged-but-
+	 * unreleased pages (the +34 residual).  Re-run until a pass
+	 * yields no new frames.
+	 */
+	for (;;) {
+	unsigned long prev_frames = walk_frames;
+
 	frame = 0;
 	xa_for_each(&state->arenas, frame, slot) {
 		struct corten_frame_bucket *b;
@@ -5483,6 +5493,12 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 	if (have_run) {
 		have_run = false;
 		corten_arena_exit_run(mm, tlb, run_start, run_end);
+	}
+	/* sec 86: one stable pass is enough -- a re-run only when the
+	 * previous pass advanced (the mid-iteration erase skip). */
+	if (walk_frames == prev_frames)
+		break;
+	walk_frames -= prev_frames;
 	}
 
 	/* B) upper-table self-teardown, one ascending frame pass per
@@ -5726,6 +5742,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 
 	tlb_finish_mmu(tlb);
 	state->walk_frames = walk_frames;
+	corten_yield_print_exits++;
 	mmap_write_unlock(mm);
 }
 
