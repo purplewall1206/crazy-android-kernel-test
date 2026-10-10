@@ -300,6 +300,9 @@ static atomic_long_t corten_nr_chg_fork_pin;     /* sec 69c: fork pinned-copy ch
 static atomic_long_t corten_nr_rel_cow_old;      /* sec 70: cow_write old-folio release */
 static atomic_long_t corten_nr_rel_file_unmap;   /* sec 70: try_to_unmap file-branch release */
 static atomic_long_t corten_nr_rel_swap_out;     /* sec 70: swap-out driver release */
+static atomic_long_t corten_nr_chg_legacy_anon;  /* sec 76: legacy funnel anon charge */
+static atomic_long_t corten_nr_chg_total_anon;   /* sec 76: ALL anon charges, MODE */
+static atomic_long_t corten_nr_rel_total_anon;   /* sec 76: ALL anon releases, MODE */
 static atomic_long_t corten_nr_chg_tree_anon;    /* sec 70c: generic fork copy, anon */
 static atomic_long_t corten_nr_chg_tree_file;    /* sec 70c: generic fork copy, file */
 static atomic_long_t corten_nr_rel_legacy_anon;  /* sec 70c: legacy zap, anon */
@@ -311,6 +314,34 @@ void corten_note_tree_copy(int nr, bool file)
 				   &corten_nr_chg_tree_anon);
 }
 EXPORT_SYMBOL_GPL(corten_note_tree_copy);
+
+void corten_note_legacy_anon_charge(int nr)
+{
+	atomic_long_add(nr, &corten_nr_chg_legacy_anon);
+}
+EXPORT_SYMBOL_GPL(corten_note_legacy_anon_charge);
+
+void corten_note_anon_counter(struct mm_struct *mm, long val)
+{
+	struct corten_mm_state *state;
+
+	if (!corten_enabled_static())
+		return;
+	if (val > 0)
+		atomic_long_add(val, &corten_nr_chg_total_anon);
+	else
+		atomic_long_add(-val, &corten_nr_rel_total_anon);
+	/* The per-mm own totals: the exiting mm's chg - rel equals its
+	 * counter residual by construction. */
+	state = smp_load_acquire(&mm->corten_state);
+	if (state) {
+		if (val > 0)
+			atomic_long_add(val, &state->mm_chg_total);
+		else
+			atomic_long_add(-val, &state->mm_rel_total);
+	}
+}
+EXPORT_SYMBOL_GPL(corten_note_anon_counter);
 
 void corten_note_legacy_zap(bool file, int nr)
 {
@@ -327,7 +358,9 @@ static atomic_long_t *const corten_arm_ctr[CORTEN_ARM_NR] = {
 	&corten_nr_zrel_file, &corten_nr_zrel_kpage,
 	&corten_nr_rel_cow_old, &corten_nr_rel_file_unmap,
 	&corten_nr_rel_swap_out, &corten_nr_chg_tree_anon,
-	&corten_nr_chg_tree_file, &corten_nr_rel_legacy_anon,
+	&corten_nr_chg_tree_file, &corten_nr_chg_legacy_anon,
+	&corten_nr_chg_total_anon, &corten_nr_rel_total_anon,
+	&corten_nr_rel_legacy_anon,
 	&corten_nr_rel_legacy_file,
 };
 
@@ -336,11 +369,14 @@ static const char *const corten_arm_name[CORTEN_ARM_NR] = {
 	"chg_unuse_pull", "chg_fork_copy", "chg_fork_pin",
 	"rel_zrel_anon", "rel_zrel_file", "rel_kpage",
 	"rel_cow_old", "rel_file_unmap", "rel_swap_out",
-	"chg_tree_anon", "chg_tree_file",
+	"chg_tree_anon", "chg_tree_file", "chg_legacy_anon",
+	"chg_total_anon", "rel_total_anon",
 	"rel_legacy_anon", "rel_legacy_file",
 };
 
 static atomic_long_t corten_nr_arm_last[CORTEN_ARM_NR];
+static atomic_long_t corten_nr_chg_total_last;
+static atomic_long_t corten_nr_rel_total_last;
 
 static void corten_arms_snapshot(struct corten_mm_state *state)
 {
@@ -357,6 +393,7 @@ void corten_note_legacy_shadow_zap(void)
 }
 EXPORT_SYMBOL_GPL(corten_note_legacy_shadow_zap);
 
+static bool corten_carrier_ext_dbg;
 static long corten_exit_probe_seq;
 
 void corten_exit_unmap_probe(struct mm_struct *mm, bool pre)
@@ -4074,6 +4111,10 @@ void corten_arena_stats_report(struct seq_file *m)
 	{
 		int ai;
 
+		seq_printf(m, "last_chg_TOTAL_mm %ld\n",
+			   atomic_long_read(&corten_nr_chg_total_last));
+		seq_printf(m, "last_rel_TOTAL_mm %ld\n",
+			   atomic_long_read(&corten_nr_rel_total_last));
 		for (ai = 0; ai < CORTEN_ARM_NR; ai++)
 			seq_printf(m, "last_%s %ld\n",
 				   corten_arm_name[ai],
@@ -5728,6 +5769,12 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				get_mm_counter(mm, MM_FILEPAGES));
 		atomic_long_set(&corten_nr_post_walk_anon,
 				get_mm_counter(mm, MM_ANONPAGES));
+		/* sec 76: the mm's own central totals -- the tautological
+		 * pair for the exit residual. */
+		atomic_long_set(&corten_nr_chg_total_last,
+				atomic_long_read(&state->mm_chg_total));
+		atomic_long_set(&corten_nr_rel_total_last,
+				atomic_long_read(&state->mm_rel_total));
 		/* sec 70c: this child's own per-arm profile -- the global
 		 * counters minus its birth snapshot, rendered as the
 		 * last-exit scalars. */
@@ -13533,6 +13580,55 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 	vm_stat_account(mm, corten_take_vm_flags(READ_ONCE(stack->prot)),
 			(long)grow);
 	atomic_long_inc(&corten_nr_stack_grows);
+	/* sec 76: the carrier contract.  The growth above extends the
+	 * region record; the covering carrier VMA (the window form's
+	 * final stack VMA) must grow with it -- expand_downwards' tree
+	 * form, the accounting already taken on the region arm.  Without
+	 * this the below-carrier pages are VMA-uncovered: the fork
+	 * mirror's whole-frame pass charges them, and at exit they fall
+	 * outside unmap_vmas' VMA-ranged coverage and die in the bare PT
+	 * teardown -- the +34 ANON per-child exit residual (the sec 74b
+	 * probe: pre 82 -> post 48, residual 34).
+	 */
+	{
+		struct vm_area_struct *cv;
+
+		cv = find_vma(mm, READ_ONCE(stack->end) - PAGE_SIZE);
+		if (!corten_carrier_ext_dbg) {
+			corten_carrier_ext_dbg = true;
+			pr_info("corten: carrier-ext cv=%px growdn=%d anon=%d addr=%lx cvs=%lx rstart=%lx rend=%lx\n",
+				cv, cv ? !!(cv->vm_flags & VM_GROWSDOWN) : -1,
+				cv && cv->anon_vma ? 1 : 0, addr,
+				cv ? cv->vm_start : 0UL,
+				READ_ONCE(stack->start),
+				READ_ONCE(stack->end));
+		}
+		/* Pure-arena carriers only: a carrier whose anon_vma was
+		 * prepared (a legacy fault served on it once) lives in the
+		 * legacy rmap world, where the range change would need
+		 * vma.c's static interval-tree walkers -- that rare shape
+		 * keeps the legacy behavior (disclosed residual).
+		 */
+		if (cv && (cv->vm_flags & VM_GROWSDOWN) && !cv->anon_vma &&
+		    addr < cv->vm_start) {
+			VMA_ITERATOR(vmi, mm, cv->vm_start);
+
+			vma_iter_config(&vmi, addr, cv->vm_end);
+			if (!vma_iter_prealloc(&vmi, cv)) {
+				vma_start_write(cv);
+				cv->vm_pgoff -= (cv->vm_start - addr) >>
+						PAGE_SHIFT;
+				cv->vm_start = addr;
+				vma_iter_store_overwrite(&vmi, cv);
+			}
+			/* prealloc failure: the region stays extended and
+			 * the frame registration already covers the pages
+			 * -- the exit walk's member clip still releases
+			 * them counted; the VMA contract resumes on the
+			 * next growth.
+			 */
+		}
+	}
 	ret = 1;
 	goto out;
 out:

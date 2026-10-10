@@ -559,13 +559,16 @@ enum {
 	CORTEN_ARM_REL_COW_OLD, CORTEN_ARM_REL_FILE_UNMAP,
 	CORTEN_ARM_REL_SWAP_OUT, CORTEN_ARM_CHG_TREE_ANON,
 	CORTEN_ARM_CHG_TREE_FILE, CORTEN_ARM_REL_LEGACY_ANON,
-	CORTEN_ARM_REL_LEGACY_FILE, CORTEN_ARM_NR
+	CORTEN_ARM_REL_LEGACY_FILE, CORTEN_ARM_CHG_LEGACY_ANON,
+	CORTEN_ARM_CHG_TOTAL, CORTEN_ARM_REL_TOTAL, CORTEN_ARM_NR
 };
 
 /* sec 70c census producers (memory.c hooks, MODE-gated): the generic
  * fork-copy charges and the legacy zap decrements -- the tree-VMA face
  * the arena arm table cannot see. */
 void corten_note_tree_copy(int nr, bool file);
+void corten_note_legacy_anon_charge(int nr);
+void corten_note_anon_counter(struct mm_struct *mm, long val);
 void corten_note_legacy_zap(bool file, int nr);
 
 /* sec 74 census: the first MODE exit's pre/post-unmap rss pair (the
@@ -639,7 +642,11 @@ struct corten_mm_state {
 	 * per-arm charge/release profile, and the +34 ANON phantom's arm
 	 * is whichever delta fails to close.  Purely observational.
 	 */
-	long			arm_snap[CORTEN_ARM_NR];
+	long			arm_snap[CORTEN_ARM_NR];	/* sec 76: this mm's own ANONPAGES totals (the central census
+	 * hook adds here) -- chg minus rel equals the exit residual by
+	 * construction on the mm that owns them. */
+	atomic_long_t		mm_chg_total;
+	atomic_long_t		mm_rel_total;
 	/* w3fix4: the deferred free's second hop -- the RCU callback only
 	 * schedules this work, and the actual teardown (xa_destroy et
 	 * al) runs in kworker task context.  Running the teardown in the

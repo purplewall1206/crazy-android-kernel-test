@@ -2742,9 +2742,20 @@ static inline unsigned long get_mm_counter_sum(struct mm_struct *mm, int member)
 
 void mm_trace_rss_stat(struct mm_struct *mm, int member);
 
+/* sec 76 census: the MODE ANONPAGES channel's total intake/outgo. */
+void corten_note_anon_counter(struct mm_struct *mm, long val);
+
 static inline void add_mm_counter(struct mm_struct *mm, int member, long value)
 {
 	percpu_counter_add(&mm->rss_stat[member], value);
+
+	/* sec 76 census: the ANONPAGES channel's total intake/outgo on
+	 * MODE mms -- the tautological closure of the per-arm census
+	 * (chg_TOTAL - rel_TOTAL == the exit residual by construction;
+	 * the diff against the per-arm sum names the unattributed arm).
+	 */
+	if (IS_ENABLED(CONFIG_CORTEN_MM_ARENA) && member == MM_ANONPAGES)
+		corten_note_anon_counter(mm, value);
 
 	mm_trace_rss_stat(mm, member);
 }
