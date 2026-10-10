@@ -1374,6 +1374,13 @@ file=756 全 charged / spec=6804——**特殊阴影面整体洗清**（+2/-2 �
 
 ## 62. 漂移普查采样化（2026-10-10）: 未采样 region walk RCU 楔死教训
 
+**soak3 并行启动（10-10 17:3x, sec 63 前置）**: 判别版内核（含
+drift_anon/file census）+ 旗标 on, port 10037——**旗标 on 浸泡钟与
+V3 漂移归因在此积累**; soak2（旧内核）继续积累 E2 钟。双 VM 双钟
+并行, 每小时巡检扩展覆盖双实例。
+
+（soak3 前置注：sec 63 将本段与 soak3 启动合并入册。）
+
 v2 census（region iter + 全 span PTE 走查每 exit）在 exit churn 下
 楔死盒子（rcu_preempt stall t=15min）→ v3 采样形：每 4096 次 mode
 exit 采样一次，attribution 证据以有界成本累积。旗标 on boot 健康
