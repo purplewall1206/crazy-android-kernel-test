@@ -3909,6 +3909,17 @@ void corten_arena_stats_report(struct seq_file *m)
 	seq_printf(m, "arenas              %d\n", nr);
 	seq_printf(m, "drain_timeout       %ld\n",
 		   atomic_long_read(&corten_arena_nr_drain_timeouts));
+	/* sec 69 render completion: the sec 61 entry snapshot (pre-arena-
+	 * walk rss of the last MODE exit) pairs with post_walk below --
+	 * entry minus post = what the arena walk released; post minus the
+	 * check_mm residual = what the legacy walk released.
+	 */
+	seq_printf(m, "exit_snaps          %ld\n",
+		   atomic_long_read(&corten_nr_exit_snaps));
+	seq_printf(m, "exit_snap_file      %ld\n",
+		   atomic_long_read(&corten_nr_exit_snap_file));
+	seq_printf(m, "exit_snap_anon      %ld\n",
+		   atomic_long_read(&corten_nr_exit_snap_anon));
 	seq_printf(m, "wz_anon             %ld\n",
 		   atomic_long_read(&corten_nr_wz_anon));
 	seq_printf(m, "wz_file             %ld\n",
