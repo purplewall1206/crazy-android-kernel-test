@@ -280,6 +280,9 @@ static atomic_long_t corten_nr_orphan_anon;      /* sec 69b: orphan anon pages *
 static atomic_long_t corten_nr_orphan_file;      /* sec 69b: orphan file pages */
 static unsigned long corten_nr_orphan_addr;      /* sec 69b: last orphan address */
 static unsigned long corten_nr_kpage_addr;       /* sec 69b: last kpage release address */
+static unsigned long corten_kpage_log[8];        /* sec 70: first 8 kpage addrs */
+static unsigned int corten_kpage_log_n;          /* sec 70: slots used */
+static bool corten_kpage_warned;                 /* sec 70: one-shot vma identity */
 static atomic_long_t corten_nr_chg_map_anon;     /* sec 69c: map_anon arm charges */
 static atomic_long_t corten_nr_chg_cow_write;    /* sec 69c: cow_write arm charges */
 static atomic_long_t corten_nr_chg_swap_in;      /* sec 69c: swap_in arm charges */
@@ -287,6 +290,9 @@ static atomic_long_t corten_nr_chg_file_cow;     /* sec 69c: file_cow arm charge
 static atomic_long_t corten_nr_chg_unuse_pull;   /* sec 69c: unuse_cache_pull charges */
 static atomic_long_t corten_nr_chg_fork_copy;    /* sec 69c: fork mirror copy charges */
 static atomic_long_t corten_nr_chg_fork_pin;     /* sec 69c: fork pinned-copy charges */
+static atomic_long_t corten_nr_rel_cow_old;      /* sec 70: cow_write old-folio release */
+static atomic_long_t corten_nr_rel_file_unmap;   /* sec 70: try_to_unmap file-branch release */
+static atomic_long_t corten_nr_rel_swap_out;     /* sec 70: swap-out driver release */
 
 void corten_note_legacy_shadow_zap(void)
 {
@@ -3964,6 +3970,14 @@ void corten_arena_stats_report(struct seq_file *m)
 		   READ_ONCE(corten_nr_orphan_addr));
 	seq_printf(m, "kpage_addr          %lx\n",
 		   READ_ONCE(corten_nr_kpage_addr));
+	{
+		unsigned int ki;
+
+		for (ki = 0; ki < READ_ONCE(corten_kpage_log_n) &&
+		     ki < ARRAY_SIZE(corten_kpage_log); ki++)
+			seq_printf(m, "kpage_log%u         %lx\n",
+				   ki, READ_ONCE(corten_kpage_log[ki]));
+	}
 	seq_printf(m, "chg_map_anon        %ld\n",
 		   atomic_long_read(&corten_nr_chg_map_anon));
 	seq_printf(m, "chg_cow_write       %ld\n",
@@ -3978,6 +3992,12 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_chg_fork_copy));
 	seq_printf(m, "chg_fork_pin        %ld\n",
 		   atomic_long_read(&corten_nr_chg_fork_pin));
+	seq_printf(m, "rel_cow_old         %ld\n",
+		   atomic_long_read(&corten_nr_rel_cow_old));
+	seq_printf(m, "rel_file_unmap      %ld\n",
+		   atomic_long_read(&corten_nr_rel_file_unmap));
+	seq_printf(m, "rel_swap_out        %ld\n",
+		   atomic_long_read(&corten_nr_rel_swap_out));
 	seq_printf(m, "lz_anon             %ld\n",
 		   atomic_long_read(&corten_nr_lz_anon));
 	seq_printf(m, "lz_file             %ld\n",
@@ -11481,6 +11501,7 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 		folio_remove_rmap_pte(old, page, vma);
 	else
 		folio_remove_anon_rmap_novma(old);
+	atomic_long_inc(&corten_nr_rel_cow_old);
 	add_mm_counter(mm, old_is_file ? mm_counter_file(old) :
 				    MM_ANONPAGES, -1);
 	pte_unmap_unlock(ptep, ptl);
@@ -13949,8 +13970,25 @@ static void corten_zap_release_page(struct mm_struct *mm,
 		 * address is recorded for the frame/region lookup.
 		 */
 		if (!folio_mapping(folio)) {
+			unsigned int kn = READ_ONCE(corten_kpage_log_n);
+
 			atomic_long_inc(&corten_nr_zrel_kpage);
 			WRITE_ONCE(corten_nr_kpage_addr, addr);
+			if (kn < ARRAY_SIZE(corten_kpage_log)) {
+				WRITE_ONCE(corten_kpage_log[kn], addr);
+				WRITE_ONCE(corten_kpage_log_n, kn + 1);
+			}
+			if (!READ_ONCE(corten_kpage_warned)) {
+				struct vm_area_struct *kv = find_vma(mm, addr);
+
+				WRITE_ONCE(corten_kpage_warned, true);
+				pr_info("corten: kpage release %lx vma=[%lx,%lx) flags=%lx pgoff=%lx file=%pd\n",
+					addr, kv ? kv->vm_start : 0UL,
+					kv ? kv->vm_end : 0UL,
+					kv ? (unsigned long)kv->vm_flags : 0UL,
+					kv ? kv->vm_pgoff : 0UL,
+					kv ? kv->vm_file : NULL);
+			}
 		}
 		add_mm_counter(mm, mm_counter_file(folio), -1);
 		atomic_long_inc(&corten_nr_zrel_file);
@@ -13971,6 +14009,12 @@ static bool corten_zap_drop_present_page(struct mm_struct *mm,
 {
 	struct page *page = pte_page(oldpte);
 
+	if (!READ_ONCE(corten_kpage_warned) && !folio_mapping(page_folio(page)) &&
+	    !folio_test_swapbacked(page_folio(page))) {
+		WRITE_ONCE(corten_kpage_warned, true);
+		pr_info("corten: kpage pte %lx pteval=%lx pfn=%lx\n",
+			addr, pte_val(oldpte), (unsigned long)pte_pfn(oldpte));
+	}
 	corten_zap_release_page(mm, vma, page, addr);
 	return __tlb_remove_page_size(tlb, page, false, PAGE_SIZE);
 }
@@ -14205,6 +14249,15 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 				if (pte_present(oldpte) &&
 				    !pte_special(oldpte)) {
 					page = pte_page(oldpte);
+
+					if (!READ_ONCE(corten_kpage_warned) &&
+					    !folio_mapping(page_folio(page)) &&
+					    !folio_test_swapbacked(page_folio(page))) {
+						WRITE_ONCE(corten_kpage_warned, true);
+						pr_info("corten: kpage pte %lx pteval=%lx pfn=%lx\n",
+							addr, pte_val(oldpte),
+							(unsigned long)pte_pfn(oldpte));
+					}
 
 					/* [T3] Observability only: a pinned
 					 * folio survives the zap on its pin
@@ -19394,6 +19447,7 @@ bool corten_rmap_swap_out(struct folio *folio, struct mm_struct *mm,
 		spin_unlock(&mmlist_lock);
 	}
 	update_hiwater_rss(mm);
+	atomic_long_inc(&corten_nr_rel_swap_out);
 	dec_mm_counter(mm, MM_ANONPAGES);
 	inc_mm_counter(mm, MM_SWAPENTS);
 
@@ -19582,6 +19636,7 @@ static int corten_rmap_ttu_file_one(struct corten_arena *ar,
 		folio_mark_dirty(folio);
 
 	update_hiwater_rss(mm);
+	atomic_long_inc(&corten_nr_rel_file_unmap);
 	add_mm_counter(mm, mm_counter_file(folio), -1);
 	/* W1.d (R4 inverse): the file mapcount is the pagecache folio's
 	 * own, returned through the novma wrapper inside this
