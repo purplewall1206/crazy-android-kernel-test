@@ -1301,3 +1301,22 @@ vma_gate=0 + 零 trap。E2 满期呈递包就位
 **值守状态**: 每小时巡检 automation + 满期时点
 （E2 10-11 10:09:35 → 呈递 A-E 裁决包; 旗标 on 10-17 10:09 →
 呈递默认化序列）。等待期无未竟实作件（sec 55 定案）。
+
+## 57. 下一片锁定（2026-10-10）: V3 阴影 rss 漂移修复 = syz 解锁件
+
+**syzkaller 并行启动实测**: 判别版内核 + 旗标 on 双 VM fuzzing 启动即
+325 次 "crash"——全部为已知 V3 阴影漂移 `BUG: Bad rss-counter
+(+2 MM_FILEPAGES / -2 MM_ANONPAGES)`（journald 掩蔽无效 → 漂移源在
+mm-exit 本身，fuzzer 进程 churn 每秒级触发）。真 bug 修复 = syz 有效
+fuzzing 解锁 + J6 待核验项闭合。
+
+**签名分析**: +2 FILE / -2 ANON = 2 页在生命周期内被错误
+anon→file 记账。两个嫌疑面:
+(a) 特殊阴影的 fault 服务路径：CORTEN_RF_SPECIAL_SHADOW tier-1
+    pass-through 到 vvar/vdso 特殊 .fault（vvar=vmf_insert_pfn 不
+    记账；vdso text=.pages 预装按 FILE 计 +2）——若 arena 的区域
+    服务臂在此之上又以 ANON 安装/或双计，得 FILE+2 残留；
+(b) exit zap 对特殊 VMA 内非 PFN 页的扣减类型错配（PageAnon 判定
+    与安装侧记账类型不一致 → -2 ANON）。
+**仪器化方案**: 在特殊阴影 pass-through 臂与 .fault 返回处加
+install 类型计数器一次 boot 分形。
