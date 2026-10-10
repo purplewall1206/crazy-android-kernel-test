@@ -256,6 +256,12 @@ static atomic_long_t corten_nr_span_free_legacy; /* sec 57: legacy frames freed 
 static atomic_long_t corten_nr_exit_snap_file;   /* sec 61: last-exit rss file */
 static atomic_long_t corten_nr_exit_snap_anon;   /* sec 61: last-exit rss anon */
 static atomic_long_t corten_nr_exit_snaps;       /* sec 61: mode exits snapped */
+static atomic_long_t corten_nr_wz_anon;          /* sec 62: window found anon */
+static atomic_long_t corten_nr_wz_file;          /* sec 62: window found file */
+static atomic_long_t corten_nr_lz_anon;          /* sec 62: legacy found anon */
+static atomic_long_t corten_nr_lz_file;          /* sec 62: legacy found file */
+static atomic_long_t corten_nr_drift_anon;       /* sec 62: accumulated anon drift */
+static atomic_long_t corten_nr_drift_file;       /* sec 62: accumulated file drift */
 static atomic_long_t corten_nr_sh_exit_anon;     /* sec 57b: shadow exit anon PTEs */
 static atomic_long_t corten_nr_sh_exit_file;     /* sec 57b: shadow exit file PTEs */
 static atomic_long_t corten_nr_sh_exit_spec;     /* sec 57b: shadow exit special/none */
@@ -3888,6 +3894,18 @@ void corten_arena_stats_report(struct seq_file *m)
 	seq_printf(m, "arenas              %d\n", nr);
 	seq_printf(m, "drain_timeout       %ld\n",
 		   atomic_long_read(&corten_arena_nr_drain_timeouts));
+	seq_printf(m, "wz_anon             %ld\n",
+		   atomic_long_read(&corten_nr_wz_anon));
+	seq_printf(m, "wz_file             %ld\n",
+		   atomic_long_read(&corten_nr_wz_file));
+	seq_printf(m, "lz_anon             %ld\n",
+		   atomic_long_read(&corten_nr_lz_anon));
+	seq_printf(m, "lz_file             %ld\n",
+		   atomic_long_read(&corten_nr_lz_file));
+	seq_printf(m, "drift_anon          %ld\n",
+		   atomic_long_read(&corten_nr_drift_anon));
+	seq_printf(m, "drift_file          %ld\n",
+		   atomic_long_read(&corten_nr_drift_file));
 	/* Ledger #2: the per-mm registry walks' truncation disclosure --
 	 * zero means every arena_stats read counted its mms whole; a
 	 * positive count names the reads where the budget cut the walk
@@ -5423,33 +5441,25 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		atomic_long_inc(&corten_nr_exit_snaps);
 	}
 
-	/* sec 57b: the V3 drift census -- at exit, walk every special
-	 * shadow's carrier VMA and count the PTE page types, so the
-	 * +2 FILE / -2 ANON drift attributes to the shadow's own
-	 * resident pages.  Runs before any drain/zap: mm_users is 0 and
-	 * the teardown is single-threaded, so the census walks the PTEs
-	 * without the locks (a frozen picture).
+	/* sec 62 v3: the drift census is SAMPLED (once per 4096 mode
+	 * exits) -- the unsampled form walked every arena span PTE on
+	 * every exit and stalled RCU under exit churn (t=15min).
+	 * Sampling keeps the attribution evidence at ~1/4096 cost.
 	 */
-	{
-		struct corten_region_iter sit;
-		struct corten_arena *sar;
+	if (READ_ONCE(mm->corten_mode) &&
+	    (atomic_long_read(&corten_nr_exit_snaps) & 0xFFF) == 0) {
+		struct corten_region_iter cit;
+		struct corten_arena *car;
+		long cf = 0, ca = 0;
 
-		corten_region_iter_init(&sit);
-		while ((sar = corten_region_next(mm, &sit))) {
-			struct vm_area_struct *sv;
+		corten_region_iter_init(&cit);
+		while ((car = corten_region_next(mm, &cit))) {
 			unsigned long a;
 
-			if (!(READ_ONCE(sar->rflags) &
-			      CORTEN_RF_SPECIAL_SHADOW))
+			if (READ_ONCE(car->frozen))
 				continue;
-			/* V3 declares novma=true: the anchor is not
-			 * cached -- recover the carrier by range.
-			 */
-			sv = vma_lookup(mm, READ_ONCE(sar->start));
-			if (!sv || sv->vm_start != READ_ONCE(sar->start))
-				continue;
-			for (a = sv->vm_start; a < sv->vm_end;
-			     a += PAGE_SIZE) {
+			for (a = READ_ONCE(car->start);
+			     a < READ_ONCE(car->end); a += PAGE_SIZE) {
 				pgd_t *pgd = pgd_offset(mm, a);
 				p4d_t *p4d = p4d_offset(pgd, a);
 				pud_t *pud = pud_offset(p4d, a);
@@ -5457,34 +5467,30 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				pte_t *pte;
 				struct page *pg;
 
-				if (!pmd_present(READ_ONCE(*pmd))) {
-					atomic_long_inc(&corten_nr_sh_exit_spec);
+				if (!pmd_present(READ_ONCE(*pmd)))
 					continue;
-				}
 				pte = pte_offset_map(pmd, a);
-				if (!pte) {
-					atomic_long_inc(&corten_nr_sh_exit_spec);
+				if (!pte)
 					continue;
-				}
 				if (pte_none(ptep_get(pte))) {
 					pte_unmap(pte);
-					atomic_long_inc(&corten_nr_sh_exit_spec);
 					continue;
 				}
-				pg = vm_normal_page(sv, a, ptep_get(pte));
+				pg = vm_normal_page(NULL, a, ptep_get(pte));
 				pte_unmap(pte);
-				if (!pg) {
-					atomic_long_inc(&corten_nr_sh_exit_spec);
+				if (!pg)
 					continue;
-				}
 				if (PageAnon(pg))
-					atomic_long_inc(&corten_nr_sh_exit_anon);
+					ca++;
 				else
-					atomic_long_inc(&corten_nr_sh_exit_file);
-				if (page_mapped(pg))
-					atomic_long_inc(&corten_nr_sh_exit_charged);
+					cf++;
 			}
 		}
+
+		atomic_long_add(get_mm_counter(mm, MM_ANONPAGES) - ca,
+				&corten_nr_drift_anon);
+		atomic_long_add(get_mm_counter(mm, MM_FILEPAGES) - cf,
+				&corten_nr_drift_file);
 	}
 
 	/* V-A.3c lifecycle trigger (j2-audit hook list): the INV-MV2 exit
