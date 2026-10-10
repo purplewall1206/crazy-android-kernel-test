@@ -1188,3 +1188,16 @@ soak2 本身刚起, 非循环）。
 MAP_FIXED 文件形路由（需 classify 的 fixed-形 admit + file 臂的
 MAP_FIXED 落位支持）——设计核查入 next 片; 每片过 grep 门 +
 旗标 on boot + smoke。
+
+## 48. MAP_FIXED 收编片设计核查修正（2026-10-10）
+
+**认知修正**: MAP_FIXED 文件形已有双路收编, 无需新 admit——
+(1) 窗口目标的 fixed 文件形 = **punch route**
+（mmap_punches 计数面, "file-MAP_FIXED punch routes"）;
+(2) legacy 漏斗形 = classify decline → mmap_region → **take 臂**
+（mmap_region_routes=1055）收编 VM_CORTEN。盲目"admit fixed 形"
+与 OQ-MV-2 设计豁免相悖（auto 摆入器本就不管 fixed 落位）。
+**真下一片 = 覆盖普查**: auto_legacy_class 的 decline 读数
+（2498）vs mmap_region_routes 的 take 读数（1055）的差值面分形
+（哪类 decline 形未被 take 臂覆盖 = punch/take 的真实缺口清单）,
+一次 boot 的分形计数定案。此为纯读数轮, 非新路由。
