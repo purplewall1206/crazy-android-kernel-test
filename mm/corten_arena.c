@@ -13696,7 +13696,7 @@ static void corten_zap_release_page(struct mm_struct *mm,
 				    struct page *page, unsigned long addr)
 {
 	struct folio *folio = page_folio(page);
-	bool file = corten_folio_is_filemap(folio);
+	bool file = !folio_test_anon(folio);
 
 	if (file)
 		folio_remove_file_rmap_novma(folio);
@@ -13704,14 +13704,14 @@ static void corten_zap_release_page(struct mm_struct *mm,
 		folio_remove_rmap_pte(folio, page, vma);
 	else
 		folio_remove_anon_rmap_novma(folio);
-	/* V-B.4: the file family is mm_counter_file()'s (shmem-backed
-	 * folios are MM_SHMEMPAGES), symmetric with the read arm's
-	 * install and upstream's fork dup.
+	/* sec 63 fix: the counter selector matches mm_counter_file()
+	 * (!PageAnon → FILE, same as insert_pages' charge) instead of
+	 * corten_folio_is_filemap() which additionally requires
+	 * folio_mapping() != NULL -- kernel-allocated pages (the vdso
+	 * image) have mapping == NULL and were misclassified as ANON,
+	 * producing the +2 FILE / -2 ANON exit drift.
 	 */
-	if (file)
-		add_mm_counter(mm, mm_counter_file(folio), -1);
-	else
-		add_mm_counter(mm, MM_ANONPAGES, -1);
+	add_mm_counter(mm, mm_counter_file(folio), -1);
 }
 
 /*

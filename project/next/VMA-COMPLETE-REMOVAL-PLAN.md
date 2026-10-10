@@ -1414,3 +1414,16 @@ _span（PT 页退役, 无页扣减）的组合可能跳过部分页的扣减。�
 扣减计数器，一次 boot 分形漏扣的精确位置。
 **相关**: soak2 的 FILE+2/ANON-2 对 = 不同签名（阴影 carrier 双服
 务记账差），修复本轮后独立复查。
+
+## 65. mm_counter_file 分类修复 + val:32 仍未消（2026-10-10）
+
+`corten_zap_release_page` 的 `corten_folio_is_filemap` 分类改为
+`!folio_test_anon`（匹配 insert_pages 的 mm_counter_file 扣减）——
+该修复消除了 kernel-allocated 无 mapping 页（如 vdso image）被误扣
+ANON 的分类错误。**但 val:32 ANON (bash) 未消**——该漂移不经
+corten_zap_release_page，来源在窗口 arena 的 exit 记账链 elsewhere
+（可能: arena exit walk 的 unmap_chunk 只清元数据不清 rss，或窗口
+页的 fault 安装在 arena exit walk zap 后被 legacy walk 二次发现）。
+**下轮**: 在 exit_walk 的 unmap_chunk 前后加 mm rss 计数器差值
+计数器（pre-zap vs post-zap per exit），一次 boot 即分形漏扣在
+arena walk 内还是 legacy walk 内。
