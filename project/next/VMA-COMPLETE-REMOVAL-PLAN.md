@@ -1177,3 +1177,14 @@ stack_adopts 全覆盖, vma_gate=0）。**E2 ≥1 天钟与旗标 on ≥1 周钟
 同源积累**（同一 VM 同一内核, 每小时巡检 automation 指向不变）。
 满期: E2 → 探针退役裁决; 旗标 → 默认化 → 回退臂删 → vma_exec.c
 全删 → J6 终账。
+
+## 47. 双钟浸泡健康核（2026-10-10）: 全覆盖形态持续, 下一片定位
+
+soak2 健康核: bprm_mode=213=stack_adopts 全覆盖 + vma_gate=0 +
+零 trap + auto_legacy_class=2498（漏斗余量面, MAP_FIXED 库段等
+OQ-MV-2 豁免形）。console 无 panic 无重启（"up 2 minutes" =
+soak2 本身刚起, 非循环）。
+**下一片（已定位）**: 漏斗余量形状收编 = auto_legacy_class 的
+MAP_FIXED 文件形路由（需 classify 的 fixed-形 admit + file 臂的
+MAP_FIXED 落位支持）——设计核查入 next 片; 每片过 grep 门 +
+旗标 on boot + smoke。
