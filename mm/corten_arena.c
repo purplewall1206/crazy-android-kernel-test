@@ -283,6 +283,13 @@ static unsigned long corten_nr_kpage_addr;       /* sec 69b: last kpage release 
 static unsigned long corten_kpage_log[8];        /* sec 70: first 8 kpage addrs */
 static unsigned int corten_kpage_log_n;          /* sec 70: slots used */
 static bool corten_kpage_warned;                 /* sec 70: one-shot vma identity */
+static atomic_long_t corten_nr_fault_kpage_chg;  /* sec 70: fault install kpage charges */
+
+void corten_note_fault_kpage_charge(int nr)
+{
+	atomic_long_add(nr, &corten_nr_fault_kpage_chg);
+}
+EXPORT_SYMBOL_GPL(corten_note_fault_kpage_charge);
 static atomic_long_t corten_nr_chg_map_anon;     /* sec 69c: map_anon arm charges */
 static atomic_long_t corten_nr_chg_cow_write;    /* sec 69c: cow_write arm charges */
 static atomic_long_t corten_nr_chg_swap_in;      /* sec 69c: swap_in arm charges */
@@ -3968,6 +3975,8 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_orphan_file));
 	seq_printf(m, "orphan_addr         %lx\n",
 		   READ_ONCE(corten_nr_orphan_addr));
+	seq_printf(m, "fault_kpage_chg     %ld\n",
+		   atomic_long_read(&corten_nr_fault_kpage_chg));
 	seq_printf(m, "kpage_addr          %lx\n",
 		   READ_ONCE(corten_nr_kpage_addr));
 	{
@@ -13990,8 +13999,18 @@ static void corten_zap_release_page(struct mm_struct *mm,
 					kv ? kv->vm_file : NULL);
 			}
 		}
-		add_mm_counter(mm, mm_counter_file(folio), -1);
-		atomic_long_inc(&corten_nr_zrel_file);
+		/* sec 70: the kernel-image family (mapping-less file pages,
+		 * the vdso image) skips the file-family decrement on MODE
+		 * mms -- its fault install skips the charge symmetrically
+		 * (finish_fault's corten_mode gate); legacy keeps the
+		 * incidental upstream accounting on both sides.
+		 */
+		if (!folio_mapping(folio)) {
+			atomic_long_inc(&corten_nr_zrel_kpage);
+		} else {
+			add_mm_counter(mm, mm_counter_file(folio), -1);
+			atomic_long_inc(&corten_nr_zrel_file);
+		}
 	} else {
 		add_mm_counter(mm, MM_ANONPAGES, -1);
 		atomic_long_inc(&corten_nr_zrel_anon);

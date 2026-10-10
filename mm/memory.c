@@ -5723,7 +5723,18 @@ fallback:
 	folio_ref_add(folio, nr_pages - 1);
 	set_pte_range(vmf, folio, page, nr_pages, addr);
 	type = is_cow ? MM_ANONPAGES : mm_counter_file(folio);
-	add_mm_counter(vma->vm_mm, type, nr_pages);
+	/* sec 70: the kernel-image family (mapping-less file pages --
+	 * the vdso image) is not rss-counted on MODE mms: their charge
+	 * here races no contract and the arena exit release drops the
+	 * file-family decrement symmetrically (corten_zap_release_page).
+	 * Legacy mms keep the incidental upstream accounting.
+	 */
+	if (!is_cow && !folio_test_anon(folio) && !folio_mapping(folio) &&
+	    READ_ONCE(vma->vm_mm->corten_mode)) {
+		corten_note_fault_kpage_charge(nr_pages);
+	} else {
+		add_mm_counter(vma->vm_mm, type, nr_pages);
+	}
 	ret = 0;
 
 unlock:

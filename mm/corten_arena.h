@@ -568,6 +568,10 @@ void corten_note_brk_funnel(struct mm_struct *mm);
  * MODE mm (the shadow-carrier double-release suspect). */
 void corten_note_legacy_shadow_zap(void);
 
+/* sec 70 census: the fault funnel's mapping-less file-family charge
+ * (the vdso image pages) on a MODE mm. */
+void corten_note_fault_kpage_charge(int nr);
+
 /* V3: shadow-adopt a special-mapping VMA (the vdso/vvar family). */
 void corten_arena_special_shadow(struct mm_struct *mm,
 				 struct vm_area_struct *vma);
@@ -1260,6 +1264,10 @@ static inline void corten_note_brk_funnel(struct mm_struct *mm)
 }
 
 static inline void corten_note_legacy_shadow_zap(void)
+{
+}
+
+static inline void corten_note_fault_kpage_charge(int nr)
 {
 }
 
