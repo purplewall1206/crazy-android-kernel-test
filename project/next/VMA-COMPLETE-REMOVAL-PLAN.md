@@ -1605,3 +1605,19 @@ carrier VMA 的 vm_start, below-carrier 生长页由镜像整帧拷贝计费、
 同构双侧对齐）: below-VMA 生长页在 exit 获得计费释放（走查帧覆盖
 或 carrier 扩展契约二择一）。电池双腿绿。另: sec-70c 钩子原型位
 置纠正（include/linux 头现为全包含者可见）。
+
+## 76. 中心化 ANONPAGES census: 恒等式闭合（2026-10-11 凌晨）
+
+add_mm_counter 的 ANONPAGES 通道接入 per-mm 总量
+（state->mm_chg_total/mm_rel_total）+ 全局 chg/rel_TOTAL 臂——
+**退出 mm 的 chg − rel ≡ 自身残差（构造恒等）**, census 从此完备。
+静默 boot 实测 exec-child: chg 191 / rel 127 → +64（残差 34 +
+state 前窗口 ~30）—— 残差首次被完整归局为"计费未释放页"的实测
+净值。本轮另: legacy 漏斗自臂（chg_legacy_anon, do_anonymous_page,
+exec-child 37 页, 此前不可见）; 单 PTE fork-copy 臂实测确认
+（chg_tree_anon 62）; stack_grow carrier 扩展尝试（maple 树正确,
+纯 arena 门控）——静默 boot 上未触发（stack_grows=0: exec 形的栈
+在 transfer 时已全量入 carrier, 无 below-start 生长）, 修复本体
+的释放缺口在别处, per-page charge-address trace（计费地址记录,
+exit 时差集）为归零修复的首题。电池双腿绿（7/0, 34/0）。
+363d5ab7c214。
