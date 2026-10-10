@@ -319,6 +319,13 @@ void corten_note_legacy_anon_charge(int nr)
 	atomic_long_add(nr, &corten_nr_chg_legacy_anon);
 }
 EXPORT_SYMBOL_GPL(corten_note_legacy_anon_charge);
+static atomic_long_t corten_nr_freepte_present; /* sec 89: bare-teardown PTEs */
+
+void corten_note_freepte_live(int nr)
+{
+	atomic_long_add(nr, &corten_nr_freepte_present);
+}
+EXPORT_SYMBOL_GPL(corten_note_freepte_live);
 
 void corten_note_anon_counter(struct mm_struct *mm, long val)
 {
@@ -452,6 +459,8 @@ static const char *const corten_arm_name[CORTEN_ARM_NR] = {
 
 static atomic_long_t corten_nr_arm_last[CORTEN_ARM_NR];
 static atomic_long_t corten_nr_sweep_released;
+
+bool corten_freepte_warned;
 static int corten_yield_print_exits; /* sec 86: per-frame yield print, first exits */
 static atomic_long_t corten_nr_chg_total_last;
 static atomic_long_t corten_nr_walk_frames_last;
@@ -4201,7 +4210,9 @@ void corten_arena_stats_report(struct seq_file *m)
 	{
 		int ai;
 
-		seq_printf(m, "sweep_released     %ld\n",
+		seq_printf(m, "freepte_present    %ld\n",
+		   atomic_long_read(&corten_nr_freepte_present));
+	seq_printf(m, "sweep_released     %ld\n",
 		   atomic_long_read(&corten_nr_sweep_released));
 	seq_printf(m, "last_walk_frames %ld\n",
 			   atomic_long_read(&corten_nr_walk_frames_last));

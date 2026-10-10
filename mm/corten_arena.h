@@ -24,6 +24,9 @@ struct vm_area_struct;
 
 #ifdef CONFIG_CORTEN_MM_ARENA
 
+/* sec 89 bare-teardown tripwire (memory.c free_pte_range). */
+extern bool corten_freepte_warned;
+
 /*
  * Swapped payload encoding in corten_pte_meta.__resv (M6.T2, spec D6):
  * __resv[0] = swap type (u8 -- MAX_SWAPFILES is far below 256; zram is a

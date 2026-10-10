@@ -197,6 +197,33 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 			   unsigned long addr)
 {
 	pgtable_t token = pmd_pgtable(*pmd);
+	/* sec 89: the bare-teardown tripwire -- a PT page freed while it
+	 * still holds present, non-special PTEs means the zap funnel
+	 * never saw those pages (charged, uncounted at release: the
+	 * residual mechanism's exact face).  Counted, first VAs printed
+	 * once per boot. */
+	if (READ_ONCE(tlb->mm->corten_mode)) {
+		pte_t *ptep = (pte_t *)token;
+		int i, live = 0;
+
+		for (i = 0; i < PTRS_PER_PTE; i++) {
+			pte_t pt = READ_ONCE(ptep[i]);
+
+			if (pte_none(pt) || !pte_present(pt) ||
+			    pte_special(pt))
+				continue;
+			live++;
+			if (live <= 4 && !corten_freepte_warned)
+				pr_info("corten: freepte LIVE addr=%lx\n",
+					addr + i * PAGE_SIZE);
+		}
+		if (live) {
+			WRITE_ONCE(corten_freepte_warned, true);
+			corten_note_freepte_live(live);
+			pr_info("corten: freepte bare-teardown live=%d at %lx\n",
+				live, addr);
+		}
+	}
 	pmd_clear(pmd);
 	pte_free_tlb(tlb, token, addr);
 	mm_dec_nr_ptes(tlb->mm);
