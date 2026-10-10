@@ -1675,3 +1675,18 @@ child 读数 **0**。逐 child 方差（127 vs 0）= in-life 清除臂的判别
 **下轮（终局）**: 用 127-vs-0 判别面对照两类 child 的退出路径差
 （state 快照时点/pool flush/fork 顺序）→ 钉死释放跳空的臂 → 补
 扣减 → 验归零。
+
+## 81. 钩子恢复 + 现象重钉: fork child 的 registry 生命周期（2026-10-11 凌晨）
+
+**事故发现**: sec 70c bisect 的 `git checkout HEAD -- mm/memory.c`
+删掉了 zap 侧 census 钩子且从未恢复 —— 其后所有 rel_legacy_anon=0
+读数均为无钩伪象。已恢复（present 递减钩 + VA/页双擦除 +
+full-ptes 匿名臂）。恢复后判决: exec-child 退出 **129 fork VA 全部
+幸存 + rel_legacy_anon = 0** —— unmap_vmas 对这些 child 释放为零,
+且其退出时 arena registry 空置 —— **释放跳空钉死在 fork child 的
+registry 生命周期**（fork_commit 的镜像注册在 child 侧何处丢失/
+清空, 即最后缺口）。恒等式全程闭合。电池 on 腿绿（27/0/1）。
+5530612b。
+**终局路径**: fork_begin/fork_commit 的 child registry 生命周期
+审计（register_child 的帧是否真的进了 child xa / exit 前是否被
+pool flush 或 drain 清空）→ 补释放 → 验归零。
