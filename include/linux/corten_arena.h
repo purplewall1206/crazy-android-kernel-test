@@ -569,6 +569,7 @@ enum {
 void corten_note_tree_copy(int nr, bool file);
 void corten_note_legacy_anon_charge(int nr);
 void corten_note_anon_counter(struct mm_struct *mm, long val);
+void corten_trace_charge_arm(struct mm_struct *mm, struct page *page, int arm);
 void corten_trace_charge(struct mm_struct *mm, struct page *page);
 void corten_trace_release(struct mm_struct *mm, struct page *page);
 void corten_note_legacy_zap(bool file, int nr);
