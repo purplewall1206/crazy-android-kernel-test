@@ -461,6 +461,12 @@ static const char *const corten_arm_name[CORTEN_ARM_NR] = {
 static atomic_long_t corten_nr_arm_last[CORTEN_ARM_NR];
 static atomic_long_t corten_nr_sweep_released;
 static atomic_long_t corten_nr_sweep_scanned;
+/* sec 102: the A-pass yield sequence (one captured exit, debugfs-read --
+ * the dmesg form interleaved concurrent walks, the sec 93 artifact). */
+#define CORTEN_WALK_YIELD_CAP 48
+static unsigned long corten_walk_yield_buf[CORTEN_WALK_YIELD_CAP];
+static int corten_walk_yield_n;
+static int corten_walk_yield_tag = -1;
 
 bool corten_freepte_warned;
 static int corten_yield_print_exits; /* sec 86: per-frame yield print, first exits */
@@ -4239,6 +4245,16 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_post_walk_survivors));
 	seq_printf(m, "freepte_present    %ld\n",
 		   atomic_long_read(&corten_nr_freepte_present));
+	{
+		int wi;
+
+		seq_printf(m, "yield_seq_tag %d n %d\n",
+			   corten_walk_yield_tag, corten_walk_yield_n);
+		for (wi = 0; wi < corten_walk_yield_n &&
+		     wi < CORTEN_WALK_YIELD_CAP; wi++)
+			seq_printf(m, "yield_f %d %lx\n", wi,
+				   corten_walk_yield_buf[wi]);
+	}
 	seq_printf(m, "sweep_scanned     %ld\n",
 		   atomic_long_read(&corten_nr_sweep_scanned));
 	seq_printf(m, "sweep_released     %ld\n",
@@ -5465,6 +5481,8 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 		unsigned long win = frame << PMD_SHIFT;
 
 		walk_frames++;
+		if (corten_walk_yield_n < CORTEN_WALK_YIELD_CAP)
+			corten_walk_yield_buf[corten_walk_yield_n++] = frame;
 		if (slot == &corten_va_reserve_sentinel)
 			continue;
 
