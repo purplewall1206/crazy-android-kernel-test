@@ -2546,3 +2546,19 @@ val:2, 94% 闭合）; residue-n=0 全场（multi=0）; 精确和探针 anon=0
 
 **队列**: off 腿电池 → sec 135 账本+报告 → systemd 全量启动验证 →
 E2 PR 待批复; 48h 判定 10-14 02:24。
+
+## 136. 残余 val:2 定案: 真实 2 页类（非雾差）（2026-10-12 晨, 对照实验）
+
+**判定**: check_mm 本就使用 `percpu_counter_sum`（kernel/fork.c:597）
+——**val:2 = 精确和, 真实 2 页类, 非雾差**。且 census（unpublish）的
+精确和读数 anon=0 → **+2 增量发生在 unpublish 之后、destroy 之前的
+窗口**（unmap_vmas → free_pgtables → check_mm 段的某个增量位点——
+该段本应只有递减）。
+
+**下会话收口**: unpublish→destroy 窗口的 MM_ANONPAGES 增量位点插
+桩（2 页/进程的常量形态——候选: vdso/vvar 对、特殊映射对）→ 修
+增量位点 → val 完全归零。
+
+**当前状态总账**: 残差 34→2（94% 闭合, 判别器语义修正）; KUnit
+双腿绿; N-boot campaign A/B 各 5/5 零崩; churn 浸泡零事件（48h 判
+定 10-14 02:24）; E2 PR 待批复。
