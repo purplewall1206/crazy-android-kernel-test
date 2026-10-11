@@ -2562,3 +2562,20 @@ E2 PR 待批复; 48h 判定 10-14 02:24。
 **当前状态总账**: 残差 34→2（94% 闭合, 判别器语义修正）; KUnit
 双腿绿; N-boot campaign A/B 各 5/5 零崩; churn 浸泡零事件（48h 判
 定 10-14 02:24）; E2 PR 待批复。
+
+## 138. generator-fork EPROTO: 降级修复尝试未打通（2026-10-12 晨, #532-#533）
+
+**落地（#533）**: mark/copy 窗口通道的 -EPROTO 降级（corrupt/deep
+tree view → 跳窗计数, 如 -ENOENT）——**systemd 启动仍在 generator
+fork 失败**（"Failed to fork off sandboxing environment: Protocol
+error", 9.4s）——**-EPROTO 的源头在 fork_commit 的其它臂**
+（候选: register_child 的合成树构建、fork_copy_ptes 的错误路径、
+或 fork_begin 的 drain 路径）。
+
+**systemd 全量启动**: 内核侧稳定（零 oops, 本次 boot 至 9.5s 无内
+核错）; 阻塞 = generator-fork EPROTO（下会话: fork_commit 全臂的
+错误传播审计 → 源头点名 → 修复）。
+
+**当前总账**: 残差 34→2（判别器语义修正, 94%）; N-boot A/B 各 5/5
+零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
+E2 PR 待批复。

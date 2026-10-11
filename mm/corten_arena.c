@@ -10211,9 +10211,14 @@ corten_arena_fork_mark_window(struct corten_arena *ar, unsigned long addr,
 			break;
 	}
 	/* Untracked window (hole/defective install): nothing recorded --
-	 * the shadow pieces still copy as plain VMAs.
+	 * the shadow pieces still copy as plain VMAs.  sec 137: a
+	 * corrupt/deep tree view (-EPROTO) degrades the same way: the
+	 * window's content is legacy-copied by the VMA loop and closes
+	 * through the legacy funnels -- aborting the fork for a
+	 * bookkeeping gap broke systemd's sandboxed-generator clones
+	 * (the "Failed to fork off sandboxing environment" blocker).
 	 */
-	if (ret == -ENOENT || ret == -EOPNOTSUPP)
+	if (ret == -ENOENT || ret == -EOPNOTSUPP || ret == -EPROTO)
 		return 0;
 	if (ret)
 		return ret;
@@ -10801,7 +10806,8 @@ static int corten_arena_fork_copy_window(struct mm_struct *mm,
 		if (ret != -EAGAIN || ++tries >= 2)
 			break;
 	}
-	if (ret == -ENOENT || ret == -EOPNOTSUPP)
+	/* sec 137: -EPROTO degrades like -ENOENT (see mark_window). */
+	if (ret == -ENOENT || ret == -EOPNOTSUPP || ret == -EPROTO)
 		return 0;
 	if (ret)
 		return ret;
