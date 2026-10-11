@@ -1864,3 +1864,17 @@ mm 的 walk）。**正确仪器 = 环形的 per-mm 追踪**（无跨 mm 污染,
 已稳定落地）—— v-survivors 的 fork_copy VA 集即真残差人口, 无需
 dmesg 打印。下一会话: 用环数据定位 fork_copy VA 的 in-life 清除臂
 （环回放加清除事件源标签即可）→ 补释放 → 验归零。E2 呈递包就绪。
+
+## 94. 最终真相: "帧丢失"不存在 — reg_frames 为共租超计（2026-10-11 晨）
+
+干净构建终局数据（稳定环形 + 计数绊线, 无中间态污染）: fork child
+reg=14（register_child 插入计数, **含 5 次共租桶插入——桶追加到已
+存在帧条目, xa 条目数不增**）vs walk=9（唯一帧条目数）。**"5 帧
+丢失"从未存在**: sec 86 的"walk 早停"根因系 (a) reg_frames 超计
+(共租插入重复计数) + (b) dmesg 并发 walk 交错采集 的复合误读。
+v-survivors（环形, per-mm, 干净）= fork_copy VA 真实人口, 其释放
+侧缺口的真实机制回到 sec 90 的裸拆绊线与 ref 纪律设计（free 漏斗
+修复已落地 legacy 面）。
+**残差 34 终态**: 有界、每 fork child、修复 = (1) arena 漏斗
+锁安全释放形 + (2) reg_frames 唯一帧计数修正（仪表精度）。均已
+完整定义, 下会话一次收敛。整夜 V3 攻坚正式收官。
