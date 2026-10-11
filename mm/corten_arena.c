@@ -11088,6 +11088,41 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 			return ret;
 	}
 
+	/* sec 134: the meta adoption's frame-completion pass.  The replay
+	 * loop above covers the arena's byte extent; the VMA loop's
+	 * copies in the SAME frames but OUTSIDE the extent (the growth
+	 * shapes: the heap VMA above the brk arena's end, the stack VMA
+	 * below the stack region's start) were left unrecorded -- the
+	 * arena's exit paths went blind to them and the charges orphaned
+	 * (the val:34's remaining 32).  Walk the arena's full frames and
+	 * adopt every present child PTE whose snapshot slot is empty:
+	 * meta-only, PTE untouched, the accounting completes. */
+	{
+		unsigned long fst = (ar->start >> PMD_SHIFT) << PMD_SHIFT;
+		unsigned long fend = (((ar->end - 1) >> PMD_SHIFT) + 1)
+				     << PMD_SHIFT;
+		unsigned long faddr;
+
+		for (faddr = fst; faddr < fend; faddr += PMD_SIZE) {
+			unsigned long win_end = faddr + PMD_SIZE;
+			struct vm_area_struct *fv = find_vma(mm, faddr);
+
+			memset(snap, 0, CORTEN_META_ARRAY_BYTES);
+			if (!fv || fv->vm_start >= win_end)
+				continue;	/* no VMA content in frame */
+			if (fv->vm_start >= faddr &&
+			    /* the frame's content is entirely the arena's
+			     * own extent: the replay loop above covered it */
+			    ar->start <= faddr && ar->end >= win_end)
+				continue;
+
+			ret = corten_arena_fork_copy_window(mm, faddr,
+							    win_end, snap);
+			if (ret)
+				return ret;
+		}
+	}
+
 	return 0;
 }
 

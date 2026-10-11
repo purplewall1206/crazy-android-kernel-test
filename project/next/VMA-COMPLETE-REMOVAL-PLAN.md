@@ -2516,3 +2516,18 @@ mixed-frame 成员裁剪边界、或第二孤儿类）。
 **下会话首项**: 收养窗口几何补全（对照 residue VAs 与 region/
 window 边界逐一核对）→ val:34 归零 → smoke/systemd 双 boot; 然后
 generator-fork EPROTO。
+
+## 134. 帧补全 pass 判决 + 晨间定稿（2026-10-12 晨, #530）
+
+**帧补全 pass**（replay 扩展到注册帧全 2M 跨度的 meta 收养）落地:
+val 仍 32, residue-n=60——**帧内收养未命中**（剩余 32 的槽不在
+arena 帧跨度内, 或收养路径的 lock_range -ENOENT 跳过）。
+
+**残余 32 的定位需求**: unmap-zap 层追踪（zap_pte_range 对残差 VA
+的行为插桩——kprobe/trace_printk 级）——超出今夜预算, 下会话首项。
+
+**晨间定稿**: 最终形 #530（基线 + sweep 收缴 + charge_arm 栅栏 +
+判别器 + meta 收养 + 帧补全 pass, 全部零 oops）; N-boot campaign
+A/B 各 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14
+02:24）; E2 PR 待批复。val:34 = 32（收养后残面）, 机制链三层定案
+维持, 剩余单层（unmap-zap 行为）下会话收口。
