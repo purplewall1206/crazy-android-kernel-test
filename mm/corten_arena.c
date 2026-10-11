@@ -5956,17 +5956,29 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		unsigned long vidx = 0;
 		int shown = 0, left = 0;
 
+		long relsrc[8] = { 0 };
+
 		for (i = 0; i < n; i++) {
 			u32 e = state->trace_ring[i & 4095];
 			unsigned long va = (e & 0xFFFFFF) << PAGE_SHIFT;
 			int arm = (e >> 24) & 0xFF;
 
-			if (arm & 0x40)
+			if (arm & 0x40) {
+				int src = arm & 0xF;
+
+				if (src < 8)
+					relsrc[src]++;
 				xa_erase(&vset, va >> PAGE_SHIFT);
-			else
+			} else {
 				xa_store(&vset, va >> PAGE_SHIFT, (void *)(long)arm,
 					 GFP_NOWAIT);
+			}
 		}
+		for (i = 1; i < 8; i++)
+			if (relsrc[i])
+				pr_info("corten: relsrc[%d]=%ld\n", (int)i,
+					relsrc[i]);
+		pr_info("corten: relsrc[UNTRACED]=%d\n", (int)relsrc[0]);
 		xa_for_each(&vset, vidx, vent) {
 			int arm = (int)(long)vent;
 
