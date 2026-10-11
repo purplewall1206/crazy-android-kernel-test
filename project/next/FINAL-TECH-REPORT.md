@@ -308,3 +308,20 @@ charge_arm 栅栏; smoke 验证 ✓。sec 120-127 全量仪器与修复保留在
 **交付总账**: 账本 sec 120-130（11 节）· 报告附一至附八 · 提交链
 e0d07ed0 → 02283460 → 85e7c857 → 18dfe24d（全推送）。E2 PR 待批复;
 48h 判定 10-14 02:24。
+
+---
+
+## 附九: 判别器落地与诚实终态（sec 131, a7ee830b）
+
+**落地**: `corten_slot_is_record`（PRIVATE_ANON 记录判别, desc 读锁
++ stale/mm 校验）+ copy_present_ptes 入口的记录槽跳过合同（消费不
+拷贝, 子侧 replay 承接）。
+
+**诚实终态**: val:34 未归零。#528 smoke 实测: 判别器在 fork 入口
+拦不住——**记录化转换发生在 fork 计费之后、child 退出之前（child
+侧 arena 生命周期内）**。最后未知名 = child 侧将已计费真页 PTE 转
+为 PRIVATE_ANON 记录的转换位点（候选: 子 exec 镜像/entry 重扫/
+arena fault 层 slot 重置）; 命名探针（census 交叉引用 + zap 采样
+器）就绪, 一次插桩 boot 点名。
+
+**48h 判定 10-14 02:24**（churn 浸泡零事件持续）; E2 PR 待批复。
