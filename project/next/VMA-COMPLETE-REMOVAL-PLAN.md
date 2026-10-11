@@ -2007,3 +2007,13 @@ free 漏斗处的释放与 mode_default teardown 的交互对所有释放形致
 （fork 镜像/vm 生命周期的计费-PTE 对齐）。下会话以活体 repro
 （mode_default boot 崩溃可复现）一次收敛。**残差账**: 有界 34 页
 /fork child, 无 UAF, 生产 soaks 零事件不受影响。
+
+## 104. 生产事件处置: 清扫回归启用仍致 boot-loop → 重新门控（2026-10-11 午）
+
+HEAD 2692cccb（清扫回归启用）上 soak3 **5 分钟内两次重启**（boot
+loop）—— pmd_leaf 门只修了 THP-leaf 自旋锁崩溃, walk 长映射段的
+rcu/preempt 纪律仍杀死 mode_default 形 → 重新门控（sec 96 形）,
+soak3 重部署回门控构建（up, 稳定, stack_adopts 重启累计）。
+**教训**: 清扫的释放职责回归必须以其 rcu/preempt 纪律修复
+（sec 105 重构: 短临界区快照形）为前提, 不能仅凭 pmd_leaf 门。
+旗标 on 钟重锚 09:42。freepte 裸拆绊线持续计数（观测面完好）。
