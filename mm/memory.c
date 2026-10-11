@@ -206,12 +206,13 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 		pte_t *ptep = (pte_t *)token;
 		int i, live = 0;
 
-		/* sec 91: the repair -- live PTEs in a PT page reaching
-		 * the free funnel are released through the counted funnel
-		 * (corten_zap_release_page: family-split counter + rmap +
-		 * VA trace) instead of dying bare.  This is the +34
-		 * residual's exact face (the sec 90 probe: live=110 at
-		 * the adopted-heap address). */
+		/* sec 91, RESTORED (the sec 92 repair crashed the
+		 * corten_mode_default boot: the release+folio_put at this
+		 * funnel, under the dying mm's teardown with the tlb
+		 * gather active, wedged systemd with irqs disabled --
+		 * the shape needs the post-walk lock-safe pass design
+		 * before it can run here).  Count-only census until
+		 * then. */
 		for (i = 0; i < PTRS_PER_PTE; i++) {
 			pte_t pt = READ_ONCE(ptep[i]);
 			unsigned long pa = addr + i * PAGE_SIZE;
@@ -219,37 +220,15 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 			if (pte_none(pt) || !pte_present(pt) ||
 			    pte_special(pt))
 				continue;
-			/* sec 92: the ref-discipline repair.  Every fork-copied
-		 * PTE holds its own folio reference (the batch arm's
-		 * folio_ref_add), so the release at this funnel is
-		 * release_page (rmap + family-split counter) plus the
-		 * folio_put.  The two earlier crash forms died on
-		 * garbage-PFN entries (pte_page past the vmemmap) --
-		 * the pfn sanity gate skips those (their crash
-		 * signature, CR2 fffff461..., is the vmemmap read). */
-			unsigned long pfn = pte_pfn(pt);
-
-			if (pfn > max_pfn) {
-				live++;
-				continue;
-			}
-			{
-				struct page *page = pfn_to_page(pfn);
-
-				ptep_get_and_clear(tlb->mm, pa, ptep + i);
-				corten_zap_release_page(tlb->mm, NULL, page,
-							pa);
-				folio_put(page_folio(page));
-			}
 			live++;
 			if (live <= 4 && !corten_freepte_warned)
-				pr_info("corten: freepte RELEASED addr=%lx\n",
+				pr_info("corten: freepte LIVE addr=%lx\n",
 					pa);
 		}
 		if (live) {
 			WRITE_ONCE(corten_freepte_warned, true);
 			corten_note_freepte_live(live);
-			pr_info("corten: freepte released live=%d at %lx\n",
+			pr_info("corten: freepte bare-teardown live=%d at %lx\n",
 				live, addr);
 		}
 	}
