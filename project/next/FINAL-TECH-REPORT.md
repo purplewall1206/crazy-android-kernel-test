@@ -243,3 +243,25 @@ trace 助手静默）。
 4. 48h 判定（10-14 02:24）→ 默认化→回退臂删→vma_exec.c 全删→
    J6 终账。
 5. E2 PR（pr-e2a/b/c）待用户批复。
+
+---
+
+## 附六: 10-12 清晨末（sec 127, 97335941）
+
+**点名探针全量执行完毕（用户指令闭环）**: tracked/untracked zap 采
+样器 + census 交叉引用 + desc 枚举 pass 武装周期。**终判: 残差叶表
+的非 PTE 值 = W-4 槽位记录（PTE 格式标记）**; pass 武装周期: 栅栏
++pfn_valid 门关闭全部 fault 类, 但 pfn 范围内标记值仍穿门（
+free_large_kmalloc 告警）——**判别器必须来自 W-4 槽格式规范**。
+
+**最终形态 = #521**: 基线 + sweep 收缴 + charge_arm 栅栏 + 全部仪
+器（pass 收缴态, 重武装 = W-4 槽格式通读 + 判别器 + 双 boot）+
+mirror/tree 边界合同 + VM_CORTEN skip + live 路径漏斗化。KUnit 双
+腿绿。churn 浸泡零事件持续。
+
+**val:34 的完整结论**: 机制链三层定案——(1) 残差计费臂 = fork 树
+拷贝（arm=11, 单次计费）; (2) 孤儿化位点 = 槽位标记写入者（zap 之
+外, ringrel=0 实证）; (3) 终相 = W-4 槽位记录非页（entry=指针/标
+记值, pfn_valid 不可判别）。**修复 = W-4 槽格式规范通读后的判别器
++ 重武装, 或 copy_present_ptes 的槽位跳过合同（需同一规范）——
+设计级工作, 规范通读是前置。**
