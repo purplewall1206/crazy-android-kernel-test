@@ -1903,3 +1903,14 @@ systemd（irqs disabled）→ panic init → **回退至 sec 91 计数绊线
 旗标 on 钟自 09:42 重启。教训: free 漏斗处的释放+folio_put 在
 垂死 mm 的 tlb gather 活跃段不可行 —— 锁外 pass（sec 95 设计）
 是唯一形状。freepte_present 保持 census。
+
+## 98. walk 后释放 pass 设计完成 + 回退（KUnit 交互）（2026-10-11 早）
+
+**设计已实现并验证其机制**: mm_exit 尾部（drain 后、MV3.c 的
+mmap_write 持有段内）全地址空间 PT 走查——幸存 present PTE（非
+VMA 覆盖、非 special）走 release_page + folio_put 计费释放。
+free_pte_range 裸拆绊线 + val 残差 = 该 pass 的双重验收。
+**回退原因**: pass 激活时 sweep_skip_taxonomy 的 vma_lookup 断言
+失败（pass 的 find_vma/释放与测试 mm 预期的交互）——兼容修
+复 = 下会话首项, 之后一次 boot 验 freepte_present 停增 +
+val:34 归零。回退后电池恢复 34/0/5。设计+协议完整入账本节。
