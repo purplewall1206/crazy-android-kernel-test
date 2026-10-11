@@ -2055,3 +2055,13 @@ clean boot 单 child 全量对账: **chg 210（map 1 + cow 17 + fork 130
 声）**。对账表完整——34 的计费点已收窄至 map/cow/fork 三臂的
 130+18 中（tree 62 全部正常释放）, 下会话以 per-VA 环差集继续收
 敛至单臂。仪器链完备, 对账表每 boot 可复现。
+
+## 109. 状态快照（2026-10-11 13:2x, 会话交接）
+
+soak3（旗标 on, 门控构建）单条启动期 WARNING = 追踪框架的
+trace_frames xa_store 噪声（已知一次性, PID 110 早期 fork 风暴）
+—— 非功能性, 下会话以 trace_frames 的 GFP_NOWAIT 显式容忍或
+XA_LIMIT 收敛。残差 34 的最终归因链与对账表（sec 108）完整可复
+现; per-VA 环差集（v-survivors 带 24 位截断）为下会话收敛仪器。
+E2 裁决包已呈递（满期 10:09:35, 24h56m 零事件）, 待批复落地
+pr-e2a/pr-e2b。双钟自动化值守中。
