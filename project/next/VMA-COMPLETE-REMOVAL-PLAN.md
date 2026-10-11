@@ -2075,3 +2075,13 @@ census 与 sweep 的共享盲点修复: find_vma(mm, pa) 非空 ≠ VMA 覆盖
 下会话: (1) kdb 活体定位清扫盲点 (2) 快照重构回归释放职责 (3)
 freepte 停增 + val:34 归零双验 (4) E2 PR 落地（待批复）(5) 旗标
 序列（10-18 满期）。
+
+## 111. 幸存者清扫两相重构落地（2026-10-11 午）
+
+清扫 per-PMD 体重构为两相形（sec 105 设计）: PTL 内扫描+快照+
+get_and_clear（静态数组）; PTL 外按页走计费释放漏斗 + tlb 队列。
+PTL 持有缩至 scan+clear（interlock 预算内）, 释放/rmap/计数脱离
+preempt/rcu 约束。溢出即 flush（caller-owned gather）。电池双腿绿
+（7/0/32, 27/0/1）。验证 boot 零崩溃稳定; sweep_released=0 —— 残
+差页所在帧仍不在清扫命中集, 下会话以 walk 释放 VA 集 vs 幸存者集
+对照闭合（sec 103 终局路径, 仪器全备）。
