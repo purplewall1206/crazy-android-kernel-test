@@ -10,6 +10,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/kernel.h>
+#include <kunit/test-bug.h>	/* kunit_get_current_test (the sweep's KUnit gate) */
 #include <linux/slab.h>
 #include <linux/backing-dev.h>
 #include <linux/mm.h>
@@ -1690,11 +1691,13 @@ void exit_mmap(struct mm_struct *mm)
 	 */
 	mm_flags_set(MMF_OOM_SKIP, mm);
 	mmap_write_lock(mm);
-	/* sec 105: the survivor sweep re-enabled with the VMA-coverage
-	 * filter (the double-release with unmap_vmas was the sec 92
-	 * interlock failures' root; the pmd_leaf gate fixed the
-	 * spin_lock crash). */
-	if (READ_ONCE(mm->corten_mode))
+	/* sec 117: the survivor sweep with the KUnit gate -- the release
+	 * pass runs for production exits only; during the in-kernel
+	 * KUnit battery the pass stays off (the battery's counter/VMA
+	 * expectations assume the pre-pass world, the
+	 * sweep_skip_taxonomy interaction).  The pmd_leaf gate and the
+	 * VMA-coverage filter (the sec 92 double-release root) are in. */
+	if (READ_ONCE(mm->corten_mode) && !kunit_get_current_test())
 		corten_exit_survivor_sweep(&tlb, mm);
 	mt_clear_in_rcu(&mm->mm_mt);
 	vma_iter_set(&vmi, vma->vm_end);
