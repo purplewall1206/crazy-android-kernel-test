@@ -2531,3 +2531,18 @@ arena 帧跨度内, 或收养路径的 lock_range -ENOENT 跳过）。
 A/B 各 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14
 02:24）; E2 PR 待批复。val:34 = 32（收养后残面）, 机制链三层定案
 维持, 剩余单层（unmap-zap 行为）下会话收口。
+
+## 135. 判别器语义修正: 残差 34→2（94% 闭合, 2026-10-12 晨, #531）
+
+**一行语义修正**: `corten_slot_is_record` 的判别条件从
+`state == CORTEN_PRIVATE_ANON` 修正为 `state != CORTEN_MAPPED`——
+探针终判（mstate=0/INVALID）证明残差记录槽的状态是 INVALID 而非
+PRIVATE_ANON, 旧条件漏判。
+
+**smoke 实测（#531, 8 探针 exit + 8 child）**: **val 34→2**（5 处
+val:2, 94% 闭合）; residue-n=0 全场（multi=0）; 精确和探针 anon=0
+（unpublish 时账本精确清零——残余 2 在 percpu read_positive 雾差
+±batch 内, 或一类 2 页小脸）; KUnit on 27/0/1 ✓。
+
+**队列**: off 腿电池 → sec 135 账本+报告 → systemd 全量启动验证 →
+E2 PR 待批复; 48h 判定 10-14 02:24。

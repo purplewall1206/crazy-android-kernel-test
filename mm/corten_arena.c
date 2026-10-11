@@ -508,8 +508,8 @@ static pmd_t *corten_arena_pmd(struct mm_struct *mm, unsigned long addr);
  * as one anon page that nothing ever releases (the val:34, exactly
  * one per record).  Returns true when @addr's slot in @mm's leaf is
  * such a record (live same-mm descriptor, meta present, state
- * PRIVATE_ANON): the caller skips the copy and the charge, and the
- * child's arena replay carries the record on its own books. */
+ * anything non-MAPPED): the caller skips the copy and the charge, and
+ * the child's arena replay carries the records on its own books. */
 bool corten_slot_is_record(struct mm_struct *mm, unsigned long addr)
 {
 	pmd_t *pmdp, pmd;
@@ -527,7 +527,7 @@ bool corten_slot_is_record(struct mm_struct *mm, unsigned long addr)
 		return false;
 	read_lock_bh(&desc->lock);
 	if (!READ_ONCE(desc->stale) && desc->mm == mm && desc->meta &&
-	    desc->meta[pte_index(addr)].state == CORTEN_PRIVATE_ANON)
+	    desc->meta[pte_index(addr)].state != CORTEN_MAPPED)
 		rec = true;
 	read_unlock_bh(&desc->lock);
 	corten_ptdesc_put(desc);
