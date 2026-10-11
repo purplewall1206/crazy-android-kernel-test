@@ -5957,6 +5957,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		int shown = 0, left = 0;
 
 		long relsrc[8] = { 0 };
+		DEFINE_XARRAY(cset);	/* the charge VAs (arm-stamped) */
 
 		for (i = 0; i < n; i++) {
 			u32 e = state->trace_ring[i & 4095];
@@ -5969,9 +5970,13 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				if (src < 8)
 					relsrc[src]++;
 				xa_erase(&vset, va >> PAGE_SHIFT);
+				xa_store(&cset, va >> PAGE_SHIFT,
+					 (void *)(long)(0x40 | src), GFP_NOWAIT);
 			} else {
 				xa_store(&vset, va >> PAGE_SHIFT, (void *)(long)arm,
 					 GFP_NOWAIT);
+				xa_store(&cset, va >> PAGE_SHIFT,
+					 (void *)(long)arm, GFP_NOWAIT);
 			}
 		}
 		for (i = 1; i < 8; i++)
@@ -5979,6 +5984,28 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				pr_info("corten: relsrc[%d]=%ld\n", (int)i,
 					relsrc[i]);
 		pr_info("corten: relsrc[UNTRACED]=%d\n", (int)relsrc[0]);
+		/* sec 112: the phantom-release census -- releases whose VAs
+		 * never carried a charge event in this ring window (the
+		 * un-instrumented in-life clear's fingerprint). */
+		{
+			void *cent;
+			unsigned long cidx = 0;
+			int ph = 0;
+
+			xa_for_each(&cset, cidx, cent) {
+				int csrc = (int)(long)cent & 0x3F;
+
+				if (!(csrc & 0x40))
+					continue;
+				ph++;
+				if (ph <= 6)
+					pr_info("corten: phantom-release va=%lx src=%d\n",
+						cidx << PAGE_SHIFT,
+						csrc & 0xF);
+			}
+			pr_info("corten: phantom-releases=%d\n", ph);
+			xa_destroy(&cset);
+		}
 		xa_for_each(&vset, vidx, vent) {
 			int arm = (int)(long)vent;
 
