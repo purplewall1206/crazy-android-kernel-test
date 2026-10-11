@@ -265,3 +265,23 @@ mirror/tree 边界合同 + VM_CORTEN skip + live 路径漏斗化。KUnit 双
 记值, pfn_valid 不可判别）。**修复 = W-4 槽格式规范通读后的判别器
 + 重武装, 或 copy_present_ptes 的槽位跳过合同（需同一规范）——
 设计级工作, 规范通读是前置。**
+
+---
+
+## 附七: 终版方法论（sec 128, 02283460）
+
+**systemd 启动崩溃 = 基线 + mode_default 自带的间歇性竞态**。决定性
+证据: #512（9146a235 纯代码）与 #523（50883d1e + disarm + fence）
+的运行代码差仅 debugfs 渲染 + 一个 include（不在退出路径）, 而前者
+绿后者崩——代码差不可能解释, **单 boot 绿/崩判定全部作废**。今夜全
+部"崩溃者"判定（funnel flush、sweep 收缴、charge_arm 栅栏）皆
+boot 骰子噪声; 对应的"撤回"同理。旧 soak3b 的 9h 绿 = 一次幸运
+boot + 不 reboot。
+
+**正确方法论**: N≥5 boot 统计 campaign 每配置; 修复以崩率下降为
+准。残差 34 的修复（W-4 槽格式判别器 + 计费转移合同, 设计已录
+sec 124/127）在统计框架内落地。
+
+**最终形态（HEAD 02283460 的树）**: 50883d1e 基线 + sweep 收缴 +
+charge_arm 栅栏; smoke 验证 ✓。sec 120-127 全量仪器与修复保留在
+历史提交（e0d07ed0/ee221803/97335941）, 统计框架内逐项重 landing。
