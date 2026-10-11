@@ -2477,3 +2477,25 @@ fault 层的 slot 重置）——命名探针（census 交叉引用 + 采样器�
 record 拷贝源头上错误的形态关闭）; (2) 全套仪器重 landing; (3)
 funnel break + pass 收缴维持; (4) N-boot 方法论 + campaign 基线
 （A/B 各 5/5 零崩）。
+
+## 132. meta-state 探针终判: 子 arena 账本对 VMA 循环拷贝"失明"（2026-10-12 晨, #528 build）
+
+**残差 VA 的 meta-state 探针（新仪器）实测**: `residue va=55c256c9b000
+arm=11 n=1 pte=0 entry=0 mstate=0`——**mstate=0 = CORTEN_INVALID**:
+fork mirror 的 meta replay **从未把 VMA 循环拷贝的页记入子 arena 的
+meta 账本**（M5 设计 ④-4 "子侧 meta 深拷贝"对 whitelist 树窗
+（stack/heap）缺失——mark_window 的 -ENOENT（无 desc 视角）返回
+"nothing recorded", replay 按 INVALID 全跳过）。
+
+**后果链**: 子 arena 的退出路径对 INVALID 槽"失明"（recorded=false
+门）; unmap 的释放覆盖不全（post=30 非 0 的 exit 形态）; 计费 30-34
+悬空。**修复 = M5 ④-4 的补全**: fork_commit 的 replay 对
+VMA-循环拷贝的窗（whitelist 树窗）补 meta 深拷贝（snap 无记录时以
+VMA 循环的实际拷贝为准建 MAPPED meta）, 或等价地 fork_begin 的
+snapshot 覆盖 whitelist 窗。涉及 M5_FORK_SPEC.md 1.3 ④-2/④-4 的
+设计修订（whitelist 窗从"标记豁免"改为"meta 深拷贝纳入"）——设计
+修订 + 实现 + 双 boot 验证 = 下会话首项。
+
+**新仪器**: census 的 meta-state 交叉探针（叶槽原始值 vs
+desc->meta[i].state 并读）——区分"账本失明"与"翻译真丢"的最终工
+具。本 boot 判决: **账本失明型（mstate=0/INVALID, 非翻译丢失）**。

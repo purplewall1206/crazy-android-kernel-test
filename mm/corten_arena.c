@@ -6500,6 +6500,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					(rslot ? 1 : 0);
 				bool rpresent = false;
 				u64 rentry_v = 0;
+				int rmeta_state = -1;
 				pmd_t *rpmdp;
 
 				mmap_assert_write_locked(mm);
@@ -6511,9 +6512,31 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 						READ_ONCE(*rpmdp));
 					pte_t rentry = READ_ONCE(
 						rptep[pte_index(raddr)]);
+					struct corten_ptdesc *rdesc;
 
 					rpresent = !pte_none(rentry);
 					rentry_v = (u64)pte_val(rentry);
+					/* sec 132: the leaf's own meta view
+					 * -- is the slot's meta state (the
+					 * arena's bookkeeping) consistent
+					 * with the raw slot?  A meta state
+					 * of MAPPED behind a marker slot
+					 * (or vice versa) splits the two
+					 * views of the frame. */
+					rdesc = corten_ptdesc_get(
+						pmd_pfn(READ_ONCE(*rpmdp)));
+					if (rdesc) {
+						read_lock_bh(&rdesc->lock);
+						if (!READ_ONCE(rdesc->stale) &&
+						    rdesc->mm == mm &&
+						    rdesc->meta)
+							rmeta_state =
+								rdesc->meta[
+								pte_index(raddr)]
+								.state;
+						read_unlock_bh(&rdesc->lock);
+						corten_ptdesc_put(rdesc);
+					}
 				}
 				{
 					pgd_t *rpgdp = pgd_offset(mm, raddr);
@@ -6522,10 +6545,10 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					pud_t *rpudp2 = pud_offset(rp4dp,
 								   raddr);
 
-					pr_info("corten: residue va=%lx arm=%ld n=%ld pte=%d entry=%llx pgd=%d p4d=%d pud=%d pmd=%d pmdv=%llx vma=[%lx,%lx) frame-recs=%u\n",
+					pr_info("corten: residue va=%lx arm=%ld n=%ld pte=%d entry=%llx mstate=%d pgd=%d p4d=%d pud=%d pmd=%d pmdv=%llx vma=[%lx,%lx) frame-recs=%u\n",
 						raddr, (long)rent & 0xFF,
 						(long)rent >> 8, rpresent,
-						rentry_v,
+						rentry_v, rmeta_state,
 						pgd_present(READ_ONCE(*rpgdp)),
 						p4d_present(READ_ONCE(*rp4dp)),
 						pud_present(READ_ONCE(*rpudp2)),
