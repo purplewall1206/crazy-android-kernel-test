@@ -206,35 +206,31 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 		pte_t *ptep = (pte_t *)token;
 		int i, live = 0;
 
-		/* sec 105: the ref-discipline release, the v8 form
-		 * (tlb_remove_page): every fork-copied PTE holds its own
-		 * folio reference (the batch arm's folio_ref_add), so the
-		 * release at this funnel is ptep_get_and_clear +
-		 * corten_zap_release_page (family-split counter + rmap +
-		 * VA trace) + tlb_remove_page -- the standard API handles
-		 * the batch overflow internally (no custom mid-funnel
-		 * flush; the sec 92/86 crashes were the garbage-PFN
-		 * entries, gated by the pfn check, and the custom flush
-		 * respectively). */
+		/* sec 91, RESTORED (the sec 92 repair crashed the
+		 * corten_mode_default boot: the release+folio_put at this
+		 * funnel, under the dying mm's teardown with the tlb
+		 * gather active, wedged systemd with irqs disabled --
+		 * the shape needs the post-walk lock-safe pass design
+		 * before it can run here).  Count-only census until
+		 * then. */
 		for (i = 0; i < PTRS_PER_PTE; i++) {
 			pte_t pt = READ_ONCE(ptep[i]);
 			unsigned long pa = addr + i * PAGE_SIZE;
-			unsigned long pfn = pte_pfn(pt);
-			struct page *page;
-			pte_t oldpte;
 
 			if (pte_none(pt) || !pte_present(pt) ||
-			    pte_special(pt) || pfn > max_pfn)
+			    pte_special(pt))
 				continue;
-			oldpte = ptep_get_and_clear(tlb->mm, pa, ptep + i);
-			page = pte_page(oldpte);
-			corten_zap_release_page(tlb->mm, NULL, page, pa);
-			corten_trace_release_va(tlb->mm, pa);
-			tlb_remove_page(tlb, page);
 			live++;
+			if (live <= 4 && !corten_freepte_warned)
+				pr_info("corten: freepte LIVE addr=%lx\n",
+					pa);
 		}
-		if (live)
+		if (live) {
+			WRITE_ONCE(corten_freepte_warned, true);
 			corten_note_freepte_live(live);
+			pr_info("corten: freepte bare-teardown live=%d at %lx\n",
+				live, addr);
+		}
 	}
 	pmd_clear(pmd);
 	pte_free_tlb(tlb, token, addr);
