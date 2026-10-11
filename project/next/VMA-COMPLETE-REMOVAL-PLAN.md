@@ -2124,3 +2124,13 @@ sweep_skip_taxonomy 交互修复）。门后: KUnit 电池双腿全绿
 （off 7/0/32, on 34/0/5 —— sweep_skip_taxonomy 绿）, 验证 boot 零
 崩溃清扫在岗。残差 +34 仍在（in-life 清除臂 —— 环清除源标签下会
 话点名）。sec 95 定版设计完整落地。
+
+## 118. per-source 释放分布定案（2026-10-11 午）
+
+带源标签验证 boot 终读（全 exit 聚合）: relsrc[1](WALK)=14-16/exit,
+relsrc[3](COWFLIP)=1-11/exit, **UNTRACED=0** —— 全系统 PTE 清除零
+漏挂, 各源释放计数与计费臂收支自洽。残差 34 最终归因收敛至
+**臂内收支对**（sec 112 结论确证）: 某臂的 charge+release 对内一
+侧丢失。仪器链完备（源标签 + relsrc 分布 + registry 审计 + 全臂
+对账 + 幻影 census + 对账自分析）。下会话: 活体调试（kdb）定位
+臂内丢失侧 → 修 → freepte 停增 + val:34 归零。
