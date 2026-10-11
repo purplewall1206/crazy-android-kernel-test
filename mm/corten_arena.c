@@ -320,6 +320,7 @@ void corten_note_legacy_anon_charge(int nr)
 }
 EXPORT_SYMBOL_GPL(corten_note_legacy_anon_charge);
 static atomic_long_t corten_nr_freepte_present; /* sec 89: bare-teardown PTEs */
+static atomic_long_t corten_nr_post_walk_survivors; /* sec 98: post-walk releases */
 
 void corten_note_freepte_live(int nr)
 {
@@ -4234,7 +4235,9 @@ void corten_arena_stats_report(struct seq_file *m)
 	{
 		int ai;
 
-		seq_printf(m, "freepte_present    %ld\n",
+		seq_printf(m, "post_walk_survivors %ld\n",
+		   atomic_long_read(&corten_nr_post_walk_survivors));
+	seq_printf(m, "freepte_present    %ld\n",
 		   atomic_long_read(&corten_nr_freepte_present));
 	seq_printf(m, "sweep_scanned     %ld\n",
 		   atomic_long_read(&corten_nr_sweep_scanned));
@@ -6165,6 +6168,13 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		else
 			corten_arena_note_drain_timeout(state);
 	}
+
+	/* sec 98: the post-walk survivor release pass is DESIGNED but
+	 * reverted pending the KUnit interaction fix (the sweep_skip_
+	 * taxonomy assert failed with the pass live -- its find_vma/
+	 * release interplay with the test mm's expectations needs the
+	 * compat pass).  The full design + the verification protocol
+	 * are in the sec 98 ledger. */
 
 	mutex_unlock(&state->ctl_lock);
 
