@@ -206,41 +206,30 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 		pte_t *ptep = (pte_t *)token;
 		int i, live = 0;
 
-		/* sec 97: the ref-discipline release, the no-mid-flush
-		 * form: every fork-copied PTE holds its own folio
-		 * reference (the batch arm's folio_ref_add), so the
-		 * release at this funnel is the pfn-gated
-		 * ptep_get_and_clear + corten_zap_release_page (family-
-		 * split counter + rmap + VA trace) + the folio reference
-		 * QUEUED on the caller's tlb batch.  On batch overflow
-		 * the release STOPS (the remaining PTEs die bare,
-		 * counted) -- no flush runs inside free_pgtables (the
-		 * sec 92 wedge).  The sec 92 crashes were garbage-PFN
-		 * entries past the vmemmap (CR2 fffff461...) -- the pfn
-		 * gate skips those. */
+		/* sec 91, RESTORED (the sec 92 repair crashed the
+		 * corten_mode_default boot: the release+folio_put at this
+		 * funnel, under the dying mm's teardown with the tlb
+		 * gather active, wedged systemd with irqs disabled --
+		 * the shape needs the post-walk lock-safe pass design
+		 * before it can run here).  Count-only census until
+		 * then. */
 		for (i = 0; i < PTRS_PER_PTE; i++) {
 			pte_t pt = READ_ONCE(ptep[i]);
 			unsigned long pa = addr + i * PAGE_SIZE;
-			unsigned long pfn = pte_pfn(pt);
-			struct page *page;
-			pte_t oldpte;
 
 			if (pte_none(pt) || !pte_present(pt) ||
-			    pte_special(pt) || pfn > max_pfn)
+			    pte_special(pt))
 				continue;
-			oldpte = ptep_get_and_clear(tlb->mm, pa, ptep + i);
-			page = pte_page(oldpte);
-			corten_zap_release_page(tlb->mm, NULL, page, pa);
-			corten_trace_release_va(tlb->mm, pa);
-			if (__tlb_remove_page_size(tlb, page, false,
-						   PAGE_SIZE))
-				break;	/* batch full: the rest die bare,
-					 * counted below */
 			live++;
+			if (live <= 4 && !corten_freepte_warned)
+				pr_info("corten: freepte LIVE addr=%lx\n",
+					pa);
 		}
 		if (live) {
 			WRITE_ONCE(corten_freepte_warned, true);
 			corten_note_freepte_live(live);
+			pr_info("corten: freepte bare-teardown live=%d at %lx\n",
+				live, addr);
 		}
 	}
 	pmd_clear(pmd);
