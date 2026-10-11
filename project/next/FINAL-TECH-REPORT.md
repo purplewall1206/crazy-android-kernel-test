@@ -160,3 +160,29 @@ span 漏斗、funnel、implant pass）均为计数+擦除形态，逐一排除�
 
 *—— 终态"MODE 进程零 VMA 对象"的距离: 一个非追踪清除位点的点名（探针
 就绪）、一次健康载体上的干净 48 小时、然后是三步删除序列。*
+
+---
+
+## 附二: 10-12 凌晨续战（sec 123, 48e332b6）
+
+**崩溃族根除**: "RIP 0x0 rcu 回调" systemd panic 族（#492-#503）=
+trace 助手的 state 裸指针竞态——unpublish→call_rcu free 窗口内
+load 指针后 store 前被抢占, 写进已释放 state。修复 = 三个 trace
+助手全部包 `rcu_read_lock`（#504）。**trace_charge=off 下 systemd
+全量启动稳定至 generator 阶段（fence 实证）**。
+
+**两设计级发现（下一会话的主修课）**:
+1. **generator-fork EPROTO**: PID1 "Failed to fork off sandboxing
+   environment: Protocol error" → manager 起不来（此前每轮 panic 后
+   的"rootfs 脏"误诊皆此因）——corten 事务路径走深超限（-EPROTO,
+   corrupt tree view）: fork mirror replay 在 mode_default systemd
+   形态建出超深 desc 树。
+2. **metadata-in-PTE-slot 计费合同缺陷（残差 34 终相）**: 残差叶表
+   entry 读出内核指针与标记值——corten 元数据与叶表 PTE 槽双用;
+   fork VMA 循环把元数据槽当页计费（tree_copy +1）, exit 时 corten
+   按元数据处理槽位（非释放）→ 计费孤儿。修复 = fork 树拷贝对
+   corten 管理槽位的跳过合同（mirror/tree 边界定义）, 非释放补丁。
+
+**当前形态**: e0d07ed0 全量仪器 + funnel break + pass 收缴 + trace
+rcu 栅栏（sec 123 提交）。systemd 启动稳定至 generator 阶段; churn
+浸泡（smoke69, 锚 10-12 02:24）持续零事件; 48h 判定 10-14 02:24。
