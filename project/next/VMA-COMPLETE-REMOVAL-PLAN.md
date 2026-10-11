@@ -1856,3 +1856,11 @@ free_ptes_span pfn 门守卫）val:34 仍存 → 残差页的 PTE 存活于
 yield 8 后终止的跳帧机制, sec 85 yield 序列实锤）—— 修复早停后
 PT 页入正常漏斗, 页释放 + 残差归零同钩达成。电池 on 腿绿（27/0/1,
 pfn 门 span v2 + free_pte_range 修复全绿无崩溃）。
+
+**sec 93 方法学更正（最终）**: yield[0] 标签为共享全局计数 —— SMP
+下并发 exit 的多 walk 共用标签, dmesg 交错造成"乱序/8 帧中止"假象
+（时间戳升序 = 打印顺序非迭代顺序; 1fffffe 与 800000 属不同
+mm 的 walk）。**正确仪器 = 环形的 per-mm 追踪**（无跨 mm 污染,
+已稳定落地）—— v-survivors 的 fork_copy VA 集即真残差人口, 无需
+dmesg 打印。下一会话: 用环数据定位 fork_copy VA 的 in-life 清除臂
+（环回放加清除事件源标签即可）→ 补释放 → 验归零。E2 呈递包就绪。
