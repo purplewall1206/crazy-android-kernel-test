@@ -2437,3 +2437,22 @@ meta 非 MAPPED）跳过——非"漏释放"（记录非页）。
 
 **N-boot campaign 运行中**（A=基线, B=最终形, 各 5 boot systemd;
 首轮 A/B 均 crashes=0——间歇性崩率待累计）。churn 浸泡零事件持续。
+
+## 130. N-boot 统计 campaign 结果: 双配置 5/5 零崩（2026-10-12 晨 6 时, 完整对照矩阵）
+
+**campaign 数据**（各配置 5 次 systemd 全量启动, 独立镜像拷贝）:
+- A（基线 50883d1e 纯代码）: 5/5 **crashes=0**（genfail 0-0, 均 94s
+  至已知 EPROTO 冻结点）
+- B（最终形: 基线 + sweep 收缴 + charge_arm 栅栏）: 5/5 **crashes=0**
+
+**判读**: (1) 最终形 B 的 systemd 稳定性获统计支持（10 连续 boot 全
+部干净穿过 init 退出风暴）; (2) 今夜的间歇性崩溃未在干净顺序 boot
+中复现——**此前的崩与不崩与"单 boot 掷骰"+"panic 后镜像状态污染"
+相关**, N-boot 基线数据已入账, 后续判定以本 campaign 数据为参照;
+(3) reached=0 全体 = generator-fork EPROTO 为一致阻塞（已知立案项）。
+
+**残差 34 状态（不变）**: 机制链全定案（sec 129: 槽位记录 =
+corten_pte_meta 交错存储于叶表槽, entry 逐字段解码命中）; 判别器
+与计费转移合同设计已录（meta[i].state 判别, 实施点 =
+copy_present_ptes 查父侧 desc->meta）; 落地 + smoke/systemd 验证 =
+下会话首项。
