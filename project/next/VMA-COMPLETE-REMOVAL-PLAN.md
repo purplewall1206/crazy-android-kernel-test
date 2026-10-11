@@ -2416,3 +2416,24 @@ child, 3 Bad rss = 既有 val:34 形态, 无新崩溃）。sec 120-127 的仪
 ② 残差 34: W-4 槽格式规范通读 → 判别器/计费转移合同（设计已录 sec
 124/127）③ generator-fork EPROTO ④ 48h 判定（10-14 02:24）→ 三步
 删除序列 ⑤ E2 PR 待批复。
+
+## 129. 槽格式解码: corten_pte_meta 交错存储于叶表 PTE 槽（2026-10-12 晨, 设计级定案）
+
+**残差 entry 值的逐字段解码命中**: `struct corten_pte_meta`（8 字节
+packed: state/perm/flags/__resv[5], corten.h:179-188）——残差叶表
+entry 读出 **entry=2（state=2）、entry=0x2000000000（__resv[0]=0x20
+对齐）、entry=内核指针（__resv 页身份载荷）**——**arena 的槽位记录
+交错存储在叶表 PTE 槽内（论文"页表兼元数据存储"设计的实现形态）**。
+
+**由此（1）判别器定案**: copy_present_ptes 对 arena 帧（desc 存在,
+meta 非空）的槽位,**以父/子 meta[i].state 判别——state != MAPPED 的
+槽 = 记录非翻译, 跳过拷贝与计费**; state == MAPPED 正常拷贝计费。
+（2）计费转移合同简化为: 记录槽不产生计费（无需转移——arena 的
+replay/meta 自账）。实施点 = copy_present_ptes 入口查
+`corten_ptdesc_get(parent_leaf_pfn)->meta[pte_index]`（VMA 循环时
+子 desc 未建, 查父侧; fork_commit 的 replay 随后按快照建子 meta）。
+（3）untracked zap 的 present-only 门同理: 记录槽（pfn_valid 失败或
+meta 非 MAPPED）跳过——非"漏释放"（记录非页）。
+
+**N-boot campaign 运行中**（A=基线, B=最终形, 各 5 boot systemd;
+首轮 A/B 均 crashes=0——间歇性崩率待累计）。churn 浸泡零事件持续。
