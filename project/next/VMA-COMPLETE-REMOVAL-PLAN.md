@@ -1914,3 +1914,16 @@ free_pte_range 裸拆绊线 + val 残差 = 该 pass 的双重验收。
 失败（pass 的 find_vma/释放与测试 mm 预期的交互）——兼容修
 复 = 下会话首项, 之后一次 boot 验 freepte_present 停增 +
 val:34 归零。回退后电池恢复 34/0/5。设计+协议完整入账本节。
+
+## 97. free 漏斗 ref 纪律释放（no-mid-flush 形）+ 排除法收敛（2026-10-11 晨）
+
+free_pte_range 释放终形: pfn 门 + ptep_get_and_clear +
+corten_zap_release_page + 引用入 caller tlb 批（溢出即停, 余者裸拆
+计数）—— free_pgtables 内无 flush（sec 92 楔死教训）。sec 92 崩溃
+实为垃圾 PFN（CR2 fffff461 签名）—— pfn 门已治。电池双腿绿
+（39 全套 + 27/0/1）。
+**排除法收敛**: 全漏斗释放生效后残差恒 +34 → 计费页在 free 时刻
+无 PTE 存在 → **charge-without-PTE**（fork 镜像计费先于 PTE 落地,
+中止路径留无 PTE 计费）。终局修复 = 镜像计费后移（set_pte 后）或
+unwind 释放 —— 下会话首项, 一次 boot 验归零。freepte_present 与
+v 计数为双重回归度量。
