@@ -213,24 +213,36 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 		 * the shape needs the post-walk lock-safe pass design
 		 * before it can run here).  Count-only census until
 		 * then. */
+		/* sec 115: the release form FINAL: the pages queue on the caller's
+		 * tlb batch (the folio_put defers to tlb finish in safe
+		 * context -- direct folio_put here is ILLEGAL: this funnel
+		 * runs via pte_free_tlb inside the mmu_gather's irq-
+		 * disabled window, and folio_put's free path faults there,
+		 * the sec 114 "Fatal exception in interrupt").  On batch
+		 * overflow the release STOPS (the rest die bare, counted)
+		 * -- no flush inside free_pgtables. */
 		for (i = 0; i < PTRS_PER_PTE; i++) {
 			pte_t pt = READ_ONCE(ptep[i]);
 			unsigned long pa = addr + i * PAGE_SIZE;
+			unsigned long pfn = pte_pfn(pt);
+			struct page *page;
+			pte_t oldpte;
 
 			if (pte_none(pt) || !pte_present(pt) ||
-			    pte_special(pt))
+			    pte_special(pt) || pfn > max_pfn)
 				continue;
+			oldpte = ptep_get_and_clear(tlb->mm, pa, ptep + i);
+			page = pte_page(oldpte);
+			corten_zap_release_page(tlb->mm, NULL, page, pa);
+			corten_trace_release_va(tlb->mm, pa);
+			if (__tlb_remove_page_size(tlb, page, false,
+						   PAGE_SIZE))
+				break;	/* batch full: the rest die bare,
+					 * counted */
 			live++;
-			if (live <= 4 && !corten_freepte_warned)
-				pr_info("corten: freepte LIVE addr=%lx\n",
-					pa);
 		}
-		if (live) {
-			WRITE_ONCE(corten_freepte_warned, true);
+		if (live)
 			corten_note_freepte_live(live);
-			pr_info("corten: freepte bare-teardown live=%d at %lx\n",
-				live, addr);
-		}
 	}
 	pmd_clear(pmd);
 	pte_free_tlb(tlb, token, addr);
