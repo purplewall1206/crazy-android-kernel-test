@@ -3542,6 +3542,28 @@ unsigned long addr;
 		    pmd_leaf(READ_ONCE(*pmdp)))
 			continue;
 
+		/* sec 92: the arena funnel's own bare-teardown face -- a
+		 * frame reaching this retire with live PTEs is counted
+		 * (freepte_present) but NOT released inline: the release
+		 * under the desc write lock broke the txn uninstall
+		 * interlock contract (deterministic battery failure).
+		 * The counted census stands; the lock-safe release shape
+		 * is the next session's design item. */
+		if (corten_enabled_static() && READ_ONCE(mm->corten_mode)) {
+			pte_t *ptep = (pte_t *)pmd_pgtable(READ_ONCE(*pmdp));
+			int i, live = 0;
+
+			for (i = 0; i < PTRS_PER_PTE; i++) {
+				pte_t pt = READ_ONCE(ptep[i]);
+
+				if (pte_none(pt) || !pte_present(pt) ||
+				    pte_special(pt))
+					continue;
+				live++;
+			}
+			if (live)
+				corten_note_freepte_live(live);
+		}
 		pte_free_tlb(tlb, pmd_pgtable(READ_ONCE(*pmdp)), addr);
 		pmd_clear(pmdp);
 		mm_dec_nr_ptes(mm);

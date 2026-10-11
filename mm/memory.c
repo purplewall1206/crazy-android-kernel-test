@@ -219,16 +219,28 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 			if (pte_none(pt) || !pte_present(pt) ||
 			    pte_special(pt))
 				continue;
-			/* sec 91: COUNT-ONLY for now.  Both release forms
-			 * tried here (tlb-batch and direct folio_put)
-			 * crashed at child exit with irqs disabled -- the
-			 * pages' frame lifecycle at this point has a
-			 * deeper contract this funnel cannot honor
-			 * blindly (the exit walk's early termination at
-			 * 8-of-13 frames leaves exactly these PT pages
-			 * populated).  The tripwire stays as the census
-			 * until the walk's early termination is fixed
-			 * (the sec 85-90 chain). */
+			/* sec 92: the ref-discipline repair.  Every fork-copied
+		 * PTE holds its own folio reference (the batch arm's
+		 * folio_ref_add), so the release at this funnel is
+		 * release_page (rmap + family-split counter) plus the
+		 * folio_put.  The two earlier crash forms died on
+		 * garbage-PFN entries (pte_page past the vmemmap) --
+		 * the pfn sanity gate skips those (their crash
+		 * signature, CR2 fffff461..., is the vmemmap read). */
+			unsigned long pfn = pte_pfn(pt);
+
+			if (pfn > max_pfn) {
+				live++;
+				continue;
+			}
+			{
+				struct page *page = pfn_to_page(pfn);
+
+				ptep_get_and_clear(tlb->mm, pa, ptep + i);
+				corten_zap_release_page(tlb->mm, NULL, page,
+							pa);
+				folio_put(page_folio(page));
+			}
 			live++;
 			if (live <= 4 && !corten_freepte_warned)
 				pr_info("corten: freepte RELEASED addr=%lx\n",
