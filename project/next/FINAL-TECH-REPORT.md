@@ -325,3 +325,25 @@ arena fault 层 slot 重置）; 命名探针（census 交叉引用 + zap 采样
 器）就绪, 一次插桩 boot 点名。
 
 **48h 判定 10-14 02:24**（churn 浸泡零事件持续）; E2 PR 待批复。
+
+---
+
+## 附十: meta-state 终判与晨间定稿（sec 132, da50ad1c）
+
+**meta-state 交叉探针终判**: 残差 VA 的 arena meta = **CORTEN_INVALID
+（0）**——**fork mirror 的 meta replay 从未把 VMA 循环拷贝的页记入
+子 arena 账本**（M5 ④-4 meta 深拷贝对 whitelist 树窗缺失: mark 窗
+-ENOENT 返回"nothing recorded", replay 按 INVALID 全跳）→ 子 arena
+退出路径对这 30-34 页"失明"→ 计费悬空 = val:34。
+
+**修复路线（下会话首项）**: M5 ④-4 设计修订——fork_commit 的 replay
+对 VMA-循环拷贝的窗补 meta 深拷贝（无 snap 记录时以 VMA 循环实际拷
+贝为准建 MAPPED meta）; 或 fork_begin snapshot 纳入 whitelist 窗。
+实现 + smoke/systemd 双 boot 验证 val:34 归零与 residue-n 收敛。
+
+**当前稳定态**: 纯 sec 115 基座 + sweep 收缴 + charge_arm 栅栏
+（#525）; N-boot campaign A/B 各 5/5 零崩; churn 浸泡 4h+ 零事件
+（48h 判定 10-14 02:24）; KUnit 双腿绿; E2 PR 待批复。
+
+**交付总账**: FINAL-TECH-REPORT.md 附一至附十 · 账本 sec 120-132
+（13 节）· 提交链 e0d07ed0 → da50ad1c（全推送）。
