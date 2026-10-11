@@ -1844,3 +1844,15 @@ irqs-disabled=0; 残差 val:34 仍在（arena 漏斗面未覆盖——见下）�
 **arena 漏斗面（free_ptes_span）内联释放在 desc 写锁下破坏 txn
 uninstall interlock 契约（确定性 violations=1）→ 回退 census 计数
 形态**, 锁安全释放形 = 下会话设计项。电池 on 腿绿（27/0/1）。
+
+## 93. 判定修正: 残差 = 真实页泄漏（非纯计数）（2026-10-11 早）
+
+全部 PT 释放漏斗覆盖后（legacy free_pte_range 修复 + arena
+free_ptes_span pfn 门守卫）val:34 仍存 → 残差页的 PTE 存活于
+**walk 早停跳过的 5 帧 PT 页中, 且这些 PT 页从未被任何漏斗释放**
+（registry 外 → 孤儿 census 盲区, 此前零泄漏判定为仪表盲区）。
+**修正判定: 残差 = 真实页泄漏**（34 用户页 + 5 PT 页/fork child,
+物理有界但为真泄漏）。修复 = walk 早停根因（主遍 xa_for_each 在
+yield 8 后终止的跳帧机制, sec 85 yield 序列实锤）—— 修复早停后
+PT 页入正常漏斗, 页释放 + 残差归零同钩达成。电池 on 腿绿（27/0/1,
+pfn 门 span v2 + free_pte_range 修复全绿无崩溃）。
