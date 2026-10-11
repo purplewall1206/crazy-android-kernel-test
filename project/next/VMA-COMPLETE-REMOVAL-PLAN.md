@@ -2579,3 +2579,23 @@ error", 9.4s）——**-EPROTO 的源头在 fork_commit 的其它臂**
 **当前总账**: 残差 34→2（判别器语义修正, 94%）; N-boot A/B 各 5/5
 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
 E2 PR 待批复。
+
+## 139. 晨间终稿: 残差 34→2（94% 闭合）+ 全套落地清单（2026-10-12 晨 7:30）
+
+**本夜总账（#467-#531, 60+ 构建, 最终形零 oops）**:
+1. **残差 34→2（94% 闭合）**: 判别器语义修正（非 MAPPED 记录槽跳
+   过拷贝与计费, #531）+ mirror/tree 边界合同（#507/#511）+ live
+   路径漏斗化 + frame 补全 pass + meta 收养合同（#529-#530）。
+2. **崩溃族根除**: trace 助手 rcu 栅栏、pass 栅栏、pfn_valid 门、
+   判别器、收缴纪律（sweep/pass）。
+3. **仪器链建成**: census（计数量+几何+meta-state 交叉探针）、
+   zap 采样器、desc 枚举器、精确和探针、N-boot campaign 框架。
+
+**残余 val:2 的精确定义**: check_mm = percpu_counter_sum（精确）——
+真实 2 页类; per-exit 链的串口捕获有不可约交错歧义——下会话仪器 =
+全 log 离线 per-exit 状态机解析（/tmp/campaign.sh 框架扩展）+ 候选
+位点（unmap rss 提交/漏斗双重递减）。
+
+**队列（不变）**: ① 残余 2 收口（离线解析 + zap 插桩）②
+generator-fork EPROTO 全臂审计 ③ 48h 判定（10-14 02:24）→ 三步删
+除序列 ④ E2 PR 待批复。
