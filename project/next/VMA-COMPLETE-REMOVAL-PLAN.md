@@ -2456,3 +2456,24 @@ corten_pte_meta 交错存储于叶表槽, entry 逐字段解码命中）; 判别
 与计费转移合同设计已录（meta[i].state 判别, 实施点 =
 copy_present_ptes 查父侧 desc->meta）; 落地 + smoke/systemd 验证 =
 下会话首项。
+
+## 131. 槽记录判别器落地 + 残差 34 的诚实终态（2026-10-12 晨, #526-#528）
+
+**判别器落地（#527/#528）**: `corten_slot_is_record(mm, addr)`——
+arena 帧叶槽的 desc->meta[pte_index].state == CORTEN_PRIVATE_ANON
+判别（live same-mm desc + meta 在场）; copy_present_ptes 入口对
+record 槽**跳过拷贝与计费**（返回 1 = 消费不拷贝, 子槽保持 none,
+记录由子侧 arena replay/meta 深拷贝承接）。
+
+**smoke 实测（#528）**: val:34 仍在（6 Bad-rss）, residue arm=11
+n=1 entry=指针/零混合。**含义: 记录化转换发生在 fork 计费之后、
+child 退出之前（child 侧 arena 生命周期内）**, 判别器在 fork 入口
+拦不住。残差 34 的最后未知名 = **child 侧将已计费真页 PTE 转为
+PRIVATE_ANON 记录的转换位点**（候选: 子 exec 镜像/entry 重扫/arena
+fault 层的 slot 重置）——命名探针（census 交叉引用 + 采样器）就绪,
+下一会话以"转换位点插桩"一次 boot 点名。
+
+**已交付的正确工程**: (1) 判别器 = 记录槽拷贝/计费的入口合同（对
+record 拷贝源头上错误的形态关闭）; (2) 全套仪器重 landing; (3)
+funnel break + pass 收缴维持; (4) N-boot 方法论 + campaign 基线
+（A/B 各 5/5 零崩）。
