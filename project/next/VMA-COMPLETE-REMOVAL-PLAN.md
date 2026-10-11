@@ -2271,3 +2271,31 @@ soak3b.qcow2 rootfs 需修复（fsck, 深夜未及）。
 tree_copy 单计费, entry 清零/pmd 摘链两面孔, unmap 释放 0, 精确
 和探针证实残差为真非测量雾）; 非追踪清除位点点名探针已设计;
 定罪链与全部仪器在 e0d07ed0, 逐项重 landing 后继续。
+
+## 123. systemd 载体三连破案 + 两设计级发现（2026-10-12 凌晨 3 点, #502-#504）
+
+**崩溃族根除**: "RIP 0x0 rcu 回调" panic 族（#492/#494/#495/#502/#503）
+= **trace 助手的 state 裸指针竞态**——unpublish→call_rcu free 窗口内,
+load 指针后 store 前被抢占, 写进已释放 state（multiplicity 的
+load+store 双操作加宽窗口）, 砸坏后续分配的 rcu_head。修复 = 三个
+trace 助手（charge_arm/charge_va/release_va_src）的 state 访问全部
+包 `rcu_read_lock`（#504 起）。**trace_charge=off 时内核在 systemd
+全量启动下稳定到 94s+（fence 验证 ✓）**。
+
+**发现一（阻塞 systemd 启动的真因）**: PID1 "Failed to fork off
+sandboxing environment: Protocol error" → "Failed to start up
+manager"——**corten 事务路径走深超限 -EPROTO**（corten.c:874,
+"corrupt tree view"）: fork mirror 的 replay 在 mode_default systemd
+形态上建出超深 desc 树。每轮 panic 后 "manager 起不来" 皆此因（非
+rootfs 脏）。立案: fork replay 的树深/结构校验。
+
+**发现二（残差 34 的设计级终相）**: 残差叶表的 entry 读出**内核指针**
+（ffffcf3684…）与标记值（0x2）——**corten 元数据与叶表 PTE 槽双
+用**; fork 的 VMA 循环把元数据槽当页计费（tree_copy +1）, exit 时
+corten 自身按元数据处理槽位（非释放）→ 计费孤儿。修复方向 = fork
+树拷贝对 corten 管理槽位的跳过合同（mirror/tree 边界）, 非释放补丁。
+
+**最终形态（本提交）**: e0d07ed0 全量 + funnel break 回归 + pass 收
+缴（重应用）+ trace 助手 rcu 栅栏。systemd 启动稳定（至 generator
+阶段, 阻塞于发现一）。KUnit 待复跑。churn 浸泡（smoke69, 锚
+02:24）持续零事件。
