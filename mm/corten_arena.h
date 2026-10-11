@@ -1266,6 +1266,16 @@ static inline void corten_note_brk_funnel(struct mm_struct *mm)
 {
 }
 
+static inline void corten_trace_release_src(struct mm_struct *mm,
+					    unsigned long addr, int src)
+{
+}
+
+static inline void corten_trace_release_va_src(struct mm_struct *mm,
+					       unsigned long addr, int src)
+{
+}
+
 static inline void corten_note_legacy_shadow_zap(void)
 {
 }

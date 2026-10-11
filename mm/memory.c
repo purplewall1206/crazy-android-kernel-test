@@ -1737,6 +1737,7 @@ static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
 		rss[mm_counter(folio)] -= nr;
 		if (READ_ONCE(mm->corten_mode)) {
 			corten_note_legacy_zap(!folio_test_anon(folio), nr);
+			corten_trace_release_va_src(mm, addr, CORTEN_RELSRC_LEGACY);
 			corten_trace_release_va(mm, addr);
 			corten_trace_release(mm, &folio->page);
 		}
@@ -1746,6 +1747,8 @@ static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
 		rss[MM_ANONPAGES] -= nr;
 		if (READ_ONCE(mm->corten_mode)) {
 			corten_note_legacy_zap(false, nr);
+			corten_trace_release_va_src(mm, addr,
+						    CORTEN_RELSRC_LEGACY);
 			corten_trace_release_va(mm, addr);
 		}
 	}

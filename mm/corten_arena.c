@@ -362,6 +362,11 @@ static const char *const corten_trace_arm_name[] = {
 	"sweep_adopt"
 };
 #define CORTEN_TRACE_CAP 8192
+/* sec 106: release-source ids (ring release events carry 0x40|src). */
+#define CORTEN_RELSRC_WALK   0x01
+#define CORTEN_RELSRC_LEGACY 0x02
+#define CORTEN_RELSRC_COWFLIP 0x03
+#define CORTEN_RELSRC_FREEF  0x04
 static bool corten_trace_charge_param = true; /* sec 89: ring trace, bounded */
 module_param_named(trace_charge, corten_trace_charge_param, bool, 0);
 
@@ -393,10 +398,17 @@ void corten_trace_charge(struct mm_struct *mm, struct page *page)
 }
 EXPORT_SYMBOL_GPL(corten_trace_charge);
 
+void corten_trace_release_src(struct mm_struct *mm, unsigned long addr,
+			      int src)
+{
+	corten_trace_charge_arm(mm, addr, 0x40 | src);
+}
+EXPORT_SYMBOL_GPL(corten_trace_release_src);
+
 void corten_trace_release(struct mm_struct *mm, struct page *page)
 {
-	corten_trace_charge_arm(mm, (unsigned long)page << PAGE_SHIFT,
-				CORTEN_TRACE_FORK_PIN | 0x40);
+	corten_trace_release_src(mm, (unsigned long)page << PAGE_SHIFT,
+				 CORTEN_RELSRC_WALK);
 }
 EXPORT_SYMBOL_GPL(corten_trace_release);
 
@@ -421,9 +433,16 @@ void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm)
 }
 EXPORT_SYMBOL_GPL(corten_trace_charge_va);
 
+void corten_trace_release_va_src(struct mm_struct *mm, unsigned long addr,
+				 int src)
+{
+	corten_trace_release_src(mm, addr, src);
+}
+EXPORT_SYMBOL_GPL(corten_trace_release_va_src);
+
 void corten_trace_release_va(struct mm_struct *mm, unsigned long addr)
 {
-	corten_trace_charge_arm(mm, addr, CORTEN_TRACE_FORK_PIN | 0x40);
+	corten_trace_release_va_src(mm, addr, CORTEN_RELSRC_WALK);
 }
 EXPORT_SYMBOL_GPL(corten_trace_release_va);
 
@@ -11511,7 +11530,7 @@ static int corten_arena_map_anon(struct corten_fault_ctx *ctx,
 			return -EAGAIN;
 		}
 		corten_pte_clear_flush(vma, mm, ctx->addr, ptep);
-		corten_trace_release_va(mm, ctx->addr);
+		corten_trace_release_va_src(mm, ctx->addr, CORTEN_RELSRC_COWFLIP);
 	}
 
 	/* ③ mm stability check + accounting (memory.c:5248/5259-5263).
@@ -11880,7 +11899,7 @@ static int corten_arena_cow_write(struct corten_fault_ctx *ctx,
 	 * read-only translation may be cached in any CPU's TLB.
 	 */
 	corten_pte_clear_flush(vma, mm, ctx->addr, ptep);
-		corten_trace_release_va(mm, ctx->addr);
+		corten_trace_release_va_src(mm, ctx->addr, CORTEN_RELSRC_COWFLIP);
 
 	entry = folio_mk_pte(ctx->folio,
 			     vma ? corten_arena_perm_pgprot(vma, m->perm) :

@@ -573,6 +573,16 @@ void corten_note_anon_counter(struct mm_struct *mm, long val);
 void corten_trace_charge_arm(struct mm_struct *mm, unsigned long addr, int arm);
 void corten_trace_charge(struct mm_struct *mm, struct page *page);
 void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm);
+/* sec 106: release-source ids (ring release events carry 0x40|src). */
+#define CORTEN_RELSRC_WALK   0x01
+#define CORTEN_RELSRC_LEGACY 0x02
+#define CORTEN_RELSRC_COWFLIP 0x03
+#define CORTEN_RELSRC_FREEF  0x04
+
+void corten_trace_release_src(struct mm_struct *mm, unsigned long addr,
+			      int src);
+void corten_trace_release_va_src(struct mm_struct *mm, unsigned long addr,
+				 int src);
 void corten_trace_release_va(struct mm_struct *mm, unsigned long addr);
 void corten_trace_release(struct mm_struct *mm, struct page *page);
 void corten_note_legacy_zap(bool file, int nr);
