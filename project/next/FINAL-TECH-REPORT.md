@@ -347,3 +347,19 @@ arena fault 层 slot 重置）; 命名探针（census 交叉引用 + zap 采样
 
 **交付总账**: FINAL-TECH-REPORT.md 附一至附十 · 账本 sec 120-132
 （13 节）· 提交链 e0d07ed0 → da50ad1c（全推送）。
+
+---
+
+## 附十一: meta 收养合同与部分闭合（sec 133, 3163ea65）
+
+**落地**: fork_copy_window 的 meta 收养——零快照槽 + 子 PTE present
+→ 记 MAPPED(拷贝 PTE 权限, SHARED+WRITABLE), PTE 不动。子 arena
+账本收录 VMA 循环的拷贝。
+
+**实测**: val **34→32**（部分闭合, 指针移动）; residue-n=60（账本
+可见性提升）; 零 oops。未闭合的 32 = 收养窗口几何未覆盖部分
+（below/above-carrier 窗、mixed-frame 边界、或第二孤儿类）。
+
+**晨起队列**: ① 收养窗口几何补全 → val:34 归零（smoke/systemd 双
+boot）② generator-fork EPROTO ③ 48h 判定（10-14 02:24）→ 三步删
+除序列 ④ E2 PR 待批复。
