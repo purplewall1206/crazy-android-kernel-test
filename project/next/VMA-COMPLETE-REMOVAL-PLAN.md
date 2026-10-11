@@ -1832,3 +1832,15 @@ walk=516/517 全量走查正常。**归因最终态**: fork_copy 计费 VA 集�
 径的 charge 回退（fork_copy 在 register_child 之后运行, 失败 arena
 的已计费 PTE 需随 unwind 释放）或 mirror 全成功才计费。一次 boot
 可验。
+
+## 92. ref 纪律修复落地（legacy 漏斗）+ arena 漏斗面保持 census（2026-10-11 早）
+
+free_pte_range 修复以 ref 纪律形落地: 每 fork 拷贝 PTE 持独立
+folio_ref（batch 臂 folio_ref_add 实证）→ 漏斗处 pfn 合法门 +
+ptep_get_and_clear + corten_zap_release_page（家族分计数 + rmap +
+VA 追踪）+ folio_put。两早崩形实为**垃圾 PFN**（pte_page 越界
+vmemmap, CR2 fffff461 签名）—— pfn 门跳过。验证 boot: 无崩溃、
+irqs-disabled=0; 残差 val:34 仍在（arena 漏斗面未覆盖——见下）。
+**arena 漏斗面（free_ptes_span）内联释放在 desc 写锁下破坏 txn
+uninstall interlock 契约（确定性 violations=1）→ 回退 census 计数
+形态**, 锁安全释放形 = 下会话设计项。电池 on 腿绿（27/0/1）。
