@@ -459,6 +459,7 @@ static const char *const corten_arm_name[CORTEN_ARM_NR] = {
 
 static atomic_long_t corten_nr_arm_last[CORTEN_ARM_NR];
 static atomic_long_t corten_nr_sweep_released;
+static atomic_long_t corten_nr_sweep_scanned;
 
 bool corten_freepte_warned;
 static int corten_yield_print_exits; /* sec 86: per-frame yield print, first exits */
@@ -4235,6 +4236,8 @@ void corten_arena_stats_report(struct seq_file *m)
 
 		seq_printf(m, "freepte_present    %ld\n",
 		   atomic_long_read(&corten_nr_freepte_present));
+	seq_printf(m, "sweep_scanned     %ld\n",
+		   atomic_long_read(&corten_nr_sweep_scanned));
 	seq_printf(m, "sweep_released     %ld\n",
 		   atomic_long_read(&corten_nr_sweep_released));
 	seq_printf(m, "last_walk_frames %ld\n",
@@ -6033,6 +6036,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				continue;
 			oslot = xa_load(&state->arenas, wa >> PMD_SHIFT);
 
+			atomic_long_inc(&corten_nr_sweep_scanned);
 			opte = pte_offset_map(opmd, wa);
 			if (!opte) {
 				continue;
