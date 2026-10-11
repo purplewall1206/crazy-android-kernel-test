@@ -2499,3 +2499,20 @@ snapshot 覆盖 whitelist 窗。涉及 M5_FORK_SPEC.md 1.3 ④-2/④-4 的
 **新仪器**: census 的 meta-state 交叉探针（叶槽原始值 vs
 desc->meta[i].state 并读）——区分"账本失明"与"翻译真丢"的最终工
 具。本 boot 判决: **账本失明型（mstate=0/INVALID, 非翻译丢失）**。
+
+## 133. M5 ④-4 meta 收养合同落地: val 34→32（部分闭合, 2026-10-12 晨, #529）
+
+**落地（#529）**: fork_copy_window 的 meta 收养合同——零快照槽且子
+PTE present（VMA 循环已拷贝计费）→ **收养**: meta 记
+MAPPED(perm=拷贝 PTE 权限, flags=SHARED+WRITABLE), **PTE 不动**
+（corten_map/mark 纯元数据层, 实证）→ 子 arena 账本收录 VMA 循环
+的拷贝。
+
+**smoke 实测**: val **34→32**（指针移动, 部分闭合）, residue-n=60
+（收养后账本可见性提升）, 零 oops。**未闭合的 32 = 收养窗口几何
+未覆盖的部分**（候选: [ms,me) 区域边界外的 below/above-carrier 窗、
+mixed-frame 成员裁剪边界、或第二孤儿类）。
+
+**下会话首项**: 收养窗口几何补全（对照 residue VAs 与 region/
+window 边界逐一核对）→ val:34 归零 → smoke/systemd 双 boot; 然后
+generator-fork EPROTO。

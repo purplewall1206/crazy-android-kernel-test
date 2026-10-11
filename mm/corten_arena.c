@@ -10822,6 +10822,42 @@ static int corten_arena_fork_copy_window(struct mm_struct *mm,
 		spinlock_t *ptl;	/* ptl nests below desc lock */
 		struct page *page;
 
+		/* sec 133: the meta deep-copy adoption (the M5 ④-4
+		 * contract completed for the whitelist tree windows).
+		 * A zeroed snapshot slot whose child PTE is PRESENT is a
+		 * page the VMA loop copied and charged (tree_copy +1):
+		 * ADOPT it -- record MAPPED with the copied PTE's perms
+		 * and the SHARED flag (the copy is wrprotect-shared with
+		 * the parent) WITHOUT touching the PTE.  The pre-fix
+		 * replay skipped zero-snap slots entirely, leaving the
+		 * copies unrecorded: the arena's exit paths went blind
+		 * to them and the charges orphaned (the val:34, one per
+		 * record; the meta-state probe's mstate=0 verdict). */
+		ptep = pte_offset_map_lock(mm, pmdp, a, &ptl);
+		if (!ptep) {
+			corten_unlock(&txn);
+			return -EAGAIN;
+		}
+		cur = ptep_get(ptep);
+		pte_unmap_unlock(ptep, ptl);
+
+		if (m.state == CORTEN_INVALID && !m.perm &&
+		    pte_present(cur) && !pte_special(cur)) {
+			page = pte_page(cur);
+			nm.state = CORTEN_MAPPED;
+			nm.perm = CORTEN_PERM_READ |
+				  (pte_write(cur) ? CORTEN_PERM_WRITE : 0) |
+				  (pte_exec(cur) ? CORTEN_PERM_EXEC : 0);
+			nm.flags = CORTEN_PF_SHARED |
+				   (pte_write(cur) ? CORTEN_PF_WRITABLE : 0);
+			ret = corten_map(&txn, a, page, nm.perm, 0);
+			if (!ret)
+				ret = corten_mark(&txn, a, PAGE_SIZE, &nm);
+			if (ret)
+				break;
+			continue;
+		}
+
 		if (m.state == CORTEN_INVALID && !m.perm)
 			continue;
 
