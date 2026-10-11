@@ -1387,8 +1387,12 @@ static void corten_slot_remove(struct xarray *xa, unsigned long frame,
 		ret = xa_err(xa_store(xa, frame, b->rec[i ^ 1], GFP_KERNEL));
 		if (!ret)
 			kfree_rcu(b, rcu);
-		else
-			xa_erase(xa, frame);	/* the no-dangling fallback */
+		else {
+			xa_erase(xa, frame);
+			if (corten_trace_charge_param)
+				pr_info("corten: frame-erase f=%lx xa=%px (n2)\n",
+					frame, xa);
+		}
 		return;
 	}
 
@@ -1409,7 +1413,9 @@ static void corten_slot_remove(struct xarray *xa, unsigned long frame,
 		}
 		kfree(nb);
 	}
-	xa_erase(xa, frame);		/* the no-dangling fallback */
+	xa_erase(xa, frame);
+	if (corten_trace_charge_param)
+		pr_info("corten: frame-erase f=%lx xa=%px (tail)\n", frame, xa);
 }
 
 /* M5 faithful-fork counters (M5_FORK_SPEC.md 1.3-④6): fork_demotes stays
