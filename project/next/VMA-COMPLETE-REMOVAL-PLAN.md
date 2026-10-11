@@ -1969,3 +1969,16 @@ slot_remove 桶路径补擦除打印（n2 回退 + nb 失败回退）。静默 b
 幸存者清扫已在 exit_mmap 回归（pmd_leaf 门修其自旋锁崩溃）。电池
 on 腿绿（27/0/1）。**下会话终局**: walk 释放 VA 打印 vs 幸存者 VA
 集对照 → 补释放 → 验归零。
+
+## 105. v7 形 mode_default 实测 + 回退安全态（2026-10-11 早）
+
+v7 形（pfn 门 + 批队列 + 溢出即停）在 mode_default boot **存活**
+（无 panic, systemd 继续启动 —— sec 92 的 direct-folio_put 形才
+是 panic 者）, 但每个受影响任务退出**泄漏 irqs-disabled 状态**
+（"note: N exited with irqs disabled"）—— free 漏斗释放形的中断
+纪律真实缺陷。回退 soak3 至 3b39d330 计数形态（已知安全, login
+正常, 1 条启动期 __xa_store 追踪噪声入账）, 旗标 on 钟重锚 09:42
+→ **满 1 周 = 2026-10-18 ~09:42**。v7 形在 c216db8e 历史中供工
+具轮。**归零修复的完整路径（sec 97-105）**: (1) v7 中断纪律修复
+（批量溢出的放行方式）, (2) in-life 清除臂定位（环清除源标签）,
+(3) freepte_present 停增 + val:34 归零双重验收。下会话一次收敛。
