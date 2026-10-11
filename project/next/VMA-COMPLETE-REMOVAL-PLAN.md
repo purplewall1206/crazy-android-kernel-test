@@ -2599,3 +2599,19 @@ E2 PR 待批复。
 **队列（不变）**: ① 残余 2 收口（离线解析 + zap 插桩）②
 generator-fork EPROTO 全臂审计 ③ 48h 判定（10-14 02:24）→ 三步删
 除序列 ④ E2 PR 待批复。
+
+## 137. 残余 2 的身份判定: vdso/vvar 对（2026-10-12 晨, #533 精确和链）
+
+**精确和链实测**（#533, 4 exits）: pre=2→post=2 / pre=5→post=2——
+**val:2 = 精确和真实值（check_mm 本用 percpu_counter_sum, 非雾差）;
+unmap 释放 0-3, 残 2 恒定**。
+
+**身份**: **vdso/vvar 对 = 2 页/进程**（W-6 J2 白名单"vdso/vvar
+special 桶"的豁免形状——数量与常量性完美命中）。机理: fork 继承
+父 vdso PTEs（+2 计费）, exit 的 special-区豁免/记录形态使其不被
+释放 → +2 孤儿/进程。**下会话收口**: unmap-zap 层对 [vdso]/[vvar]
+VMA 的插桩确认 → 修豁免的释放路径（或 fork 跳过 vdso 拷贝）→
+val 归零。
+
+**总账**: 残差 34→2→**身份判定 vdso/vvar**（从 34 页未知到 2 页
+具名）; 账本 sec 120-137; 提交链至本提交。

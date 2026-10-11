@@ -5466,6 +5466,8 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	if (READ_ONCE(vma->vm_mm->corten_mode))
 		corten_note_legacy_anon_charge(nr_pages);
 	corten_trace_charge(vma->vm_mm, &folio->page);
+	if (READ_ONCE(vma->vm_mm->corten_mode))
+		corten_trace_map_anon_va(vma->vm_mm, addr, nr_pages);
 	count_mthp_stat(folio_order(folio), MTHP_STAT_ANON_FAULT_ALLOC);
 	folio_add_new_anon_rmap(folio, vma, addr, RMAP_EXCLUSIVE);
 	folio_add_lru_vma(folio, vma);

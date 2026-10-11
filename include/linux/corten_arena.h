@@ -569,6 +569,8 @@ enum {
 void corten_note_tree_copy(struct mm_struct *mm, unsigned long addr, int nr,
 			   bool file);
 bool corten_slot_is_record(struct mm_struct *mm, unsigned long addr);
+void corten_trace_map_anon_va(struct mm_struct *mm, unsigned long addr,
+			      int nr);
 void corten_note_legacy_anon_charge(int nr);
 void corten_note_freepte_live(int nr);
 void corten_note_funnel_ovfl(void);
