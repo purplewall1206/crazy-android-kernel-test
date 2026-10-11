@@ -414,3 +414,30 @@ boot）② generator-fork EPROTO ③ 48h 判定（10-14 02:24）→ 三步删
 **晨间终态**: 残差 34→2（94% 闭合）; N-boot A/B 各 5/5 零崩;
 KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR
 待批复。
+
+---
+
+## 附十五: 夜战终稿（sec 139, ac73b3b2）——2026-10-12 交付确认
+
+**本夜战果**（#467-#531, 60+ 构建, 最终形全程零 oops）:
+
+1. **残差 34→2（94% 闭合）**: 判别器语义修正（非 MAPPED 记录槽跳
+   过拷贝与计费）+ mirror/tree 边界合同 + live 路径漏斗化 + frame
+   补全 pass + meta 收养合同。残余 2 = 精确和真实 2 页类（非雾
+   差）, 增量位点在 unpublish→destroy 窗——下会话以离线 per-exit
+   解析 + zap 插桩收口。
+
+2. **崩溃族根除**: trace 助手 rcu 栅栏（初版撤回后以方法论终案重
+   析）、pass 栅栏、pfn_valid 门、sweep/pass 收缴纪律、N-boot 统
+   计框架（单 boot 判定作废教训入账）。
+
+3. **仪器链建成**: 残差 census（计数量+几何+meta-state 交叉探针）、
+   tracked/untracked zap 采样器、desc 枚举器、精确和探针、
+   campaign 框架。
+
+**双钟**: churn 浸泡 5h07m 零事件（48h 判定 10-14 02:24 → 三步删
+除序列）; soak2 存活。E2 PR（pr-e2a/b/c）待批复。
+
+**队列**: ① 残余 2 收口（离线解析 + zap 插桩）② generator-fork
+EPROTO 全臂审计 ③ 仪器重 landing（双 boot）④ 48h 判定 → 三步删除
+序列 → J6 终账（"MODE 进程零 VMA 对象"达成）。
