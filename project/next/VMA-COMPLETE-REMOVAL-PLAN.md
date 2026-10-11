@@ -1991,3 +1991,19 @@ v7 的 irqs-disabled 泄漏根因 = 批溢出后自定义 break 弃批（引用�
 释放工作正常（freepte_present 计数释放）, 电池双腿绿。残差
 +34 仍在（in-life 清除臂）—— 下一步 = 环回放清除源标签点名该臂。
 v8 为安全落地态（较 v7 与纯计数均严格改进）。
+
+## 109. v8 形 mode_default panic → 最终安全态定版（2026-10-11 午）
+
+v8 形（标准 tlb_remove_page, 中断纪律正确、简单 boot 与电池全绿）
+在 mode_default boot **SIGKILL init**（exitcode 9, 12s）——
+free 漏斗处的释放与 mode_default teardown 的交互对所有释放形致
+命（三形三败: direct-folio_put panic、v7 irqs 泄漏、v8 SIGKILL）。
+**最终安全态 = 计数 census 形**（a3915481, 24h+ 零事件实证）,
+生产 soaks 运行中。启动期 1 条 __xa_store WARNING = 追踪框架噪声
+（一次性, 已知）。
+**归零修复的诚实定版**: 释放在 free 漏斗处不可行（三形三败）,
+正确形状 = (1) 幸存者清扫的 RCU 纪律修复后回归释放职责（清扫在
+锁外、独立上下文运行, 无 free_pgtables 交互）, 或 (2) 根因修复
+（fork 镜像/vm 生命周期的计费-PTE 对齐）。下会话以活体 repro
+（mode_default boot 崩溃可复现）一次收敛。**残差账**: 有界 34 页
+/fork child, 无 UAF, 生产 soaks 零事件不受影响。
