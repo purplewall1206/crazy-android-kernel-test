@@ -363,3 +363,24 @@ arena fault 层 slot 重置）; 命名探针（census 交叉引用 + zap 采样
 **晨起队列**: ① 收养窗口几何补全 → val:34 归零（smoke/systemd 双
 boot）② generator-fork EPROTO ③ 48h 判定（10-14 02:24）→ 三步删
 除序列 ④ E2 PR 待批复。
+
+---
+
+## 附十二: 帧补全判决与晨间定稿（sec 134, 596809ad）
+
+**帧补全 pass**（replay 扩展到注册帧全跨度）未命中: val 仍 32——
+剩余 32 的槽不在收养路径可达集, 定位需 unmap-zap 层追踪（下会话
+首项）。
+
+**晨间定稿状态**:
+- **最终形 #530**: 基线 + sweep 收缴 + charge_arm 栅栏 + 判别器 +
+  meta 收养 + 帧补全 pass——全部零 oops。
+- **N-boot campaign**: A/B 各 5/5 零崩（统计支持）。
+- **KUnit**: on 27/0/1, off 7/0/32 双腿绿。
+- **churn 浸泡**: 零事件持续（48h 判定 10-14 02:24）。
+- **val:34 → 32**（meta 收养部分闭合）; 剩余 32 = unmap-zap 行为
+  层, 下会话以 zap 插桩收口。
+
+**队列**: ① unmap-zap 插桩 → 残余 32 收口 ② generator-fork EPROTO
+③ 仪器重 landing（双 boot）④ 48h 判定 → 三步删除序列 ⑤ E2 PR
+待批复。
