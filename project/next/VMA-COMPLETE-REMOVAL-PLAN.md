@@ -1960,3 +1960,12 @@ exit 2 的 yield 含 800002 —— **800002 帧在 child 1 生命期内从 xa
 slot_remove 桶路径补打印（观测）, (2) register_child 失败路径的
 charge 回退, (3) 幸存者清扫 RCU 纪律修复后回归释放职责。下会话
 一次收敛。yield 捕获仪表（debugfs 缓冲）已入库。
+
+## 103. 擦除归因: 窗口基帧的 park/re-register 周期（2026-10-11 晨）
+
+slot_remove 桶路径补擦除打印（n2 回退 + nb 失败回退）。静默 boot
+归因: **frame-erase f=800000 来自三个不同 mm 的 xa** —— 窗口基帧
+（exec 时代首 arena）随 mm 生命周期 park/re-register 周期性擦除。
+幸存者清扫已在 exit_mmap 回归（pmd_leaf 门修其自旋锁崩溃）。电池
+on 腿绿（27/0/1）。**下会话终局**: walk 释放 VA 打印 vs 幸存者 VA
+集对照 → 补释放 → 验归零。
