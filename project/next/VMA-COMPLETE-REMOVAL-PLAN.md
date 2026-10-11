@@ -1878,3 +1878,9 @@ v-survivors（环形, per-mm, 干净）= fork_copy VA 真实人口, 其释放
 **残差 34 终态**: 有界、每 fork child、修复 = (1) arena 漏斗
 锁安全释放形 + (2) reg_frames 唯一帧计数修正（仪表精度）。均已
 完整定义, 下会话一次收敛。整夜 V3 攻坚正式收官。
+
+**sec 95 收口（09:1x）**: arena 漏斗两形内联释放（直 folio_put 与
+tlb 队列）均超出 desc 写锁的 interlock 时序预算（确定性
+violations=1）→ 回退计数 census 安全态（复跑 27/0/1 绿）。锁安全
+形定版: 释放延迟到 walk 后的 pass（corten_arena_mm_exit 的幸存者
+清扫槽位, 在锁外跑）—— 下会话实现 + 归零验证。E2 呈递包就绪。
