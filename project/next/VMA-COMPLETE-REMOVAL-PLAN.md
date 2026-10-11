@@ -1884,3 +1884,13 @@ tlb 队列）均超出 desc 写锁的 interlock 时序预算（确定性
 violations=1）→ 回退计数 census 安全态（复跑 27/0/1 绿）。锁安全
 形定版: 释放延迟到 walk 后的 pass（corten_arena_mm_exit 的幸存者
 清扫槽位, 在锁外跑）—— 下会话实现 + 归零验证。E2 呈递包就绪。
+
+## 96. 幸存者清扫门控: RCU 纪律崩溃消除（2026-10-11 早）
+
+清扫的长 pte_offset_map 走查在 rcu 读侧临界区内被抢占（voluntary
+配置）→ 退出崩溃（RCU 警告 + 自旋锁故障, trace 定名
+corten_exit_survivor_sweep ← __pte_offset_map_lock）→ 门控关闭
+（仪器非正确性组件; 职责由 free_pte_range ref 纪律修复 + 绊线承
+担）。门控后验证: 零崩溃零 RCU 警告, 系统稳定; 电池 on 腿绿
+（34/0/5）。walk 后锁外释放 pass（sec 95 设计）下会话回归清扫的
+释放职责并实现归零。
