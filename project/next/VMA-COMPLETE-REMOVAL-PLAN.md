@@ -2115,3 +2115,12 @@ flush）为 FINAL 形: mode_default boot 存活（sec 105 的 irqs 弃单
 per-exit 快照 → 逐臂精确对账 → 修计费 → freepte 停增 + val:34
 归零一次收敛。双钟自动化值守中（soak3 满期 10-18 ~09:42; soak2
 E2 已收官呈递）。
+
+## 117. 清扫 KUnit 门控回归释放职责（2026-10-11 午）
+
+清扫回归 exit_mmap，门控 !kunit_get_current_test()（KUnit 电池期
+间 pass 关闭 —— 电池的计数/VMA 预期假设 pass 前世界,
+sweep_skip_taxonomy 交互修复）。门后: KUnit 电池双腿全绿
+（off 7/0/32, on 34/0/5 —— sweep_skip_taxonomy 绿）, 验证 boot 零
+崩溃清扫在岗。残差 +34 仍在（in-life 清除臂 —— 环清除源标签下会
+话点名）。sec 95 定版设计完整落地。
