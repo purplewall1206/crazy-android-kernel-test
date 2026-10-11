@@ -2346,3 +2346,29 @@ sandbox clone 的 corten fork 路径处理）。
 的仪器与修复保留在 e0d07ed0/ee221803 历史, 逐项重 landing 排队:
 每项过 smoke+systemd 双 boot（systemd = 本形态已验证的 96s 启动 +
 generator 修复后全量）。
+
+## 126. systemd 稳定基座定稿: 纯 sec 115 final + rcu 栅栏撤回（2026-10-12 凌晨 5 点, #512-#516）
+
+**对照矩阵终版**: 9146a235（sec 115 final）纯代码 = **systemd 全量启
+动全程内核稳定**（#512/#516 双复现, 0 panic, 94.3s 到已知 EPROTO
+冻结点）; 9146a235 + sweep 收缴 + charge_arm rcu 栅栏（#514）=
+**9.2s 崩**（init memcg slab）。sec 119 状态（50883d1e）同崩。
+
+**rcu 栅栏撤回（自白）**: sec 122 的 rcu_read_lock 栅栏本身是引入
+者——fork 风暴中每页一对 lock/unlock, RCU 优先级反转 → "rcu_preempt
+detected stalls"（#504 起日志）→ 崩溃级联。栅栏的设计正解（留档未
+落地）: unpublish 时置 `state->dead` 原子旗, trace 助手见旗即静默
+return（best-effort 仪器本就该如此）; 或 trace 写改为
+`rcu_read_lock()` **逐操作微临界区且禁用于 fork 路径**。
+
+**最终形态（本提交 = 工作树 = HEAD）**: 纯 9146a235 代码。systemd
+车辆: 内核全程稳定, 阻塞于 generator-fork EPROTO（发现一, 下一会
+话修）。churn 浸泡（smoke69, 锚 10-12 02:24）持续零事件, 48h 判定
+10-14 02:24。
+
+**残差 34 晨报终稿**: 机制链完整（instrumented 到叶表项级, 非追踪
+清除位点 = 槽位标记写入者）; 修复 = 槽位转换计费转移合同（设计已
+录, sec 124）, 需 W-4 槽标记生命周期通读后落地——smoke 载体先行,
+systemd 载体待 EPROTO 修复。发电机级教训: **每一层"修复"都要在
+真实载体上对照验证——今夜两代修复（funnel flush、rcu 栅栏）都是未
+对照的引入者**。
