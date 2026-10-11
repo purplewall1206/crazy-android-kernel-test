@@ -108,11 +108,55 @@ span 漏斗、funnel、implant pass）均为计数+擦除形态，逐一排除�
 
 ---
 
-## 5. 本轮提交清单
+## 附: 深夜战役补记（sec 122, e4736d38, 2026-10-12 凌晨）
 
-- sec 120（7522b4b1）: 清扫先天失明定案+收缴；残差 census；span+funnel 加固
-- sec 121（本次提交）: desc 枚举器 + implant pass + 计数量 census + tree_copy
-  VA trace + sum 探针 + frame_ptes_empty 翻转 + VMA 相交拒收 + 本报告
+**第 2.3 节之后的进展与反转, 按真相全量记录:**
 
-*—— CortenMM VMA 全删主线，距离"零 VMA 对象"终态：一个非追踪清除位点的点名，
-一次干净的 48 小时。*
+### A. 仪器化夜战（#480-#492, 残差压到叶表项级）
+
+- **desc 注册表枚举器** `corten_ptdesc_next_owned`: 枚举"活/同 mm/
+  PTE 级"表, 结构上绕开全部垃圾表类——安全扫描的唯一形态。
+- **残差 census 计数量编码**: `(count<<8)|arm`, 释放减计。实测
+  multi=0 → **双重计费假说排除**; `arm=11`（fork 树拷贝）点名计费
+  臂; 单次计费 n=1 排除重复入账。
+- **探针换 `percpu_counter_sum`**: 发现 `get_mm_counter`
+  （read_positive）漏他 CPU delta 的测量雾——**精确和证实 pre=34=
+  post=34=val=34, 残差为真**, 且 **unmap 在覆盖 VMA 上释放 0**。
+- **层级探针**: 残差叶表项在 unpublish 时读 **entry=0（清零）或
+  pmdv=0（摘链）**——清除者是**非追踪清除位点**（无计数、无擦
+  除）。全部已知清除位点逐一排除; 点名探针（clip 逐 get_and_clear
+  挂 caller 打印）已设计。
+
+### B. 落地并被复验的修复
+
+- `frame_ptes_empty` desc-miss 翻转（#490: "查不到描述符"不再判
+  空, 收活页/孤儿化双防——**vmaov=1 现行 → 0 实证**）。
+- span 收缴 **VMA 相交帧拒收**（#491: VMA 覆盖帧的表归
+  free_pgtables+漏斗, pmd_clear 摘链孤儿化结构封死）。
+- span 收缴站计数释放 + desc 读锁栅栏（#493: 修早释放扫描已释放
+  内存——systemd panic 现场定罪）。
+
+### C. 反转与教训（同等重要）
+
+- **implant pass 两次实爆**（#492 panic / #493-boot oops）→ 按清扫
+  先例**调用点收缴**; 枚举器与 census 保留为仪器。
+- **深夜二分判定作废**: smoke69.qcow2 + systemd 载体连绿基线
+  50883d1e 也崩（init 大 mm exit 写 faults, #501 复现）——
+  "funnel flush 崩溃者""sweep 收缴崩溃者"判定**无效**, 两项恢复
+  清白待健康载体重验。基线在该载体上的大 mm exit 缺陷**单独立案**
+  （新发现, 与残差 34 同族）。
+- **最终形回锚基线** 50883d1e（HEAD e4736d38 = 工作树回到该态,
+  sec 120/121 仪器与修复保留在历史, 逐项重 landing, 每项过
+  smoke+systemd 双 boot）。
+
+### D. 当前形态与验证
+
+- **soak 终态**: 基线 50883d1e 代码, smoke69 载体 + init=/bin/bash
+  + fork churn 负载（本周验证协议）。锚点 2026-10-12 02:24,
+  **48h 判定 2026-10-14 02:24**。
+- KUnit 电池: on 27/0/1 ✓ off 7/0/32 ✓（#492 上验证; 基线历史多轮绿）。
+- 残差 34: 机制链 instrumented 到叶表项级, 非追踪清除位点点名探针
+  就绪——下一会话在健康载体上完成最后闭环。
+
+*—— 终态"MODE 进程零 VMA 对象"的距离: 一个非追踪清除位点的点名（探针
+就绪）、一次健康载体上的干净 48 小时、然后是三步删除序列。*
