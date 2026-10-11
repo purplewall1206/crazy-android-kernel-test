@@ -2392,3 +2392,27 @@ VM_CORTEN skip + live 路径漏斗化 + 点名探针。KUnit 双腿绿。
 **晨起队列不变**: ① W-4 槽格式规范通读 → 判别器 → pass 重武装 →
 val:34 归零 ② generator-fork EPROTO ③ systemd 全量 soak。churn 浸
 泡零事件持续（48h 判定 10-14 02:24）。
+
+## 128. 方法论终案: systemd 启动崩溃为间歇性竞态, 单 boot 判定全部作废（2026-10-12 清晨, #522-#523）
+
+**决定性发现**: #512（9146a235 纯代码）绿 vs #523（50883d1e + disarm +
+fence）崩——两者的**运行代码差仅 debugfs 渲染块 + 一个 include**（
+git diff 实证, 不在退出路径上）——**不可能造成绿/崩差异 ⇒ systemd
+启动崩溃 = 基线 + mode_default 自带的间歇性竞态（boot 骰子）, 今晚
+全部单 boot "崩溃者"判定（funnel flush、sweep 收缴、charge_arm 栅
+栏……）皆为噪声**。旧 soak3b 的"9h 绿"= 一次幸运 boot + 之后不再
+reboot 的产物。
+
+**正确方法论（下会话执行）**: N≥5 boot 统计 campaign 每配置（
+corten=on/off × 各候选修复）, 以崩率判别; 修复以崩率下降为准, 不
+以单 boot 绿为准。
+
+**最终形态（本提交 = 工作树 = HEAD, 确定性组装）**: 50883d1e 基线
++ mmap.c sweep 收缴 + charge_arm rcu 栅栏。smoke boot 验证 ✓（3
+child, 3 Bad rss = 既有 val:34 形态, 无新崩溃）。sec 120-127 的仪
+器与修复代码全量保留在 e0d07ed0/ee221803/97335941 历史。
+
+**晨起队列**: ① N-boot 统计 campaign（基线 vs 候选修复, 各 5 boot）
+② 残差 34: W-4 槽格式规范通读 → 判别器/计费转移合同（设计已录 sec
+124/127）③ generator-fork EPROTO ④ 48h 判定（10-14 02:24）→ 三步
+删除序列 ⑤ E2 PR 待批复。
