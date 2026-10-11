@@ -14529,6 +14529,9 @@ static bool corten_zap_drop_present_page(struct mm_struct *mm,
  * construction.  Post-unmap the sweep is sparse (VMA-ranged PTEs are
  * already none).
  */
+static struct page *corten_sweep_livepg[PTRS_PER_PTE];
+static unsigned long corten_sweep_livepa[PTRS_PER_PTE];
+
 void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm)
 {
 	unsigned long addr;
@@ -14559,7 +14562,6 @@ void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm)
 		     pmd_addr += PMD_SIZE, pmd++) {
 			pte_t *ptep;
 			spinlock_t *ptl;
-			unsigned long pa;
 
 			if (!pmd_present(READ_ONCE(*pmd)) ||
 			    pmd_bad(READ_ONCE(*pmd)) ||
@@ -14568,48 +14570,46 @@ void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm)
 			ptep = pte_offset_map_lock(mm, pmd, pmd_addr, &ptl);
 			if (!ptep)
 				continue;
-			for (pa = pmd_addr;
-			     pa < pmd_addr + PMD_SIZE; pa += PAGE_SIZE) {
-				pte_t pt = ptep_get(ptep +
-						    ((pa - pmd_addr) >>
-						     PAGE_SHIFT));
-				struct page *page;
+			/* sec 111: the two-phase release -- under the PTL:
+			 * scan, snapshot, and get_and_clear the live
+			 * entries; outside it: the counted release funnel +
+			 * the tlb queue (the rmap/counter ops and the
+			 * folio_put deferred to tlb finish no longer run
+			 * under the PTL, shortening the hold for the txn
+			 * uninstall interlock and keeping the preempt/rcu
+			 * sections tiny). */
+			{
+				int pi, nlive = 0;
 
-				if (pte_none(pt) || !pte_present(pt) ||
-				    pte_special(pt))
-					continue;
-				/* sec 105: VMA-covered pages belong to the
-				 * legacy funnel's unmap_vmas (which runs
-				 * after us) -- releasing them here would
-				 * double-release (the sec 92 interlock
-				 * failures' root).  Only the uncovered
-				 * survivors (the walk's coverage gaps) are
-				 * ours. */
-				{
-					struct vm_area_struct *cv =
-						find_vma(mm, pa);
+				for (pi = 0; pi < PTRS_PER_PTE; pi++) {
+					pte_t pt = READ_ONCE(ptep[pi]);
 
-					/* sec 110: covered = the VMA
-					 * CONTAINS pa (see above). */
-					if (cv && cv->vm_start <= pa)
+					if (pte_none(pt) || !pte_present(pt) ||
+					    pte_special(pt))
 						continue;
+					corten_sweep_livepg[nlive] = pte_page(pt);
+					corten_sweep_livepa[nlive] = pmd_addr +
+						pi * PAGE_SIZE;
+					ptep_get_and_clear(mm,
+							   pmd_addr +
+							   pi * PAGE_SIZE,
+							   ptep + pi);
+					nlive++;
 				}
-				page = pte_page(pt);
-				ptep_get_and_clear(mm, pa, ptep +
-						   ((pa - pmd_addr) >>
-						    PAGE_SHIFT));
-				corten_zap_release_page(mm, NULL, page, pa);
-				atomic_long_inc(&corten_nr_sweep_released);
-				if (__tlb_remove_page_size(tlb, page, false,
-							   PAGE_SIZE)) {
-					/* Batch overflow: flush and retry
-					 * this page's slot (its PTE is
-					 * already cleared; the reference
-					 * rides the tlb batch). */
-					tlb_flush_mmu(tlb);
+				pte_unmap_unlock(ptep, ptl);
+
+				for (pi = 0; pi < nlive; pi++) {
+					corten_zap_release_page(mm, NULL,
+								corten_sweep_livepg[pi],
+								corten_sweep_livepa[pi]);
+					atomic_long_inc(&corten_nr_sweep_released);
+					if (__tlb_remove_page_size(tlb,
+								   corten_sweep_livepg[pi],
+								   false,
+								   PAGE_SIZE))
+						tlb_flush_mmu(tlb);
 				}
 			}
-			pte_unmap_unlock(ptep, ptl);
 		}
 	}
 	tlb_flush_mmu(tlb);
