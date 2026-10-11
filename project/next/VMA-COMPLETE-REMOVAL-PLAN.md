@@ -2028,3 +2028,12 @@ boot: 零崩溃稳定; sweep_released = 0 —— **残差页在 exit 时刻无
 PTE 的结论再次确证, in-life 清除臂为最后靶**, 仪器 = 环回放清除
 源标签。电池 on 腿绿（27/0/1）。下会话: 清除源标签 → 点名 → 补
 释放 → 验归零。
+
+## 106. 清除事件源标签落地（2026-10-11 午）
+
+环形释放事件带 0x40|src 源字节: RELSRC_WALK（release_page）/
+LEGACY（memory.c zap 钩）/COWFLIP（corten_pte_clear_flush 双点）/
+FREEF（free 漏斗 census）。回放输出按源释放分布 —— 残差 34 的清除
+臂 = 发不出事件的那个臂, 由其余源计数 + freepte 绊线排除法点名。
+电池 on 腿绿（27/0/1）。下会话: 一次 boot 读 per-source 分布 →
+点名 → 补释放 → 验归零。
