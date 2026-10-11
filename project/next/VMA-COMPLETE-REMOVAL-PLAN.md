@@ -2205,3 +2205,40 @@ residue census (VA+arm) = 下会话修计费的定位仪器。
 val:34 归零单 child 双验 (2) desc 分类器 + 快照 per-cpu → 清扫
 复配 (3) -EINTR 定案 (4) 旗标序列 (10-18 ~09:42) (5) E2 PR 批复
 落地。
+
+## 121. 残差 34 夜战: 定罪链到叶表项级 + 六件落地（2026-10-11 深夜 → 10-12 凌晨, #480-#492, 13 构建）
+
+**工具链新增**（全部 boot 实证）: (1) desc 注册表枚举器
+`corten_ptdesc_next_owned`（活/同 mm/PTE 级, 精确绕开 sec 120 三
+类垃圾表）; (2) implant 表收缴 pass（desc 枚举 + pfn 双保险 +
+sec 115 FINAL 漏斗, impl_rel 计数; #480 起 oops=0）; (3) 残差
+census 升级 = trace_vxa **计数量编码**（(count<<8)|arm, 释放减
+计, 双重计费现形——实测 multi=0 全场, 双计费假说死刑）+ 几何打
+印（VMA 边界/frame-recs）+ 层级探针（pgd/p4d/pud/pmd/entry 原
+始值）; (4) tree_copy 臂补 VA trace（残差集盲区闭合, arm=11 点
+名）; (5) 探针预算 8→128; (6) **探针换 percpu_counter_sum**（
+get_mm_counter=read_positive 漏他 CPU delta——fork 计费记在父
+CPU, 子在他 CPU exit: 全程测量雾排除, **pre-sum=34=val=34 实测
+闭合, 残差为真**）。
+
+**修复落地**: (a) span 收缴站释放（#471, span_rel 实释放）;
+(b) funnel 批溢出 flush-and-continue（#469, 实测 ovfl=0=加固）;
+(c) **frame_ptes_empty desc-miss 翻转**（#490: miss 一律
+"非空不收缴"——收活页 UAF 与孤儿化双防）; (d) **span 收缴
+VMA-相交帧拒收**（#491: VMA 覆盖帧的表归 legacy pass=
+free_pgtables+漏斗, pmd_clear 摘链孤儿化结构封死; vmaov=1 现行
+→ 0）。
+
+**残差 34 现状（#492 精确读数）**: pre-sum=34 → post-sum=34 →
+val=34。**unmap 在覆盖 VMA 上释放 0**。残差叶表项在 census
+（unpublish）时读 **entry=0（清零）或 pmdv=0（摘链）**——清除
+者是一个**非追踪清除位点**（不走 release_page: 无计数、无擦
+除），位于 fork 计费（arm=11 tree_copy, n=1 单计费已排除双
+计）与 unpublish 之间。机制链已 instrumented 到叶表项级; 最后
+一位 actor 的点名探针已设计（对 clip/tracked-zap 的每条
+get_and_clear 挂 caller 打印, 或对叶表项清零插桩）。**电池:
+on 27/0/1, off 7/0/32 双腿绿; 全夜 13 构建零 oops**。
+
+**方案 C 启动**: 最终形（#492）重锚浸泡钟（替换 10-18 旧钟）,
+48h 干净 → 默认化→回退臂删→vma_exec.c 全删→J6 终账。开放项:
+-EINTR 基线定案; E2 PR 待批复。

@@ -430,6 +430,7 @@ void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm)
 {
 	struct corten_mm_state *state;
 	void *old;
+	long count = 1, prim = arm;
 
 	if (!corten_trace_charge_param)
 		return;
@@ -438,8 +439,18 @@ void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm)
 		return;
 	if (atomic_long_read(&state->trace_n) >= CORTEN_TRACE_CAP)
 		return;
+	/* sec 121: the entry value is a MULTIPLICITY -- (count << 8) |
+	 * first-arm.  A double charge of one VA (the fork mirror and the
+	 * tree copy sharing a page) is invisible to a keyed set (the
+	 * second store overwrites, one release erases both) -- exactly
+	 * the residue-n=0-yet-val:34 face.  Count instead. */
+	old = xa_load(&state->trace_vxa, addr >> PAGE_SHIFT);
+	if (old && !IS_ERR(old)) {
+		count = ((long)old >> 8) + 1;
+		prim = (long)old & 0xFF;
+	}
 	old = xa_store(&state->trace_vxa, addr >> PAGE_SHIFT,
-		       (void *)(long)arm, GFP_NOWAIT);
+		       (void *)(long)((count << 8) | prim), GFP_NOWAIT);
 	if (IS_ERR(old))
 		return;
 	if (!old)
@@ -452,16 +463,29 @@ void corten_trace_release_va_src(struct mm_struct *mm, unsigned long addr,
 {
 	corten_trace_release_src(mm, addr, src);
 	/* sec 120: the VA-keyed charge set is now a RESIDUE set -- the
-	 * release erases its VA, so what is left at exit is the charged-
-	 * but-never-released population (the val:34's face), not the
-	 * lifetime charge history. */
+	 * release decrements its VA's multiplicity (sec 121 encoding),
+	 * erasing at zero, so what is left at exit is the charged-but-
+	 * never-fully-released population (the val:34's face). */
 	{
 		struct corten_mm_state *state;
+		void *old;
+		long count;
 
 		if (!corten_trace_charge_param)
 			return;
 		state = smp_load_acquire(&mm->corten_state);
-		if (state)
+		if (!state)
+			return;
+		old = xa_load(&state->trace_vxa, addr >> PAGE_SHIFT);
+		if (!old || IS_ERR(old))
+			return;
+		count = ((long)old >> 8) - 1;
+		if (count > 0)
+			xa_store(&state->trace_vxa, addr >> PAGE_SHIFT,
+				 (void *)(long)((count << 8) |
+						((long)old & 0xFF)),
+				 GFP_NOWAIT);
+		else
 			xa_erase(&state->trace_vxa, addr >> PAGE_SHIFT);
 	}
 }
@@ -533,6 +557,11 @@ static atomic_long_t corten_nr_ssweep_bad;
 static atomic_long_t corten_nr_ssweep_leaf;
 static atomic_long_t corten_nr_ssweep_mapfail;
 static atomic_long_t corten_nr_ssweep_nopud;
+/* sec 121: the implant-table release pass (defined after the sweep's
+ * arrays, which it reuses under the sweep lock). */
+static atomic_long_t corten_nr_implant_rel;
+static atomic_long_t corten_nr_implant_tables;
+static void corten_implant_release_pass(struct mm_struct *mm);
 /* sec 102: the A-pass yield sequence (one captured exit, debugfs-read --
  * the dmesg form interleaved concurrent walks, the sec 93 artifact). */
 #define CORTEN_WALK_YIELD_CAP 48
@@ -567,14 +596,19 @@ static long corten_exit_probe_seq;
 
 void corten_exit_unmap_probe(struct mm_struct *mm, bool pre)
 {
-	if (READ_ONCE(corten_exit_probe_seq) >= 8)
+	if (READ_ONCE(corten_exit_probe_seq) >= 128)
 		return;
-	pr_info("corten: exit %s-unmap[%ld] mm=%d anon=%ld file=%ld shmem=%ld\n",
+	/* sec 121: SUM reads, not get_mm_counter (percpu_counter_read_
+	 * positive misses OTHER cpus' deltas -- the fork charges sit on
+	 * the parent's cpu, the child exits elsewhere: the fog that
+	 * made every pre/post read suspect).  The exact sum is the
+	 * residual's number. */
+	pr_info("corten: exit %s-unmap[%ld] mm=%d anon=%lld file=%lld shmem=%lld\n",
 		pre ? "pre" : "post", READ_ONCE(corten_exit_probe_seq),
 		READ_ONCE(mm->corten_mode),
-		get_mm_counter(mm, MM_ANONPAGES),
-		get_mm_counter(mm, MM_FILEPAGES),
-		get_mm_counter(mm, MM_SHMEMPAGES));
+		percpu_counter_sum(&mm->rss_stat[MM_ANONPAGES]),
+		percpu_counter_sum(&mm->rss_stat[MM_FILEPAGES]),
+		percpu_counter_sum(&mm->rss_stat[MM_SHMEMPAGES]));
 	if (!pre)
 		atomic_long_inc((atomic_long_t *)&corten_exit_probe_seq);
 }
@@ -3691,6 +3725,31 @@ unsigned long addr;
 			if (live)
 				atomic_long_add(live, &corten_nr_span_bare);
 		}
+		/* sec 121 FINAL: a VMA-overlapping frame is never ours to
+		 * retire.  The retirement drops the upper entry (pmd_clear)
+		 * and strands every live leaf beneath it beyond the reach
+		 * of unmap_vmas (VMA-ranged) and free_pgtables (which only
+		 * frees VMA-span tables) -- the orphaning the #485-#489
+		 * boots convicted (residue VAs inside the stack VMA
+		 * reading pmdv=0, the charges unreachable forever: the
+		 * val:34).  VMA-covered tables belong to the legacy pass:
+		 * free_pgtables frees them through the counted funnel.
+		 * Only VMA-less frames (the window domain's own) retire
+		 * here; the empty-table-under-VMA case this retirement
+		 * once served (W-4 leftover) now stays with the legacy
+		 * pass too -- a disclosed pgtables residue instead of an
+		 * orphaned charge. */
+		{
+			struct vm_area_struct *ov = find_vma(mm,
+							     addr + PAGE_SIZE);
+
+			if (ov && ov->vm_start < addr + PMD_SIZE) {
+				static atomic_long_t vmaov_skips;
+
+				atomic_long_inc(&vmaov_skips);
+				continue;
+			}
+		}
 		pte_free_tlb(tlb, pmd_pgtable(READ_ONCE(*pmdp)), addr);
 		pmd_clear(pmdp);
 		mm_dec_nr_ptes(mm);
@@ -4400,6 +4459,11 @@ void corten_arena_stats_report(struct seq_file *m)
 		   atomic_long_read(&corten_nr_ssweep_tables));
 	seq_printf(m, "ssweep_found       %ld\n",
 		   atomic_long_read(&corten_nr_ssweep_found));
+	/* sec 121: the implant-table release pass's verdict. */
+	seq_printf(m, "implant_rel        %ld\n",
+		   atomic_long_read(&corten_nr_implant_rel));
+	seq_printf(m, "implant_tables     %ld\n",
+		   atomic_long_read(&corten_nr_implant_tables));
 	seq_printf(m, "last_walk_frames %ld\n",
 			   atomic_long_read(&corten_nr_walk_frames_last));
 		seq_printf(m, "last_reg_frames %ld\n",
@@ -5533,13 +5597,19 @@ static bool corten_arena_frame_ptes_empty(struct mm_struct *mm,
 	 * emptiness check takes -- this scan decides whole-frame PT-page
 	 * retirements, so walking a retired page is exactly the shape the
 	 * DPA boot convicted there.  A present pmd with no live (same-mm,
-	 * non-stale) descriptor is a retired or recycled page: skip it,
-	 * the retirement arms zap the content first.
-	 */
+	 * non-stale) descriptor could be a retired or recycled page --
+	 * but it could equally be a LIVE page whose descriptor never
+	 * materialized (any fork-loop table): the sec 121 conviction
+	 * retired exactly such pages bare (vmaov=1, the residue VAs
+	 * reading pmdv=0 inside the stack VMA).  A miss now verdicts
+	 * NOT-empty: the retirement is skipped -- never touching the
+	 * page keeps the recycled-page UAF out, and never retiring keeps
+	 * the live pages' charges reachable by the funnels that own
+	 * them. */
 	desc = corten_ptdesc_get(page_to_pfn(pmd_page(pmd)));
 	if (!desc) {
 		corten_arena_note_probe_skip(mm, addr, false, false);
-		return true;	/* retired/recycled: empty */
+		return false;	/* unproven: not empty, do not retire */
 	}
 	read_lock_bh(&desc->lock);
 	if (READ_ONCE(desc->stale) || desc->mm != mm) {
@@ -5548,7 +5618,7 @@ static bool corten_arena_frame_ptes_empty(struct mm_struct *mm,
 		read_unlock_bh(&desc->lock);
 		corten_ptdesc_put(desc);
 		corten_arena_note_probe_skip(mm, addr, was_stale, !was_stale);
-		return true;	/* retired under us: empty */
+		return false;	/* retired under us: not ours, skip */
 	}
 
 	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
@@ -6169,6 +6239,13 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 
 	corten_arena_exit_walk(mm, state);
 
+	/* sec 121: the implant-table release pass -- the residual's
+	 * final bare-drop site, released counted before the tables can
+	 * die (runs before the residue census, which becomes the fix's
+	 * verifier: a clean pass reads residue-n=0). */
+	if (READ_ONCE(mm->corten_mode))
+		corten_implant_release_pass(mm);
+
 	/* sec 66: post-arena-walk snapshot -- pairs with the entry
 	 * snapshot to split the exit drift between the arena walk and
 	 * the legacy walk.
@@ -6360,21 +6437,72 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 * still sit in the set -- the val:N at destroy names the true
 	 * subset.  Gated to the probe budget, quiet boots only. */
 	if (READ_ONCE(mm->corten_mode) && corten_trace_charge_param &&
-	    READ_ONCE(corten_exit_probe_seq) < 8) {
+	    READ_ONCE(corten_exit_probe_seq) < 128) {
 		unsigned long rva;
 		void *rent;
-		int rn = 0, rshown = 0;
+		int rn = 0, rshown = 0, rmulti = 0;
 
 		xa_for_each(&state->trace_vxa, rva, rent) {
+			struct vm_area_struct *rv;
+
 			rn++;
-			if (rshown < 12) {
-				pr_info("corten: residue va=%lx arm=%ld\n",
-					rva << PAGE_SHIFT, (long)rent);
+			if (((long)rent >> 8) > 1)
+				rmulti++;
+			if (rshown < 8) {
+				unsigned long raddr = rva << PAGE_SHIFT;
+				void *rslot = xa_load(&state->arenas,
+						      raddr >> PMD_SHIFT);
+				struct corten_frame_bucket *rb = rslot &&
+					rslot != &corten_va_reserve_sentinel ?
+					corten_slot_bucket(rslot) : NULL;
+				unsigned int rnr = rb ? rb->nr :
+					(rslot ? 1 : 0);
+				bool rpresent = false;
+				u64 rentry_v = 0;
+				pmd_t *rpmdp;
+
+				mmap_assert_write_locked(mm);
+				rv = find_vma(mm, raddr);
+				rpmdp = corten_arena_pmd(mm, raddr);
+				if (rpmdp && pmd_present(READ_ONCE(*rpmdp)) &&
+				    !pmd_leaf(READ_ONCE(*rpmdp))) {
+					pte_t *rptep = (pte_t *)pmd_pgtable(
+						READ_ONCE(*rpmdp));
+					pte_t rentry = READ_ONCE(
+						rptep[pte_index(raddr)]);
+
+					rpresent = !pte_none(rentry);
+					rentry_v = (u64)pte_val(rentry);
+				}
+				{
+					pgd_t *rpgdp = pgd_offset(mm, raddr);
+					p4d_t *rp4dp = p4d_offset(rpgdp,
+								  raddr);
+					pud_t *rpudp2 = pud_offset(rp4dp,
+								   raddr);
+
+					pr_info("corten: residue va=%lx arm=%ld n=%ld pte=%d entry=%llx pgd=%d p4d=%d pud=%d pmd=%d pmdv=%llx vma=[%lx,%lx) frame-recs=%u\n",
+						raddr, (long)rent & 0xFF,
+						(long)rent >> 8, rpresent,
+						rentry_v,
+						pgd_present(READ_ONCE(*rpgdp)),
+						p4d_present(READ_ONCE(*rp4dp)),
+						pud_present(READ_ONCE(*rpudp2)),
+						rpmdp ?
+						pmd_present(READ_ONCE(*rpmdp)) :
+						-1,
+						rpmdp ? (u64)pmd_val(READ_ONCE(*rpmdp)) :
+						0ULL,
+						rv ? rv->vm_start : 0UL,
+						rv ? rv->vm_end : 0UL, rnr);
+				}
 				rshown++;
 			}
 		}
-		pr_info("corten: residue-n=%d anon=%ld\n", rn,
-			get_mm_counter(mm, MM_ANONPAGES));
+		pr_info("corten: residue-n=%d multi=%d anon=%ld impl_rel=%ld impl_tab=%ld\n",
+			rn, rmulti, get_mm_counter(mm, MM_ANONPAGES),
+			atomic_long_read(&corten_nr_implant_rel),
+			atomic_long_read(&corten_nr_implant_tables));
 	}
 
 	/* Unpublish; the write lock fences even a hypothetical reader
@@ -14899,6 +15027,115 @@ void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm)
 			atomic_long_read(&corten_nr_ssweep_mapfail),
 			atomic_long_read(&corten_nr_ssweep_nopud));
 	spin_unlock_irqrestore(&corten_sweep_lock, flags);
+}
+
+/* sec 121: the implant-table release pass -- the residual +34's final
+ * site.  The tree-domain PT pages corten OWNS (the implant/shadow
+ * pieces and every other shape free_pgtables' VMA-ranged free never
+ * reaches) die with the mm's root free: their live PTEs drop bare, no
+ * folio put, no counter decrement (the sec 120 conviction:
+ * residue-n=30/exit, arm=11 tree_copy).  The tables are enumerated
+ * through the descriptor registry (corten_ptdesc_next_owned), never
+ * by walking -- the registry yields exactly the live, same-mm,
+ * PTE-level pages, which is what makes the sec 120 oops classes
+ * (window markers, implant markers, stale/recycled tables)
+ * structurally unreachable here.  The window domain is skipped (the
+ * walk's registry frames + the span release own it), and the scan
+ * only proceeds when the mm's own upper entry names the very page the
+ * descriptor describes (pfn match -- the stale guard squared).  Each
+ * live PTE takes the sec 115 FINAL funnel (release_page + the tlb
+ * queue, flush on overflow), counted as implant_rel; the residue
+ * census runs after this pass, so a clean boot reads residue-n=0.
+ * The scan reuses the disarmed survivor sweep's snapshot arrays under
+ * its lock (a 512-entry stack array is the frame-size red line; the
+ * global arrays need the serialization the #476 race already paid
+ * for), so the pass and the sweep are mutually exclusive. */
+/* sec 121: the shared scan+release loop; returns the live count.  The
+ * snapshot rides the disarmed sweep's global arrays (the caller holds
+ * corten_sweep_lock).  @va is the table's base -- 0 for the va-less
+ * class: the pages still release counted, but the residue-set entries
+ * their charges hold cannot be erased (the VAs are unknowable), so
+ * the census over-counts by exactly this class; the val gate is the
+ * counter, not the census. */
+static int corten_implant_scan(struct mm_struct *mm, pte_t *ptep,
+			       unsigned long va, struct mmu_gather *tlb)
+{
+	int i, nlive = 0, si;
+
+	for (i = 0; i < PTRS_PER_PTE; i++) {
+		pte_t pt = READ_ONCE(ptep[i]);
+		unsigned long pa = va + i * PAGE_SIZE;
+
+		if (pte_none(pt) || !pte_present(pt) || pte_special(pt))
+			continue;
+		ptep_get_and_clear(mm, pa, ptep + i);
+		corten_sweep_livepg[nlive] = pte_page(pt);
+		corten_sweep_livepa[nlive] = pa;
+		nlive++;
+	}
+	for (si = 0; si < nlive; si++) {
+		corten_zap_release_page(mm, NULL, corten_sweep_livepg[si],
+					corten_sweep_livepa[si]);
+		if (va)
+			corten_trace_release_va(mm, corten_sweep_livepa[si]);
+		if (__tlb_remove_page_size(tlb, corten_sweep_livepg[si],
+					   false, PAGE_SIZE))
+			tlb_flush_mmu(tlb);
+	}
+	return nlive;
+}
+
+static void corten_implant_release_pass(struct mm_struct *mm)
+{
+	struct mmu_gather _tlb;
+	struct mmu_gather *tlb = &_tlb;
+	unsigned long idx = 0;
+	unsigned long flags;
+	struct corten_ptdesc *desc;
+
+	mmap_write_lock(mm);
+	spin_lock_irqsave(&corten_sweep_lock, flags);
+	tlb_gather_mmu(tlb, mm);
+	while ((desc = corten_ptdesc_next_owned(mm, &idx))) {
+		unsigned long pfn = idx - 1;
+		unsigned long va = READ_ONCE(desc->va_base);
+		pmd_t *pmdp, pmd;
+		pte_t *ptep;
+		spinlock_t *ptl_guard;
+		int nlive;
+
+		corten_ptdesc_put(desc);
+		if (!va || (va & (PMD_SIZE - 1)))
+			continue;	/* va-less class: see the sec 121
+					 * ledger -- the fork-loop tables
+					 * (the brk residue's home) sit
+					 * here, but the class is not
+					 * domain-provable (the #482
+					 * val:334 face): skip until a
+					 * safe discriminator exists. */
+		if (va >= CORTEN_MODE_WINDOW_START &&
+		    va < CORTEN_MODE_WINDOW_END)
+			continue;	/* the walk + span release own it */
+		pmdp = corten_arena_pmd(mm, va);
+		if (!pmdp)
+			continue;
+		pmd = READ_ONCE(*pmdp);
+		if (!pmd_present(pmd) || pmd_leaf(pmd) ||
+		    pmd_pfn(pmd) != pfn)
+			continue;	/* not this page's slot: stale guard */
+		ptep = pte_offset_map_lock(mm, pmdp, va, &ptl_guard);
+		if (!ptep)
+			continue;
+		nlive = corten_implant_scan(mm, ptep, va, tlb);
+		pte_unmap_unlock(ptep, ptl_guard);
+		if (nlive) {
+			atomic_long_inc(&corten_nr_implant_tables);
+			atomic_long_add(nlive, &corten_nr_implant_rel);
+		}
+	}
+	tlb_finish_mmu(tlb);
+	spin_unlock_irqrestore(&corten_sweep_lock, flags);
+	mmap_write_unlock(mm);
 }
 
 static int corten_arena_zap_window(struct mm_struct *mm,
