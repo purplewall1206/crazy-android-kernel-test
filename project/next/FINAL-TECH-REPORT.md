@@ -186,3 +186,24 @@ load 指针后 store 前被抢占, 写进已释放 state。修复 = 三个 trace
 **当前形态**: e0d07ed0 全量仪器 + funnel break + pass 收缴 + trace
 rcu 栅栏（sec 123 提交）。systemd 启动稳定至 generator 阶段; churn
 浸泡（smoke69, 锚 10-12 02:24）持续零事件; 48h 判定 10-14 02:24。
+
+---
+
+## 附三: 10-12 晨（sec 124, ee221803）
+
+**点名探针执行完毕, 判决**: ringrel=0 + zapsampled=0 + uzap=0——
+两个 zap 循环与擦除路径全部清白; 清除者是 zap 之外的**槽位标记写
+入者**（fork_begin/register_child 的 "markers restored" 路径）。
+残差叶表 entry 读出内核指针/标记值——**corten 元数据与叶表 PTE 槽
+双用**: fork VMA 循环按页计费拷贝, 槽位随后被转成 arena 标记态
+（无计费转移）→ 计费孤儿。**残差 34 = 设计级计费合同缺口**, 修复 =
+槽位转换时的计费转移（需 W-4 槽标记生命周期通读）。
+
+**mirror/tree 边界合同已落地**（#507）: fork mirror 两个循环的
+窗口级 VMA-相交跳过——VMA 覆盖窗口归 legacy 循环。KUnit on
+27/0/1 ✓。systemd 载体: sec 123 内核稳定至 generator 阶段,
+generator-fork EPROTO 修复中。
+
+**晨起队列**: ① 槽标记生命周期通读 → 计费转移合同 → val:34 归零
+② generator-fork EPROTO ③ sec 120/121 剩余仪器逐项重 landing
+（双 boot 纪律）④ 48h 判定（10-14 02:24）→ 三步删除序列。
