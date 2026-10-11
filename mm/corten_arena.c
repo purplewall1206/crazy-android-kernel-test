@@ -14497,7 +14497,8 @@ void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm)
 			unsigned long pa;
 
 			if (!pmd_present(READ_ONCE(*pmd)) ||
-			    pmd_bad(READ_ONCE(*pmd)))
+			    pmd_bad(READ_ONCE(*pmd)) ||
+			    pmd_leaf(READ_ONCE(*pmd)))
 				continue;
 			ptep = pte_offset_map_lock(mm, pmd, pmd_addr, &ptl);
 			if (!ptep)
