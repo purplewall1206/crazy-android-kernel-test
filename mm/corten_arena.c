@@ -14585,8 +14585,15 @@ void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm)
 				 * failures' root).  Only the uncovered
 				 * survivors (the walk's coverage gaps) are
 				 * ours. */
-				if (find_vma(mm, pa))
-					continue;
+				{
+					struct vm_area_struct *cv =
+						find_vma(mm, pa);
+
+					/* sec 110: covered = the VMA
+					 * CONTAINS pa (see above). */
+					if (cv && cv->vm_start <= pa)
+						continue;
+				}
 				page = pte_page(pt);
 				ptep_get_and_clear(mm, pa, ptep +
 						   ((pa - pmd_addr) >>
