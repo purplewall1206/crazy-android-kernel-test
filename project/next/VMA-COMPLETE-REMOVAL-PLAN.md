@@ -2299,3 +2299,27 @@ corten 自身按元数据处理槽位（非释放）→ 计费孤儿。修复方
 缴（重应用）+ trace 助手 rcu 栅栏。systemd 启动稳定（至 generator
 阶段, 阻塞于发现一）。KUnit 待复跑。churn 浸泡（smoke69, 锚
 02:24）持续零事件。
+
+## 124. 点名探针执行 + mirror/tree 边界合同落地 + 残差终相定案（2026-10-12 早晨, #505-#507）
+
+**点名探针（用户指令）执行与判决**: 残差 census 升级 = 环形回放交叉
+引用（ringrel: 残差 VA 的释放事件是否在 ring 窗口）+ tracked/untracked
+zap 清除采样器（本 exit 前 16 个清除 VA + 原始入口值）。**判决:
+ringrel=0 + zapsampled=0 + uzap=0——两个 zap 循环清白, 擦除路径清白,
+清除者是 zap 之外的位点**。残差叶表 entry 读出**内核指针/标记值**
+（ffffffff、2、2000000000）——**corten 元数据与叶表 PTE 槽双用**:
+fork 的 VMA 循环按页计费拷贝, 随后 arena 槽位管理把同一批槽位转成
+标记态（无计费转移）→ 计费孤儿。
+
+**mirror/tree 边界合同落地（#507）**: fork mirror 的两个循环
+（auto PTE 拷贝 + ④-2/④-4 replay）加窗口级 VMA-相交跳过——VMA 覆盖
+窗口归 legacy 循环（copy_present_ptes 已计费拷贝, mirror 不得重写）。
+KUnit on 27/0/1 ✓。**残差仍在（residue-n=30, entry 仍标记值）——
+标记写入者是 fork_begin/register_child 的 "markers restored" 路径
+（VMA 循环前后皆有）, 不止 replay**: 计费合同缺口为设计层
+（fork 对 VMA 拷贝页计 +1, 槽位转 arena 管理时无计费转移）, 修复 =
+槽位转换时的计费转移合同, 需 W-4 槽标记生命周期设计通读后落地。
+
+**systemd 载体**: sec 123 内核（trace rcu 栅栏 + pass/span 收缴 +
+funnel break）稳定至 generator 阶段; generator-fork EPROTO 立案在
+修。churn 浸泡零事件持续。

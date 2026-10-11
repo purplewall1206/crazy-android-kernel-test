@@ -616,6 +616,14 @@ EXPORT_SYMBOL_GPL(corten_note_legacy_shadow_zap);
 
 static bool corten_carrier_ext_dbg;
 static long corten_exit_probe_seq;
+/* sec 124: the clear-site sampler -- the tracked zap's first 16
+ * cleared VAs of the current exit, printed beside the residue census
+ * (which resets the sample). */
+static unsigned long corten_zap_sample_va[16];
+static int corten_zap_sample_n;
+static unsigned long corten_uzap_sample_va[16];
+static u64 corten_uzap_sample_pte[16];
+static int corten_uzap_sample_n;
 
 void corten_exit_unmap_probe(struct mm_struct *mm, bool pre)
 {
@@ -6486,7 +6494,38 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					(rslot ? 1 : 0);
 				bool rpresent = false;
 				u64 rentry_v = 0;
+				int ringrel = 0, zapsampled = 0, zi;
 				pmd_t *rpmdp;
+
+				/* sec 124: ring cross-reference -- was a
+				 * release event for this VA ever traced in
+				 * the ring window?  ringrel=1: released but
+				 * the residue entry survived (an erase-path
+				 * bug); ringrel=0: the clearing site never
+				 * traced (the non-tracing clear actor). */
+				{
+					long rpos = atomic_long_read(
+						&state->trace_pos);
+					long rstart = rpos > 4096 ?
+						rpos - 4096 : 0;
+					long ri;
+
+					for (ri = rstart; ri < rpos; ri++) {
+						u32 re = state->trace_ring[
+							ri & 4095];
+
+						if ((re & 0xFF000000) &&
+						    ((re >> 24) & 0x40) &&
+						    (re & 0xFFFFFF) ==
+						    (u32)((raddr >>
+							   PAGE_SHIFT) &
+							  0xFFFFFF))
+							ringrel = 1;
+					}
+				}
+				for (zi = 0; zi < corten_zap_sample_n; zi++)
+					if (corten_zap_sample_va[zi] == raddr)
+						zapsampled = 1;
 
 				mmap_assert_write_locked(mm);
 				rv = find_vma(mm, raddr);
@@ -6502,32 +6541,33 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					rentry_v = (u64)pte_val(rentry);
 				}
 				{
-					pgd_t *rpgdp = pgd_offset(mm, raddr);
-					p4d_t *rp4dp = p4d_offset(rpgdp,
-								  raddr);
-					pud_t *rpudp2 = pud_offset(rp4dp,
-								   raddr);
-
-					pr_info("corten: residue va=%lx arm=%ld n=%ld pte=%d entry=%llx pgd=%d p4d=%d pud=%d pmd=%d pmdv=%llx vma=[%lx,%lx) frame-recs=%u\n",
+					pr_info("corten: residue va=%lx arm=%ld n=%ld pte=%d entry=%llx ringrel=%d zapsampled=%d vma=[%lx,%lx) frame-recs=%u\n",
 						raddr, (long)rent & 0xFF,
 						(long)rent >> 8, rpresent,
-						rentry_v,
-						pgd_present(READ_ONCE(*rpgdp)),
-						p4d_present(READ_ONCE(*rp4dp)),
-						pud_present(READ_ONCE(*rpudp2)),
-						rpmdp ?
-						pmd_present(READ_ONCE(*rpmdp)) :
-						-1,
-						rpmdp ? (u64)pmd_val(READ_ONCE(*rpmdp)) :
-						0ULL,
+						rentry_v, ringrel, zapsampled,
 						rv ? rv->vm_start : 0UL,
 						rv ? rv->vm_end : 0UL, rnr);
 				}
 				rshown++;
 			}
 		}
-		pr_info("corten: residue-n=%d multi=%d anon=%ld impl_rel=%ld impl_tab=%ld\n",
-			rn, rmulti, get_mm_counter(mm, MM_ANONPAGES),
+		{
+			int zi;
+
+			pr_info("corten: zap-sample n=%d:", corten_zap_sample_n);
+			for (zi = 0; zi < corten_zap_sample_n && zi < 16; zi++)
+				pr_cont(" %lx", corten_zap_sample_va[zi]);
+			pr_cont("\n");
+			pr_info("corten: uzap-sample n=%d:", corten_uzap_sample_n);
+			for (zi = 0; zi < corten_uzap_sample_n && zi < 16; zi++)
+				pr_cont(" %lx=%llx", corten_uzap_sample_va[zi],
+					corten_uzap_sample_pte[zi]);
+			pr_cont("\n");
+		}
+		corten_zap_sample_n = 0;
+		corten_uzap_sample_n = 0;
+		pr_info("corten: residue-n=%d multi=%d anon=%lld impl_rel=%ld impl_tab=%ld\n",
+			rn, rmulti, percpu_counter_sum(&mm->rss_stat[MM_ANONPAGES]),
 			atomic_long_read(&corten_nr_implant_rel),
 			atomic_long_read(&corten_nr_implant_tables));
 	}
@@ -10963,6 +11003,16 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 		     addr = min((addr | (PMD_SIZE - 1)) + 1, ar->end)) {
 			unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1,
 						    ar->end);
+			struct vm_area_struct *fv = find_vma(mm, addr);
+
+			/* sec 124: the mirror/tree boundary -- a window the
+			 * child's tree VMA covers is the legacy loop's: its
+			 * pages were copied and charged by
+			 * copy_present_ptes(); re-copying (or replaying)
+			 * them here double-owns the window and orphans the
+			 * tree charges (the val:34's face). */
+			if (fv && fv->vm_start < win_end)
+				continue;
 
 			/* The child PT page of a window exists exactly
 			 * where the parent had content: the arm walks by
@@ -10983,6 +11033,15 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 	     addr = min((addr | (PMD_SIZE - 1)) + 1, ar->end)) {
 		unsigned long win_end = min((addr | (PMD_SIZE - 1)) + 1,
 					    ar->end);
+		struct vm_area_struct *fv = find_vma(mm, addr);
+
+		/* sec 124: the same boundary for the replay arm -- its
+		 * install overwrites the VMA loop's copied PTEs with the
+		 * arena's slot state, orphaning the tree_copy charges
+		 * (the residue leaf entries reading kernel pointers and
+		 * markers).  VMA-covered windows skip. */
+		if (fv && fv->vm_start < win_end)
+			continue;
 
 		/* F2 (STATE D18, the over-SHARED corner): a window with no
 		 * child PT page has no second mapper -- a VM_DONTCOPY piece
@@ -15388,6 +15447,16 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 			if (!pte_none(oldpte))
 				tlb_remove_tlb_entry(g, ptep, addr);
 
+			/* sec 124: the clear-site sampler -- the first 16
+			 * non-none entries this exit's tracked zap cleared,
+			 * printed beside the residue census (the census runs
+			 * after the walk): a residue VA that appears here was
+			 * cleared BY THIS ZAP -- its release/erase path is
+			 * then the suspect; one that does not names a
+			 * different clearer. */
+			if (!pte_none(oldpte) && corten_zap_sample_n < 16)
+				corten_zap_sample_va[corten_zap_sample_n++] = addr;
+
 			if (!pte_none(oldpte)) {
 				/* Zero-page entries are pte_special()d and
 				 * not ours to release.
@@ -15615,6 +15684,19 @@ static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 			oldpte = ptep_get_and_clear(mm, addr, ptep);
 			if (!pte_none(oldpte))
 				tlb_remove_tlb_entry(&tlb, ptep, addr);
+
+			/* sec 124: the untracked zap's own sampler -- the
+			 * first 16 cleared entries with their RAW values:
+			 * a non-present-non-none entry (PROTNONE holds a
+			 * folio reference; the present-only release gate
+			 * drops it bare) is the residue actor's face. */
+			if (!pte_none(oldpte) && corten_uzap_sample_n < 16) {
+				corten_uzap_sample_va[corten_uzap_sample_n] =
+					addr;
+				corten_uzap_sample_pte[corten_uzap_sample_n] =
+					(u64)pte_val(oldpte);
+				corten_uzap_sample_n++;
+			}
 
 			if (!pte_none(oldpte)) {
 				drift = true;
