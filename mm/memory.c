@@ -1246,7 +1246,12 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	 * deep-copy (the fork replay) carries the records on its own
 	 * books. */
 	if (READ_ONCE(src_vma->vm_mm->corten_mode) &&
-	    corten_slot_is_record(src_vma->vm_mm, addr))
+	    (corten_slot_is_record(src_vma->vm_mm, addr) ||
+	     /* sec 137: the two-views guard -- the meta may say MAPPED
+	      * while the raw slot has already been converted to a
+	      * marker (a present-formatted record whose pfn bits are
+	      * bookkeeping): pfn_valid names it. */
+	     !pfn_valid(pte_pfn(pte))))
 		return 1;	/* consumed, nothing copied: the arena
 				 * replay/meta owns the record */
 
