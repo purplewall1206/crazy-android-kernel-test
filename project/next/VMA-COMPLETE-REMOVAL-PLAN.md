@@ -1927,3 +1927,12 @@ corten_zap_release_page + 引用入 caller tlb 批（溢出即停, 余者裸拆
 中止路径留无 PTE 计费）。终局修复 = 镜像计费后移（set_pte 后）或
 unwind 释放 —— 下会话首项, 一次 boot 验归零。freepte_present 与
 v 计数为双重回归度量。
+
+## 100. 计费后移实测: 非镜像臂所为 —— in-life 清除臂是最后靶（2026-10-11 晨）
+
+镜像三臂计费后移（set_pte 落地后）落地并实测: 残差恒 +34（chg 199
+/ rel 135 同 child）—— 重排语义无变化（每臂 charge 后本就无条件
+set_pte），**证明 charge-without-PTE 人口并非镜像臂所生**: 计费页
+的 PTE 由某个不发释放事件的 in-life 臂清除。**最后靶**: 环回放加
+清除事件源标签（或对全部 PTE 清除位点补 trace_release_va）→ 点名
+清除臂 → 补释放 → 验归零。电池双腿绿（28/0, 27/0/1）。
