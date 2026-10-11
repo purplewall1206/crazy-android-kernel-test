@@ -3542,23 +3542,34 @@ unsigned long addr;
 		    pmd_leaf(READ_ONCE(*pmdp)))
 			continue;
 
-		/* sec 92: the arena funnel's own bare-teardown face -- a
-		 * frame reaching this retire with live PTEs is counted
-		 * (freepte_present) but NOT released inline: the release
-		 * under the desc write lock broke the txn uninstall
-		 * interlock contract (deterministic battery failure).
-		 * The counted census stands; the lock-safe release shape
-		 * is the next session's design item. */
+		/* sec 93: the arena funnel's bare-teardown face, the
+		 * lock-safe release form: live PTEs take ptep_get_and_clear
+		 * + the counted release funnel, and the page reference is
+		 * QUEUED on the caller's tlb batch (the folio_put happens
+		 * at tlb finish, outside the desc write lock -- the inline
+		 * folio_put form broke the txn uninstall interlock
+		 * contract deterministically).  Batch overflow flushes
+		 * inline (the caller-owned gather tolerates it). */
 		if (corten_enabled_static() && READ_ONCE(mm->corten_mode)) {
 			pte_t *ptep = (pte_t *)pmd_pgtable(READ_ONCE(*pmdp));
 			int i, live = 0;
 
 			for (i = 0; i < PTRS_PER_PTE; i++) {
 				pte_t pt = READ_ONCE(ptep[i]);
+				unsigned long pa = addr + i * PAGE_SIZE;
+				unsigned long pfn = pte_pfn(pt);
+				struct page *page;
 
 				if (pte_none(pt) || !pte_present(pt) ||
-				    pte_special(pt))
+				    pte_special(pt) || pfn > max_pfn)
 					continue;
+				ptep_get_and_clear(mm, pa, ptep + i);
+				page = pfn_to_page(pfn);
+				corten_zap_release_page(mm, NULL, page, pa);
+				corten_trace_release_va(mm, pa);
+				if (__tlb_remove_page_size(tlb, page, false,
+							   PAGE_SIZE))
+					tlb_flush_mmu(tlb);
 				live++;
 			}
 			if (live)
