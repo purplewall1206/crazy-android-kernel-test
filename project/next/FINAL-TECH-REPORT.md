@@ -207,3 +207,18 @@ generator-fork EPROTO 修复中。
 **晨起队列**: ① 槽标记生命周期通读 → 计费转移合同 → val:34 归零
 ② generator-fork EPROTO ③ sec 120/121 剩余仪器逐项重 landing
 （双 boot 纪律）④ 48h 判定（10-14 02:24）→ 三步删除序列。
+
+---
+
+## 附四: 10-12 凌晨末（sec 125, 190861625f9f）
+
+**对照矩阵闭合, systemd 稳定形态定案**: 独立镜像拷贝 + systemd
+全量启动——**#510（基线 50883d1e + sweep 收缴 + charge_arm rcu 栅
+栏）零 oops 跑完整个 init 退出风暴**。对照: 基线裸栅栏（#501）与
+基线+disarm 裸栅栏（#509）同载体崩于 init memcg slab。机制终案:
+ring 写的裸 state 指针在启动风暴下命中已释放 state。
+
+**最终形态**（本提交, 即浸泡基座）: 基线 + sweep 收缴 + charge_arm
+栅栏。残差 34 的仪器与修复在 e0d07ed0/ee221803 历史排队重 landing
+（每项 smoke+systemd 双 boot; systemd 载体 = 独立镜像拷贝, 96s 启
+动验证基座）。剩余阻塞: generator-fork EPROTO（feature 级, 下会话）。
