@@ -441,3 +441,18 @@ KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR
 **队列**: ① 残余 2 收口（离线解析 + zap 插桩）② generator-fork
 EPROTO 全臂审计 ③ 仪器重 landing（双 boot）④ 48h 判定 → 三步删除
 序列 → J6 终账（"MODE 进程零 VMA 对象"达成）。
+
+---
+
+## 附十六: 残余 2 身份判定（sec 137, 28ba7ba9）
+
+**精确和链**: pre=2→post=2 / pre=5→post=2——val:2 = 精确和真实值。
+**身份 = vdso/vvar 对（2 页/进程）**——W-6 J2 白名单 special 桶的
+豁免形状; 机理 = fork 继承 vdso PTEs（+2）, exit 的豁免使其不被
+释放。
+
+**收口设计（下会话首项）**: unmap-zap 层对 [vdso]/[vvar] VMA 的插
+桩确认 → 修豁免的释放路径（或 fork 跳过 vdso 拷贝）→ val 归零 →
+systemd 全量启动（EPROTO 修复后）。
+
+**总账**: 残差 34→2→**vdso/vvar 具名**; 账本 sec 120-137（18 节）。
