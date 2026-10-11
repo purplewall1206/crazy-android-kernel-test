@@ -2134,3 +2134,31 @@ relsrc[3](COWFLIP)=1-11/exit, **UNTRACED=0** —— 全系统 PTE 清除零
 侧丢失。仪器链完备（源标签 + relsrc 分布 + registry 审计 + 全臂
 对账 + 幻影 census + 对账自分析）。下会话: 活体调试（kdb）定位
 臂内丢失侧 → 修 → freepte 停增 + val:34 归零。
+
+## 119. 残差 34 的关键性质定案（2026-10-11 午后）
+
+**残差 34 与 argv/env 长度无关**（systemd/udev/bash/ifup 全部恰
+34）, 与 fork_copy 计费数无关（129-144 变动, 残差恒 34）——
+**34 = 固定 per-fork-child 量**: 每 fork child 恰好 34 页计费无配
+对释放。候选: (1) fork 镜像的固定形态页（init bash 的 34 页继承
+集, 每 child CoW 共享计费 +1×34）, (2) 共享页的释放事件丢一侧
+（child 释放时 PTE 清 + mapcount − 但 **缺 folio_put**—— CoW 共
+享页的 fork dup 不取独立 ref, 释放侧 release_page 的 rmap 移除不
+put —— **ref 不缺**, 计数器却 −1……** **(3) 计费 +1 但共享页无
+独立 folio_ref: fork share 臂 add_mm_counter(+1) 而
+folio_dup_anon_rmap_novma 只加 mapcount 不加 ref —— 释放侧
+release_page 减计数 + 移 mapcount 但 **folio_put 缺失时 ref 不
+减** —— 反之 **计数减了 ref 没减 = 页泄漏; ref 减了计数没减 =
+计数负**。观测 +34 = **计费多/释放少** —— share 臂计费 +1/页,
+child 退出 release −1/页 平衡……除非 share 页的退出释放走了
+**不走 release_page 的路**（如 exit walk 的 untracked zap 或
+free_pte_range 直接 folio_put 不减计数）—— **这正是 sec 91-92 的
+free 漏斗裸拆: 裸拆路径 folio_put 不减计数（v7 前形态）或减计数
+不加 mapcount**。下会话: free_pte_range 的裸拆路径补
+corten_zap_release_page 调用（rmap + 计数, folio_put 由 tlb 批
+队）—— 即 **恢复 sec 115 的 v7 形但修中断纪律**（vma gather 的
+irqs: tlb_remove_page 的标准 API 已在 v8 验证 irqs 安全, 崩溃的
+v8 用的是 mode_default 的 tlb_remove_page —— **回归 v7 + pfn 门
++ 批溢出即停 = sec 115 FINAL 形**, 该形 simple boot 已绿,
+mode_default 存活仅 irqs notes —— **notes 非致命, 接受**）。下
+会话: v7 FINAL 形回归 + val:34 复测。
