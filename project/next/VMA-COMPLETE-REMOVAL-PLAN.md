@@ -2096,3 +2096,12 @@ release 事件。结合 relsrc[UNTRACED] = 0（无漏挂清除）, 归因收敛
 衡**。臂的 charge/release 对已全枚举（fork share/copy/pin、
 map_anon、cow_write、walk、legacy、freeff）—— 下会话: 每臂的
 charge+release 差值 vs check_mm 残差逐 exit 对照（仪器已存在）。
+
+## 115. free 漏斗释放 FINAL: tlb 队列形 mode_default 实证存活（2026-10-11 午）
+
+v7 形（pfn 门 + release_page + tlb 批队列 + 溢出即停, 无中途
+flush）为 FINAL 形: mode_default boot 存活（sec 105 的 irqs 弃单
+判定过谨 —— notes 为已退出任务的诊断噪声）, 电池双腿绿。soak3 以
+本形重部署（旗标 on 钟重锚 09:42）。残差 +34 持续 —— 释放侧已
+尽, 缺口确证在计费侧: 下会话 chg_TOTAL vs 各臂和对账点名超计臂 →
+修计费 → val:34 归零。
