@@ -4296,6 +4296,29 @@ void corten_arena_stats_report(struct seq_file *m)
 			seq_printf(m, "last_%s %ld\n",
 				   corten_arm_name[ai],
 				   atomic_long_read(&corten_nr_arm_last[ai]));
+		/* sec 116: the self-analyzing reconciliation -- the
+		 * unaccounted delta (chg_TOTAL minus the sum of the
+		 * per-arm ANON charge deltas) names the over-charging
+		 * arm by absence: a nonzero value localizes the +34 to
+		 * the arms NOT in the traced set. */
+		{
+			static const int chg_arms[] = {
+				CORTEN_ARM_CHG_MAP_ANON, CORTEN_ARM_CHG_COW_WRITE,
+				CORTEN_ARM_CHG_SWAP_IN, CORTEN_ARM_CHG_FILE_COW,
+				CORTEN_ARM_CHG_UNUSE_PULL, CORTEN_ARM_CHG_FORK_COPY,
+				CORTEN_ARM_CHG_FORK_PIN, CORTEN_ARM_CHG_TREE_ANON,
+				CORTEN_ARM_CHG_TREE_FILE, CORTEN_ARM_CHG_LEGACY_ANON,
+			};
+			long sum = 0;
+			int ci;
+
+			for (ci = 0; ci < ARRAY_SIZE(chg_arms); ci++)
+				sum += atomic_long_read(&corten_nr_arm_last[chg_arms[ci]]);
+			seq_printf(m, "last_chg_arm_sum %ld\n", sum);
+			seq_printf(m, "last_unaccounted %ld\n",
+				   atomic_long_read(&corten_nr_chg_total_last) -
+				   sum);
+		}
 	}
 	seq_printf(m, "rel_cow_old         %ld\n",
 		   atomic_long_read(&corten_nr_rel_cow_old));
