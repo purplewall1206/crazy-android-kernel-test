@@ -2615,3 +2615,20 @@ val 归零。
 
 **总账**: 残差 34→2→**身份判定 vdso/vvar**（从 34 页未知到 2 页
 具名）; 账本 sec 120-137; 提交链至本提交。
+
+## 140. 双守卫定案 + 残余 2 的插桩设计（2026-10-12 晨, b4bf9f15）
+
+**落地**: copy_present_ptes 的**双视图守卫**（meta 非 MAPPED 记录 +
+原始槽 pfn_valid 失败——两类记录槽都跳过拷贝与计费）; fork
+mark/copy 窗的 **-EPROTO 降级**（ corrupt tree view → 跳窗计数）。
+
+**残余 val:2 的插桩设计（下会话执行）**: 精确和已证 2 页/进程真
+实（check_mm=percpu_counter_sum）。增量位点 = unpublish→destroy 窗
+口的 `rss[MM_ANONPAGES] +=`（copy_present_ptes 已排除——判别器 +
+跳过合同在）或 unmap-zap 的释放缺口。插桩 = zap_pte_range 的
+!page 分支（vm_normal_page NULL 的入口: 记 VA + pte 值, 前 8/exit）
++ the funnel 的 release 计数——一次 boot 定位 2 页的清除位点。
+
+**队列**: ① 残余 2 收口（插桩设计就绪）② generator-fork EPROTO
+全臂审计 ③ 仪器重 landing（双 boot）④ 48h 判定（10-14 02:24）→
+三步删除序列 ⑤ E2 PR 待批复。
