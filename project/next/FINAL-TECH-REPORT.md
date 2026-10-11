@@ -384,3 +384,19 @@ boot）② generator-fork EPROTO ③ 48h 判定（10-14 02:24）→ 三步删
 **队列**: ① unmap-zap 插桩 → 残余 32 收口 ② generator-fork EPROTO
 ③ 仪器重 landing（双 boot）④ 48h 判定 → 三步删除序列 ⑤ E2 PR
 待批复。
+
+---
+
+## 附十三: 判别器语义修正与 94% 闭合（sec 135, 44a6f005）
+
+**一行语义修正**: 判别器条件 `state == PRIVATE_ANON` →
+`state != CORTEN_MAPPED`（探针终判 mstate=0/INVALID 证明旧条件漏
+判）。**smoke 实测: val 34→2（94% 闭合）**; residue-n=0 全场; 精
+确和探针 anon=0（账本在 unpublish 时精确清零）; KUnit on 27/0/1 ✓。
+
+**残余 val:2**: 在 percpu read_positive 雾差（±batch）内, 或一类
+2 页小脸——精确和探针下会话判定。
+
+**终态汇总**: 账本 sec 120-135（16 节）· 报告附一至附十三 · 最终
+形 #531（判别器语义修正版）· campaign A/B 各 5/5 零崩 · KUnit 双
+腿绿 · churn 浸泡零事件（48h 判定 10-14 02:24）。
