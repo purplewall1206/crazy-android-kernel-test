@@ -2162,3 +2162,46 @@ v8 用的是 mode_default 的 tlb_remove_page —— **回归 v7 + pfn 门
 + 批溢出即停 = sec 115 FINAL 形**, 该形 simple boot 已绿,
 mode_default 存活仅 irqs notes —— **notes 非致命, 接受**）。下
 会话: v7 FINAL 形回归 + val:34 复测。
+
+## 120. 残差 34 定位链: 幸存者清扫先天失明 + 残差 census 点名 tree_copy（2026-10-11 夜）
+
+**三件硬发现, 一次 boot 链 (#467-#479, 13 次构建):**
+
+**(1) 幸存者清扫自出生结构性失明**（#471 门计数: scan=0,
+nopud=3-9, pgdv/p4dv=present 表指针而 pudv=0）—— 外层循环以
+512G 槽基址为步, 只查**槽基址那一个 pud**: libc 在 0x7f6a...
+(槽 127 的 pud idx 362, 基址 pud 空) → 整个 512G 槽被
+pud_none 丢掉。历次 boot 扫描零表、zero-yield (sweep_released=0
+全史)、两次"崩溃"皆是此环 bug 的面孔。修复 = 逐 pud 下行
+(#473)。唤醒后立即暴露三类不可扫表: 窗域槽标记表 (pmd_present
++bad 69-71k/run, 值位是计数器非 pfn: pmd_page() 落 vmemmap 洞,
+#474 Oops)、树域 implant/shadow 表 (同型 present 格式标记,
+#476/#477/#478 release_page vmemmap oops)、以及**全局快照数组
+SMP 竞态** (#476: 两 exit 并发互改 corten_sweep_livepg, 释放陈
+旧指针)。#477 全局锁 + #478 窗域门控后树域 implant 仍 oops →
+**#479 调用点收缴 (if false)**: 复配条件 = corten-desc 表分类器
+(区分 corten 自有表 vs 普通树表) + per-cpu 快照。它一生只发布过
+零; 放生职责归漏斗 (free_pte_range + span, 零 oops 记录)。
+
+**(2) 两处真实加固**: span 收缴站 (#471) 活体 bare-drop 带释放
+(span_rel=89-158/boot 真释放; span_bare 只计活路 census);
+free_pte_range 批溢出 break (#467 形) → flush-and-continue
+(#469)—— live 实测 funnel_ovfl=0 (溢出路径实践中未走过, 加固
+非机制)。
+
+**(3) 残差 34 的最终点名**: 残差 census (trace_vxa 释放擦除 +
+unpublish 点 dump, #468) 首读 residue-n=0 (树拷贝计费无 VA trace
+= census 盲区) → tree_copy 补 VA trace (#476) → **#479 活体判
+决: residue-n=30/exit, arm=11 (tree_copy) —— +34 = copy_present
+_ptes 计费的树拷贝页, 其 PTE 死于 corten 自有 implant/shadow 表
+的收缴 (无计数释放) —— 即"活体清除臂" = implant 表拆除路**。
+residue census (VA+arm) = 下会话修计费的定位仪器。
+
+**电池**: 官方 last-Totals 双腿绿 (on 27/0/1, off 7/0/32)。
+开放项: off 全套件 pass 中 sweep_skip_taxonomy 以 -EINTR setup
+确定性失败 ×2 (列入已知不稳集; 下会话在 50883d1e 基线复跑定
+新案/旧案)。mode_default 存活 ✓ (span/funnel 改形后 smoke 全绿
+零 oops, #479)。下会话: (1) implant 表拆除路补计数释放 →
+val:34 归零单 child 双验 (2) desc 分类器 + 快照 per-cpu → 清扫
+复配 (3) -EINTR 定案 (4) 旗标序列 (10-18 ~09:42) (5) E2 PR 批复
+落地。
