@@ -1690,15 +1690,11 @@ void exit_mmap(struct mm_struct *mm)
 	 */
 	mm_flags_set(MMF_OOM_SKIP, mm);
 	mmap_write_lock(mm);
-	/* sec 76/94: the survivor sweep is DISABLED as an instrument:
-	 * its long pte_offset_map walks under the rcu read side
-	 * preempted within the critical section (the voluntary
-	 * preemption config) and crashed the exit.  Its census job is
-	 * superseded by the free_pte_range tripwire (freepte_present)
-	 * and the release job by the counted free-funnel repair; the
-	 * sweep returns as the post-walk lock-safe release pass once
-	 * its rcu discipline is fixed (sec 95 design). */
-	(void)corten_exit_survivor_sweep;
+	/* sec 76/94/96: the survivor sweep -- counted release for any
+	 * present PTE outside both exit coverages.  Re-enabled with the
+	 * pmd_leaf gate (the THP-leaf PMD was the spin_lock crash). */
+	if (READ_ONCE(mm->corten_mode))
+		corten_exit_survivor_sweep(&tlb, mm);
 	mt_clear_in_rcu(&mm->mm_mt);
 	vma_iter_set(&vmi, vma->vm_end);
 	free_pgtables(&tlb, &vmi.mas, vma, FIRST_USER_ADDRESS,

@@ -10132,6 +10132,7 @@ retry:
 		struct page *page;
 		struct folio *folio;
 		bool copied = false;
+		bool share_charge = false;
 
 		if (pte_none(pte))
 			continue;
@@ -10215,9 +10216,6 @@ retry:
 				folio_copy(newfolio, folio);
 				__folio_mark_uptodate(newfolio);
 				folio_add_anon_rmap_novma(newfolio);
-				atomic_long_inc(&corten_nr_chg_fork_pin);
-				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
-				corten_trace_charge_arm(dst_mm, a, CORTEN_TRACE_FORK_PIN);
 				/* The copy's writable bit follows the
 				 * parent's encoding (the recorded perm):
 				 * a RO parent's copy re-arms on the
@@ -10232,6 +10230,12 @@ retry:
 				if (pte_write(pte))
 					npte = pte_mkwrite_novma(npte);
 				set_pte_at(dst_mm, a, dptep, npte);
+				/* sec 100: the charge lands AFTER the PTE
+				 * (a charge without a landed PTE is the
+				 * +34 residual's exact face). */
+				atomic_long_inc(&corten_nr_chg_fork_pin);
+				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
+				corten_trace_charge_arm(dst_mm, a, CORTEN_TRACE_FORK_PIN);
 				/* The loop head's folio_get() was this
 				 * arm's scratch reference: the copy,
 				 * unlike the share above, gives the
@@ -10244,11 +10248,7 @@ retry:
 				copied = true;
 			} else {
 				folio_dup_anon_rmap_novma(folio, page);
-				atomic_long_inc(&corten_nr_chg_fork_copy);
-				add_mm_counter(dst_mm, MM_ANONPAGES, 1);
-				corten_trace_charge_arm(dst_mm, a, CORTEN_TRACE_FORK_COPY);
-				corten_trace_charge_va(dst_mm, a,
-						       CORTEN_TRACE_FORK_COPY);
+				share_charge = true;
 			}
 		} else {
 			/* A pagecache folio: dup is a bare mapcount bump
@@ -10267,6 +10267,16 @@ retry:
 				ptep_set_wrprotect(src_mm, a, sptep);
 			npte = pte_mkold(pte_wrprotect(pte));
 			set_pte_at(dst_mm, a, dptep, npte);
+		}
+		/* sec 100: both arms' charges land AFTER the PTE
+		 * (charge-without-PTE is the +34 residual's face). */
+		if (share_charge) {
+			atomic_long_inc(&corten_nr_chg_fork_copy);
+			add_mm_counter(dst_mm, MM_ANONPAGES, 1);
+			corten_trace_charge_arm(dst_mm, a,
+						CORTEN_TRACE_FORK_COPY);
+			corten_trace_charge_va(dst_mm, a,
+					       CORTEN_TRACE_FORK_COPY);
 		}
 	}
 
