@@ -1894,3 +1894,12 @@ corten_exit_survivor_sweep ← __pte_offset_map_lock）→ 门控关闭
 担）。门控后验证: 零崩溃零 RCU 警告, 系统稳定; 电池 on 腿绿
 （34/0/5）。walk 后锁外释放 pass（sec 95 设计）下会话回归清扫的
 释放职责并实现归零。
+
+## 97. 生产回归处置: sec 92 修复回退（2026-10-11 早）
+
+sec 92 的 free 漏斗修复在 corten_mode_default=on 真实 boot 楔死
+systemd（irqs disabled）→ panic init → **回退至 sec 91 计数绊线
+形态**（本提交）。soak3 已重部署回退构建（login 正常, 无 panic）,
+旗标 on 钟自 09:42 重启。教训: free 漏斗处的释放+folio_put 在
+垂死 mm 的 tlb gather 活跃段不可行 —— 锁外 pass（sec 95 设计）
+是唯一形状。freepte_present 保持 census。
