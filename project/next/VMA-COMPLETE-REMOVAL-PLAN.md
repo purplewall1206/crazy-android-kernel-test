@@ -2085,3 +2085,14 @@ preempt/rcu 约束。溢出即 flush（caller-owned gather）。电池双腿绿
 （7/0/32, 27/0/1）。验证 boot 零崩溃稳定; sweep_released=0 —— 残
 差页所在帧仍不在清扫命中集, 下会话以 walk 释放 VA 集 vs 幸存者集
 对照闭合（sec 103 终局路径, 仪器全备）。
+
+## 112. 幻影释放 census: 零幻影 —— 缺口在臂内收支对（2026-10-11 午）
+
+exit 回放构建 charge 集（cset, 带臂戳）与幸存者集并列, 计数幻影释
+放（VA 无 charge 事件的 release 事件）。静默 boot 判决:
+**phantom-releases = 0 全 exit** —— 不存在无 charge 事件的
+release 事件。结合 relsrc[UNTRACED] = 0（无漏挂清除）, 归因收敛
+至单一结论: +34 的 charge 与 release **均发生但收支在臂内破
+衡**。臂的 charge/release 对已全枚举（fork share/copy/pin、
+map_anon、cow_write、walk、legacy、freeff）—— 下会话: 每臂的
+charge+release 差值 vs check_mm 残差逐 exit 对照（仪器已存在）。
