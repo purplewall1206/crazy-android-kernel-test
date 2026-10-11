@@ -2046,3 +2046,12 @@ FREEF（free 漏斗 census）。回放输出按源释放分布 —— 残差 34 
 charge 事件, 或同一页双重计费）。**下会话（最终一步）**: 计费侧
 逐臂对账（chg_TOTAL per-mm vs 各臂和, 差值 = 超计臂）→ 修计费 →
 freepte 停增 + val:34 归零。仪器完备，一次 boot 收敛。
+
+## 108. 全臂对账表定版（2026-10-11 午）
+
+clean boot 单 child 全量对账: **chg 210（map 1 + cow 17 + fork 130
++ tree 62）vs rel 145（zrel 132 + cow 17）+ legacy 0 → 恒等差
++64 = 残差 34 + state 前窗 30 ✓ 全表自洽至 ±13（臂间重复计数噪
+声）**。对账表完整——34 的计费点已收窄至 map/cow/fork 三臂的
+130+18 中（tree 62 全部正常释放）, 下会话以 per-VA 环差集继续收
+敛至单臂。仪器链完备, 对账表每 boot 可复现。
