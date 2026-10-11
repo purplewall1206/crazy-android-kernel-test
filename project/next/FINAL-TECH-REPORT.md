@@ -222,3 +222,24 @@ ring 写的裸 state 指针在启动风暴下命中已释放 state。
 栅栏。残差 34 的仪器与修复在 e0d07ed0/ee221803 历史排队重 landing
 （每项 smoke+systemd 双 boot; systemd 载体 = 独立镜像拷贝, 96s 启
 动验证基座）。剩余阻塞: generator-fork EPROTO（feature 级, 下会话）。
+
+---
+
+## 附五: 终版（sec 126, 5469e129）
+
+**systemd 稳定基座定稿**: 纯 sec 115 final（9146a235）——双复现
+全程内核稳定（0 panic, 94.3s 至已知 EPROTO 冻结点）。sec 122 的
+rcu_read_lock 栅栏**撤回**（自身即引入者: fork 风暴中的 RCU 优先
+级反转 → stalls → 崩溃级联; 正解设计已留档: unpublish dead-旗 +
+trace 助手静默）。
+
+**晨起队列（优先级序）**:
+1. generator-fork EPROTO（fork replay 树深/结构校验）→ systemd
+   全量启动打通 → systemd 全量 soak。
+2. 槽标记生命周期通读 → 槽位转换计费转移合同 → val:34 归零
+   （smoke 载体验证, systemd 载体随 1 打通后复验）。
+3. sec 120-124 仪器逐项重 landing（每项 smoke+systemd 双 boot;
+   trace 助手先落 dead-旗设计）。
+4. 48h 判定（10-14 02:24）→ 默认化→回退臂删→vma_exec.c 全删→
+   J6 终账。
+5. E2 PR（pr-e2a/b/c）待用户批复。
