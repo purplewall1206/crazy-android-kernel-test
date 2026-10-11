@@ -233,6 +233,53 @@ void corten_ptdesc_put(struct corten_ptdesc *desc)
 }
 
 /**
+ * corten_ptdesc_next_owned - pin the next live PTE-level descriptor of
+ * @mm at or after *@idx.
+ * @mm: owning address space.
+ * @idx: in/out search cursor (xa index); advanced past the returned
+ *	entry.
+ *
+ * sec 121: the exit's implant-table release pass enumerates the dying
+ * mm's own tables through this registry instead of a page-table walk
+ * -- the generic walk classes cannot tell the corten-owned tables'
+ * marker encodings (and stale/recycled tables) from live content (the
+ * sec 120 oops classes); the registry yields exactly the live, owned,
+ * PTE-level tables, pinned per the get/put contract.  Returns the
+ * pinned descriptor or NULL at the end; drop the pin with
+ * corten_ptdesc_put().
+ */
+struct corten_ptdesc *corten_ptdesc_next_owned(struct mm_struct *mm,
+					       unsigned long *idx)
+{
+	unsigned long pfn = *idx;
+
+	for (;;) {
+		struct corten_ptdesc *cand;
+		struct corten_ptdesc *desc;
+
+		rcu_read_lock();
+		cand = xa_find(&corten_ptdesc_xa, &pfn, ULONG_MAX,
+			       XA_PRESENT);
+		rcu_read_unlock();
+		if (!cand) {
+			*idx = pfn;
+			return NULL;
+		}
+		desc = corten_ptdesc_get(pfn);
+		pfn++;
+		if (!desc)
+			continue;
+		if (desc->mm == mm && !READ_ONCE(desc->stale) &&
+		    desc->level == CORTEN_LEVEL_PTE) {
+			*idx = pfn;
+			return desc;
+		}
+		corten_ptdesc_put(desc);
+	}
+}
+EXPORT_SYMBOL_GPL(corten_ptdesc_next_owned);
+
+/**
  * corten_meta_ensure_locked - allocate the per-PTE metadata array if absent.
  * @desc: descriptor of the PT page whose array is needed.
  *

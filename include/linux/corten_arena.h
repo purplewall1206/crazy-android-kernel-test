@@ -566,9 +566,11 @@ enum {
 /* sec 70c census producers (memory.c hooks, MODE-gated): the generic
  * fork-copy charges and the legacy zap decrements -- the tree-VMA face
  * the arena arm table cannot see. */
-void corten_note_tree_copy(int nr, bool file);
+void corten_note_tree_copy(struct mm_struct *mm, unsigned long addr, int nr,
+			   bool file);
 void corten_note_legacy_anon_charge(int nr);
 void corten_note_freepte_live(int nr);
+void corten_note_funnel_ovfl(void);
 void corten_note_anon_counter(struct mm_struct *mm, long val);
 void corten_trace_charge_arm(struct mm_struct *mm, unsigned long addr, int arm);
 void corten_trace_charge(struct mm_struct *mm, struct page *page);

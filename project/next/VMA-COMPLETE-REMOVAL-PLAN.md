@@ -2372,3 +2372,23 @@ return（best-effort 仪器本就该如此）; 或 trace 写改为
 systemd 载体待 EPROTO 修复。发电机级教训: **每一层"修复"都要在
 真实载体上对照验证——今夜两代修复（funnel flush、rcu 栅栏）都是未
 对照的引入者**。
+
+## 127. 点名探针全量执行 + pass 武装/收缴周期完成（2026-10-12 清晨, #518-#521）
+
+**用户指令的点名探针全量执行**: tracked/untracked zap 采样器 + 残差
+census 交叉引用（ringrel/zapsampled）+ desc 枚举 pass 武装（栅栏版）
+——**判决: 残差叶表 entry 的非 PTE 值 = W-4 槽位记录（PTE 格式标记,
+值位为簿记非 pfn）**。pass 武装周期实测: pfn_valid 门关闭 vmemmap
+oops 类（零 oops 到 6.4s）; **但 pfn 范围内的标记值（0x80200020,
+0xf5000000）仍穿门释放随机页**（free_large_kmalloc 告警）——**标记
+vs 翻译的判别器必须来自 W-4 槽格式规范, pfn_valid 不充分**。
+
+**收缴纪律执行**: pass 最终收缴（if false）, 仪器与代码全量保留
+（枚举器/栅栏/pfn_valid 门/采样器——重武装 = 通读 W-4 槽格式 +
+判别器 + 双 boot）。**最终形态 = #521**: 基线 + sweep 收缴 +
+charge_arm 栅栏 + 全部仪器（收缴态）+ mirror/tree 边界合同 +
+VM_CORTEN skip + live 路径漏斗化 + 点名探针。KUnit 双腿绿。
+
+**晨起队列不变**: ① W-4 槽格式规范通读 → 判别器 → pass 重武装 →
+val:34 归零 ② generator-fork EPROTO ③ systemd 全量 soak。churn 浸
+泡零事件持续（48h 判定 10-14 02:24）。
