@@ -2323,3 +2323,26 @@ KUnit on 27/0/1 ✓。**残差仍在（residue-n=30, entry 仍标记值）——
 **systemd 载体**: sec 123 内核（trace rcu 栅栏 + pass/span 收缴 +
 funnel break）稳定至 generator 阶段; generator-fork EPROTO 立案在
 修。churn 浸泡零事件持续。
+
+## 125. systemd 稳定形态定案: 基线 + sweep 收缴 + charge_arm 栅栏（2026-10-12 04:00, #509-#510）
+
+**对照实验矩阵闭合**: 独立镜像拷贝（cp --sparse, 免镜像锁连坐）+
+systemd 全量启动: **#510（基线 + sweep 收缴 + charge_arm rcu 栅栏）
+零 oops 跑完整个 init 退出风暴（96s 至 manager-start 阶段）**——
+systemd 稳定性修复成立。对照: 基线无栅栏（#501）同载体崩（init
+memcg slab 写 faults）; 基线+disarm 无栅栏（#509）同点崩。
+
+**崩溃机制终案**: `corten_trace_charge_arm` 的 ring 写持裸 state
+指针——systemd 启动风暴 = 最高竞争时刻, load→store 间被抢占写进
+已 call_rcu 释放的 state → 砸坏 slab/memcg 元数据（__memcg_slab_
+post_alloc_hook 写 faults 杀 init）。rcu_read_lock 栅栏闭合 ✓。
+
+**systemd 全量启动的剩余阻塞 = generator-fork EPROTO**（sec 123
+发现二, 独立 feature 级修复: fork replay 树深/结构, 或 systemd
+sandbox clone 的 corten fork 路径处理）。
+
+**最终形态（本提交 = 工作树）**: 50883d1e 基线代码 + mmap.c sweep
+收缴（if false, 带 sec 125 注）+ charge_arm rcu 栅栏。sec 120-124
+的仪器与修复保留在 e0d07ed0/ee221803 历史, 逐项重 landing 排队:
+每项过 smoke+systemd 双 boot（systemd = 本形态已验证的 96s 启动 +
+generator 修复后全量）。
