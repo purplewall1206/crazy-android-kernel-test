@@ -1690,12 +1690,12 @@ void exit_mmap(struct mm_struct *mm)
 	 */
 	mm_flags_set(MMF_OOM_SKIP, mm);
 	mmap_write_lock(mm);
-	/* sec 104: the survivor sweep GATED OFF: the pmd_leaf gate fixed
-	 * one crash, but the walk still boot-loops the mode_default boot
-	 * (the rcu/preempt discipline of its long mapped walks needs the
-	 * sec 105 restructure).  Its release job returns with that fix;
-	 * the free_pte_range tripwire counts the face meanwhile. */
-	(void)corten_exit_survivor_sweep;
+	/* sec 105: the survivor sweep re-enabled with the VMA-coverage
+	 * filter (the double-release with unmap_vmas was the sec 92
+	 * interlock failures' root; the pmd_leaf gate fixed the
+	 * spin_lock crash). */
+	if (READ_ONCE(mm->corten_mode))
+		corten_exit_survivor_sweep(&tlb, mm);
 	mt_clear_in_rcu(&mm->mm_mt);
 	vma_iter_set(&vmi, vma->vm_end);
 	free_pgtables(&tlb, &vmi.mas, vma, FIRST_USER_ADDRESS,

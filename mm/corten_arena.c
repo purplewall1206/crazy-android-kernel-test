@@ -14547,6 +14547,15 @@ void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm)
 				if (pte_none(pt) || !pte_present(pt) ||
 				    pte_special(pt))
 					continue;
+				/* sec 105: VMA-covered pages belong to the
+				 * legacy funnel's unmap_vmas (which runs
+				 * after us) -- releasing them here would
+				 * double-release (the sec 92 interlock
+				 * failures' root).  Only the uncovered
+				 * survivors (the walk's coverage gaps) are
+				 * ours. */
+				if (find_vma(mm, pa))
+					continue;
 				page = pte_page(pt);
 				ptep_get_and_clear(mm, pa, ptep +
 						   ((pa - pmd_addr) >>
