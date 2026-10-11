@@ -2242,3 +2242,32 @@ on 27/0/1, off 7/0/32 双腿绿; 全夜 13 构建零 oops**。
 **方案 C 启动**: 最终形（#492）重锚浸泡钟（替换 10-18 旧钟）,
 48h 干净 → 默认化→回退臂删→vma_exec.c 全删→J6 终账。开放项:
 -EINTR 基线定案; E2 PR 待批复。
+
+## 122. 夜半反转: 测试载体污染 + 二分判定作废 + 最终形回锚基线（2026-10-12 凌晨, #493-#501）
+
+**必须先记录的诚实自白**: 深夜的 systemd-boot 二分（"funnel flush
+崩溃者"、"sweep 收缴崩溃者"判定）**全部作废**——测试载体
+smoke69.qcow2 + systemd 连**绿基线 50883d1e 纯代码也崩**（init 的
+1820-survivor 大 mm exit 写 faults, #501 复现）。基线在此载体上
+从未被 systemd 验证过（smoke 一直 init=/bin/bash）。旧 soak3b.qcow2
+上基线跑绿 9 小时 → **崩溃 = 基线自身对"大 mm exit + 该镜像"的既有
+缺陷, 非今晚回归**。sec 121 的两项"加固"（funnel flush、sweep
+收缴+重构）恢复嫌疑清白待重验; sec 120/121 的全部仪器与修复
+（e0d07ed0）**smoke 协议验证成立, systemd 验证待健康载体**。
+
+**新发现（真金）**: smoke69+systemd 载体上, 基线内核在 init 的
+大 mm（1820 survivors, walk=535 reg=28）exit 中写 faults 杀 init
+——一个独立的基线既有 exit-path 缺陷, 与残差 34 同族（大 mm 形
+态）, 下会话单独立案。
+
+**最终形决定**: HEAD 回到 50883d1e 代码（本提交 = 工作树回到该
+态）, **方案 C 浸泡重锚其上**: smoke69 载体 + init=/bin/bash +
+fork churn 负载（本周验证协议）, 锚点 2026-10-12 02:24, 48h 判定
+**2026-10-14 02:24**。sec 120/121 仪器与修复逐项重 landing（每项
+必须过 smoke + systemd 双 boot）排在浸泡窗口内并行推进。
+soak3b.qcow2 rootfs 需修复（fsck, 深夜未及）。
+
+**残差 34 的晨报状态**: 机制 instrumented 到叶表项级（arm=11
+tree_copy 单计费, entry 清零/pmd 摘链两面孔, unmap 释放 0, 精确
+和探针证实残差为真非测量雾）; 非追踪清除位点点名探针已设计;
+定罪链与全部仪器在 e0d07ed0, 逐项重 landing 后继续。

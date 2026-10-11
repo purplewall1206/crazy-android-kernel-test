@@ -235,22 +235,10 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 			page = pte_page(oldpte);
 			corten_zap_release_page(tlb->mm, NULL, page, pa);
 			corten_trace_release_va(tlb->mm, pa);
-			/* sec 120: the overflow ABANDONMENT was the +34
-			 * residual's last face: by free_pgtables the
-			 * caller's batch is nearly full (unmap_vmas
-			 * queued the mm's pages on it), so the first
-			 * queue here overflowed and the break left the
-			 * REST of the PT page's live PTEs dying bare
-			 * with the table -- no folio_put, no counter
-			 * decrement (the constant per-child residue).
-			 * true means the page IS queued but the batch
-			 * is full: flush mid-walk (the zap's own
-			 * force_flush shape) and keep scanning. */
 			if (__tlb_remove_page_size(tlb, page, false,
-						   PAGE_SIZE)) {
-				corten_note_funnel_ovfl();
-				tlb_flush_mmu(tlb);
-			}
+						   PAGE_SIZE))
+				break;	/* batch full: the rest die bare,
+					 * counted */
 			live++;
 		}
 		if (live)
@@ -1264,15 +1252,9 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 			}
 			rss[MM_ANONPAGES] += nr;
 			VM_WARN_ON_FOLIO(PageAnonExclusive(page), folio);
-			if (READ_ONCE(dst_vma->vm_mm->corten_mode))
-				corten_note_tree_copy(dst_vma->vm_mm, addr, nr,
-						      false);
 		} else {
 			folio_dup_file_rmap_ptes(folio, page, nr, dst_vma);
 			rss[mm_counter_file(folio)] += nr;
-			if (READ_ONCE(dst_vma->vm_mm->corten_mode))
-				corten_note_tree_copy(dst_vma->vm_mm, addr, nr,
-						      true);
 		}
 		__copy_present_ptes(dst_vma, src_vma, dst_pte, src_pte, pte,
 				    addr, nr);
@@ -1296,13 +1278,13 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 		}
 		rss[MM_ANONPAGES]++;
 		if (READ_ONCE(dst_vma->vm_mm->corten_mode))
-			corten_note_tree_copy(dst_vma->vm_mm, addr, 1, false);
+			corten_note_tree_copy(1, false);
 		VM_WARN_ON_FOLIO(PageAnonExclusive(page), folio);
 	} else {
 		folio_dup_file_rmap_pte(folio, page, dst_vma);
 		rss[mm_counter_file(folio)]++;
 		if (READ_ONCE(dst_vma->vm_mm->corten_mode))
-			corten_note_tree_copy(dst_vma->vm_mm, addr, 1, true);
+			corten_note_tree_copy(1, true);
 	}
 
 copy_pte:

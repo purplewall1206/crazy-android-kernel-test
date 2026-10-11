@@ -1694,22 +1694,10 @@ void exit_mmap(struct mm_struct *mm)
 	/* sec 117: the survivor sweep with the KUnit gate -- the release
 	 * pass runs for production exits only; during the in-kernel
 	 * KUnit battery the pass stays off (the battery's counter/VMA
-	 * expectations assume the pass-before world, the
+	 * expectations assume the pre-pass world, the
 	 * sweep_skip_taxonomy interaction).  The pmd_leaf gate and the
-	 * VMA-coverage filter (the sec 92 double-release root) are in.
-	 * sec 120: OFF.  The pass spent its whole life structurally
-	 * blind (the slot-base pud gate -- scan=0 across every boot),
-	 * and its awakening (#473+) convicts three garbage-table
-	 * classes it cannot safely scan: the window's slot-marker
-	 * tables, the tree-domain implant/shadow tables (present-
-	 * formatted markers, pte_page() = garbage pfn, the
-	 * release_page vmemmap oops #476/#477/#478), plus the global
-	 * snapshot-array race under SMP exits.  The stragglers it would
-	 * have caught ride the counted funnels that never oops (the
-	 * span release, the free_pte_range funnel); the residue census
-	 * monitors what is left.  Re-arm only with a corten-desc-aware
-	 * table classifier. */
-	if (false)
+	 * VMA-coverage filter (the sec 92 double-release root) are in. */
+	if (READ_ONCE(mm->corten_mode) && !kunit_get_current_test())
 		corten_exit_survivor_sweep(&tlb, mm);
 	mt_clear_in_rcu(&mm->mm_mt);
 	vma_iter_set(&vmi, vma->vm_end);

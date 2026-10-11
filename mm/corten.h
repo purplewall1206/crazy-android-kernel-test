@@ -88,8 +88,6 @@ void corten_ptdesc_set_level(struct corten_ptdesc *desc,
  */
 struct corten_ptdesc *corten_ptdesc_get(unsigned long pfn);
 void corten_ptdesc_put(struct corten_ptdesc *desc);
-struct corten_ptdesc *corten_ptdesc_next_owned(struct mm_struct *mm,
-					       unsigned long *idx);
 
 /*
  * Per-PTE metadata array, allocated on demand with GFP_NOWAIT|__GFP_NOWARN
