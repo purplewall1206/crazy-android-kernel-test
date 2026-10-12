@@ -504,3 +504,21 @@ THP 类 +1 位点）的孤儿——扩展 watch 到 do_swap_page/迁移位点 =
 **总账**: 残差 34→2（94% 闭合）; 全套仪器在树; N-boot A/B 各 5/5
 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24 → 三步
 删除序列 → J6 终账）; E2 PR 待批复。
+
+---
+
+## 附二十: 判别器最终边界与收口设计（sec 145b, 626b4a3d）
+
+**双守卫实测边界**: (1) meta[i].state != MAPPED 判别漏判（marker
+槽的 parent meta 读回 MAPPED——meta 与叶槽两视图分叉）; (2)
+pfn_valid 判别漏判（marker 编码的 pfn 是合法真帧——arena 记录携
+带真页身份）。
+
+**收口设计（下会话首项）**: copy_present_ptes 的第三判别 = meta
+__resv 页身份载荷 vs raw pte pfn 比对——不一致（记录槽）→ 跳过拷
+贝与计费。**同判别器 = implant pass 重武装的安全门**（W-4 槽格式
+判别器的正解形态）。
+
+**状态**: 残差 34→2（94% 闭合）; 最终形零 oops; N-boot A/B 各
+5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
+E2 PR 待批复。
