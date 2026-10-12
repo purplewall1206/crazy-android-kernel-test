@@ -411,6 +411,7 @@ int corten_ptdesc_install(struct mm_struct *mm, struct page *pte_page)
 	}
 
 	rwlock_init(&desc->lock);
+	init_waitqueue_head(&desc->waitq);
 	refcount_set(&desc->refs, 1);
 	desc->mm = mm;
 	/* Ledger #11: the dirty range starts empty (rec_lo > rec_hi). */

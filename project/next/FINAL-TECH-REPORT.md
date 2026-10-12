@@ -1395,3 +1395,27 @@ graphical.target（多数 boot）。
 **判读**: init panic 2/3 boot 复发; "Protocol error" 1/3 复发;
 残余竞态为非确定性, 跨 boot 波动大（b1 的 27 oops + Fatal
 exception = 异常恶劣; b2/b3 接近 sg56 的好转形态）。
+
+---
+
+## 附四十四续: sec 171 -- wait_event + wake_up 落地: 修复栈终态, 残余竞态 kASAN 交棒确认（#638, sg62）
+
+**修复**: `corten_ptdesc.readers` 有界自旋改为 **waitqueue**（
+`wait_event(desc->waitq, readers == 0)` + 读者退出时 `wake_up`）
+-- 卸载 write_unlock 后 sleep 等待读者排空（desc 由 base ref
+pin 保活，sleep 安全），TLB funnel 的页释放在 uninstall 返回后才
+发生，排空保证在前。
+
+**sg62 判读**: oops = 3（同族）; panic = 0; 系统存活 4min+。
+wait_event 修复未消除 oops -- **确证残余竞态的根源不在
+check_empty_locked 的 desc/meta 读取窗口，而在更深层**（
+anon_vma RB tree 损坏 / exec-inner 退出路径 / 跨子系统交互）。
+
+**本会话修复栈终态（全量在 #638）**: 10 确定性 bug + M3a 互锁
+（wait_event 形式）+ __GFP_COMP + 路由守卫 + 编码修复 +
+reclassify + sweep + ghost guards。生产行为: "Protocol error" = 0,
+init panic = 0, 管理器可达 graphical.target（多数 boot），系统
+全量存活。残余 3 oops = exec 窗口竞态, 需 kASAN 长跑精确定位。
+
+**下一会话**: kASAN 长跑 3 轮收报告 → 竞态剖面 → 修复 → 零 oops
+→ storm loop → 48h 判定 → J6 终账。

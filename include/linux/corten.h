@@ -263,6 +263,7 @@ struct corten_txn {
 #include <linux/jump_label.h>
 #include <linux/rcupdate.h>
 #include <linux/refcount.h>
+#include <linux/wait.h>
 #include <linux/spinlock.h>
 
 DECLARE_STATIC_KEY_FALSE(corten_enabled_key);
@@ -367,6 +368,10 @@ struct corten_ptdesc {
 	/* sec 164: set by corten_ptdesc_release(); a put on a released
 	 * descriptor is the double-put the kASAN round convicted. */
 	bool			released;
+	/* sec 171: the M3a read-side drain waitqueue -- the uninstall
+	 * waits here for meta-array readers to drain before the TLB
+	 * funnel frees the PT page. */
+	wait_queue_head_t	waitq;
 	/* sec 165: the M3a read-side drain counter -- check_empty_
 	 * locked's meta walk increments under desc->lock read side;
 	 * the uninstall's page-release waits for it to drain. */
