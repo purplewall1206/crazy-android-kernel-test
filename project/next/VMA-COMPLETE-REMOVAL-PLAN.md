@@ -2716,3 +2716,17 @@ __resv 页身份 vs raw pfn 比对——不一致（记录槽）→ 跳过拷贝
 费; 一致（真翻译）→ 拷贝计费。**该判别同时是 pass 重武装的安
 全门（marker 槽识别后, implant pass 的 pfn_valid 门升级为同判
 别）**。
+
+## 145c. 晨间收束确认（2026-10-12 晨 8:00, 工作树 = b4bf9f15 状态）
+
+**最终形态确认**: 工作树 = b4bf9f15（双视图守卫 + EPROTO 窗口降级 +
+判别器语义修正 + 全套仪器），零 oops，smoke 验证 ✓。**无未提交变
+更**。
+
+**val:2 的收口路径（下会话，方法已定）**: free_pgtables 层的 per-VA
+release trace（the funnel 的释放 VA 采样器，落点 = free_pte_range 的
+release_page 调用后采样，census 交叉引用）+ per-table ownership 审计
+——残差 2 的 PTEs 在被非漏斗路径释放/清零的表内（zap 层已排除）。
+
+**队列**: ① 残余 2 收口 ② generator-fork EPROTO ③ 48h 判定（10-14
+02:24）→ 三步删除序列 → J6 终账 ④ E2 PR 待批复。
