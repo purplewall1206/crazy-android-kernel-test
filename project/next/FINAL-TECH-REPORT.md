@@ -539,3 +539,21 @@ release trace（the funnel 的释放 VA 采样器，落点 = free_pte_range
 
 **队列**: ① 残余 2 收口 ② generator-fork EPROTO ③ 48h 判定（10-14
 02:24）→ 三步删除序列 → J6 终账 ④ E2 PR 待批复。
+
+---
+
+## 附二十二: per-exit 精确链定稿（sec 146, 044fa58b）
+
+**全套仪器的 per-exit 精确链**:
+- 13-anon child: census anon=13 rn=0 → pre=13 → post=0 → **val=0 ✓**
+- 30-anon child: census anon=30 rn=0 → pre=30 → post=0 → **val=0 ✓**
+- bash fork-child: pre=5 → unmap 释放 3 → post=2 → **val=2**（精确和）
+
+**残余 2 的定位**: zap 主循环的 `should_zap_folio`/`vm_normal_page`
+拒绝路径对 present 格式记录槽的静默跳过（pfn 可能合法但 folio 无效
+→ 清除不递减）。下会话: 该拒绝分支的 VA 采样 → 位点插桩 → 计费修
+正 → val 归零。
+
+**终态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿;
+churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
+34→2（94%）。
