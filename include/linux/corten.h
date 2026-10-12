@@ -94,6 +94,12 @@ struct page;
  * Mirrors the paper's Status enum (Figure 4).  The states are produced and
  * consumed through the transaction API below (corten_query/map/mark/unmap).
  */
+/* sec 141: the meta-write choke-point sampler (the residual-34's
+ * final probe; printed and reset at the arena census). */
+void corten_meta_watch_arm(struct mm_struct *mm);
+int corten_meta_watch_count(void);
+bool corten_meta_watch_entry(int i, unsigned long *va, u8 *state, u8 *arm);
+
 enum corten_page_state {
 	CORTEN_INVALID = 0,	/* paper: Invalid -- page not allocated */
 	CORTEN_MAPPED,		/* paper: Mapped(PhysPage, Perm) */

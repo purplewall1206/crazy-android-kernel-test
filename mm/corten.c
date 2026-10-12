@@ -1277,6 +1277,51 @@ static void corten_desc_widen_dirty(struct corten_ptdesc *desc,
 /**
  * corten_map - see include/linux/corten.h.
  */
+/* sec 141: the meta-write choke-point sampler -- the residual-34's
+ * final probe: the leaf slots' meta records are written through
+ * corten_map/corten_unmap; this names the arm and the VA for the
+ * exiting MODE mms (printed and reset at the arena census). */
+static unsigned long corten_mw_va[8];
+static u8 corten_mw_state[8];
+static u8 corten_mw_arm[8];
+static int corten_mw_n;
+static struct mm_struct *corten_mw_mm;
+
+void corten_meta_watch_arm(struct mm_struct *mm)
+{
+	corten_mw_mm = mm;
+	corten_mw_n = 0;
+}
+EXPORT_SYMBOL_GPL(corten_meta_watch_arm);
+
+int corten_meta_watch_count(void)
+{
+	return corten_mw_n;
+}
+EXPORT_SYMBOL_GPL(corten_meta_watch_count);
+
+bool corten_meta_watch_entry(int i, unsigned long *va, u8 *state, u8 *arm)
+{
+	if (i < 0 || i >= corten_mw_n)
+		return false;
+	*va = corten_mw_va[i];
+	*state = corten_mw_state[i];
+	*arm = corten_mw_arm[i];
+	return true;
+}
+EXPORT_SYMBOL_GPL(corten_meta_watch_entry);
+
+static void corten_meta_watch_hit(struct mm_struct *mm, unsigned long addr,
+				  u8 state, u8 arm)
+{
+	if (corten_mw_mm != mm || corten_mw_n >= 8)
+		return;
+	corten_mw_va[corten_mw_n] = addr;
+	corten_mw_state[corten_mw_n] = state;
+	corten_mw_arm[corten_mw_n] = arm;
+	corten_mw_n++;
+}
+
 int corten_map(struct corten_txn *txn, unsigned long addr, struct page *page,
 	       u8 perm, unsigned int flags)
 {
@@ -1326,6 +1371,7 @@ int corten_map(struct corten_txn *txn, unsigned long addr, struct page *page,
 	m->state = CORTEN_MAPPED;
 	m->perm = perm;
 	m->flags = 0;
+	corten_meta_watch_hit(txn->mm, addr, m->state, 1);
 	/* Ledger #11: the slot is recorded now -- the dirty range grows
 	 * with it (the park reset's walk bound).
 	 */
@@ -1639,6 +1685,9 @@ int corten_unmap(struct corten_txn *txn, unsigned long start,
 			 * "rogue" ACCERR family).
 			 */
 			m->state = CORTEN_INVALID;
+			/* sec 141: the meta-write choke-point sampler
+			 * (arm 2 = unmap). */
+			corten_meta_watch_hit(txn->mm, addr, m->state, 2);
 		if (!(flags & CORTEN_UNMAP_KEEP_PERM))
 			m->perm = 0;
 		m->flags = 0;

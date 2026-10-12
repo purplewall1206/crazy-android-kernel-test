@@ -2651,3 +2651,22 @@ meta[i] 写入点全量插桩（write拦截, 一次 boot 点名）。
 
 **状态**: churn 浸泡 5h20m 零事件（48h 判定 10-14 02:24）; 全套
 仪器在树; E2 PR 待批复。
+
+## 142. meta-write choke-point watch 终判: meta 层零写入（2026-10-12 晨, #543）
+
+**终极探针执行**（corten_map/corten_unmap 的 choke point 采样器 +
+census 打印）: **全部 exit 的 meta-writes n=0——meta 层零写入**。
+行为者排除清单终版: meta 层（本次）、tracked/untracked/legacy zap、
+span、funnel、sweep（收缴）——**残差 +2 的增量 = unmap→destroy 窗
+口内计数器自身的某 `add_mm_counter(MM_ANONPAGES, +2)`**（census
+精确 0 → check_mm 精确 2; 两者皆 percpu_counter_sum, 无雾差）。
+
+**+2 候选（下会话）**: 内存压力下的 migration/swap-in 类路径（
+remove_migration_pte 的 rss 迁移、khugepaged collapse 的计数迁移
+——这些 add_mm_counter 正迁移而非新增, 但**迁移源的递减落在别的
+mm/别的计数器**时即成孤儿）。仪器 = **per-folio 身份配对追踪**
+（charge 与 release 的 folio 指针配对, census 打印）。
+
+**状态总账**: 残差 34→2（94% 闭合）; 全部修复与仪器在树; N-boot
+A/B 各 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14
+02:24）; E2 PR 待批复。

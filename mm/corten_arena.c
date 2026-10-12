@@ -6657,6 +6657,21 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		corten_uzap_sample_n = 0;
 		corten_rec_sample_n = 0;
 		corten_leg_sample_n = 0;
+		{
+			int wi;
+			unsigned long wva;
+			u8 wst, warm;
+
+			pr_info("corten: meta-writes n=%d:",
+				corten_meta_watch_count());
+			for (wi = 0; corten_meta_watch_entry(wi, &wva, &wst,
+							      &warm); wi++) {
+				pr_cont(" %lx=st%d/arm%d", wva, wst, warm);
+				if (wi >= 7)
+					break;
+			}
+			pr_cont("\n");
+		}
 		pr_info("corten: residue-n=%d multi=%d anon=%lld impl_rel=%ld impl_tab=%ld\n",
 			rn, rmulti,
 			percpu_counter_sum(&mm->rss_stat[MM_ANONPAGES]),
