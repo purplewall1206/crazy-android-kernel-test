@@ -341,7 +341,8 @@ void corten_note_freepte_live(int nr)
 }
 EXPORT_SYMBOL_GPL(corten_note_freepte_live);
 
-void corten_note_anon_counter(struct mm_struct *mm, long val)
+void corten_note_anon_counter(struct mm_struct *mm, unsigned long caller,
+			      long val)
 {
 	struct corten_mm_state *state;
 
@@ -359,6 +360,14 @@ void corten_note_anon_counter(struct mm_struct *mm, long val)
 			atomic_long_add(val, &state->mm_chg_total);
 		else
 			atomic_long_add(-val, &state->mm_rel_total);
+	}
+	/* sec 149: the exit-window sampler -- the armed (exiting) mm's
+	 * every anon +/- with the caller IP: the +2's increment site
+	 * names itself. */
+	if (corten_et_mm == mm && corten_et_delta_seq < 16) {
+		corten_et_delta[corten_et_delta_seq] = val;
+		corten_et_caller[corten_et_delta_seq] = caller;
+		corten_et_delta_seq++;
 	}
 }
 EXPORT_SYMBOL_GPL(corten_note_anon_counter);
@@ -642,6 +651,49 @@ static int corten_uzap_sample_n;
 static unsigned long corten_rec_sample_va[8];
 static u64 corten_rec_sample_pte[8];
 static int corten_rec_sample_n;
+
+/* sec 149: the exit-window counter-delta tracer -- armed at the
+ * unpublish, samples every MM_ANONPAGES change of the dying mm
+ * (exact percpu_counter_sum deltas) through mm_trace_rss_stat.
+ * The +2's increment caller names itself by the delta sequence. */
+static struct mm_struct *corten_et_mm;
+static long corten_et_prev;
+static long corten_et_delta_seq;
+static long corten_et_delta[16];
+static unsigned long corten_et_caller[16];
+
+void corten_exit_trace_arm(struct mm_struct *mm)
+{
+	corten_et_mm = mm;
+	corten_et_prev = percpu_counter_sum(&mm->rss_stat[MM_ANONPAGES]);
+	corten_et_delta_seq = 0;
+	memset(corten_et_delta, 0, sizeof(corten_et_delta));
+}
+EXPORT_SYMBOL_GPL(corten_exit_trace_arm);
+
+long corten_exit_trace_dump(long *out, int max)
+{
+	int i;
+
+	for (i = 0; i < corten_et_delta_seq && i < max; i++)
+		out[i] = corten_et_delta[i];
+	return corten_et_delta_seq;
+}
+EXPORT_SYMBOL_GPL(corten_exit_trace_dump);
+
+void corten_exit_trace_sample(struct mm_struct *mm, int member)
+{
+	long now;
+
+	if (corten_et_mm != mm || member != MM_ANONPAGES)
+		return;
+	now = percpu_counter_sum(&mm->rss_stat[MM_ANONPAGES]);
+	if (corten_et_delta_seq < 16) {
+		corten_et_delta[corten_et_delta_seq] = now - corten_et_prev;
+		corten_et_delta_seq++;
+	}
+	corten_et_prev = now;
+}
 
 /* sec 140: the legacy zap's release VA sampler (the unmap-side leg;
  * printed and reset at the arena census). */
@@ -6576,6 +6628,9 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	if (READ_ONCE(mm->corten_mode) && corten_trace_charge_param &&
 	    READ_ONCE(corten_exit_probe_seq) < 128) {
 		unsigned long rva;
+
+		/* sec 149: arm the exit-window counter-delta tracer. */
+		corten_exit_trace_arm(mm);
 		void *rent;
 		int rn = 0, rshown = 0, rmulti = 0;
 
@@ -6724,6 +6779,16 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		corten_uzap_sample_n = 0;
 		corten_rec_sample_n = 0;
 		corten_leg_sample_n = 0;
+		{
+			long d[16];
+			long dn = corten_exit_trace_dump(d, 16);
+			int di;
+
+			pr_info("corten: exit-trace deltas n=%ld:", dn);
+			for (di = 0; di < dn && di < 16; di++)
+				pr_cont(" %+ld", d[di]);
+			pr_cont("\n");
+		}
 		corten_funnel_sample_n = 0;
 		{
 			unsigned long fwk;

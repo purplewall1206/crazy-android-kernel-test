@@ -572,6 +572,9 @@ bool corten_slot_is_record(struct mm_struct *mm, unsigned long addr);
 void corten_note_rec_sample(unsigned long addr, u64 pteval);
 void corten_note_funnel_sample(unsigned long addr, u64 pteval);
 void corten_note_leg_sample(unsigned long addr, u64 pteval);
+void corten_exit_trace_arm(struct mm_struct *mm);
+long corten_exit_trace_dump(long *out, int max);
+void corten_exit_trace_sample(struct mm_struct *mm, int member);
 void corten_folio_watch_add(struct page *page, u8 arm);
 bool corten_folio_watch_del(struct page *page);
 void corten_note_legacy_anon_charge(int nr);
@@ -579,7 +582,8 @@ void corten_trace_map_anon_va(struct mm_struct *mm, unsigned long addr,
 			      int nr);
 void corten_note_freepte_live(int nr);
 void corten_note_funnel_ovfl(void);
-void corten_note_anon_counter(struct mm_struct *mm, long val);
+void corten_note_anon_counter(struct mm_struct *mm, unsigned long caller,
+			      long val);
 void corten_trace_charge_arm(struct mm_struct *mm, unsigned long addr, int arm);
 void corten_trace_charge(struct mm_struct *mm, struct page *page);
 void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm);

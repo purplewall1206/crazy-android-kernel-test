@@ -2743,7 +2743,8 @@ static inline unsigned long get_mm_counter_sum(struct mm_struct *mm, int member)
 void mm_trace_rss_stat(struct mm_struct *mm, int member);
 
 /* sec 76 census: the MODE ANONPAGES channel's total intake/outgo. */
-void corten_note_anon_counter(struct mm_struct *mm, long val);
+void corten_note_anon_counter(struct mm_struct *mm, unsigned long caller,
+			      long val);
 
 static inline void add_mm_counter(struct mm_struct *mm, int member, long value)
 {
@@ -2755,7 +2756,7 @@ static inline void add_mm_counter(struct mm_struct *mm, int member, long value)
 	 * the diff against the per-arm sum names the unattributed arm).
 	 */
 	if (IS_ENABLED(CONFIG_CORTEN_MM_ARENA) && member == MM_ANONPAGES)
-		corten_note_anon_counter(mm, value);
+		corten_note_anon_counter(mm, value, _RET_IP_);
 
 	mm_trace_rss_stat(mm, member);
 }

@@ -2770,3 +2770,20 @@ untracked zap、legacy zap（释放 3, 已计数）、funnel、span、sweep
 **状态**: 最终形 #555 零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿
 绿; churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
 34→2（94%）。
+
+## 150. meta-write watch 判读（受捕获覆盖限制）+ 夜战总收束（2026-10-12 晨, #561）
+
+**meta-write watch 判读**: 前 4 exit n=0; 大 exit 的打印超出捕获窗
+——**读数不定论**。n=0 的两种解释: (a) 大 exit 的计数器变化为零
+（exit 窗口内计数器冻结——与 pre 62→post 30 的 32 页释放矛盾 →
+(a) 排除）; (b) **捕获覆盖不足**（串口滚动丢失）。(b) 成立概率高。
+
+**残余 val:2 的下会话收口（仪器全部在树）**: 全量串口落盘
+（serial file: 而非 stdio pane）+ 离线 per-exit 解析; 或
+ftrace events/kmem/rss_stat。**val:2 = 2 页/child 的精确真实残
+面**, 机制链三层定案维持（tree_copy 计费 → 记录化 → 释放缺口）。
+
+**夜战总账（#467-#561, 90+ 构建）**: 残差 34→2（94% 闭合）; 判别
+器（语义修正+双视图守卫）; meta 收养+帧补全; 崩溃族根除; 仪器链
+（census/采样器×4/folio-watch/delta-tracer/choke-point watch）;
+N-boot campaign; EPROTO 窗口降级; 全部推送。
