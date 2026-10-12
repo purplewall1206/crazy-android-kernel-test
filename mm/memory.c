@@ -185,7 +185,6 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(rss_stat);
 
 void mm_trace_rss_stat(struct mm_struct *mm, int member)
 {
-	corten_exit_trace_sample(mm, member);
 	trace_rss_stat(mm, member);
 }
 EXPORT_SYMBOL_GPL(mm_trace_rss_stat);

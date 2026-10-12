@@ -359,6 +359,8 @@ static unsigned long corten_ad_caller[32];
 static unsigned long corten_ad_mm[32];
 static int corten_ad_n;
 
+void corten_exit_trace_sample(struct mm_struct *mm, int member);
+
 void corten_note_anon_delta(struct mm_struct *mm, long val,
 			    unsigned long caller)
 {
@@ -368,6 +370,10 @@ void corten_note_anon_delta(struct mm_struct *mm, long val,
 	corten_ad_caller[i] = caller;
 	corten_ad_mm[i] = (unsigned long)mm;
 	corten_ad_n++;
+	/* sec 152: feed the exit-window delta tracer from the choke
+	 * point that actually fires (the mm_trace_rss_stat hook was
+	 * dead: it sits off the main add_mm_counter path). */
+	corten_exit_trace_sample(mm, MM_ANONPAGES);
 }
 EXPORT_SYMBOL_GPL(corten_note_anon_delta);
 
@@ -6660,6 +6666,18 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	if (READ_ONCE(mm->corten_mode)) {
 		unsigned long rva;
 
+		/* sec 149/152: print the PREVIOUS window's accumulated
+		 * deltas BEFORE arming (the arm resets the sequence). */
+		{
+			long d[16];
+			long dn = corten_exit_trace_dump(d, 16);
+			int di;
+
+			pr_info("corten: exit-trace deltas n=%ld:", dn);
+			for (di = 0; di < dn && di < 16; di++)
+				pr_cont(" %+ld", d[di]);
+			pr_cont("\n");
+		}
 		/* sec 149: arm the exit-window counter-delta tracer. */
 		corten_exit_trace_arm(mm);
 		void *rent;

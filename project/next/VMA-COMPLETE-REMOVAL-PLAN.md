@@ -2879,3 +2879,27 @@ corten_note_anon_counter 调用点）→ +2 增量调用者一次 boot 点名 �
 
 **状态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿;
 churn 浸泡 11h05m 零事件（48h 判定 10-14 02:24）; E2 PR 待批复。
+
+## 153. delta tracer 终于工作: 残余 2 = fork 计费的未释放页（2026-10-12 晨, #572）
+
+**delta tracer 修正后首次产出有效数据**: per-exit delta 序列 =
+[-1370386859, -1, -1370386859, -2]——巨大负值 = percpu 初始化伪影
+（首次 read 的偏移跳变）; **真实变化 = −1 和 −2（legacy zap + arena
+walk 的释放）**。计数器: fork +5 → 释放 3 → **destroy = 2（精确和，
+非雾差）**。
+
+**⇒ 残余 2 = fork tree_copy 计费的 2 页在 exit 时不被任何路径释放
+（arena walk + legacy zap + funnel 的合计释放 = 3 ≠ 5）**——差值 2
+= **W-4 adoption 树摘除后、fork VMA 循环仍拷贝了 whitelist VMA 的
+页（+1 计费 ✓），但子进程 exit 时这些页的 PTEs 已被 adoption 的
+树摘除清零 → unmap 不走（无 VMA）→ arena walk 不走（无 meta）→
+释放缺口**。
+
+**修复方向**: fork 的 VMA 循环对 whitelist VMA 的拷贝——**若
+whitelist VMA 的页已被 W-4 adoption 转为 arena 管理，fork 不应再
+按页计费**（页的 arena 记录已在 parent meta 中，child 的 meta 深
+拷贝已收养）。计费跳过 = **whitelist VMA 的 PTE 拷贝时查 meta 状
+态，记录槽跳过计费**。
+
+**下会话**: copy_present_ptes 的 meta-INVALID 判别器（#531 已有）
+对 whitelist VMA 的 PTE 拷贝路径生效验证 → 修 → val 归零。
