@@ -629,3 +629,23 @@ PR 待批复。
 **队列**: ① choke-point 采样器的 armed_mm 修正 → 残余 2 定位 →
 val 归零 ② generator-fork EPROTO ③ 48h 判定 → 三步删除序列 → J6
 终账。
+
+---
+
+## 附二十八: 全量插装收敛判决（sec 152, 6a047efd）
+
+**anon-delta ring 终判**: exit 窗口的 MM_ANONPAGES 变化 = 全部
+−1 @ corten_arena_zap_window（每 exit 3 次，与 pre 5 → post 2 精
+确吻合）——**没有 +2 增量位点，没有未计数释放：计数器与所有
+traced 通道完全平衡**。
+
+**⇒ 残余 2 的最终定性**: fork 的 tree_copy 计费对 present 格式记
+录槽的合法形态计费——这些记录槽在 exit 时被清除（无释放，无计数
+递减）→ 计费孤儿 = 记录槽的"页形态计费"设计行为，非泄漏。修复 =
+copy_present_ptes 对记录槽的计费跳过合同（判别器 #531 已覆盖
+meta-INVALID 形态但 fork 时未命中——**记录化发生在 fork 之后的
+child 生命周期内**）⇒ 收口 = child 生命周期内的记录化位点插桩。
+
+**总账**: 残差 34→2（94% 闭合）; 全套仪器在树; N-boot A/B 各 5/5
+零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）; E2
+PR 待批复。
