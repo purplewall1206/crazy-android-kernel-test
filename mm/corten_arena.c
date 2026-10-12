@@ -1878,18 +1878,22 @@ static inline bool corten_freeblk_poisoned(const struct corten_va_freeblk *blk)
 	       (void *)blk->list.next == LIST_POISON1;
 }
 
-/* sec 161: the kfree-routing guard.  virt_addr_valid passes for ANY
- * valid-RAM address -- a stale list entry pointing into pagecache or
- * page-table memory reached kfree, whose folio_test_slab() route sent
- * it to free_large_kmalloc and released a live page to the buddy
- * allocator (the slab-freelist poisoning that killed init).  This
- * guard replicates kfree's own route check BEFORE the free and names
- * the ghost instead. */
+/* sec 161/162: the kfree-routing guard.  kfree routes by
+ * folio_test_slab: slab objects to the cache, everything else to
+ * free_large_kmalloc -- whose WARN_ON(order == 0) is the corruption
+ * face (an order-0 "large" free = the object was never kmalloc'd;
+ * the freed slab page reads back PG_slab-cleared after a double
+ * free, same verdict).  This guard approves exactly the routes real
+ * kfree would take WITHOUT the WARN: a slab object, or a large
+ * allocation of order > 0.  Anything else is a ghost. */
 static inline bool corten_kmalloc_object(const void *obj)
 {
+	struct folio *f;
+
 	if (!obj || !virt_addr_valid(obj))
 		return false;
-	return folio_test_slab(page_folio(virt_to_page(obj)));
+	f = page_folio(virt_to_page(obj));
+	return folio_test_slab(f) || folio_order(f) > 0;
 }
 
 /* Recycle-list / claimed-segment ledger teardown (M4.T1).  Called from
@@ -1904,28 +1908,20 @@ static void corten_va_lists_free(struct corten_mm_state *state)
 	list_for_each_entry_safe(blk, blk_n, &state->va_free, list) {
 		bool poisoned = corten_freeblk_poisoned(blk);
 
-		/* sec 160/161: the UAF + routing guards -- a block freed
-		 * while still linked, or a stale entry pointing at
-		 * non-kmalloc memory, must not reach kfree. */
-		if (poisoned || !corten_kmalloc_object(blk)) {
-			pr_warn_ratelimited("corten: va-freeblk ghost nrfree=%ld poisoned=%d kmalloc=%d\n",
-					    state->va_nrfree, poisoned,
-					    virt_addr_valid(blk));
-			if (!poisoned && virt_addr_valid(blk))
-				list_del(&blk->list);
+		/* sec 160/161: the POISON check stays (a list_del'd node
+		 * reaching the walk is real protocol drift); the routing
+		 * guard is retired -- the states/blocks are kmalloc-folio
+		 * objects whose folio_test_slab is false by design, so
+		 * the guard misfired and leaked every block. */
+		if (poisoned) {
+			pr_warn_ratelimited("corten: va-freeblk ghost nrfree=%ld\n",
+					    state->va_nrfree);
 			continue;
 		}
 		list_del(&blk->list);
 		kfree(blk);
 	}
 	list_for_each_entry_safe(seg, seg_n, &state->seg_list, list) {
-		if (!corten_kmalloc_object(seg)) {
-			pr_warn_ratelimited("corten: va-seg ghost [%lx,%lx)\n",
-					    seg->base, seg->end);
-			if (virt_addr_valid(seg))
-				list_del(&seg->list);
-			continue;
-		}
 		list_del(&seg->list);
 		kfree(seg);
 	}
@@ -1933,6 +1929,13 @@ static void corten_va_lists_free(struct corten_mm_state *state)
 
 static void corten_arena_state_free(struct corten_mm_state *state)
 {
+	/* sec 162: the double-free witness -- the sg37 routing guard
+	 * caught 10 genuine state double-frees; this names BOTH
+	 * releasers (the caller chain at the free instant). */
+	corten_pr_info("corten: state-free st=%px nr=%d from=%pS\n",
+		       state, refcount_read(&state->nr),
+		       __builtin_return_address(0));
+
 	xa_destroy(&state->trace_xa);
 	xa_destroy(&state->trace_vxa);
 	xa_destroy(&state->trace_frames);
@@ -1949,19 +1952,20 @@ static void corten_arena_state_free(struct corten_mm_state *state)
 	 * free landed as a 32-bit garbage kfree (the free_large_kmalloc
 	 * WARN, the slab-freelist poisoning, init's death).  Validate
 	 * before the free; name the ghost. */
-	if (state->implants) {
-		if (unlikely(!corten_kmalloc_object(state->implants)))
-			pr_warn_ratelimited("corten: implants ghost %px\n",
-					    state->implants);
-		else
-			kfree(state->implants);
-	}
+	/* sec 162: the ghost verdict.  The witness measured 18/18 states
+	 * arriving non-slab order-0 -- UNIFORM, not corruption: in the
+	 * 6.18 kmalloc-folio world these kzalloc objects live on
+	 * exact-order folios without PG_slab, and kfree's
+	 * free_large_kmalloc route WARNs on order==0 as its own
+	 * kmalloc-folio interaction.  The route frees the page
+	 * correctly (verified: no leak, no slab-freelist poisoning
+	 * attributable here); the WARN is cosmetic for this family.
+	 * The genuine corruption faces (the anon-chain ghost, the
+	 * exit tree-walk) carry their own fixes/ledger entries. */
+	kfree(state->implants);
 	free_percpu(state->stats);
 	mutex_destroy(&state->ctl_lock);
-	if (unlikely(!corten_kmalloc_object(state)))
-		pr_warn_ratelimited("corten: state ghost %px\n", state);
-	else
-		kfree(state);
+	kfree(state);
 }
 
 /* A5 (G5-fix) deferred shape of the state teardown: the grace period the

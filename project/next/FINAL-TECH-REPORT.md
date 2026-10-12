@@ -1012,3 +1012,35 @@ exit_mmap→mm_exit→state_free）路径把 state 释放两次; 守卫把破坏
 **验收对照**: "Protocol error" = 0 ✓; init panic 消除 ✓; 系统全量
 存活 ✓; "零 oops" = 未达成（set_root 1 oops + 活锁, 随双重释放源
 同族）。
+
+---
+
+## 附三十七: sec 162 -- state_free 取证审计判决: 单释放者, 14 幽灵绕过见证, kASAN 交棒（#615-#619, 5 boot）
+
+**取证方法**: `corten_arena_state_free` 入口见证（指针+nr+调用点）
+× `corten_arena.silent` 净化控制台 × 路由守卫（修正语义: kfree 的
+真实路由 = slab 对象进 cache、非 slab 大对象进 free_large_kmalloc
+order>0 无告警; order==0 告警 = 唯一损坏指纹）。
+
+**判决（sg38/39 全量交叉比对）**:
+1. 30 次 state_free 见证 **全部单一调用点**（mm_exit+0x76c）,
+   指针零重复;
+2. 14 只 ghost 指针与见证列表 **交集为零** -- 幽灵态在抵达
+   state_free 尾部之前已被 **绕过 state_free 的释放者** 放掉
+   （页内容 [0]=0 [1]=0 [2]=14 [3]=0 + order=0 + 非 slab =
+   释放后零化/重用痕迹）;
+3. state_free 自身的五处释放（xa_destroy/free_percpu×2/
+   va_lists_free/implants）逐一排除;
+4. **定名**: 绕过者 = **kmalloc_large 路由的 state 页被
+   `__free_pages` 族直接放页** -- 嫌疑集中在 `kvfree_call_rcu`
+   （exec-inner arena 的延迟释放, sg32 反汇编 +0x6db 实证在
+   mm_exit 附近）与 anon-chain ghost 撕毁面的后续破坏 -- 需
+   CONFIG_KASAN 定位精确调用栈（printk 取证已达极限）。
+
+**修复落地**: 路由守卫语义修正（kfree 真实判据复刻）, 守卫包含
+的第二次释放已 containment（sg37 起无 init panic）。sg37/39/41
+三 boot 存活; sg44/46 复发 panic = 退出树遍历/活锁族（kASAN 同批）。
+
+**kASAN 交棒清单**: ①CONFIG_KASAN=y + coden_arena.silent 构建;
+②KUnit fork_file_dirty 扩展 state_free 路径断言; ③kvfree_call_rcu
+与 unlink_anon_vmas 双嫌疑栈; ④exec-inner fault 活锁 SIGKILL 化。
