@@ -2787,3 +2787,17 @@ ftrace events/kmem/rss_stat。**val:2 = 2 页/child 的精确真实残
 器（语义修正+双视图守卫）; meta 收养+帧补全; 崩溃族根除; 仪器链
 （census/采样器×4/folio-watch/delta-tracer/choke-point watch）;
 N-boot campaign; EPROTO 窗口降级; 全部推送。
+
+## 153. 夜战总收束（2026-10-12 晨, #563）
+
+**sec 152 的系统稳定化全部生效**: systemd 全量启动零 panic 零 oops
+（三连续 boot）; free_large_kmalloc/xa WARN/vmemmap oops 全清; 子
+进程零 Bad-rss。
+
+**残余 val:2 与 generator-fork EPROTO**: 均定位至 M5 ④-4 的
+meta 深拷贝缺口（whitelist 树窗的记录态拷贝与树深越界）——收口
+= 下会话首项（判别器 + 树深校验, 设计已录 sec 152）。
+
+**状态**: 残差 34→2（94% 闭合）; 最终形零 oops; N-boot A/B 各
+5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
+E2 PR 待批复。

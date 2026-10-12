@@ -341,6 +341,15 @@ void corten_note_freepte_live(int nr)
 }
 EXPORT_SYMBOL_GPL(corten_note_freepte_live);
 
+/* sec 149: the exit-window counter-delta tracer statics (the sampler
+ * in corten_note_anon_counter below; the definitions live here so the
+ * anon-counter choke sees them). */
+static struct mm_struct *corten_et_mm;
+static long corten_et_prev;
+static long corten_et_delta_seq;
+static long corten_et_delta[16];
+static unsigned long corten_et_caller[16];
+
 void corten_note_anon_counter(struct mm_struct *mm, unsigned long caller,
 			      long val)
 {
@@ -458,6 +467,11 @@ void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm)
 		count = ((long)old >> 8) + 1;
 		prim = (long)old & 0xFF;
 	}
+	/* sec 152: the multiplicity is capped -- an unbounded count shifts
+	 * the stored value into the xarray's internal-entry patterns (the
+	 * #562 __xa_store warning). */
+	if (count > 0xFF)
+		count = 0xFF;
 	old = xa_store(&state->trace_vxa, addr >> PAGE_SHIFT,
 		       (void *)(long)((count << 8) | prim), GFP_NOWAIT);
 	if (IS_ERR(old))
@@ -489,11 +503,14 @@ void corten_trace_release_va_src(struct mm_struct *mm, unsigned long addr,
 		if (!old || IS_ERR(old))
 			return;
 		count = ((long)old >> 8) - 1;
-		if (count > 0)
+		if (count > 0) {
+			if (count > 0xFF)
+				count = 0xFF;
 			xa_store(&state->trace_vxa, addr >> PAGE_SHIFT,
 				 (void *)(long)((count << 8) |
 						((long)old & 0xFF)),
 				 GFP_NOWAIT);
+		}
 		else
 			xa_erase(&state->trace_vxa, addr >> PAGE_SHIFT);
 	}
@@ -656,12 +673,6 @@ static int corten_rec_sample_n;
  * unpublish, samples every MM_ANONPAGES change of the dying mm
  * (exact percpu_counter_sum deltas) through mm_trace_rss_stat.
  * The +2's increment caller names itself by the delta sequence. */
-static struct mm_struct *corten_et_mm;
-static long corten_et_prev;
-static long corten_et_delta_seq;
-static long corten_et_delta[16];
-static unsigned long corten_et_caller[16];
-
 void corten_exit_trace_arm(struct mm_struct *mm)
 {
 	corten_et_mm = mm;
@@ -10470,9 +10481,13 @@ corten_arena_fork_mark_window(struct corten_arena *ar, unsigned long addr,
 			break;
 	}
 	/* Untracked window (hole/defective install): nothing recorded --
-	 * the shadow pieces still copy as plain VMAs.
-	 */
-	if (ret == -ENOENT || ret == -EOPNOTSUPP)
+	 * the shadow pieces still copy as plain VMAs.  sec 151: a
+	 * corrupt/deep tree view (-EPROTO) on the PARENT's tree degrades
+	 * the same way -- the window's content is legacy-copied by the
+	 * VMA loop and closes through the legacy funnels; propagating it
+	 * aborted the fork (the systemd generator clone's "Protocol
+	 * error" boot freeze, #561). */
+	if (ret == -ENOENT || ret == -EOPNOTSUPP || ret == -EPROTO)
 		return 0;
 	if (ret)
 		return ret;
