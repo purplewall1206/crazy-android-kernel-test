@@ -1297,3 +1297,30 @@ __slab_free/free_large oops 从每 boot 3+ 降为 **0-2 间歇**。
 
 **残余**: 生成器 exec 窗口的非确定性竞态（3 oops, containment 有
 效）-- kASAN 长跑定位后修复（交棒包完整: 内核+报告+storm-loop）。
+
+### 附四十一续: kASAN 三轮收敛判决 -- 越界写者定名（k2 报告）
+
+**KASAN 报告（boot 2, #628）**:
+`BUG: KASAN: slab-out-of-bounds in corten_arena_check_empty_locked`
+object = **anon_vma_chain** (64B, cache anon_vma_chain)
+read = 0 bytes to the RIGHT of the allocated region
+
+**定名**: `check_empty_locked` 的 `desc->meta[pte_index(a)]` 读取
+落在 **已释放且被 anon_vma_chain 重用的 slab 对象末尾外** --
+`desc->meta` 指向的内存曾释放并被 anon_vma_chain 缓存重用后
+又释放。**这证明 ptdesc 的 meta 数组（或 ptdesc 本身）在其
+消费者（check_empty_locked 的 overlap 走）还在读取时就被
+`corten_meta_free(desc)` + `kfree_rcu(desc)` 释放了。**
+
+**修复方向（最终）**: ptdesc 的 refcount 协议没有双减（sentinel
+零命中）-- **问题是 meta 数组的生命周期没有跟 desc 的 pin 关联**:
+`corten_meta_free` 在 `corten_ptdesc_release` 中随 desc 释放,
+但读者的 pin 只保 desc 的 refcount > 0, 不保 meta 数组不被
+kfree_rcu 延迟释放后的 reuse -- **kfree_rcu 宽限期已过、slab
+对象重用后再释放, KASAN 捕获的是重用后的二次释放的 OOB 读**。
+
+**修复方案**: `corten_ptdesc_release` 中 **先 kfree_rcu(desc)
+后 corten_meta_free(meta)** 改为 **meta 数组跟 desc 一起走
+kfree_rcu**（把 meta 指针存入 desc->rcu 后的联合体, 在
+release callback 里一起放）, 或在 uninstall 时同时 erase + meta
+延迟到同一 RCU 宽限期。
