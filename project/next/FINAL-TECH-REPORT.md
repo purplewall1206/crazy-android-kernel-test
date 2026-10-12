@@ -475,3 +475,19 @@ census 打印）→ 2 页收口 → val 完全归零。**
 **终态**: 残差 34→2（94% 闭合）; 全部修复与仪器在树; N-boot A/B
 各 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14
 02:24）; E2 PR 待批复。
+
+---
+
+## 附十八: folio-watch 判读（sec 144, 8e49c130）
+
+**per-folio 身份配对仪器落地并判决**: survivors=0（所有已计费
+folio 均被释放擦除 ✓）; erase-miss=722 递增（未计费 folio 的释放
+——watch 未覆盖的计费位点或双重释放）; post 恒 2。
+
+**结论**: 残余 2 = **未入 watch 的计费位点**（swap-in/migration/
+THP 类 +1 位点）的孤儿——扩展 watch 到 do_swap_page/迁移位点 =
+下会话收口路径。
+
+**终态**: 最终形 #546 零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿
+绿; churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
+34→2（94%）。
