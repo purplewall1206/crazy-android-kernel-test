@@ -1702,3 +1702,19 @@ callback 不足以保护读者，因为**读者的 pin 采下后，另一个 CPU
 **desc->rcu 回调的下一个宽限期**释放（双宽限期），或改用
 **kref** 替代 refcount 使 put_atomic 语义更严格。这是协议级
 修复，需下一会话实施。
+
+---
+
+## 附五十六: 本会话终态（38+ 小时, 65+ boot, 32 推送, sec 156-175）
+
+**生产内核 #637 boot 统计（4 boot）**: init panic **1/4**; 
+"Protocol error" **2/4** 间歇; 管理器冻结 **1/4**; oops **2-27**
+（b1 异常）。
+
+**修复的确定性 bug**: 14 个 + 3 防线（附四十三全清单）。
+**kASAN 交棒**: 内核 ×2 + 报告 ×5 + 竞态剖面（跨 CPU meta 
+数组生命周期 vs desc pin -- 修复方向 = kref 升级或双宽限期）。
+
+**storm loop**: `project/bin/storm-loop.sh` 已入册待生产内核
+零 oops 后启动。
+**48h 判定**: 10-14 02:24 两车持续存活。
