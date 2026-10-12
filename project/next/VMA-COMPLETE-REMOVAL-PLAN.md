@@ -2852,3 +2852,30 @@ E2 PR 待批复。
 **⇒ val:2 的计费不在 trace_vxa 集内（page-form-only 计费——
 corten_trace_charge(mm, page) 不入 VA 集）**——计费调和需
 add_mm_counter 层的增量追踪（非 VA-keyed census）。
+
+## 152. 夜战总收束 + 残余 val:2 交接（2026-10-12 晨 11 时, #565-#570）
+
+**全套仪器收敛判决（#554-#570）**:
+- meta-write watch n=0（meta 层清白）
+- should_zap_folio 拒绝采样 n=0（details 过滤器清白）
+- vm_normal_page-NULL rec 采样 n=0（!page 分支清白）
+- leg-sample 释放 3 VAs（非残差 VAs）
+- funnel-sample 释放 1 VA（非残差 VAs）
+- folio-watch survivors=0（所有已计费 folio 均释放）
+- erase-miss=722（未计费 folio 的释放——watch 未覆盖的计费位点）
+- delta tracer n=0（mm_trace_rss_stat 钩不在主 add_mm_counter 路径——
+  tracer 设计需重定位至 corten_note_anon_counter 的 choke point,
+  该点已在 mm.h:2758 落地带 _RET_IP_ ✓）
+
+**⇒ 残余 val:2 的定性**: 精确和真实 2 页类（非雾差），增量位点不在
+任何已插桩通道上。**下会话收口**: 将 delta tracer 从
+mm_trace_rss_stat 重定位至 add_mm_counter 的 ANON 通道（已有的
+corten_note_anon_counter 调用点）→ +2 增量调用者一次 boot 点名 →
+修位点 → val 归零。
+
+**已落地修复总账**: 判别器语义修正（非 MAPPED 跳过）+ 双视图守卫
+（pfn_valid）+ mirror/tree 边界合同 + live 路径漏斗化 + meta 收养
+合同 + 帧补全 pass + billing reconcile + probe 门放开。
+
+**状态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿;
+churn 浸泡 11h05m 零事件（48h 判定 10-14 02:24）; E2 PR 待批复。
