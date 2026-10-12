@@ -839,3 +839,27 @@ file-read 臂净取盘上页; (b) FILE 臂 rpoff/reof 计算偏移取到邻页;
 blanket FILE_MAPPED 标记使子进程臂按 FILE 语义重取。KUnit: 建含
 脏重定位页的 FILE 类 arena → fork → 断言子进程页内容 == 父进程
 （非盘上内容）。
+
+### 附三十二续: 收窄后的候选面（KUnit 确定性复现的断言目标）
+
+子进程读到的 `0x50a66` = libsystemd-core 的 `strv_copy_n@plt`
+**链接期**地址（该符号是 libsystemd-shared-257.so 的导入,
+镜像路径 /usr/lib/x86_64-linux-gnu/systemd/, 与 libsystemd-core
+同目录 -- 早期查错目录误判"不存在"）。加载器对 JUMP_SLOT/GLOB_DAT
+的重定位写入 `base+off`; 子进程读到裸 `off` ⇒ 子进程的
+libsystemd-core **GOT/RW 页 = 盘上初值页**, 父进程 = 重定位后的
+私有 COW 拷贝（anon folio）。三个候选臂, KUnit 一测即辨:
+
+- (a) copy 臂 `pmd_leaf` 整窗跳过（父 RW 段若以叶 PMD 在场, 子进程
+  全窗 PTE 缺失 → file-read 臂按 FILE_MAPPED meta 净取盘上页）;
+- (b) 父侧 GOT 页 PTE 被某个 reclaim/park 臂清成 none（copy 臂
+  pte_none 跳过 → 子进程 file-read 臂净取）;
+- (c) replay 把 FILE_MAPPED meta 镜像给子进程后, 子进程首读走
+  file-read 臂而非 anon-COW 语义 -- meta 家族与内容家族错配。
+
+KUnit 骨架: `corten_arena_test_fork_file_dirty` -- shmem 双页,
+kernel_write 写 pattern → attach FILE 类 arena RW → 读安装 →
+**手工清 PTE 保 folio**（形态 b）→ fork_begin/copy_ptes/commit →
+断言子进程读回 == pattern（非盘上旧值）; 同断言跑形态 (a)
+（PMD 叶构造）与 (c)（meta 直设 FILE_MAPPED + 子 PTE none）。
+任一形态红 ⇒ 命名修复位点。
