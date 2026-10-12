@@ -3164,9 +3164,14 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 		 * foreign page table) is the same verdict.
 		 */
 		desc = corten_ptdesc_get(page_to_pfn(pmd_page(pmd)));
-		if (!desc) {
+		if (!desc || desc->magic != CORTEN_PTDESC_MAGIC) {
+			/* sec 172: the magic sentinel -- a stale desc
+			 * (SLUB-merged with acpi_object, freed and
+			 * reused) fails the magic check. */
+			if (desc)
+				corten_ptdesc_put(desc);
 			corten_arena_note_probe_skip(mm, addr, false, false);
-			continue;		/* retired/recycled: empty */
+			continue;
 		}
 		read_lock_bh(&desc->lock);
 		/* sec 165: the M3a read-side drain counter -- the

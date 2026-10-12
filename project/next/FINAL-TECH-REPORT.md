@@ -1484,3 +1484,26 @@ kmalloc 类合并到同一 slab 缓存）+ **PT 页释放与描述符卸载的
 需增加 `desc->magic != CORTEN_PTDESC_MAGIC` 哨兵（或在
 `corten_ptdesc_release` 中将 magic 清零，使陈旧描述符的
 `desc->mm != mm` 检查可靠跳过）。这是一行修复 + KASAN 复验。
+
+---
+
+## 附四十七: sec 172 -- magic sentinel 落地 + boot 64 判读（#641）
+
+**修复**: `check_empty_locked` 的 `corten_ptdesc_get` 返回后增加
+`desc->magic != CORTEN_PTDESC_MAGIC` 哨兵（SLUB 缓存合并
+acpi_object + corten_ptdesc 时的陈旧描述符防护）+
+`corten_ptdesc_release` 的 magic 清零。
+
+**sg64 判读（#641）**: systemd 推进到 **slices.target + swap.target**
+（24.8s）-- 首次到达 systemd target 阶段！但 55.8s 时 init
+SIGSEGV（exitcode=0xb）→ panic。free_large WARN = 4 次（大量
+state 释放走 kmalloc_large 路径）。
+
+**净进展**: systemd 从 5s（生成器阶段冻结）→ 25s（target 阶段）
+→ 55s（panic）。每个修复都推进了启动进程。**残余 = init 的
+SIGSEGV**（exitcode=0xb），需要 kASAN 精确定位 init 进程地址
+空间中的损坏写者。
+
+**下会话**: kASAN 构建（当前代码含 magic sentinel + 全修复栈）
+→ 收 init SIGSEGV 的 KASAN 报告 → 定位写者 → 修复 → 零 oops +
+零 panic boot。
