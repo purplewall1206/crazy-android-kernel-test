@@ -816,6 +816,19 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
 
 	if (likely(show_unhandled_signals))
 		show_signal_msg(regs, error_code, address, tsk);
+	/* sec 156: the sg bad-area witness -- show_signal_msg's global
+	 * printk_ratelimit drops the "segfault at" line under the exit
+	 * census spam; MODE tasks' fatal faults print unfiltered with the
+	 * faulting RIP.  NO table walk here: the forked children's
+	 * corrupt upper entries (#585 pud=0xa01ff000f000, #586 the
+	 * f000ff53 doubled pattern) GPF every deref-through-entry form
+	 * -- the raw dump belongs in the next round's KProbe/crash tool,
+	 * not in the fault path. */
+	if (IS_ENABLED(CONFIG_CORTEN_MM) && tsk->mm &&
+	    READ_ONCE(tsk->mm->corten_mode))
+		pr_info("corten-dbg: sg BAD-AREA %s[%d] a=%lx ip=%lx err=%lx code=%d\n",
+			tsk->comm, tsk->pid, address, regs->ip, error_code,
+			si_code);
 
 	set_signal_archinfo(address, error_code);
 
@@ -1377,6 +1390,13 @@ void do_user_addr_fault(struct pt_regs *regs,
 		case CORTEN_FAULT_HANDLED:
 			return;
 		case CORTEN_FAULT_ACCERR:
+			/* sec 156: the sg fatal-fault witness -- unfiltered:
+			 * the global printk_ratelimit swallows show_signal's
+			 * "segfault at" under the exit-census spam, and the
+			 * RIP is what names the child's NULL-deref site. */
+			pr_info("corten-dbg: sg FAULT-ACCERR %s[%d] a=%lx ip=%lx err=%lx\n",
+				current->comm, current->pid, address, regs->ip,
+				error_code);
 			if (user_mode(regs))
 				force_sig_fault(SIGSEGV, SEGV_ACCERR,
 						(void __user *)address);
@@ -1384,6 +1404,9 @@ void do_user_addr_fault(struct pt_regs *regs,
 				bad_area_nosemaphore(regs, error_code, address);
 			return;
 		case CORTEN_FAULT_MAPERR:
+			pr_info("corten-dbg: sg FAULT-MAPERR %s[%d] a=%lx ip=%lx err=%lx\n",
+				current->comm, current->pid, address, regs->ip,
+				error_code);
 			bad_area_nosemaphore(regs, error_code, address);
 			return;
 		case CORTEN_FAULT_OOM:

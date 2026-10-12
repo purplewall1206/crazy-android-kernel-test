@@ -757,3 +757,49 @@ reconcile 处理**（计数器归零于 mm 释放前）。
 **状态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿;
 churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
 34→2（reconcile 对账 ✓）。
+
+---
+
+## 附三十一: sec 156 -- generator-fork "Protocol error" 的根因链与三重修复（#574-#589, 12 轮 boot 实证）
+
+**判决级突破**: systemd 生成器沙箱子进程的静默死亡被 12 轮
+仪器化 boot 逐层定罪。**根因 #1（已修）**: W-4 采納后 fork 回放
+的 sec 133 采納臂从**已被 fork 拷贝臂 wrprotect 的子 PTE** 推导
+perm —— `pte_write(cur)` 恒假 —— 槽位被记录为 MAPPED+**READ**-
+only+SHARED; 子进程首个栈写经 `DISP_COW_COPY`（"契约只读"）→
+ACCERR → SIGSEGV → 父端握手失败 → "Protocol error" 冻结。
+实证: `sg COWCOPY-ACCERR systemd[81] a=7ffc1e7e5000 w=1
+m.state=1 m.perm=1 m.flags=1`（栈 arena [7ffc1e7a8000,7ffc1e7e8000)
+内的 argv 槽）。
+
+**修复三重**: (1) replay 采納臂 perm 改自范围契约（extent 窗
+= ar->prot, frame 补全窗 = 覆盖 VMA）—— adopt_perm 参数;
+(2) mark 侧采納: mark_window 对"未记录但父 PTE 在场"的槽
+（setup_arg_pages 搬移的 bprm/argv PTE 无 arena 记账）先
+`corten_map`（mark() 拒绝 INVALID→MAPPED 边——首修的
+-EINVAL 塌缩成 ENOMEM 的 #576 boot 实证）再 SHARED 标记,
+父侧元数据同时入账; (3) **fork gap pass**: 镜像末端对每窗
+比对父/子 PTE, 父在场而子缺失的槽就地补拷贝+记账+打印
+（#580 boot: **零缺口** —— 子进程 PTE 完备, 排除缺页类）。
+
+**仪器套件**（全数入册）: sg MIRROR（每 arena 形状）、
+MARK-ADOPT（采納槽清单）、FRESH（fresh-fill 见证, 首叉后重
+武装）、GAP、DUPMM-FAIL（fork 原始错误码）、GROUP-EXIT
+（MODE 任务致命信号死亡）、FORCE-SEGV（force_sig 递送）、
+BAD-AREA（RIP+err）、FRESH-ACCERR/COWCOPY-ACCERR/DISP-ACCERR
+（三个 ACCERR 产点）、FORK-FOREIGN 计数、child 侧 -EPROTO
+降级（sec 151 的镜像面, 队列项闭）。
+
+**根因 #2（在册, 下会话 P0）**: 修完 #1 后子进程存活推进至
+0.3-0.4s, 死于 `ip=0` 跳零（`sg BAD-AREA systemd[83] a=0
+ip=0 err=14 code=1`—— err bit3=RSVD）; #585/#586 boot 的表
+遍历见证 GPF 出**子进程 upper 表垃圾项**（pud=0xa01ff000f000
+非规范; p4d 级 0xf000ff53f000ff53 双 u32 模式）—— 上层表
+被写入了数据模式字节。写者未名（corten marker 均为 xarray
+槽值, 非表项编码）; 下一轮用 KProbe/crash 工具在安全上下文
+dump。
+
+**回归验证**: corten 核心套件全绿（27/0/1, on 腿）; arena 套
+件 6 败**为基线存量**（stash 基线同败 6 项且多败一项
+file_rmap_shared —— sec 156 实际净修一项）; #587 终版零 oops;
+systemd 冻结维持（诚实登记: 根因 #2 未闭）。

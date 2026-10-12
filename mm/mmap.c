@@ -2327,6 +2327,13 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 	retval = arch_dup_mmap(oldmm, mm);
 loop_out:
 #ifdef CONFIG_CORTEN_MM_ARENA
+	/* sec 156: the sg fork-abort witness -- dup_mm() collapses every
+	 * dup_mmap() error to -ENOMEM at the syscall boundary, so the raw
+	 * verdict must be named here (the systemd generator sandbox's
+	 * "Cannot allocate memory"/"Protocol error" faces). */
+	if (retval)
+		pr_info_ratelimited("corten-dbg: sg DUPMM-FAIL comm=%s pid=%d ret=%d\n",
+				    current->comm, current->pid, retval);
 	/*
 	 * R-A/R-G unwind closure for the aborts that skip fork_commit()
 	 * (fatal signal in the loop above, copy_page_range failure,

@@ -1723,6 +1723,14 @@ int force_sig_fault_to_task(int sig, int code, void __user *addr,
 	info.si_errno = 0;
 	info.si_code  = code;
 	info.si_addr  = addr;
+	/* sec 156: the sg delivery witness -- the arena hook's fatal
+	 * deliveries print nothing anywhere else (the fast hook's
+	 * force_sig_fault ACCERR arm has no show_signal call site), so
+	 * the sandbox child's silent SIGSEGV deaths were unwitnessed. */
+	if (IS_ENABLED(CONFIG_CORTEN_MM) && sig == SIGSEGV && t->mm &&
+	    READ_ONCE(t->mm->corten_mode))
+		pr_info("corten-dbg: sg FORCE-SEGV %s[%d] code=%d addr=%lx\n",
+			t->comm, t->pid, code, (unsigned long)addr);
 	return force_sig_info_to_task(&info, t, HANDLER_CURRENT);
 }
 

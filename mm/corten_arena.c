@@ -296,6 +296,7 @@ static atomic_long_t corten_nr_chg_file_cow;     /* sec 69c: file_cow arm charge
 static atomic_long_t corten_nr_chg_unuse_pull;   /* sec 69c: unuse_cache_pull charges */
 static atomic_long_t corten_nr_chg_fork_copy;    /* sec 69c: fork mirror copy charges */
 static atomic_long_t corten_nr_chg_fork_pin;     /* sec 69c: fork pinned-copy charges */
+static atomic_long_t corten_nr_fork_foreign;     /* sec 155: fork-dropped foreign entries */
 static atomic_long_t corten_nr_rel_cow_old;      /* sec 70: cow_write old-folio release */
 static atomic_long_t corten_nr_rel_file_unmap;   /* sec 70: try_to_unmap file-branch release */
 static atomic_long_t corten_nr_rel_swap_out;     /* sec 70: swap-out driver release */
@@ -551,6 +552,14 @@ void corten_trace_release_va(struct mm_struct *mm, unsigned long addr)
 EXPORT_SYMBOL_GPL(corten_trace_release_va);
 
 static pmd_t *corten_arena_pmd(struct mm_struct *mm, unsigned long addr);
+
+/* sec 156: the sg fresh-fill witness counter -- reset at the first fork
+ * so the window catches the forked children's fills, not boot noise. */
+static atomic_long_t corten_sg_fresh_n;
+/* the mark-side adoption's witness counter (per boot). */
+static atomic_long_t corten_sg_mark_adopt_n;
+/* the fork gap pass's witness counter (per boot). */
+static atomic_long_t corten_sg_gap_n;
 
 /* sec 131: the arena slot-record discriminator.  In arena frames the
  * leaf slots double as the slot records (corten_pte_meta, 8 bytes:
@@ -10583,6 +10592,64 @@ corten_arena_fork_mark_window(struct corten_arena *ar, unsigned long addr,
 		if (unlikely(ret))
 			break;
 
+		/* sec 156: the mark-side adoption.  A resident page whose
+		 * slot was never recorded (setup_arg_pages moves the
+		 * bprm/argv PTEs onto the final stack VMA with no arena
+		 * mark) would ride the fork with an INVALID snapshot: the
+		 * replay's adoption arm then records the child from its
+		 * ALREADY-WROPROTECTED PTE and the slot lands READ-ONLY
+		 * SHARED -- the child's first stack write ACCERRs through
+		 * DISP_COW_COPY (the sg "Protocol error" death).  Adopt
+		 * from the RANGE contract instead: record MAPPED with
+		 * ar->prot's perm (the parent PTE is already wrprotected
+		 * by the auto copy arm, so it cannot source the write
+		 * bit), then the SHARED mark below runs -- the parent's
+		 * meta becomes recorded (its own post-fork write takes
+		 * the COW) and the replay's MAPPED arm carries the true
+		 * perm to the child. */
+		if (m.state == CORTEN_INVALID && !m.perm) {
+			pte_t *ptep, cur;
+			spinlock_t *ptl;	/* nests below desc write */
+
+			ptep = pte_offset_map_lock(ar->mm, pmdp, a, &ptl);
+			if (!ptep) {
+				ret = -EAGAIN;
+				break;
+			}
+			cur = ptep_get(ptep);
+			pte_unmap_unlock(ptep, ptl);
+			if (pte_present(cur) && !pte_special(cur)) {
+				m.state = CORTEN_MAPPED;
+				m.perm = CORTEN_PERM_READ |
+					 (READ_ONCE(ar->prot) &
+					  (CORTEN_PERM_WRITE |
+					   CORTEN_PERM_EXEC)) |
+					 (pte_exec(cur) ? CORTEN_PERM_EXEC
+							: 0);
+				m.flags = 0;
+				/* sec 156: Invalid->MAPPED is the map()
+				 * edge (mark() refuses it -- the first
+				 * #576 boot's dup_mmap -EINVAL collapse);
+				 * the SHARED flag mark below then rides on
+				 * the recorded MAPPED state. */
+				ret = corten_map(&txn, a, pte_page(cur),
+						 m.perm, 0);
+				if (ret)
+					break;
+				{
+					if (atomic_long_inc_return(&corten_sg_mark_adopt_n) <= 64)
+						pr_info("corten-dbg: sg MARK-ADOPT %s[%d] a=%lx ar=[%lx,%lx)\n",
+							current->comm, current->pid,
+							a, ar->start, ar->end);
+				}
+				/* fall through to the SHARED mark below;
+				 * the snapshot records the post-mark state */
+			} else {
+				snap[pte_index(a)] = m;
+				continue;
+			}
+		}
+
 		if (m.state != CORTEN_MAPPED) {
 			snap[pte_index(a)] = m;
 			continue;
@@ -10937,8 +11004,19 @@ retry:
 			 */
 			swp_entry_t entry = pte_to_swp_entry(pte);
 
-			if (non_swap_entry(entry))
+			if (non_swap_entry(entry)) {
+				/* sec 155: the sg skip witness -- a
+				 * migration/marker entry the fork drops;
+				 * the child's slot stays empty and its
+				 * first touch must be served by the
+				 * mirrored meta (or it dies). */
+				long n = atomic_long_inc_return(&corten_nr_fork_foreign);
+
+				if (n <= 8)
+					pr_info("corten-dbg: sg FORK-FOREIGN a=%lx pte=%lx\n",
+						a, pte_val(pte));
 				continue;
+			}
 			if (unlikely(swap_duplicate(entry) < 0)) {
 				ret = -EIO;
 				break;
@@ -11126,7 +11204,8 @@ int corten_arena_test_sweep_adopt_anon(struct mm_struct *mm,
 static int corten_arena_fork_copy_window(struct mm_struct *mm,
 					 unsigned long addr,
 					 unsigned long win_end,
-					 struct corten_pte_meta *snap)
+					 struct corten_pte_meta *snap,
+					 u8 adopt_perm)
 {
 	pmd_t *pmdp = corten_arena_pmd(mm, addr);
 	struct corten_txn txn;
@@ -11149,6 +11228,17 @@ static int corten_arena_fork_copy_window(struct mm_struct *mm,
 		ret = corten_lock_range(mm, addr, win_end - addr, &txn);
 		if (ret != -EAGAIN || ++tries >= 2)
 			break;
+	}
+	/* sec 155: the child-side degradation (the parent's sec 151 face
+	 * landed in fork_mark_window): a corrupt/deep tree view (-EPROTO)
+	 * on the CHILD's tree during the replay degrades the same way --
+	 * the window's records stay unreplayed (the exit census books the
+	 * residue; the billing reconcile aligns the counter) but the
+	 * mirror no longer aborts the fork with "Protocol error". */
+	if (ret == -EPROTO) {
+		pr_info_ratelimited("corten: fork-copy-window EPROTO degraded va=%lx\n",
+				    addr);
+		return 0;
 	}
 	if (ret == -ENOENT || ret == -EOPNOTSUPP)
 		return 0;
@@ -11194,11 +11284,22 @@ static int corten_arena_fork_copy_window(struct mm_struct *mm,
 		    pte_present(cur) && !pte_special(cur)) {
 			page = pte_page(cur);
 			nm.state = CORTEN_MAPPED;
+			/* sec 156: the adoption perm is the RANGE's
+			 * contract (@adopt_perm: the arena prot for the
+			 * extent windows, the covering VMA's for the frame
+			 * pass), never the child PTE's -- the fork copy
+			 * wrprotected the child before the replay ran, so
+			 * pte_write() reads the COW share, not the range.
+			 * The pre-fix recorded READ-ONLY-SHARED slots and
+			 * the child's first write ACCERR'd through
+			 * DISP_COW_COPY (the sg generator-child death). */
 			nm.perm = CORTEN_PERM_READ |
-				  (pte_write(cur) ? CORTEN_PERM_WRITE : 0) |
+				  (adopt_perm & (CORTEN_PERM_WRITE |
+						 CORTEN_PERM_EXEC)) |
 				  (pte_exec(cur) ? CORTEN_PERM_EXEC : 0);
 			nm.flags = CORTEN_PF_SHARED |
-				   (pte_write(cur) ? CORTEN_PF_WRITABLE : 0);
+				   ((adopt_perm & CORTEN_PERM_WRITE) ?
+				    CORTEN_PF_WRITABLE : 0);
 			ret = corten_map(&txn, a, page, nm.perm, 0);
 			if (!ret)
 				ret = corten_mark(&txn, a, PAGE_SIZE, &nm);
@@ -11343,6 +11444,18 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 		return 0;
 	}
 
+	/* sec 155: the sg mirror witness -- the forked arenas' shapes for
+	 * the first mirrors of a boot (the generator child's lost-page
+	 * face needs the arena extent beside its fault prints).  The
+	 * first fork also re-arms the sg fresh-fill witness window. */
+	if (atomic_long_read(&corten_nr_fork_faithful) < 4) {
+		atomic_long_set(&corten_sg_fresh_n, 0);
+		pr_info("corten-dbg: sg MIRROR %s[%d] ar=[%lx,%lx) auto=%d pvma=%px any_piece=%d\n",
+			current->comm, current->pid,
+			ar->start, ar->end, !!READ_ONCE(ar->auto_shape),
+			READ_ONCE(ar->vma), any_piece);
+	}
+
 	/* Mirror the parent's cached shadow-VMA: the same piece, when the
 	 * child inherited it (its start is the identity); NULL otherwise,
 	 * the established safe degradation (fault paths fall back, the
@@ -11432,7 +11545,8 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 		if (ret)
 			return ret;
 
-		ret = corten_arena_fork_copy_window(mm, addr, win_end, snap);
+		ret = corten_arena_fork_copy_window(mm, addr, win_end, snap,
+						    READ_ONCE(ar->prot));
 		if (ret)
 			return ret;
 	}
@@ -11466,9 +11580,151 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 				continue;
 
 			ret = corten_arena_fork_copy_window(mm, faddr,
-							    win_end, snap);
+							    win_end, snap,
+							    fv->vm_flags & VM_WRITE ?
+							    CORTEN_PERM_WRITE |
+							    CORTEN_PERM_READ |
+							    (fv->vm_flags & VM_EXEC ?
+							     CORTEN_PERM_EXEC : 0) :
+							    0);
 			if (ret)
 				return ret;
+		}
+	}
+
+	/* sec 156: the fork gap pass -- the mirror's completeness closure.
+	 * Every earlier arm (the auto copy arm, the VMA loop's legacy
+	 * copy, the replay, both adoptions) leaves the invariant implicit;
+	 * the sandbox child's NULL jump proved a parent-PRESENT slot can
+	 * still reach the child PTE-none (the anon arms then serve fresh
+	 * zero over content -- silent corruption).  Walk every arena
+	 * window and CLOSE each such gap in place: copy the PTE (the COW
+	 * share shape), record the meta, and print the witness naming the
+	 * slot so the root arm goes into the ledger. */
+	{
+		unsigned long gaddr;
+
+		for (gaddr = ar->start; gaddr < ar->end;
+		     gaddr = min((gaddr | (PMD_SIZE - 1)) + 1, ar->end)) {
+			unsigned long win_end = min((gaddr | (PMD_SIZE - 1)) + 1,
+						    ar->end);
+			pgd_t *gpgdp;
+			p4d_t *gp4dp;
+			pud_t *gpudp;
+			pmd_t *spmdp, *dpmdp;
+			pte_t *sptep, *dptep;
+			spinlock_t *sptl, *dptl;
+			struct corten_txn txn;
+			unsigned long a;
+			int tries = 0;
+
+			spmdp = corten_arena_pmd(ar->mm, gaddr);
+			if (!spmdp || !pmd_present(READ_ONCE(*spmdp)) ||
+			    pmd_leaf(READ_ONCE(*spmdp)))
+				continue;
+
+			gpgdp = pgd_offset(mm, gaddr);
+			gp4dp = p4d_alloc(mm, gpgdp, gaddr);
+			if (!gp4dp)
+				return -ENOMEM;
+			gpudp = pud_alloc(mm, gp4dp, gaddr);
+			if (!gpudp)
+				return -ENOMEM;
+			dpmdp = pmd_alloc(mm, gpudp, gaddr);
+			if (!dpmdp)
+				return -ENOMEM;
+
+			for (;;) {
+				ret = corten_lock_range(mm, gaddr,
+							win_end - gaddr, &txn);
+				if (ret != -EAGAIN || ++tries >= 2)
+					break;
+			}
+			if (ret == -ENOENT || ret == -EOPNOTSUPP ||
+			    ret == -EPROTO)
+				continue;	/* untracked: nothing to close */
+			if (ret)
+				return ret;
+
+			sptep = pte_offset_map(spmdp, gaddr);
+			if (!sptep) {
+				corten_unlock(&txn);
+				return -EAGAIN;
+			}
+			dptep = pte_offset_map_lock(mm, dpmdp, gaddr, &dptl);
+			if (!dptep) {
+				pte_unmap(sptep);
+				corten_unlock(&txn);
+				return -EAGAIN;
+			}
+			sptl = pte_lockptr(ar->mm, spmdp);
+			spin_lock_nested(sptl, SINGLE_DEPTH_NESTING);
+
+			for (a = gaddr; a < win_end;
+			     a += PAGE_SIZE, sptep++, dptep++) {
+				pte_t pte = ptep_get(sptep), cpte;
+				struct page *page;
+				struct folio *folio;
+				struct corten_pte_meta nm;
+				int mret;
+
+				cpte = ptep_get(dptep);
+				if (!pte_present(pte) || pte_special(pte) ||
+				    !pte_none(cpte))
+					continue;
+
+				page = pte_page(pte);
+				folio = page_folio(page);
+				folio_get(folio);
+
+				if (!corten_folio_is_filemap(folio)) {
+					folio_dup_anon_rmap_novma(folio, page);
+					atomic_long_inc(&corten_nr_chg_fork_copy);
+					add_mm_counter(mm, MM_ANONPAGES, 1);
+					corten_trace_charge_arm(mm, a,
+							CORTEN_TRACE_FORK_COPY);
+					corten_trace_charge_va(mm, a,
+							CORTEN_TRACE_FORK_COPY);
+				} else {
+					folio_dup_file_rmap_novma(folio);
+					add_mm_counter(mm,
+						       mm_counter_file(folio),
+						       1);
+				}
+				if (pte_write(pte))
+					ptep_set_wrprotect(ar->mm, a, sptep);
+				set_pte_at(mm, a, dptep,
+					   pte_mkold(pte_wrprotect(pte)));
+
+				/* The record: MAPPED SHARED, the write
+				 * identity from the range contract.  A meta
+				 * failure degrades (counted) -- the fork
+				 * aborting here would be the worse face;
+				 * the fresh gate answers an unrecorded slot
+				 * with the arena prot. */
+				nm.state = CORTEN_MAPPED;
+				nm.perm = CORTEN_PERM_READ |
+					  (READ_ONCE(ar->prot) &
+					   (CORTEN_PERM_WRITE |
+					    CORTEN_PERM_EXEC));
+				nm.flags = CORTEN_PF_SHARED |
+					   ((nm.perm & CORTEN_PERM_WRITE) ?
+					    CORTEN_PF_WRITABLE : 0);
+				mret = corten_map(&txn, a, page, nm.perm, 0);
+				if (!mret)
+					mret = corten_mark(&txn, a, PAGE_SIZE,
+							   &nm);
+				if (atomic_long_inc_return(&corten_sg_gap_n) <=
+				    16)
+					pr_info("corten-dbg: sg GAP %s[%d] a=%lx ar=[%lx,%lx) mret=%d\n",
+						current->comm, current->pid,
+						a, ar->start, ar->end, mret);
+			}
+
+			spin_unlock(sptl);
+			pte_unmap_unlock(dptep - 1, dptl);
+			pte_unmap(sptep - 1);
+			corten_unlock(&txn);
 		}
 	}
 
@@ -14020,8 +14276,34 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 
 		if (!corten_arena_perm_ok(&gate, ctx->write,
 					  ctx->instruction)) {
+			/* sec 155: the sg ACCERR witness -- the FRESH gate's
+			 * fatal verdict names its meta bound (the systemd
+			 * generator child dies silently through this arm
+			 * because force_sig_fault's ACCERR delivery prints
+			 * nothing, unlike bad_area's "segfault at"). */
+			pr_info_ratelimited("corten-dbg: sg FRESH-ACCERR %s[%d] a=%lx w=%d x=%d gate.state=%u gate.perm=%x ar.prot=%x\n",
+					    current->comm, current->pid,
+					    ctx->addr, !!ctx->write,
+					    !!ctx->instruction,
+					    gate.state, gate.perm,
+					    READ_ONCE(ctx->ar->prot));
 			corten_unlock(&txn);
 			return CORTEN_F_ACCERR;
+		}
+		{
+			/* sec 156: the sg fresh-fill witness -- a forked
+			 * child fresh-filling a page the parent had
+			 * resident is the NULL-deref corruption's face;
+			 * the counter resets at the first fork (see the
+			 * declaration) so the window catches the forked
+			 * children, not boot noise. */
+			if (ctx->write &&
+			    atomic_long_inc_return(&corten_sg_fresh_n) <= 24)
+				pr_info("corten-dbg: sg FRESH %s[%d] a=%lx ar=[%lx,%lx) perm=%x\n",
+					current->comm, current->pid,
+					ctx->addr, READ_ONCE(ctx->ar->start),
+					READ_ONCE(ctx->ar->end),
+					gate.perm);
 		}
 		ret = corten_mark(&txn, ctx->addr, PAGE_SIZE, &fresh);
 		switch (ret) {
@@ -14157,9 +14439,21 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		 * outcome.  It answers SIGSEGV for every writer, kernel
 		 * path included -- see the [T3] note above the dispatch.
 		 */
+		/* sec 155: the sg ACCERR witness -- a heap-shaped write
+		 * landing here means the child's mirrored meta lost the
+		 * WRITABLE record (the fork mark/replay's face). */
+		pr_info_ratelimited("corten-dbg: sg COWCOPY-ACCERR %s[%d] a=%lx w=%d m.state=%u m.perm=%x m.flags=%x\n",
+				    current->comm, current->pid, ctx->addr,
+				    !!ctx->write, m.state, m.perm, m.flags);
 		corten_unlock(&txn);
 		return CORTEN_F_ACCERR;
 	case CORTEN_DISP_ACCERR:
+		/* sec 155: the sg ACCERR witness (the dispatch's own
+		 * fatal verdict). */
+		pr_info_ratelimited("corten-dbg: sg DISP-ACCERR %s[%d] a=%lx w=%d x=%d m.state=%u m.perm=%x m.flags=%x\n",
+				    current->comm, current->pid, ctx->addr,
+				    !!ctx->write, !!ctx->instruction,
+				    m.state, m.perm, m.flags);
 		corten_unlock(&txn);
 		return CORTEN_F_ACCERR;
 	case CORTEN_DISP_STUB:

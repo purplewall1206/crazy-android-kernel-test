@@ -1124,6 +1124,16 @@ do_group_exit(int exit_code)
 	}
 	trace_android_vh_do_group_exit(current);
 
+	/* sec 156: the sg death witness -- every fatal-signal group exit of
+	 * a MODE task names itself (the systemd generator sandbox's silent
+	 * pre-exec deaths print nothing through force_sig_fault's ACCERR
+	 * delivery, and the ratelimited fault witnesses drown in the exit
+	 * census spam).  exit_code's low byte is the terminating signal. */
+	if (IS_ENABLED(CONFIG_CORTEN_MM) && current->mm &&
+	    READ_ONCE(current->mm->corten_mode))
+		pr_info_ratelimited("corten-dbg: sg GROUP-EXIT %s[%d] code=%d\n",
+				    current->comm, current->pid, exit_code);
+
 	do_exit(exit_code);
 	/* NOTREACHED */
 }
