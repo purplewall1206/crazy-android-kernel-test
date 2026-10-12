@@ -2819,3 +2819,26 @@ add_mm_counter ANON 通道每次 +/- 必经, 带 _RET_IP_ 调用者）**, 但其
 **状态总账**: 残差 34→2（94% 闭合, 判别器语义修正）; 全套仪器在
 树; N-boot A/B 各 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h
 判定 10-14 02:24）; E2 PR 待批复。
+
+## 152. 全量插桩收敛判决 + 交接（2026-10-12 晨, #571）
+
+**anon-delta ring 判决（全量插装终版）**: exit 窗口的 MM_ANONPAGES
+变化 = **全部 −1 @ corten_arena_zap_window**（每 exit 3 次，与
+pre 5 → post 2 精确吻合）——**没有 +2 增量位点，没有未计数释放：
+计数器与所有 traced 通道完全平衡**。
+
+**⇒ 残余 2 的最终定性**: fork 的 tree_copy 计费（+1/页）对
+present 格式记录槽的**合法形态计费**——这些记录槽在 exit 时被
+unmap 的 zap 走 vm_normal_page-NULL 路径清除（无释放，无计数递
+减）→ **计费孤儿 = 记录槽的"页形态计费"设计行为**，非泄漏。
+修复 = copy_present_ptes 对记录槽（meta INVALID + pte present 格
+式）的**计费跳过合同**（设计已录 sec 129）——判别器 #531 的
+meta-INVALID 门已覆盖此形态（mstate=0 → skip ✓）但 val:2 仍在：
+**说明 #531 的判别器在 fork 时未命中（fork 时这些槽的 parent
+meta 可能仍 MAPPED——记录化发生在 fork 之后的 child 生命周期）**
+⇒ 收口 = **记录化位点（child 生命周期内）的插桩**——与 sec 141
+的结论合流。
+
+**交接状态**: 残差 34→2（94% 闭合）; 全套仪器在树; N-boot A/B 各
+5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
+E2 PR 待批复。

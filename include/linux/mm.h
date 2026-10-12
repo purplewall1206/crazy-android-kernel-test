@@ -2745,6 +2745,8 @@ void mm_trace_rss_stat(struct mm_struct *mm, int member);
 /* sec 76 census: the MODE ANONPAGES channel's total intake/outgo. */
 void corten_note_anon_counter(struct mm_struct *mm, unsigned long caller,
 			      long val);
+void corten_note_anon_delta(struct mm_struct *mm, long val,
+			    unsigned long caller);
 
 static inline void add_mm_counter(struct mm_struct *mm, int member, long value)
 {
@@ -2755,8 +2757,10 @@ static inline void add_mm_counter(struct mm_struct *mm, int member, long value)
 	 * (chg_TOTAL - rel_TOTAL == the exit residual by construction;
 	 * the diff against the per-arm sum names the unattributed arm).
 	 */
-	if (IS_ENABLED(CONFIG_CORTEN_MM_ARENA) && member == MM_ANONPAGES)
+	if (IS_ENABLED(CONFIG_CORTEN_MM_ARENA) && member == MM_ANONPAGES) {
 		corten_note_anon_counter(mm, value, _RET_IP_);
+		corten_note_anon_delta(mm, value, _RET_IP_);
+	}
 
 	mm_trace_rss_stat(mm, member);
 }
@@ -2766,6 +2770,8 @@ static inline void inc_mm_counter(struct mm_struct *mm, int member)
 	percpu_counter_inc(&mm->rss_stat[member]);
 
 	mm_trace_rss_stat(mm, member);
+	if (IS_ENABLED(CONFIG_CORTEN_MM_ARENA) && member == MM_ANONPAGES)
+		corten_note_anon_delta(mm, 1, _RET_IP_);
 }
 
 static inline void dec_mm_counter(struct mm_struct *mm, int member)
@@ -2773,6 +2779,8 @@ static inline void dec_mm_counter(struct mm_struct *mm, int member)
 	percpu_counter_dec(&mm->rss_stat[member]);
 
 	mm_trace_rss_stat(mm, member);
+	if (IS_ENABLED(CONFIG_CORTEN_MM_ARENA) && member == MM_ANONPAGES)
+		corten_note_anon_delta(mm, -1, _RET_IP_);
 }
 
 /* Optimized variant when folio is already known not to be anon */

@@ -584,6 +584,8 @@ void corten_note_freepte_live(int nr);
 void corten_note_funnel_ovfl(void);
 void corten_note_anon_counter(struct mm_struct *mm, unsigned long caller,
 			      long val);
+void corten_note_anon_delta(struct mm_struct *mm, long val,
+			    unsigned long caller);
 void corten_trace_charge_arm(struct mm_struct *mm, unsigned long addr, int arm);
 void corten_trace_charge(struct mm_struct *mm, struct page *page);
 void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm);

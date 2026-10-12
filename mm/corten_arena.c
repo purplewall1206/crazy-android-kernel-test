@@ -350,6 +350,27 @@ static long corten_et_delta_seq;
 static long corten_et_delta[16];
 static unsigned long corten_et_caller[16];
 
+/* sec 152: the global anon-delta ring -- every MM_ANONPAGES change of
+ * every MODE mm lands here (delta + caller IP), no mm filter.  The
+ * exit census prints the window's deltas: the +2's increment site
+ * names itself. */
+static unsigned long corten_ad_val[32];
+static unsigned long corten_ad_caller[32];
+static unsigned long corten_ad_mm[32];
+static int corten_ad_n;
+
+void corten_note_anon_delta(struct mm_struct *mm, long val,
+			    unsigned long caller)
+{
+	int i = corten_ad_n % 32;
+
+	corten_ad_val[i] = val;
+	corten_ad_caller[i] = caller;
+	corten_ad_mm[i] = (unsigned long)mm;
+	corten_ad_n++;
+}
+EXPORT_SYMBOL_GPL(corten_note_anon_delta);
+
 void corten_note_anon_counter(struct mm_struct *mm, unsigned long caller,
 			      long val)
 {
@@ -6770,6 +6791,25 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					corten_rec_sample_va[zi],
 					corten_rec_sample_pte[zi]);
 			pr_cont("\n");
+			/* sec 152: the global anon-delta ring -- the last
+			 * 32 MM_ANONPAGES changes of any MODE mm (the
+			 * val:2's increment site names itself). */
+			{
+				int di;
+
+				pr_info("corten: anon-deltas:");
+				for (di = 0; di < 32 && di < corten_ad_n;
+				     di++) {
+					int slot = di % 32;
+
+					pr_cont(" %lx:%+ld@%pS",
+						corten_ad_mm[slot],
+						corten_ad_val[slot],
+						(void *)
+						corten_ad_caller[slot]);
+				}
+				pr_cont("\n");
+			}
 			pr_info("corten: leg-sample n=%d:", corten_leg_sample_n);
 			for (zi = 0; zi < corten_leg_sample_n && zi < 8;
 			     zi++)
