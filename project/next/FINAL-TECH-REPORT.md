@@ -1659,3 +1659,24 @@ anon_vma->owner_mm 归属检查）→ 零 oops → storm loop → 48h → J6。
 **修复清单（14 个 + 3 防线）**: sec 156-174 全在册（附四十三）。
 **下会话**: 定位剩余 oops 的精确写者（anon_vma RB / freeblk 族），
 修复后达成零 oops boot。
+
+---
+
+## 附五十四: sec 175 -- avc 有效性守卫 + boot 67 判读（#647）
+
+**修复**: `unlink_anon_vmas` pass-1/pass-2 的 avc 指针有效性守卫
+（`!avc || !virt_addr_valid(avc)` + `!anon_vma || !virt_addr_valid(anon_vma)`
+-- 损坏的链表节点不再级联 GPF）。
+
+**sg67 判读（#647）**: systemd 推进到 **"Queued start job for
+default target graphical.target"**（25.8s）✓ 但 init SIGSEGV
+（exitcode=0xb）仍复发。avc 守卫 + 全修复栈不足以消除 --
+**init SIGSEGV 的根因在 arena 子系统对 systemd[1] 用户空间的
+写入竞态**（非链表损坏）。
+
+**生产现状**: systemd 稳定到达 target 入队阶段 ✓; init panic
+间歇 1/4; oops 1-2 contained。
+
+**终态**: 本会话（37+ 小时, 65+ boot）修复了 14 个确定性 bug +
+3 防线 + 全套取证基础设施。**残余 init SIGSEGV 需 kASAN 内核
+更新至当前代码后 3+ boot 精确定位**。

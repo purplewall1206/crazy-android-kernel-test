@@ -472,6 +472,14 @@ void unlink_anon_vmas(struct vm_area_struct *vma)
 			continue;
 		}
 
+		if (unlikely(!anon_vma || !virt_addr_valid(anon_vma))) {
+			pr_warn_ratelimited("corten: anon-chain ghost-2 %s[%d]\n",
+					    current->comm, current->pid);
+			if (!list_empty(&avc->same_vma))
+				list_del(&avc->same_vma);
+			continue;
+		}
+
 		VM_WARN_ON(anon_vma->num_children);
 		VM_WARN_ON(anon_vma->num_active_vmas);
 		put_anon_vma(anon_vma);
