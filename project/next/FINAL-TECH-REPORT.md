@@ -649,3 +649,20 @@ child 生命周期内**）⇒ 收口 = child 生命周期内的记录化位点�
 **总账**: 残差 34→2（94% 闭合）; 全套仪器在树; N-boot A/B 各 5/5
 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）; E2
 PR 待批复。
+
+---
+
+## 附二十九: billing reconcile 与 page-form 计费发现（sec 151b, 927d4818）
+
+**落地**: (1) census 的 billing reconcile（残差 VA 的 pte=0 + arm=11
+→ 计数器递减对账）; (2) probe 门从 128 放开到全 exit。
+
+**发现**: reconcile 未命中——census residue-n=0（trace_vxa 集已空）
+但 counter=2。**⇒ val:2 的计费 = page-form-only
+（corten_trace_charge(mm, page) 不入 VA 集）**——VA-keyed census 的
+结构性盲区。**下会话收口**: add_mm_counter 层的增量追踪（非
+VA-keyed）或 page-form 计费的 VA 补充 trace。
+
+**状态**: 残差 34→2（94% 闭合）; 最终形零 oops; N-boot A/B 各
+5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
+E2 PR 待批复。
