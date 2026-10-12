@@ -900,3 +900,24 @@ PID 1（"Attempted to kill init! exitcode=0x9"）。该面 = 生成器自
 
 **回归**: arena 套件 fork_file_dirty 绿; 存量 6 败不变（基线对证）;
 核心 corten 套件绿。
+
+### 附三十三续: 复跑确认（#608 ×2 boot）与残余面定界
+
+复跑 boot（sg28, 156s+ 存活）: "Protocol error" 再次 **0**; 12 个
+GROUP-EXIT 全部 code=0（debug/fstab/rc-local/hibernate/gpt-auto/
+tpm2/getty 生成器含常规 SIGTERM 15/exit-1 形态）-- **修复可复现**。
+无 init panic（sg27 的退出遍历级联未复现）。
+
+残余 oops（下会话 P0 队列, 均非生成器冻结族）:
+1. **窗口域 exec 任务的路径遍历**: `set_root` NULL deref（
+   `do_faccessat`→path_init→nd_jump_root, 用户 RIP=0x100000022c37
+   = 16T 窗口域, 任务 systemd-system-update-generator）。fs->root
+   空 -- 窗口域 exec 后 fs 契约的面。
+2. **`(exec-inner)`[92] irqs-disabled 退出** + `free_large_kmalloc`
+   WARN 族（与 s572 观察同源）。
+3. sg27 单发: getty 生成器退出 unmap_vmas 走到垃圾 maple 项
+   （未复现）。
+
+**验收对照**: ①"Protocol error 消失" = 2/2 boot 达成; ②生成器全量
+运行 = 达成; ③systemd 管理器越过生成器阶段 = 达成（graphical.target
+入队）; ④"全量启动零 oops" = 未达成（残余 oops 族如上, 下会话首项）。
