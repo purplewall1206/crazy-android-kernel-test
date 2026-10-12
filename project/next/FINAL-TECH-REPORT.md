@@ -1191,3 +1191,34 @@ containment 有效）。
 
 **storm loop**: `project/bin/storm-loop.sh` 已入册（40 进程生成器
 风暴 + 200 fork 风暴 + 签名中止循环）; 待下一会话启动长跑。
+
+---
+
+## 附四十一: sec 167 -- 多 boot 统计与 kASAN 定位终态（sg52-58, 7 boot; #625-#633）
+
+**多 boot 统计**: init panic（"Attempted to kill init"）从基线 100%
+降至 **间歇**（sg52/53/56/58 部分复发; sg37/39/41/51 存活）。
+"Protocol error" 同为间歇（sg56 归零, sg57/58 复发 1 次）。
+**判定**: 残余损坏 = **非确定性竞态**（生成器 exec-inner 的 old-mm
+拆卸与 PT 页退休/释放的窗口竞争），非确定性逻辑 bug -- 黑盒
+boot-verify 循环无法收敛，必须 kASAN 反复捕获以建立竞态剖面。
+
+**kASAN 交棒包（完整）**:
+- 内核: `/home/ppw/vm/bzImage-kasan-sweep`（含 sec 165 互锁 +
+  sweep + 双减 sentinel）; 配置存档 `config-prod-sec163`;
+- 报告: `results/r08/sec163/kasan-first-report.log` +
+  `kasan-swept-report.log`（check_empty_locked UAF, PT 页全页
+  poisoned, desc->mm 读取）;
+- 精确面: **exec-inner 的 old-mm exit（free_pgtables →
+  pte_free_tlb → corten_on_pte_free → uninstall: stale 发布 +
+  write_unlock → 页延迟释放）与 declare_carrier 的
+  check_empty_locked 读者（pin + read_lock + meta 走）之间的
+  跨 CPU 竞态** -- 读者持有 desc 读锁的窗口内, 另一 CPU 的
+  TLB funnel 已放页。
+- **修复方向**: uninstall 的 stale 发布改为在 write-lock 持有下
+  `synchronize_rcu`/`wait_event(desc->readers == 0)`（sec 165 的
+  readers 计数器已落地, 但 wait 放在 unlock 之后 -- 需移入
+  lock 内或改用 `__wait_event` + readers 计数唤醒）。
+
+**storm loop**: `project/bin/storm-loop.sh` 已入册（生成器风暴 +
+fork 风暴 + 签名中止）; 待 kASAN 修复后以生产内核启动长跑。

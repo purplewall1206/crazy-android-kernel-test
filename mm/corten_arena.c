@@ -1910,11 +1910,6 @@ static void corten_va_lists_free(struct corten_mm_state *state)
 	list_for_each_entry_safe(blk, blk_n, &state->va_free, list) {
 		bool poisoned = corten_freeblk_poisoned(blk);
 
-		/* sec 160/161: the POISON check stays (a list_del'd node
-		 * reaching the walk is real protocol drift); the routing
-		 * guard is retired -- the states/blocks are kmalloc-folio
-		 * objects whose folio_test_slab is false by design, so
-		 * the guard misfired and leaked every block. */
 		if (poisoned) {
 			pr_warn_ratelimited("corten: va-freeblk ghost nrfree=%ld\n",
 					    state->va_nrfree);
