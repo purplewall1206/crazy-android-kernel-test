@@ -685,3 +685,22 @@ churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。
 **队列**: ① delta tracer 重定位 → +2 点名 → val 归零 ②
 generator-fork EPROTO ③ 仪器重 landing（双 boot）④ 48h 判定 → 三
 步删除序列 → J6 终账。
+
+---
+
+## 附二十七: delta tracer 有效数据 + 残余 2 定位（sec 153, 574b75cc）
+
+**delta tracer 首次产出有效数据**: per-exit delta 序列 =
+[-1370386859(伪影), -1, -1370386859(伪影), -2]——**真实变化 = −1 和
+−2**（legacy zap + arena walk 的释放）。计数器: fork +5 → 释放 3 →
+destroy = 2（精确和）。
+
+**残余 2 = fork tree_copy 计费的 2 页在 exit 时不被任何路径释放**
+（arena walk + legacy zap + funnel 的合计释放 = 3 ≠ 5）——差值 2 =
+**W-4 adoption 树摘除后、fork VMA 循环仍拷贝了 whitelist VMA 的页
+（+1 计费 ✓），但子进程 exit 时这些页的 PTEs 已被 adoption 清零 →
+unmap 不走（无 VMA）→ 释放缺口**。
+
+**修复**: fork 的 VMA 循环对 whitelist VMA 的 PTE 拷贝时查 meta 状
+态，记录槽跳过计费。**下会话**: 该修复的实现与验证 → val 归零 →
+systemd 全量启动。
