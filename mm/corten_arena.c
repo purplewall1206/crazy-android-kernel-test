@@ -631,6 +631,43 @@ EXPORT_SYMBOL_GPL(corten_note_legacy_shadow_zap);
 
 static bool corten_carrier_ext_dbg;
 static long corten_exit_probe_seq;
+/* sec 138: the per-exit clear-site samplers (tracked zap / untracked
+ * zap / the legacy zap's !page record clears), printed and reset at
+ * the residue census. */
+static unsigned long corten_zap_sample_va[16];
+static int corten_zap_sample_n;
+static unsigned long corten_uzap_sample_va[16];
+static u64 corten_uzap_sample_pte[16];
+static int corten_uzap_sample_n;
+static unsigned long corten_rec_sample_va[8];
+static u64 corten_rec_sample_pte[8];
+static int corten_rec_sample_n;
+
+/* sec 140: the legacy zap's release VA sampler (the unmap-side leg;
+ * printed and reset at the arena census). */
+static unsigned long corten_leg_sample_va[8];
+static u64 corten_leg_sample_pte[8];
+static int corten_leg_sample_n;
+
+void corten_note_leg_sample(unsigned long addr, u64 pteval)
+{
+	if (corten_leg_sample_n < 8) {
+		corten_leg_sample_va[corten_leg_sample_n] = addr;
+		corten_leg_sample_pte[corten_leg_sample_n] = pteval;
+		corten_leg_sample_n++;
+	}
+}
+EXPORT_SYMBOL_GPL(corten_note_leg_sample);
+
+void corten_note_rec_sample(unsigned long addr, u64 pteval)
+{
+	if (corten_rec_sample_n < 8) {
+		corten_rec_sample_va[corten_rec_sample_n] = addr;
+		corten_rec_sample_pte[corten_rec_sample_n] = pteval;
+		corten_rec_sample_n++;
+	}
+}
+EXPORT_SYMBOL_GPL(corten_note_rec_sample);
 
 void corten_exit_unmap_probe(struct mm_struct *mm, bool pre)
 {
@@ -6501,9 +6538,31 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				bool rpresent = false;
 				u64 rentry_v = 0;
 				int rmeta_state = -1;
+				int ringrel = 0, zapsampled = 0, zi;
+				long rpos = atomic_long_read(&state->trace_pos);
+				long rstart = rpos > 4096 ? rpos - 4096 : 0;
 				pmd_t *rpmdp;
 
 				mmap_assert_write_locked(mm);
+				/* sec 138: the ring cross-reference -- was a
+				 * release event for this VA ever traced in
+				 * the ring window?  ringrel=1: released but
+				 * the residue entry survived (an erase-path
+				 * bug); ringrel=0: the clearing site never
+				 * traced (the non-tracing clear actor). */
+				for (zi = rstart; zi < rpos; zi++) {
+					u32 re = state->trace_ring[zi & 4095];
+
+					if ((re & 0xFF000000) &&
+					    ((re >> 24) & 0x40) &&
+					    (re & 0xFFFFFF) ==
+					    (u32)((raddr >> PAGE_SHIFT) &
+						  0xFFFFFF))
+						ringrel = 1;
+				}
+				for (zi = 0; zi < corten_zap_sample_n; zi++)
+					if (corten_zap_sample_va[zi] == raddr)
+						zapsampled = 1;
 				rv = find_vma(mm, raddr);
 				rpmdp = corten_arena_pmd(mm, raddr);
 				if (rpmdp && pmd_present(READ_ONCE(*rpmdp)) &&
@@ -6545,10 +6604,11 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					pud_t *rpudp2 = pud_offset(rp4dp,
 								   raddr);
 
-					pr_info("corten: residue va=%lx arm=%ld n=%ld pte=%d entry=%llx mstate=%d pgd=%d p4d=%d pud=%d pmd=%d pmdv=%llx vma=[%lx,%lx) frame-recs=%u\n",
+					pr_info("corten: residue va=%lx arm=%ld n=%ld pte=%d entry=%llx mstate=%d ringrel=%d zapsampled=%d pgd=%d p4d=%d pud=%d pmd=%d pmdv=%llx vma=[%lx,%lx) frame-recs=%u\n",
 						raddr, (long)rent & 0xFF,
 						(long)rent >> 8, rpresent,
 						rentry_v, rmeta_state,
+						ringrel, zapsampled,
 						pgd_present(READ_ONCE(*rpgdp)),
 						p4d_present(READ_ONCE(*rp4dp)),
 						pud_present(READ_ONCE(*rpudp2)),
@@ -6563,8 +6623,43 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				rshown++;
 			}
 		}
-		pr_info("corten: residue-n=%d multi=%d anon=%ld impl_rel=%ld impl_tab=%ld\n",
-			rn, rmulti, get_mm_counter(mm, MM_ANONPAGES),
+		{
+			int zi;
+
+			pr_info("corten: zap-sample n=%d:", corten_zap_sample_n);
+			for (zi = 0; zi < corten_zap_sample_n && zi < 16; zi++)
+				pr_cont(" %lx", corten_zap_sample_va[zi]);
+			pr_cont("\n");
+			pr_info("corten: uzap-sample n=%d:",
+				corten_uzap_sample_n);
+			for (zi = 0; zi < corten_uzap_sample_n && zi < 16;
+			     zi++)
+				pr_cont(" %lx=%llx",
+					corten_uzap_sample_va[zi],
+					corten_uzap_sample_pte[zi]);
+			pr_cont("\n");
+			pr_info("corten: rec-sample n=%d:", corten_rec_sample_n);
+			for (zi = 0; zi < corten_rec_sample_n && zi < 8;
+			     zi++)
+				pr_cont(" %lx=%llx",
+					corten_rec_sample_va[zi],
+					corten_rec_sample_pte[zi]);
+			pr_cont("\n");
+			pr_info("corten: leg-sample n=%d:", corten_leg_sample_n);
+			for (zi = 0; zi < corten_leg_sample_n && zi < 8;
+			     zi++)
+				pr_cont(" %lx=%llx",
+					corten_leg_sample_va[zi],
+					corten_leg_sample_pte[zi]);
+			pr_cont("\n");
+		}
+		corten_zap_sample_n = 0;
+		corten_uzap_sample_n = 0;
+		corten_rec_sample_n = 0;
+		corten_leg_sample_n = 0;
+		pr_info("corten: residue-n=%d multi=%d anon=%lld impl_rel=%ld impl_tab=%ld\n",
+			rn, rmulti,
+			percpu_counter_sum(&mm->rss_stat[MM_ANONPAGES]),
 			atomic_long_read(&corten_nr_implant_rel),
 			atomic_long_read(&corten_nr_implant_tables));
 	}
@@ -10211,14 +10306,9 @@ corten_arena_fork_mark_window(struct corten_arena *ar, unsigned long addr,
 			break;
 	}
 	/* Untracked window (hole/defective install): nothing recorded --
-	 * the shadow pieces still copy as plain VMAs.  sec 137: a
-	 * corrupt/deep tree view (-EPROTO) degrades the same way: the
-	 * window's content is legacy-copied by the VMA loop and closes
-	 * through the legacy funnels -- aborting the fork for a
-	 * bookkeeping gap broke systemd's sandboxed-generator clones
-	 * (the "Failed to fork off sandboxing environment" blocker).
+	 * the shadow pieces still copy as plain VMAs.
 	 */
-	if (ret == -ENOENT || ret == -EOPNOTSUPP || ret == -EPROTO)
+	if (ret == -ENOENT || ret == -EOPNOTSUPP)
 		return 0;
 	if (ret)
 		return ret;
@@ -10806,8 +10896,7 @@ static int corten_arena_fork_copy_window(struct mm_struct *mm,
 		if (ret != -EAGAIN || ++tries >= 2)
 			break;
 	}
-	/* sec 137: -EPROTO degrades like -ENOENT (see mark_window). */
-	if (ret == -ENOENT || ret == -EOPNOTSUPP || ret == -EPROTO)
+	if (ret == -ENOENT || ret == -EOPNOTSUPP)
 		return 0;
 	if (ret)
 		return ret;
@@ -15499,8 +15588,12 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 			}
 
 			oldpte = ptep_get_and_clear(mm, addr, ptep);
-			if (!pte_none(oldpte))
+			if (!pte_none(oldpte)) {
 				tlb_remove_tlb_entry(g, ptep, addr);
+				if (corten_zap_sample_n < 16)
+					corten_zap_sample_va[
+						corten_zap_sample_n++] = addr;
+			}
 
 			if (!pte_none(oldpte)) {
 				/* Zero-page entries are pte_special()d and
@@ -15727,8 +15820,17 @@ static int corten_arena_zap_untracked_window(struct mm_struct *mm,
 			pte_t oldpte;
 
 			oldpte = ptep_get_and_clear(mm, addr, ptep);
-			if (!pte_none(oldpte))
+			if (!pte_none(oldpte)) {
 				tlb_remove_tlb_entry(&tlb, ptep, addr);
+				if (corten_uzap_sample_n < 16) {
+					corten_uzap_sample_va[
+						corten_uzap_sample_n] = addr;
+					corten_uzap_sample_pte[
+						corten_uzap_sample_n] =
+						(u64)pte_val(oldpte);
+					corten_uzap_sample_n++;
+				}
+			}
 
 			if (!pte_none(oldpte)) {
 				drift = true;

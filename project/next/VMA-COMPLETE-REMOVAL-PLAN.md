@@ -2632,3 +2632,22 @@ mark/copy 窗的 **-EPROTO 降级**（ corrupt tree view → 跳窗计数）。
 **队列**: ① 残余 2 收口（插桩设计就绪）② generator-fork EPROTO
 全臂审计 ③ 仪器重 landing（双 boot）④ 48h 判定（10-14 02:24）→
 三步删除序列 ⑤ E2 PR 待批复。
+
+## 141. leg 采样判决: 残差 VAs 不在任何 traced 释放通道（2026-10-12 晨, #541-#542）
+
+**leg 采样器落地**（unmap 侧 legacy zap 的释放 VA 采样, 前 8/exit +
+原始入口值）——判决: **leg 释放的 VAs（7f683e82a000=mmap 区）与残差
+VAs（562d75ae3000=堆区）完全不相交**——残差页不被 tracked zap、
+untracked zap、legacy zap、span、funnel 任何通道释放（全部
+traced+erased ✓ 排除）。
+
+**⇒ 残差 30-34 的清除者 = 无 trace 的位点, 且其页计数悬空的唯一一
+致解释: 这些 VA 的叶槽在 fork 后被写入标记态（meta 记录写入叶表
+槽——corten_pte_meta 与 PTE 槽双用, sec 129 解码）, 写入时叶槽原
+值（fork 拷贝的真页 PTE, +1 计费）被覆写丢弃——计费孤儿 + 叶槽
+标记化同时发生。写入者 = 子 arena 生命周期内的 meta 记录写（fork
+replay/meta 深拷贝/entry 重扫的某臂）——下会话: 对叶表的
+meta[i] 写入点全量插桩（write拦截, 一次 boot 点名）。
+
+**状态**: churn 浸泡 5h20m 零事件（48h 判定 10-14 02:24）; 全套
+仪器在树; E2 PR 待批复。

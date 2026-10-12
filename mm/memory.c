@@ -1246,12 +1246,7 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	 * deep-copy (the fork replay) carries the records on its own
 	 * books. */
 	if (READ_ONCE(src_vma->vm_mm->corten_mode) &&
-	    (corten_slot_is_record(src_vma->vm_mm, addr) ||
-	     /* sec 137: the two-views guard -- the meta may say MAPPED
-	      * while the raw slot has already been converted to a
-	      * marker (a present-formatted record whose pfn bits are
-	      * bookkeeping): pfn_valid names it. */
-	     !pfn_valid(pte_pfn(pte))))
+	    corten_slot_is_record(src_vma->vm_mm, addr))
 		return 1;	/* consumed, nothing copied: the arena
 				 * replay/meta owns the record */
 
@@ -1798,6 +1793,7 @@ static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
 			corten_trace_release_va_src(mm, addr,
 						    CORTEN_RELSRC_LEGACY);
 			corten_trace_release_va(mm, addr);
+			corten_note_leg_sample(addr, (u64)pte_val(ptent));
 		}
 	}
 	/* Checking a single PTE in a batch is sufficient. */
@@ -1839,6 +1835,11 @@ static inline int zap_present_ptes(struct mmu_gather *tlb,
 	page = vm_normal_page(vma, addr, ptent);
 	if (!page) {
 		/* We don't need up-to-date accessed/dirty bits. */
+		/* sec 140: the record-clear sampler -- the zap's bare
+		 * clears of present-formatted entries (the residual-2's
+		 * clear-site locator). */
+		if (READ_ONCE(mm->corten_mode))
+			corten_note_rec_sample(addr, (u64)pte_val(ptent));
 		ptep_get_and_clear_full(mm, addr, pte, tlb->fullmm);
 		arch_check_zapped_pte(vma, ptent);
 		tlb_remove_tlb_entry(tlb, pte, addr);
@@ -5471,8 +5472,6 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	if (READ_ONCE(vma->vm_mm->corten_mode))
 		corten_note_legacy_anon_charge(nr_pages);
 	corten_trace_charge(vma->vm_mm, &folio->page);
-	if (READ_ONCE(vma->vm_mm->corten_mode))
-		corten_trace_map_anon_va(vma->vm_mm, addr, nr_pages);
 	count_mthp_stat(folio_order(folio), MTHP_STAT_ANON_FAULT_ALLOC);
 	folio_add_new_anon_rmap(folio, vma, addr, RMAP_EXCLUSIVE);
 	folio_add_lru_vma(folio, vma);
