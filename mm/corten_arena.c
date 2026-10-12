@@ -583,6 +583,8 @@ static atomic_long_t corten_sg_mark_adopt_n;
 /* the FILE_MAPPED content-family witness counters. */
 static atomic_long_t corten_sg_file_recl_n;
 static atomic_long_t corten_sg_file_guard;
+/* sec 164: the free-time defensive deregister sweep hits. */
+static atomic_long_t corten_nr_free_sweep;
 /* the fork gap pass's witness counter (per boot). */
 static atomic_long_t corten_sg_gap_n;
 
@@ -1964,18 +1966,12 @@ static void corten_arena_state_free(struct corten_mm_state *state)
 	 * exit tree-walk) carry their own fixes/ledger entries. */
 	free_percpu(state->stats);
 	mutex_destroy(&state->ctl_lock);
-	if (unlikely(!corten_kmalloc_object(state))) {
-		struct page *gp = virt_to_page(state);
-
-		/* sec 162: the ghost attribution -- a state reaching the
-		 * tail as a non-slab order-0 page was released by a
-		 * bypasser; owner_mm names whose mm it belonged to. */
-		pr_warn("corten: state ghost st=%px own=%px nr=%d op=%d slab=%d\n",
-			state, state->owner_mm, refcount_read(&state->nr),
-			gp ? (int)folio_order(page_folio(gp)) : -1,
-			gp ? (int)PageSlab(gp) : -1);
-	} else
-		kfree(state);
+	/* sec 164: the plain free restored.  The former "state ghost"
+	 * guard misread the 6.18 memdesc world: kmalloc-large folios
+	 * carry no folio_order/PG_slab, so every healthy state tripped
+	 * the check, the kfree was skipped and 16KB leaked per generator
+	 * exit (the OOM pressure behind the init panics). */
+	kfree(state);
 }
 
 /* A5 (G5-fix) deferred shape of the state teardown: the grace period the
@@ -2026,7 +2022,14 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 	 * single page -- the "state ghost" face and the downstream
 	 * slab-freelist corruption.  The padding makes folio_order
 	 * read true and the whole block free cleanly. */
-	state = kzalloc(sizeof(*state) + (1 << 13) + 64, GFP_KERNEL_ACCOUNT);
+	/* sec 164: __GFP_COMP -- the 25KB state takes the kmalloc-large
+	 * route, and kfree's free_large_kmalloc must read the true folio
+	 * order to release the whole block.  Without COMP the memdesc
+	 * folio reads order 0: only page[0] returns to the buddy, pages
+	 * 1-4 stay taken, and the head-page memmap inconsistency is the
+	 * slab-corruption family behind the init panics. */
+	state = kzalloc(sizeof(*state) + (1 << 13) + 64,
+			GFP_KERNEL_ACCOUNT | __GFP_COMP);
 	if (!state)
 		return NULL;
 
@@ -2138,8 +2141,42 @@ static bool corten_arena_drain(struct corten_arena *arena)
 	return true;
 }
 
-static void corten_arena_free(struct corten_arena *arena)
+static void corten_arena_free(struct corten_mm_state *state,
+			      struct corten_arena *arena)
 {
+	/* sec 164: the defensive deregister sweep -- the single choke
+	 * point where every arena dies.  The kASAN round (sec 163)
+	 * proved a frame-slot deregister can be missed on some release
+	 * path, leaving a dangling arena pointer that the next declare's
+	 * overlap check reads (the entire ghost family).  Whatever the
+	 * release path did, this sweep guarantees no registry slot
+	 * survives the free: singles erase, buckets rebuild without the
+	 * member.  A sweep hit names the missed path's count. */
+	if (state) {
+		unsigned long frame;
+		void *slot;
+
+		xa_for_each(&state->arenas, frame, slot) {
+			bool member = slot == (void *)arena;
+			struct corten_frame_bucket *b =
+				member ? NULL : corten_slot_bucket(slot);
+			unsigned int i;
+
+			if (!member && b) {
+				for (i = 0; i < b->nr; i++)
+					if (b->rec[i] == arena) {
+						member = true;
+						break;
+					}
+			}
+			if (member) {
+				corten_slot_remove(&state->arenas, frame,
+						   arena, false);
+				atomic_long_inc(&corten_nr_free_sweep);
+			}
+		}
+	}
+
 	/* V-B.1: the FILE payload dies with the descriptor -- out of the
 	 * mapping's per-inode registry (W1.b) and the region's file
 	 * reference dropped (corten_region_file_teardown).  Every caller
@@ -4364,7 +4401,7 @@ static int corten_arena_release_arena_locked(struct mm_struct *mm,
 	 * outstanding would turn the straggler put into a UAF.
 	 */
 	if (drained)
-		corten_arena_free(arena);
+		corten_arena_free(state, arena);
 
 	return ret;
 }
@@ -7108,7 +7145,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	while ((arena = corten_registry_next(state, &it))) {
 		corten_arena_obs_remove(arena);
 		if (corten_arena_drain(arena))
-			corten_arena_free(arena);
+			corten_arena_free(state, arena);
 		else
 			corten_arena_note_drain_timeout(state);
 	}
@@ -16895,7 +16932,7 @@ static void corten_arena_pool_eject_locked(struct mm_struct *mm,
 	 * same counted kernel-bug path as the release body's.
 	 */
 	if (corten_arena_drain(ar))
-		corten_arena_free(ar);
+		corten_arena_free(state, ar);
 	else
 		corten_arena_note_drain_timeout(state);
 }

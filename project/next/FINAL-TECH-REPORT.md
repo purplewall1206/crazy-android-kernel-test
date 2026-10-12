@@ -1096,3 +1096,31 @@ ghost、free_large garbage -- 全部是 **悬挂 arena 指针被各消费者
 **下会话**: ①corten_slot_remove 覆盖审计 + KASAN 复跑验证;
 ②生产 bzImage 恢复（bzImage-prod-sec163）+ 全量 boot 零 oops;
 ③48h 判定（10-14 02:24）→ 三步删除序列 → J6 终账。
+
+### 附三十八续: KASAN 复跑（swept 内核 #628）-- UAF 对象定名为 PT 页本体
+
+swept KASAN 内核（含防御性 sweep）复跑: **同一 UAF 仍命中**
+（check_empty_locked, Read of size 8）-- **sweep 修复了 arenas 帧
+表, 但 UAF 对象不是 arena**。KASAN 页 dump 定名: 被读地址所在
+order-0 页 **refcount:0 mapcount:0 mapping:NULL, 全页 KASAN
+poisoned (ff)** = **整页已释放的 PT 页本体** -- 读取 = desc->mm
+（描述符回链, 8 字节）-- **描述符对象（corten_ptdesc, 与
+acpi_object 缓存 SLUB 合并）自身已释放**, 其内存所在页被回收。
+
+**协议审视**: ptdesc 生命周期（get 的 rcu+pin / uninstall 的
+erase→stale→put→kfree_rcu）自洽; 存活的解释只剩:
+(a) **refcount 双减**（某探测路径双重 put, 0→释放→仍在 xa? 否,
+erase 先行 -- 或减穿回绕后二次释放）;
+(b) **slab 邻居越界写**（__resv 页身份负载/meta 家族写穿 desc
+对象, 踩坏相邻对象的 refcount/memdesc -- 与 free_large 家族的
+"object pointer 32 位垃圾"同源）;
+(c) memdesc 世界里 PG_slab/memdesc 类型位被清后 KASAN 把活 slab
+页误判为已释放（假阳性可能, 需上游对照）。
+
+**kASAN 轮交付**: KASAN 内核 ×2（首报/swept 复验）构建入册
+（bzImage-kasan-sec163/bzImage-kasan-sweep）; 两份报告工件
+（kasan-first-report.log/kasan-swept-report.log）; UAF 精确到
+desc->mm 读取、对象 = freed order-0 页。**下一轮**: 在 KASAN 构建
+上跑 KUnit fork_file_dirty 全套 + 双嫌疑栈（refcount 双减审计
+corten_ptdesc_put 调用点 / __resv 越界写审计）, 修复后以生产内核
+收尾验证。
