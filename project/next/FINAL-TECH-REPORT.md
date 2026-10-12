@@ -1337,3 +1337,25 @@ slab-out-of-bounds 判决）。
 **sg62 boot 验证**: "Protocol error" = 0; oops 3→2; panic = 0;
 系统存活 4min+。残余: RCU stall（P95 生成器活锁）+ 2 oops = 同
 exec 竞态族, 待 kASAN 长跑精确定位。
+
+---
+
+## 附四十三: 本会话总结（sec 156-170, 31+ 小时, 25+ boot, 11 推送）
+
+**修复的确定性 bug**: 10 个（全清单在附四十三续）, 另加 3 个
+防线/安全网（freeblk POISON、路由守卫、幽灵链守卫）。
+
+**关键指标演进**:
+| 指标 | 基线 | 终态 |
+|---|---|---|
+| "Protocol error" | 100% 必现 | **0**（多 boot 维持） |
+| init panic (SIGKILL) | 100% 必现 | **0**（多 boot 维持） |
+| 管理器冻结 | 100% 必现 | **0**（多 boot 维持） |
+| 生成器运行 | ❌ 出生即死 | ✅ 全量运行+退出 |
+| 残余 oops | 0（没跑到） | 2（contained, 非致命） |
+
+**残余**: exec 窗口竞态族（2 oops + RCU 活锁）, 需 kASAN 长跑
+（交棒包: bzImage-kasan-sweep + 报告 ×2 + storm-loop.sh）。
+
+**下会话路线图**: kASAN 定位竞态写者 → 修复 → 零 oops boot →
+storm loop 长跑 → 48h 判定 → 三步删除 → J6 终账。
