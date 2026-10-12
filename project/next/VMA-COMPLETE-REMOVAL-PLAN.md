@@ -2700,3 +2700,19 @@ present 格式标记的 !page 入口——本 boot rec-sample n=0: 该入口未
 器在树（census/采样器/folio-watch/精确和）; systemd 启动零内核
 oops（generator-fork EPROTO 全臂审计排队）; churn 浸泡零事件（48h
 判定 10-14 02:24 → 三步删除序列 → J6 终账）; E2 PR 待批复。
+
+## 145b. 判别器的最终边界（2026-10-12 晨 8:45, b4bf9f15 状态确认）
+
+**双守卫实测边界**: (1) meta[i].state != MAPPED → skip——**marker 槽的
+parent meta 读回 MAPPED（meta 与叶槽两视图分叉, 漏判）**; (2) 
+!pfn_valid(pte_pfn(pte)) → skip——**marker 编码的 pfn 是合法真帧
+（arena 记录携带真页身份, 漏判）**。**两个判别器都无法区分
+"真翻译"与"arena 记录"——判别器必须读 meta 的 __resv 页身份载荷
+与 raw pte 的 pfn 比对（M3 的编码格式 = 下会话首项读 M4T0
+SPEC/论文的 M3 节）**。
+
+**修复方向（设计定案）**: copy_present_ptes 的第三判别 = meta
+__resv 页身份 vs raw pfn 比对——不一致（记录槽）→ 跳过拷贝与计
+费; 一致（真翻译）→ 拷贝计费。**该判别同时是 pass 重武装的安
+全门（marker 槽识别后, implant pass 的 pfn_valid 门升级为同判
+别）**。
