@@ -570,6 +570,7 @@ void corten_note_tree_copy(struct mm_struct *mm, unsigned long addr, int nr,
 			   bool file);
 bool corten_slot_is_record(struct mm_struct *mm, unsigned long addr);
 void corten_note_rec_sample(unsigned long addr, u64 pteval);
+void corten_note_funnel_sample(unsigned long addr, u64 pteval);
 void corten_note_leg_sample(unsigned long addr, u64 pteval);
 void corten_folio_watch_add(struct page *page, u8 arm);
 bool corten_folio_watch_del(struct page *page);

@@ -235,6 +235,7 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 			page = pte_page(oldpte);
 			corten_zap_release_page(tlb->mm, NULL, page, pa);
 			corten_trace_release_va(tlb->mm, pa);
+			corten_note_funnel_sample(pa, (u64)pte_val(oldpte));
 			/* sec 120: the overflow ABANDONMENT was the +34
 			 * residual's last face: by free_pgtables the
 			 * caller's batch is nearly full (unmap_vmas

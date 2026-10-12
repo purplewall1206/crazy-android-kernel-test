@@ -2730,3 +2730,26 @@ release_page 调用后采样，census 交叉引用）+ per-table ownership 审�
 
 **队列**: ① 残余 2 收口 ② generator-fork EPROTO ③ 48h 判定（10-14
 02:24）→ 三步删除序列 → J6 终账 ④ E2 PR 待批复。
+
+## 146. per-exit 精确链定稿 + 夜战终稿（2026-10-12 晨, #554）
+
+**per-exit 精确链（#554, 全套仪器）**:
+- 13-anon child: census anon=13 rn=0 → pre=13 → post=0 → **val=0** ✓
+- 30-anon child: census anon=30 rn=0（watch total=0, erase-miss 递增）
+  → pre=30 → post=0 → **val=0** ✓
+- bash fork-child: pre=5 → unmap 释放 3 → post=2 → **val=2**（精确和）
+
+**读数一致性**: census/精确和/pre/post 四点全部自洽（无雾差）; 残余
+= fork 树拷贝计费的 2 个真页, unmap 的 zap 跳过了它们（zapsampled/
+uzap/rec/leg 采样器 + folio-watch + meta-watch 全部在案, 唯一未排
+除 = **zap 主循环的 should_zap_folio/vm_normal_page 拒绝路径对
+present 格式记录槽的静默跳过**——present 格式记录的 pfn 可能合法
+（pfn_valid 通过）但 folio 指针无效 → zap 清除不递减 → +2。
+
+**下会话收口**: zap 的 vm_normal_page-NULL 分支采样（!page 分支已有
+rec 采样器, 需确认其命中——本 boot n=0 未命中 → 命中点在
+should_zap_folio 的拒绝分支）→ 位点插桩 → 计费修正 → val 归零。
+
+**状态总账**: 残差 34→2（94%）; 全套仪器与修复在树（零 oops）;
+N-boot A/B 各 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定
+10-14 02:24）; E2 PR 待批复。

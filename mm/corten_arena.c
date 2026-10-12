@@ -687,6 +687,37 @@ bool corten_folio_watch_del(struct page *page)
 }
 EXPORT_SYMBOL_GPL(corten_folio_watch_del);
 
+/* sec 146: the free_pgtables funnel's release VA sampler (the
+ * residual-2 attribution's funnel-side leg; printed and reset at the
+ * arena census). */
+static unsigned long corten_funnel_sample_va[8];
+static u64 corten_funnel_sample_pte[8];
+static int corten_funnel_sample_n;
+
+/* sec 146: the map_anon fault charge's VA-form trace -- the page-form
+ * charge (corten_trace_charge) is invisible to the residue census's
+ * VA-keyed set; this names the map_anon-charged VAs so the census can
+ * triage every charge class. */
+void corten_trace_map_anon_va(struct mm_struct *mm, unsigned long addr,
+			      int nr)
+{
+	if (!corten_trace_charge_param)
+		return;
+	for (; nr > 0; nr--, addr += PAGE_SIZE)
+		corten_trace_charge_va(mm, addr, CORTEN_TRACE_MAP_ANON);
+}
+EXPORT_SYMBOL_GPL(corten_trace_map_anon_va);
+
+void corten_note_funnel_sample(unsigned long addr, u64 pteval)
+{
+	if (corten_funnel_sample_n < 8) {
+		corten_funnel_sample_va[corten_funnel_sample_n] = addr;
+		corten_funnel_sample_pte[corten_funnel_sample_n] = pteval;
+		corten_funnel_sample_n++;
+	}
+}
+EXPORT_SYMBOL_GPL(corten_note_funnel_sample);
+
 void corten_note_rec_sample(unsigned long addr, u64 pteval)
 {
 	if (corten_rec_sample_n < 8) {
@@ -6680,11 +6711,20 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					corten_leg_sample_va[zi],
 					corten_leg_sample_pte[zi]);
 			pr_cont("\n");
+			pr_info("corten: funnel-sample n=%d:",
+				corten_funnel_sample_n);
+			for (zi = 0; zi < corten_funnel_sample_n && zi < 8;
+			     zi++)
+				pr_cont(" %lx=%llx",
+					corten_funnel_sample_va[zi],
+					corten_funnel_sample_pte[zi]);
+			pr_cont("\n");
 		}
 		corten_zap_sample_n = 0;
 		corten_uzap_sample_n = 0;
 		corten_rec_sample_n = 0;
 		corten_leg_sample_n = 0;
+		corten_funnel_sample_n = 0;
 		{
 			unsigned long fwk;
 			void *fwv;
