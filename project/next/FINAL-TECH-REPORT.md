@@ -1593,3 +1593,24 @@ boot 越过前一阻塞点。
 
 **当前生产内核 #637 内含全修复栈**（sec 156-174, 10 确定性 bug +
 3 防线 + M3a 互锁 + magic/released 哨兵 + __GFP_COMP）。
+
+### 附五十一: kASAN 3-boot 竞态剖面定案（bzImage-kasan-current, #645）
+
+**3 boot 一致性判决**: `check_empty_locked` 的 UAF 全部指向
+**anon_vma_chain (64B)** 对象的越界/重用读取。修复栈（M3a 互锁 +
+meta 生命周期 + magic/released 哨兵 + sweep + __GFP_COMP）已全量
+落地但仍复现 -- **竞态不在 desc->meta 读取（已移除）也不在
+ptdesc refcount（sentinel 零命中）而在更深层的跨 CPU 页表
+生命周期**。
+
+**精确面**: exec 的 mode_sweep（setup_arg_pages 内）持有
+mmap_write 做 check_empty_locked 走查时，**另一 CPU 的
+exit-inner old-mm 拆卸（exit_mmap → free_pgtables →
+unlink_anon_vmas → __rb_erase）** 同时在操作共享的
+anon_vma/rb_tree -- 两个 mmap_write 域（不同 mm）之间的
+anon_vma_chain 交叉引用。
+
+**修复方向（下会话首项）**: 在 mode_sweep 的 setup_arg_pages
+期间，防止跨 mm 的 anon_vma 交叉 -- 或在 check_empty_locked 的
+kASAN 报告精确面的 `desc->mm != mm` 检查后增加
+`anon_vma->owner_mm` 归属验证。
