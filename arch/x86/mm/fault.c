@@ -819,16 +819,63 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
 	/* sec 156: the sg bad-area witness -- show_signal_msg's global
 	 * printk_ratelimit drops the "segfault at" line under the exit
 	 * census spam; MODE tasks' fatal faults print unfiltered with the
-	 * faulting RIP.  NO table walk here: the forked children's
-	 * corrupt upper entries (#585 pud=0xa01ff000f000, #586 the
-	 * f000ff53 doubled pattern) GPF every deref-through-entry form
-	 * -- the raw dump belongs in the next round's KProbe/crash tool,
-	 * not in the fault path. */
+	 * faulting RIP.  The stack qwords bracketing RSP name the call
+	 * site that jumped through the NULL (the #585/#586 "garbage
+	 * upper-table" readings were witness artifacts: pud_offset of a
+	 * ZERO entry computes __va(phys 0) -- the real-mode IVT, whose
+	 * F000:FF53 vectors read back as the doubled pattern). */
 	if (IS_ENABLED(CONFIG_CORTEN_MM) && tsk->mm &&
-	    READ_ONCE(tsk->mm->corten_mode))
-		pr_info("corten-dbg: sg BAD-AREA %s[%d] a=%lx ip=%lx err=%lx code=%d\n",
+	    READ_ONCE(tsk->mm->corten_mode)) {
+		/* sec 157: the sg bad-area walk dump, present-gated at the
+		 * PGD (a zero PGD entry makes pud_offset compute __va(0) --
+		 * the real-mode IVT whose bytes read back as present-looking
+		 * entries and GPF'd the earlier forms).  For a data fault the
+		 * faulting page's PTE and its first qwords ride along: they
+		 * separate "the child maps the clean file page" from "the
+		 * child fresh-faulted it". */
+		pgd_t *pgdp = pgd_offset(tsk->mm, address);
+		pgd_t pgdv = READ_ONCE(*pgdp);
+
+		pr_info("corten-dbg: sg BAD-AREA %s[%d] a=%lx ip=%lx err=%lx code=%d bx=%lx di=%lx si=%lx [sp]=%lx pgd=%llx\n",
 			tsk->comm, tsk->pid, address, regs->ip, error_code,
-			si_code);
+			si_code, regs->bx, regs->di, regs->si, regs->sp,
+			(u64)pgd_val(pgdv));
+		if (pgd_present(pgdv)) {
+			p4d_t *p4dp = p4d_offset(pgdp, address);
+			p4d_t p4dv = READ_ONCE(*p4dp);
+			pud_t *pudp = pud_offset(p4dp, address);
+			pud_t pudv = READ_ONCE(*pudp);
+			pmd_t *pmdp = pud_present(pudv) && !pud_leaf(pudv) ?
+				      pmd_offset(pudp, address) : NULL;
+			pmd_t pmdv = pmdp ? READ_ONCE(*pmdp) : (pmd_t){ 0 };
+
+			pr_info("corten-dbg: sg BAD-AREA-WALK %s[%d] p4d=%llx pud=%llx pmd=%llx\n",
+				tsk->comm, tsk->pid, (u64)p4d_val(p4dv),
+				(u64)pud_val(pudv), (u64)pmd_val(pmdv));
+			if (pmdp && pmd_present(pmdv) && !pmd_leaf(pmdv)) {
+				pte_t *ptep = pte_offset_map(pmdp, address);
+				unsigned long objp =
+					(regs->di & PAGE_MASK) + 0x238;
+				u64 w0 = 0, w1 = 0, w2 = 0, w3 = 0;
+				unsigned long __user *wp;
+
+				if (ptep) {
+					pr_info("corten-dbg: sg BAD-AREA-PTE %s[%d] pte=%llx\n",
+						tsk->comm, tsk->pid,
+						(u64)pte_val(READ_ONCE(*ptep)));
+					pte_unmap(ptep);
+				}
+				wp = (unsigned long __user *)(objp & ~7UL);
+				copy_from_user_nofault(&w0, wp, 8);
+				copy_from_user_nofault(&w1, wp + 1, 8);
+				copy_from_user_nofault(&w2, wp + 2, 8);
+				copy_from_user_nofault(&w3, wp + 3, 8);
+				pr_info("corten-dbg: sg BAD-AREA-OBJ %s[%d] obj=%lx [%llx %llx %llx %llx]\n",
+					tsk->comm, tsk->pid, objp, w0, w1,
+					w2, w3);
+			}
+		}
+	}
 
 	set_signal_archinfo(address, error_code);
 

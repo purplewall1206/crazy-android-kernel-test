@@ -575,8 +575,29 @@ static atomic_long_t corten_sg_gap_n;
 bool corten_slot_is_record(struct mm_struct *mm, unsigned long addr)
 {
 	pmd_t *pmdp, pmd;
+	struct corten_mm_state *state;
 	struct corten_ptdesc *desc;
+	void *slot;
 	bool rec = false;
+
+	/* sec 157: the domain gate.  Every user PT page born under
+	 * corten=on carries a descriptor, and its metadata array
+	 * materializes zeroed (state=INVALID) at install time -- the
+	 * runtime-loaded libraries' PT pages are exactly that shape.
+	 * Without this gate the fork's copy loop read their PRESENT
+	 * tree PTEs as "records" and skipped them: the child lost the
+	 * libraries' resident pages partial-wholesale (per PT page, by
+	 * whether the array had materialized), executed into a
+	 * zero-GOT module and jumped through the first NULL entry
+	 * (the sandbox child's ip=0, the "Protocol error" face).  A
+	 * record slot can only exist where an ARENA owns the 2M
+	 * frame: consult the frame registry first. */
+	state = smp_load_acquire(&mm->corten_state);
+	if (!state)
+		return false;
+	slot = xa_load(&state->arenas, addr >> PMD_SHIFT);
+	if (!slot || slot == &corten_va_reserve_sentinel)
+		return false;
 
 	pmdp = corten_arena_pmd(mm, addr);
 	if (!pmdp)

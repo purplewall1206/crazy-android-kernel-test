@@ -803,3 +803,39 @@ dump。
 件 6 败**为基线存量**（stash 基线同败 6 项且多败一项
 file_rmap_shared —— sec 156 实际净修一项）; #587 终版零 oops;
 systemd 冻结维持（诚实登记: 根因 #2 未闭）。
+
+---
+
+## 附三十二: sec 157 -- 根因#2 的三重证伪与真象收窄（#596-#598, 7 轮 boot）
+
+**证伪一（#585/#586 "upper 表垃圾"）**: 见证伪影。零项 `pud_offset`
+把 `__va(phys 0)` 当表页 -- 物理页 0 = 实模式 IVT, 其 `F000:FF53`
+向量被读成"双 u32 垃圾项"。子进程表全部干净（#590 全级 walk 证实:
+PGD..PTE 全 present, 栈页 `8400000137460067`）。
+
+**证伪二（缺页类）**: fork gap pass（父在场/子缺失就地补拷贝）跑出
+**零缺口** -- 子进程 PTE 完备, 整个 missing-PTE 类排除。
+
+**真象（#593-#598 收敛）**: 死亡面 = `(sd-gens)` 子进程跳转到
+**未重定位的 PLT 地址** `0x50a66` = libsystemd-core 的
+`strv_copy_n@plt` 链接期地址（objdump 定位: `mov 0x238(%rdi),%rdi;
+call strv_copy_n@plt`, 调用点 vaddr 0x162b02, 经 [RSP]=返回地址 +
+rino=134460 (debugfs ncheck) = libsystemd-core-257.so 归属）。
+`pgd=0`（#598 walk dump）-- 子进程在 0x50a66 处无映射, 纯属跳进
+未重定位值。RDI/RBX = 二进制 arena 内地址 -- **子进程的二进制
+arena 数据页持有干净（盘上）GOT 内容, 而父进程持有 ld.so 重定位
+后的版本**。唯一 PC-相关修复（已落地）: `corten_slot_is_record`
+加**域门**（frame registry 无 arena 的 2M 帧不再当 record 槽跳过
+-- 运行期装载的库其 PT 页 desc 的 meta 数组在 install 时物化为
+零 → 修正前 discriminator 把在场库 PTE 当记录跳过, 子进程按
+4KB 粒度丢库页）。#595 实证子进程推进到 safe_fork 改名 `(sd-gens)`
+之后的 mount 沙箱体。
+
+**未闭面（下会话 KUnit 确定性复现）**: 二进制 FILE 类 arena 的
+子进程 GOT 页服务路径 -- 三个候选: (a) copy 臂对某 4KB 窗跳过
+(pte_none, 父侧被 finish_zero_window/evict 清过) → 子进程
+file-read 臂净取盘上页; (b) FILE 臂 rpoff/reof 计算偏移取到邻页;
+(c) 重定位写发生在 pre-MODE（legacy anon-fied folio）而 arena
+blanket FILE_MAPPED 标记使子进程臂按 FILE 语义重取。KUnit: 建含
+脏重定位页的 FILE 类 arena → fork → 断言子进程页内容 == 父进程
+（非盘上内容）。
