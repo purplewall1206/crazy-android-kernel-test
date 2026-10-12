@@ -2842,3 +2842,13 @@ meta 可能仍 MAPPED——记录化发生在 fork 之后的 child 生命周期�
 **交接状态**: 残差 34→2（94% 闭合）; 全套仪器在树; N-boot A/B 各
 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
 E2 PR 待批复。
+
+## 151b. billing reconcile 落地 + probe 门放开（2026-10-12 晨, #570）
+
+**落地**: (1) census 的 billing reconcile——残差 VA 的 pte=0 + arm=11
+(tree_copy) → 计数器递减对账; (2) probe 门从 128 放开到全 exit。
+**smoke 实测: reconcile 未命中**——census residue-n=0（trace_vxa 集已
+空——releases 擦除了全部 VA-traced 条目）, 但 counter=2（ Bad rss）。
+**⇒ val:2 的计费不在 trace_vxa 集内（page-form-only 计费——
+corten_trace_charge(mm, page) 不入 VA 集）**——计费调和需
+add_mm_counter 层的增量追踪（非 VA-keyed census）。

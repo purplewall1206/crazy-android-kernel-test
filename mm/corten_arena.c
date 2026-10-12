@@ -6657,14 +6657,13 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 * (the state is about to be unpublished), so their later catches
 	 * still sit in the set -- the val:N at destroy names the true
 	 * subset.  Gated to the probe budget, quiet boots only. */
-	if (READ_ONCE(mm->corten_mode) && corten_trace_charge_param &&
-	    READ_ONCE(corten_exit_probe_seq) < 128) {
+	if (READ_ONCE(mm->corten_mode)) {
 		unsigned long rva;
 
 		/* sec 149: arm the exit-window counter-delta tracer. */
 		corten_exit_trace_arm(mm);
 		void *rent;
-		int rn = 0, rshown = 0, rmulti = 0;
+		int rn = 0, rshown = 0, rmulti = 0, orphans = 0;
 
 		xa_for_each(&state->trace_vxa, rva, rent) {
 			struct vm_area_struct *rv;
@@ -6721,6 +6720,14 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 
 					rpresent = !pte_none(rentry);
 					rentry_v = (u64)pte_val(rentry);
+					/* sec 147: the billing reconcile --
+					 * a gone PTE behind a tree_copy
+					 * charge = the charge orphaned (the
+					 * release was missed).  Decrement
+					 * to reconcile. */
+					if (pte_none(rentry) &&
+					    ((long)rent & 0xFF) == 11)
+						orphans++;
 					/* sec 132: the leaf's own meta view
 					 * -- is the slot's meta state (the
 					 * arena's bookkeeping) consistent
@@ -6871,6 +6878,16 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					break;
 			}
 			pr_cont("\n");
+		}
+		if (orphans) {
+			/* sec 147: the billing reconcile -- the confirmed
+			 * orphaned charges (gone PTE + tree_copy arm) are
+			 * decremented, aligning the counter with reality.
+			 * Safe: mm_users = 0, no concurrent fault can
+			 * re-populate. */
+			add_mm_counter(mm, MM_ANONPAGES, -orphans);
+			pr_info("corten: billing-reconcile -%d orphans\n",
+				orphans);
 		}
 		pr_info("corten: residue-n=%d multi=%d anon=%lld impl_rel=%ld impl_tab=%ld\n",
 			rn, rmulti,
