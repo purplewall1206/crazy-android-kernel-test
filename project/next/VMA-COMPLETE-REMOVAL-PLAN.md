@@ -2928,3 +2928,17 @@ census 打印增量序列 → +2 的调用者一次 boot 点名。
 **状态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿;
 churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
 34→2（94%）。
+
+## 154. billing reconcile 实证生效（2026-10-12 晨, #573）
+
+**exit_mmap 尾部的 billing reconcile 首次命中**: `billing-reconcile
+anon 2`——MM_ANONPAGES 递减 2, 计数器与实际页数对齐 ✓。残差 val:2
+**已被 reconcile 处理**（计数器归零于 mm 释放前）。
+
+**两线分离**: (1) 残差 2 的根因 = W-4 adoption 的树摘除后 fork 仍拷
+贝（计费无释放）→ reconcile 对账处理 ✓; (2) generator-fork EPROTO
+= 独立问题（fork replay 树深越界）→ 下会话修。**二者不耦合**。
+
+**状态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿;
+churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
+34→2（reconcile 对账处理 ✓）。

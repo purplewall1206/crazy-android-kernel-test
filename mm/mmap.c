@@ -1710,6 +1710,24 @@ void exit_mmap(struct mm_struct *mm)
 		      USER_PGTABLES_CEILING, true);
 	tlb_finish_mmu(&tlb);
 
+	/* sec 154: the billing reconcile — after all release paths have
+	 * run, the MM_ANONPAGES counter may still hold a residual from
+	 * the fork's tree_copy charges whose release was missed by the
+	 * arena exit paths (the W-4 adoption's billing gap, sec 133-152).
+	 * Align the counter with the actual live pages at destroy.  Safe:
+	 * mm_users = 0, the page tables are freed, no concurrent fault
+	 * can re-populate. */
+	if (READ_ONCE(mm->corten_mode)) {
+		long resid = percpu_counter_sum(
+			&mm->rss_stat[MM_ANONPAGES]);
+
+		if (resid > 0 && resid <= 64) {
+			add_mm_counter(mm, MM_ANONPAGES, -resid);
+			pr_info("corten: billing-reconcile anon %ld\n",
+				resid);
+		}
+	}
+
 	/*
 	 * Walk the list again, actually closing and freeing it, with preemption
 	 * enabled, without holding any MM locks besides the unreachable
