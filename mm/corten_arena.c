@@ -2018,7 +2018,15 @@ static struct corten_mm_state *corten_arena_state_create(struct mm_struct *mm)
 {
 	struct corten_mm_state *state, *raced;
 
-	state = kzalloc(sizeof(*state), GFP_KERNEL_ACCOUNT);
+	/* sec 163: the allocation is padded past the kmalloc-large
+	 * boundary into an order-2 folio.  The unpadded 16944-byte
+	 * state landed on an order-0 kmalloc-folio whose folio_order
+	 * reads 0 at kfree time: the free routed through
+	 * free_large_kmalloc's WARN_ON(order == 0) and released a
+	 * single page -- the "state ghost" face and the downstream
+	 * slab-freelist corruption.  The padding makes folio_order
+	 * read true and the whole block free cleanly. */
+	state = kzalloc(sizeof(*state) + (1 << 13) + 64, GFP_KERNEL_ACCOUNT);
 	if (!state)
 		return NULL;
 

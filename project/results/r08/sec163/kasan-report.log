@@ -1,0 +1,1031 @@
+[    0.000000] Linux version 6.18.32-g8e5dcc661732-dirty (ppw@vm) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #624 SMP PREEMPT_DYNAMIC Mon Oct 12 22:52:56 CST 2026
+[    0.000000] Command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 corten=on corten_mode_default=on corten_stack_s2=on corten_arena.silent=on kasan.common.report=1 systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x00000000bffdcfff] usable
+[    0.000000] BIOS-e820: [mem 0x00000000bffdd000-0x00000000bfffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000feffc000-0x00000000feffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000100000000-0x000000013fffffff] usable
+[    0.000000] NX (Execute Disable) protection: active
+[    0.000000] APIC: Static calls initialized
+[    0.000000] SMBIOS 2.8 present.
+[    0.000000] DMI: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[    0.000000] DMI: Memory slots populated: 1/1
+[    0.000000] Hypervisor detected: KVM
+[    0.000000] last_pfn = 0xbffdd max_arch_pfn = 0x400000000
+[    0.000000] kvm-clock: Using msrs 4b564d01 and 4b564d00
+[    0.000005] kvm-clock: using sched offset of 3199723796 cycles
+[    0.000036] clocksource: kvm-clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+[    0.000163] tsc: Detected 2419.198 MHz processor
+[    0.004526] last_pfn = 0x140000 max_arch_pfn = 0x400000000
+[    0.005231] MTRR map: 4 entries (3 fixed + 1 variable; max 19), built from 8 variable MTRRs
+[    0.005282] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+[    0.006148] last_pfn = 0xbffdd max_arch_pfn = 0x400000000
+[    0.023834] found SMP MP-table at [mem 0x000f5b90-0x000f5b9f]
+[    0.024188] Using GB pages for direct mapping
+[    0.356271] printk: log buffer data + meta data: 16777216 + 58720256 = 75497472 bytes
+[    0.356280] printk: early log buf free: 259960(99%)
+[    0.356489] ACPI: Early table checksum verification disabled
+[    0.356660] ACPI: RSDP 0x00000000000F59B0 000014 (v00 BOCHS )
+[    0.356811] ACPI: RSDT 0x00000000BFFE1A23 000034 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.356967] ACPI: FACP 0x00000000BFFE18BF 000074 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.357133] ACPI: DSDT 0x00000000BFFE0040 00187F (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.357170] ACPI: FACS 0x00000000BFFE0000 000040
+[    0.357182] ACPI: APIC 0x00000000BFFE1933 000090 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.357195] ACPI: HPET 0x00000000BFFE19C3 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.357207] ACPI: WAET 0x00000000BFFE19FB 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.357218] ACPI: Reserving FACP table memory at [mem 0xbffe18bf-0xbffe1932]
+[    0.357225] ACPI: Reserving DSDT table memory at [mem 0xbffe0040-0xbffe18be]
+[    0.357230] ACPI: Reserving FACS table memory at [mem 0xbffe0000-0xbffe003f]
+[    0.357233] ACPI: Reserving APIC table memory at [mem 0xbffe1933-0xbffe19c2]
+[    0.357237] ACPI: Reserving HPET table memory at [mem 0xbffe19c3-0xbffe19fa]
+[    0.357241] ACPI: Reserving WAET table memory at [mem 0xbffe19fb-0xbffe1a22]
+[    0.363283] No NUMA configuration found
+[    0.363290] Faking a node at [mem 0x0000000000000000-0x000000013fffffff]
+[    0.363330] NODE_DATA(0) allocated [mem 0x13b7fa140-0x13b7fdfff]
+[    0.364009] Zone ranges:
+[    0.364015]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+[    0.364025]   DMA32    [mem 0x0000000001000000-0x00000000ffffffff]
+[    0.364031]   Normal   [mem 0x0000000100000000-0x000000013fffffff]
+[    0.364036] Movable zone start for each node
+[    0.364038] Early memory node ranges
+[    0.364040]   node   0: [mem 0x0000000000001000-0x000000000009efff]
+[    0.364084]   node   0: [mem 0x0000000000100000-0x00000000bffdcfff]
+[    0.364090]   node   0: [mem 0x0000000100000000-0x000000013fffffff]
+[    0.364116] Initmem setup node 0 [mem 0x0000000000001000-0x000000013fffffff]
+[    0.366153] On node 0, zone DMA: 1 pages in unavailable ranges
+[    0.367990] On node 0, zone DMA: 97 pages in unavailable ranges
+[    0.796616] On node 0, zone Normal: 35 pages in unavailable ranges
+[    3.773793] KernelAddressSanitizer initialized (generic)
+[    3.776881] ACPI: PM-Timer IO Port: 0x608
+[    3.777040] ACPI: LAPIC_NMI (acpi_id[0xff] dfl dfl lint[0x1])
+[    3.778601] IOAPIC[0]: apic_id 0, version 17, address 0xfec00000, GSI 0-23
+[    3.778618] ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+[    3.778626] ACPI: INT_SRC_OVR (bus 0 bus_irq 5 global_irq 5 high level)
+[    3.778631] ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+[    3.778658] ACPI: INT_SRC_OVR (bus 0 bus_irq 10 global_irq 10 high level)
+[    3.778665] ACPI: INT_SRC_OVR (bus 0 bus_irq 11 global_irq 11 high level)
+[    3.778681] ACPI: Using ACPI (MADT) for SMP configuration information
+[    3.778685] ACPI: HPET id: 0x8086a201 base: 0xfed00000
+[    3.778699] TSC deadline timer available
+[    3.778711] CPU topo: Max. logical packages:   1
+[    3.778715] CPU topo: Max. logical dies:       1
+[    3.778717] CPU topo: Max. dies per package:   1
+[    3.778728] CPU topo: Max. threads per core:   1
+[    3.778754] CPU topo: Num. cores per package:     4
+[    3.778758] CPU topo: Num. threads per package:   4
+[    3.778760] CPU topo: Allowing 4 present CPUs plus 0 hotplug CPUs
+[    3.778905] kvm-guest: APIC: eoi() replaced with kvm_guest_apic_eoi_write()
+[    3.779118] kvm-guest: KVM setup pv remote TLB flush
+[    3.779159] kvm-guest: setup PV sched yield
+[    3.780134] PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+[    3.780143] PM: hibernation: Registered nosave memory: [mem 0x0009f000-0x000fffff]
+[    3.780147] PM: hibernation: Registered nosave memory: [mem 0xbffdd000-0xffffffff]
+[    3.780175] [mem 0xc0000000-0xfeffbfff] available for PCI devices
+[    3.780210] Booting paravirtualized kernel on KVM
+[    3.780257] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1910969940391419 ns
+[    3.851015] setup_percpu: NR_CPUS:64 nr_cpumask_bits:4 nr_cpu_ids:4 nr_node_ids:1
+[    3.862521] percpu: Embedded 66 pages/cpu s232280 r8192 d29864 u524288
+[    3.863072] Kernel command line: console=ttyS0 root=/dev/vda rw net.ifnames=0 corten=on corten_mode_default=on corten_stack_s2=on corten_arena.silent=on kasan.common.report=1 systemd.mask=sys-kernel-config.mount mitigations=off kunit.enable=0 log_buf_len=16M
+[    3.864552] corten: requested on, activating at initcall time
+[    3.864597] corten: execve default entry enabled
+[    3.864622] corten: stack-face S2 armed (bprm MODE entry)
+[    3.866340] random: crng init done
+[    3.889433] Dentry cache hash table entries: 524288 (order: 10, 4194304 bytes, linear)
+[    3.900693] Inode-cache hash table entries: 262144 (order: 9, 2097152 bytes, linear)
+[    3.903232] software IO TLB: area num 4.
+[    4.285372] Fallback order for Node 0: 0 
+[    4.285400] Built 1 zonelists, mobility grouping on.  Total pages: 1048443
+[    4.285403] Policy zone: Normal
+[    4.285407] mem auto-init: stack:off, heap alloc:off, heap free:off
+[    4.285430] stackdepot: allocating hash table via alloc_large_system_hash
+[    4.285436] stackdepot hash table entries: 1048576 (order: 12, 16777216 bytes, linear)
+[    4.321106] stackdepot: allocating space for 8192 stack pools via memblock
+[    4.496844] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=4, Nodes=1
+[    4.514364] Dynamic Preempt: voluntary
+[    4.518600] rcu: Preemptible hierarchical RCU implementation.
+[    4.518609] rcu: 	RCU event tracing is enabled.
+[    4.518612] rcu: 	RCU restricting CPUs from NR_CPUS=64 to nr_cpu_ids=4.
+[    4.518624] 	Trampoline variant of Tasks RCU enabled.
+[    4.518626] 	Tracing variant of Tasks RCU enabled.
+[    4.518629] rcu: RCU calculated value of scheduler-enlistment delay is 100 jiffies.
+[    4.518632] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=4
+[    4.519032] RCU Tasks: Setting shift to 2 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=4.
+[    4.519047] RCU Tasks Trace: Setting shift to 2 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=4.
+[    4.584947] NR_IRQS: 4352, nr_irqs: 456, preallocated irqs: 16
+[    4.586230] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    4.656854] Console: colour VGA+ 80x25
+[    4.657679] printk: legacy console [ttyS0] enabled
+[    5.381375] ACPI: Core revision 20250807
+[    5.387355] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    5.397610] APIC: Switch to symmetric I/O mode setup
+[    5.408976] x2apic enabled
+[    5.416380] APIC: Switched APIC routing to: physical x2apic
+[    5.420985] kvm-guest: APIC: send_IPI_mask() replaced with kvm_send_ipi_mask()
+[    5.428356] kvm-guest: APIC: send_IPI_mask_allbutself() replaced with kvm_send_ipi_mask_allbutself()
+[    5.438590] kvm-guest: setup PV IPIs
+[    5.469127] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    5.478408] clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x22df0f35937, max_idle_ns: 440795269039 ns
+[    5.487240] Calibrating delay loop (skipped) preset value.. 4838.39 BogoMIPS (lpj=2419198)
+[    5.491154] x86/cpu: User Mode Instruction Prevention (UMIP) activated
+[    5.492936] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    5.493240] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    5.494515] mitigations: Enabled attack vectors: SMT mitigations: off
+[    5.495323] Speculative Store Bypass: Vulnerable
+[    5.496241] Spectre V2 : Vulnerable
+[    5.497236] ITS: Vulnerable
+[    5.498241] Spectre V1 : Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers
+[    5.500323] x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'
+[    5.501243] x86/fpu: Supporting XSAVE feature 0x002: 'SSE registers'
+[    5.502255] x86/fpu: Supporting XSAVE feature 0x004: 'AVX registers'
+[    5.503242] x86/fpu: Supporting XSAVE feature 0x200: 'Protection Keys User registers'
+[    5.504243] x86/fpu: xstate_offset[2]:  576, xstate_sizes[2]:  256
+[    5.505236] x86/fpu: xstate_offset[9]:  832, xstate_sizes[9]:    8
+[    5.506245] x86/fpu: Enabled xstate features 0x207, context size is 840 bytes, using 'compacted' format.
+[    5.657606] Freeing SMP alternatives memory: 64K
+[    5.658241] pid_max: default: 32768 minimum: 301
+[    5.659737] LSM: initializing lsm=capability,selinux
+[    5.660333] SELinux:  Initializing.
+[    5.663476] Mount-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    5.665223] Mountpoint-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    5.677899] smpboot: CPU0: 13th Gen Intel(R) Core(TM) i9-13900HX (family: 0x6, model: 0xb7, stepping: 0x1)
+[    5.681220] Performance Events: Alderlake Hybrid events, core PMU driver.
+[    5.684271] core: CPUID marked event: 'cpu cycles' unavailable
+[    5.685275] core: CPUID marked event: 'instructions' unavailable
+[    5.686268] core: CPUID marked event: 'bus cycles' unavailable
+[    5.687271] core: CPUID marked event: 'cache references' unavailable
+[    5.688267] core: CPUID marked event: 'cache misses' unavailable
+[    5.689263] core: CPUID marked event: 'branch instructions' unavailable
+[    5.690288] core: CPUID marked event: 'branch misses' unavailable
+[    5.691914] core: The event 0x100 is not supported as a normal event.
+[    5.692282] core: The event 0x300 is not supported as a normal event.
+[    5.693268] core: The event 0x400 is not supported as a normal event.
+[    5.694295] core: The event 0x8000 is not supported as a normal event.
+[    5.695283] core: The event 0x8100 is not supported as a normal event.
+[    5.696276] core: The event 0x8200 is not supported as a normal event.
+[    5.697293] core: The event 0x8300 is not supported as a normal event.
+[    5.698282] core: The event 0x8400 is not supported as a normal event.
+[    5.699281] core: The event 0x8500 is not supported as a normal event.
+[    5.700279] core: The event 0x8600 is not supported as a normal event.
+[    5.701283] core: The event 0x8700 is not supported as a normal event.
+[    5.702439] core: cpu_core PMU driver: 
+[    5.703274] ... version:                   1
+[    5.704267] ... bit width:                 48
+[    5.705242] ... generic counters:          6
+[    5.706293] ... generic bitmap:            000000000000003f
+[    5.707279] ... fixed-purpose counters:    0
+[    5.708347] ... fixed-purpose bitmap:      0000000000000000
+[    5.709247] ... value mask:                0000ffffffffffff
+[    5.710287] ... max period:                000000007fffffff
+[    5.711275] ... global_ctrl mask:          000100000000003f
+[    5.713199] signal: max sigframe size: 3632
+[    5.714223] rcu: Hierarchical SRCU implementation.
+[    5.714298] rcu: 	Max phase no-delay instances is 400.
+[    5.717335] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+[    5.724556] corten: page descriptors enabled
+[    5.726299] smp: Bringing up secondary CPUs ...
+[    5.729274] smpboot: x86: Booting SMP configuration:
+[    5.730250] .... node  #0, CPUs:      #1 #2 #3
+[    5.759223] smp: Brought up 1 node, 4 CPUs
+[    5.760259] smpboot: Total of 4 processors activated (19353.58 BogoMIPS)
+[    5.763550] Memory: 3312560K/4193772K available (62518K kernel code, 10687K rwdata, 14456K rodata, 6808K init, 1160K bss, 876604K reserved, 0K cma-reserved)
+[    5.765548] devtmpfs: initialized
+[    5.778277] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+[    5.779286] posixtimers hash table entries: 2048 (order: 3, 32768 bytes, linear)
+[    5.780442] futex hash table entries: 1024 (65536 bytes on 1 NUMA nodes, total 64 KiB, linear).
+[    5.782673] PM: RTC time: 15:13:27, date: 2026-10-12
+[    5.797084] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    5.799513] audit: initializing netlink subsys (disabled)
+[    5.801259] audit: type=2000 audit(1791818006.598:1): state=initialized audit_enabled=0 res=1
+[    5.802036] thermal_sys: Registered thermal governor 'step_wise'
+[    5.802669] cpuidle: using governor menu
+[    5.807748] PCI: Using configuration type 1 for base access
+[    5.809043] kprobes: kprobe jump-optimization is enabled. All kprobes are optimized if possible.
+[    5.812848] HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+[    5.813291] HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+[    5.833971] ACPI: Added _OSI(Module Device)
+[    5.834241] ACPI: Added _OSI(Processor Device)
+[    5.835259] ACPI: Added _OSI(Processor Aggregator Device)
+[    5.885620] ACPI: 1 ACPI AML tables successfully acquired and loaded
+[    5.894811] ACPI: Interpreter enabled
+[    5.895403] ACPI: PM: (supports S0 S3 S4 S5)
+[    5.896279] ACPI: Using IOAPIC for interrupt routing
+[    5.897560] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[    5.898308] PCI: Using E820 reservations for host bridge windows
+[    5.900223] ACPI: Enabled 2 GPEs in block 00 to 0F
+[    5.972904] ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-ff])
+[    5.973340] acpi PNP0A03:00: _OSC: OS supports [ASPM ClockPM Segments MSI HPX-Type3]
+[    5.974298] acpi PNP0A03:00: _OSC: not requesting OS control; OS requires [ExtendedConfig ASPM ClockPM MSI]
+[    5.975950] acpi PNP0A03:00: fail to add MMCONFIG information, can't access extended configuration space under this bridge
+[    5.976799] PCI host bridge to bus 0000:00
+[    5.977405] pci_bus 0000:00: root bus resource [io  0x0000-0x0cf7 window]
+[    5.978327] pci_bus 0000:00: root bus resource [io  0x0d00-0xffff window]
+[    5.979300] pci_bus 0000:00: root bus resource [mem 0x000a0000-0x000bffff window]
+[    5.980249] pci_bus 0000:00: root bus resource [mem 0xc0000000-0xfebfffff window]
+[    5.981288] pci_bus 0000:00: root bus resource [mem 0x140000000-0x1bfffffff window]
+[    5.982522] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    5.983798] pci 0000:00:00.0: [8086:1237] type 00 class 0x060000 conventional PCI endpoint
+[    6.002737] pci 0000:00:01.0: [8086:7000] type 00 class 0x060100 conventional PCI endpoint
+[    6.008223] pci 0000:00:01.1: [8086:7010] type 00 class 0x010180 conventional PCI endpoint
+[    6.010482] pci 0000:00:01.1: BAR 4 [io  0xc0a0-0xc0af]
+[    6.011453] pci 0000:00:01.1: BAR 0 [io  0x01f0-0x01f7]: legacy IDE quirk
+[    6.012255] pci 0000:00:01.1: BAR 1 [io  0x03f6]: legacy IDE quirk
+[    6.013287] pci 0000:00:01.1: BAR 2 [io  0x0170-0x0177]: legacy IDE quirk
+[    6.014301] pci 0000:00:01.1: BAR 3 [io  0x0376]: legacy IDE quirk
+[    6.017165] pci 0000:00:01.3: [8086:7113] type 00 class 0x068000 conventional PCI endpoint
+[    6.020981] pci 0000:00:01.3: quirk: [io  0x0600-0x063f] claimed by PIIX4 ACPI
+[    6.021332] pci 0000:00:01.3: quirk: [io  0x0700-0x070f] claimed by PIIX4 SMB
+[    6.023636] pci 0000:00:02.0: [1234:1111] type 00 class 0x030000 conventional PCI endpoint
+[    6.030506] pci 0000:00:02.0: BAR 0 [mem 0xfd000000-0xfdffffff pref]
+[    6.032515] pci 0000:00:02.0: BAR 2 [mem 0xfeb90000-0xfeb90fff]
+[    6.033596] pci 0000:00:02.0: ROM [mem 0xfeb80000-0xfeb8ffff pref]
+[    6.040223] pci 0000:00:02.0: Video device with shadowed ROM at [mem 0x000c0000-0x000dffff]
+[    6.103181] pci 0000:00:03.0: [1af4:1000] type 00 class 0x020000 conventional PCI endpoint
+[    6.108381] pci 0000:00:03.0: BAR 0 [io  0xc080-0xc09f]
+[    6.109419] pci 0000:00:03.0: BAR 1 [mem 0xfeb91000-0xfeb91fff]
+[    6.110693] pci 0000:00:03.0: BAR 4 [mem 0xfe000000-0xfe003fff 64bit pref]
+[    6.111391] pci 0000:00:03.0: ROM [mem 0xfeb00000-0xfeb7ffff pref]
+[    6.139223] pci 0000:00:04.0: [1af4:1001] type 00 class 0x010000 conventional PCI endpoint
+[    6.142395] pci 0000:00:04.0: BAR 0 [io  0xc000-0xc07f]
+[    6.143396] pci 0000:00:04.0: BAR 1 [mem 0xfeb92000-0xfeb92fff]
+[    6.144613] pci 0000:00:04.0: BAR 4 [mem 0xfe004000-0xfe007fff 64bit pref]
+[    6.200564] ACPI: PCI: Interrupt link LNKA configured for IRQ 10
+[    6.204101] ACPI: PCI: Interrupt link LNKB configured for IRQ 10
+[    6.206223] ACPI: PCI: Interrupt link LNKC configured for IRQ 11
+[    6.207452] ACPI: PCI: Interrupt link LNKD configured for IRQ 11
+[    6.208422] ACPI: PCI: Interrupt link LNKS configured for IRQ 9
+[    6.238272] iommu: Default domain type: Translated
+[    6.239282] iommu: DMA domain TLB invalidation policy: lazy mode
+[    6.256770] SCSI subsystem initialized
+[    6.272354] ACPI: bus type USB registered
+[    6.278121] usbcore: registered new interface driver usbfs
+[    6.279825] usbcore: registered new interface driver hub
+[    6.280648] usbcore: registered new device driver usb
+[    6.283724] pps_core: LinuxPPS API ver. 1 registered
+[    6.284288] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    6.285391] PTP clock support registered
+[    6.294320] Advanced Linux Sound Architecture Driver Initialized.
+[    6.317888] NetLabel: Initializing
+[    6.318279] NetLabel:  domain hash size = 128
+[    6.319842] NetLabel:  protocols = UNLABELED CIPSOv4 CALIPSO
+[    6.321194] NetLabel:  unlabeled traffic allowed by default
+[    6.326097] PCI: Using ACPI for IRQ routing
+[    6.331182] pci 0000:00:02.0: vgaarb: setting as boot VGA device
+[    6.331223] pci 0000:00:02.0: vgaarb: bridge control possible
+[    6.331223] pci 0000:00:02.0: vgaarb: VGA device added: decodes=io+mem,owns=io+mem,locks=none
+[    6.331290] vgaarb: loaded
+[    6.339399] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+[    6.340244] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+[    6.346223] clocksource: Switched to clocksource kvm-clock
+[    6.377432] VFS: Disk quotas dquot_6.6.0
+[    6.383180] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    6.396413] pnp: PnP ACPI init
+[    6.413504] pnp: PnP ACPI: found 6 devices
+[    6.584298] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+[    6.603352] NET: Registered PF_INET protocol family
+[    6.616617] IP idents hash table entries: 65536 (order: 7, 524288 bytes, linear)
+[    6.656196] tcp_listen_portaddr_hash hash table entries: 2048 (order: 3, 32768 bytes, linear)
+[    6.664178] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    6.677768] TCP established hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[    6.690695] TCP bind hash table entries: 32768 (order: 8, 1048576 bytes, linear)
+[    6.714118] TCP: Hash tables configured (established 32768 bind 32768)
+[    6.723204] UDP hash table entries: 2048 (order: 5, 131072 bytes, linear)
+[    6.735531] UDP-Lite hash table entries: 2048 (order: 5, 131072 bytes, linear)
+[    6.748620] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    6.765639] RPC: Registered named UNIX socket transport module.
+[    6.771477] RPC: Registered udp transport module.
+[    6.774054] RPC: Registered tcp transport module.
+[    6.775030] RPC: Registered tcp-with-tls transport module.
+[    6.778851] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    6.793511] pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+[    6.800802] pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+[    6.810794] pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000bffff window]
+[    6.820179] pci_bus 0000:00: resource 7 [mem 0xc0000000-0xfebfffff window]
+[    6.828364] pci_bus 0000:00: resource 8 [mem 0x140000000-0x1bfffffff window]
+[    6.835497] pci 0000:00:01.0: PIIX3: Enabling Passive Release
+[    6.841349] pci 0000:00:00.0: Limiting direct PCI/PCI transfers
+[    6.844643] PCI: CLS 0 bytes, default 64
+[    6.848936] PCI-DMA: Using software bounce buffering for IO (SWIOTLB)
+[    6.856953] software IO TLB: mapped [mem 0x00000000bbfdd000-0x00000000bffdd000] (64MB)
+[    6.866681] RAPL PMU: API unit is 2^-32 Joules, 0 fixed counters, 10737418240 ms ovfl timer
+[    6.878104] clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x22df0f35937, max_idle_ns: 440795269039 ns
+[    6.925737] Initialise system trusted keyrings
+[    6.943877] workingset: timestamp_bits=40 max_order=20 bucket_order=0
+[    6.986608] NFS: Registering the id_resolver key type
+[    6.994385] Key type id_resolver registered
+[    7.003213] Key type id_legacy registered
+[    7.010938] 9p: Installing v9fs 9p2000 file system support
+[    7.075830] Key type asymmetric registered
+[    7.079783] Asymmetric key parser 'x509' registered
+[    7.087566] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 251)
+[    7.096129] io scheduler mq-deadline registered
+[    7.101621] io scheduler kyber registered
+[    7.112073] input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input0
+[    7.121248] ACPI: button: Power Button [PWRF]
+[   10.046741] ACPI: \_SB_.LNKC: Enabled at IRQ 11
+[   13.019075] ACPI: \_SB_.LNKD: Enabled at IRQ 10
+[   13.034744] Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled
+[   13.045272] 00:04: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+[   13.068927] Non-volatile memory driver v1.3
+[   13.072176] Linux agpgart interface v0.103
+[   13.183674] ACPI: bus type drm_connector registered
+[   13.277344] loop: module loaded
+[   13.286221] virtio_blk virtio1: 4/0/0 default/read/poll queues
+[   13.339266] virtio_blk virtio1: [vda] 20971520 512-byte logical blocks (10.7 GB/10.0 GiB)
+[   13.382762] zram: Added device: zram0
+[   13.412868] scsi host0: ata_piix
+[   13.421575] scsi host1: ata_piix
+[   13.426659] ata1: PATA max MWDMA2 cmd 0x1f0 ctl 0x3f6 bmdma 0xc0a0 irq 14 lpm-pol 0
+[   13.434699] ata2: PATA max MWDMA2 cmd 0x170 ctl 0x376 bmdma 0xc0a8 irq 15 lpm-pol 0
+[   13.447849] tun: Universal TUN/TAP device driver, 1.6
+[   13.491779] e100: Intel(R) PRO/100 Network Driver
+[   13.497640] e100: Copyright(c) 1999-2006 Intel Corporation
+[   13.502353] e1000: Intel(R) PRO/1000 Network Driver
+[   13.507211] e1000: Copyright (c) 1999-2006 Intel Corporation.
+[   13.514288] e1000e: Intel(R) PRO/1000 Network Driver
+[   13.519400] e1000e: Copyright(c) 1999 - 2015 Intel Corporation.
+[   13.527741] sky2: driver version 1.30
+[   13.542783] usbcore: registered new interface driver usblp
+[   13.549187] usbcore: registered new interface driver usb-storage
+[   13.558464] i8042: PNP: PS/2 Controller [PNP0303:KBD,PNP0f13:MOU] at 0x60,0x64 irq 1,12
+[   13.576523] serio: i8042 KBD port at 0x60,0x64 irq 1
+[   13.583503] serio: i8042 AUX port at 0x60,0x64 irq 12
+[   13.598393] rtc_cmos 00:05: RTC can wake from S4
+[   13.609910] ata2: found unknown device (class 0)
+[   13.610822] input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input1
+[   13.619267] ata2.00: ATAPI: QEMU DVD-ROM, 2.5+, max UDMA/100
+[   13.621235] rtc_cmos 00:05: registered as rtc0
+[   13.621968] rtc_cmos 00:05: alarms up to one day, y3k, 242 bytes nvram, hpet irqs
+[   13.646916] scsi 1:0:0:0: CD-ROM            QEMU     QEMU DVD-ROM     2.5+ PQ: 0 ANSI: 5
+[   13.650948] device-mapper: ioctl: 4.50.0-ioctl (2025-04-28) initialised: dm-devel@lists.linux.dev
+[   13.669865] intel_pstate: CPU model not supported
+[   13.684904] hid: raw HID events driver (C) Jiri Kosina
+[   13.719314] usbcore: registered new interface driver usbhid
+[   13.728692] usbhid: USB HID core driver
+[   13.751144] sr 1:0:0:0: [sr0] scsi3-mmc drive: 4x/4x cd/rw xa/form2 tray
+[   13.759399] xt_time: kernel timezone is -0000
+[   13.760132] cdrom: Uniform CD-ROM driver Revision: 3.20
+[   13.767735] Initializing XFRM netlink socket
+[   13.778514] NET: Registered PF_INET6 protocol family
+[   13.798966] Segment Routing with IPv6
+[   13.804175] In-situ OAM (IOAM) with IPv6
+[   13.807699] sr 1:0:0:0: Attached scsi generic sg0 type 5
+[   13.809754] sit: IPv6, IPv4 and MPLS over IPv4 tunneling driver
+[   13.846773] NET: Registered PF_PACKET protocol family
+[   13.852358] NET: Registered PF_KEY protocol family
+[   13.859836] 9pnet: Installing 9P2000 support
+[   13.865417] Key type dns_resolver registered
+[   13.871766] NET: Registered PF_VSOCK protocol family
+[   13.883540] IPI shorthand broadcast: enabled
+[   14.017331] sched_clock: Marking stable (13132030793, 884966955)->(15237799173, -1220801425)
+[   14.022864] registered taskstats version 1
+[   14.027708] Loading compiled-in X.509 certificates
+[   14.088877] Demotion targets for Node 0: null
+[   14.095085] Key type .fscrypt registered
+[   14.098954] Key type fscrypt-provisioning registered
+[   14.109825] PM:   Magic number: 14:684:234
+[   14.114370] netconsole: network logging started
+[   14.119961] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[   14.139159] kworker/u16:1 (72) used greatest stack depth: 29184 bytes left
+[   14.149017] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[   14.157361] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[   14.171559] ALSA device list:
+[   14.176013] faux_driver regulatory: Direct firmware load for regulatory.db failed with error -2
+[   14.177409]   No soundcards found.
+[   14.189490] cfg80211: failed to load regulatory.db
+[   14.190805] kunit: disabled
+[   14.205483] check access for rdinit=/init failed: -2, ignoring
+[   14.228529] input: ImExPS/2 Generic Explorer Mouse as /devices/platform/i8042/serio1/input/input3
+[   14.238796] md: Waiting for all devices to be available before autodetect
+[   14.245166] md: If you don't use raid, use raid=noautodetect
+[   14.250231] md: Autodetecting RAID arrays.
+[   14.251960] md: autorun ...
+[   14.254489] md: ... autorun DONE.
+[   14.323815] EXT4-fs (vda): warning: mounting fs with errors, running e2fsck is recommended
+[   14.344461] EXT4-fs (vda): recovery complete
+[   14.350764] EXT4-fs (vda): mounted filesystem 56b1695a-8891-40bd-bc42-c7c8a70fe76d r/w with ordered data mode. Quota mode: none.
+[   14.359356] VFS: Mounted root (ext4 filesystem) on device 253:0.
+[   14.370801] devtmpfs: mounted
+[   14.416454] Freeing unused kernel image (initmem) memory: 6808K
+[   14.422756] Write protecting the kernel read-only data: 79872k
+[   14.459262] Freeing unused kernel image (text/rodata gap) memory: 968K
+[   14.479905] Freeing unused kernel image (rodata/data gap) memory: 1928K
+[   14.564572] x86/mm: Checked W+X mappings: passed, no W+X pages found.
+[   14.570419] Run /sbin/init as init process
+[   14.649159] corten-dbg: late stage OK entry=55a7f40758d0 interp_load=100000000000
+[   16.504876] SELinux:  Permission firmware_load in class system not defined in policy.
+[   16.509022] SELinux:  Permission kexec_image_load in class system not defined in policy.
+[   16.512516] SELinux:  Permission kexec_initramfs_load in class system not defined in policy.
+[   16.517328] SELinux:  Permission policy_load in class system not defined in policy.
+[   16.521335] SELinux:  Permission x509_certificate_load in class system not defined in policy.
+[   16.527859] SELinux:  Permission watch_mountns in class file not defined in policy.
+[   16.534241] SELinux:  Permission watch_mountns in class dir not defined in policy.
+[   16.541364] SELinux:  Permission watch_mountns in class lnk_file not defined in policy.
+[   16.547353] SELinux:  Permission watch_mountns in class chr_file not defined in policy.
+[   16.552593] SELinux:  Permission watch_mountns in class blk_file not defined in policy.
+[   16.561693] SELinux:  Permission watch_mountns in class sock_file not defined in policy.
+[   16.568356] SELinux:  Permission watch_mountns in class fifo_file not defined in policy.
+[   16.574624] SELinux:  Permission watch_mountns in class anon_inode not defined in policy.
+[   16.578801] SELinux:  Permission allowed in class io_uring not defined in policy.
+[   16.581682] SELinux:  Class memfd_file not defined in policy.
+[   16.585058] SELinux: the above unknown classes and permissions will be allowed
+[   16.696769] SELinux:  policy capability network_peer_controls=1
+[   16.701445] SELinux:  policy capability open_perms=1
+[   16.704146] SELinux:  policy capability extended_socket_class=1
+[   16.707842] SELinux:  policy capability always_check_network=0
+[   16.712491] SELinux:  policy capability cgroup_seclabel=1
+[   16.716988] SELinux:  policy capability nnp_nosuid_transition=1
+[   16.721993] SELinux:  policy capability genfs_seclabel_symlinks=0
+[   16.726566] SELinux:  policy capability ioctl_skip_cloexec=0
+[   16.730662] SELinux:  policy capability userspace_initial_context=0
+[   16.735258] SELinux:  policy capability netlink_xperm=0
+[   16.739138] SELinux:  policy capability netif_wildcard=0
+[   16.743199] SELinux:  policy capability genfs_seclabel_wildcard=0
+[   16.747867] SELinux:  policy capability functionfs_seclabel=0
+[   16.752680] SELinux:  policy capability memfd_class=0
+[   16.767441] audit: type=1403 audit(1791818017.563:2): auid=4294967295 ses=4294967295 lsm=selinux res=1
+[   16.785269] systemd[1]: Successfully loaded SELinux policy in 1.718012s.
+[   16.843202] ext4lazyinit (78) used greatest stack depth: 28560 bytes left
+[   18.133300] corten-dbg: late stage OK entry=55a7e017ad20 interp_load=100000000000
+[   18.171618] corten-dbg: sg GROUP-EXIT modprobe[80] code=256
+[   18.184413] 
+[   18.185785]  100000400000 100000401000 100000402000 100000403000 100000404000 100000405000 100000406000 100001200000 100001201000 100001202000 100001203000 100001205000 100001400000 100001401000 100001402000 100001403000
+[   18.198143] 
+[   18.199695] 
+[   18.200786]  ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030
+[   18.201983]  ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8000:-1@corten_arena_zap_window+0x6f9/0x1030
+[   18.317852]  7fa6b463e000=8400000106b2f025 7fa6b463f000=8400000106b2e025 7fa6b4640000=8000000106a67067
+[   18.322763]  7fa6b440c000=202027 7fa6b4414000=20202b 7fa6b446d000=190019 7fa6b4470000=200000000000001 7fa6b44a0000=200000000000003 7fa6b44dd000=70007 7fa6b44e0000=200000000000003 7fa6b451d000=80190019
+[   18.332926] 
+[   18.333497]  total=0
+[   18.334872] 
+[   18.341586] corten: state-free st=ffff888108be8000 nr=13 own=ffff8881077f8000 from=corten_arena_mm_exit+0x77c/0x3e20
+[   18.353554] modprobe (80) used greatest stack depth: 25832 bytes left
+[   18.409752] systemd[1]: Relabeled /dev/, /dev/shm/, /run/ in 54.196ms.
+[!p]104[?7h[   18.513678] systemd[1]: systemd 257.13-1~deb13u1 running in system mode (+PAM +AUDIT +SELINUX +APPARMOR +IMA +IPE +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBCRYPTSETUP_PLUGINS +LIBFDISK +PCRE2 +PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD +BPF_FRAMEWORK +BTF -XKBCOMMON -UTMP +SYSVINIT +LIBARCHIVE)
+[   18.542476] systemd[1]: Detected virtualization kvm.
+[   18.550724] systemd[1]: Detected architecture x86-64.
+
+[0;1;39mWelcome to [0m[1mDebian GNU/Linux 13 (trixie)[0m[0;1;39m![0m
+
+[   18.581094] systemd[1]: Hostname set to <syzkaller>.
+[   20.489948] systemd[1]: bpf-restrict-fs: BPF LSM hook not enabled in the kernel, BPF LSM not supported.
+[   20.584798]  -1849015208 -2 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -4 -1849015208 -2
+[   20.588485]  100080000000 100080001000 100080002000 100080004000 100080005000 100080006000 1000c0000000 100000000000 100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000
+[   20.591923] 
+[   20.603432] 
+[   20.603448] 
+[   20.603453]  ffff888100069500:+1@corten_arena_fault_once.part.0+0x13ed/0x23c0
+[   20.604927]  100080000000
+[   20.606830]  ffff888100069c00:+1@dup_mmap+0xd1f/0x1560
+[   20.608218]  100080001000
+[   20.612919]  ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.613476]  100080002000 100080004000 100080005000 100080006000 1000c0000000 100000000000 100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000
+[   20.613487] 
+[   20.613487] 
+[   20.613488]  ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.613668] 
+[   20.613760]  100080000000 100080001000 100080002000 100080004000 100080005000 100080006000 1000c0000000 100000000000 100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000
+[   20.613770] 
+[   20.613770] 
+[   20.613771]  ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.613811]  ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff888100069c00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.613845]  55a7e019f000=84000001087fe025 55a7e01a0000=8400000108767025 55a7e01a1000=800000010873b067 7f5045172000=8400000108771025 7f5045173000=8000000108770067 7f5045192000=840000010876f025 7f5045193000=800000010876e067 7f5045375000=8400000108775025
+[   20.613852] 
+[   20.613853] 
+[   20.613853]  total=0
+[   20.613854] 
+[   20.617315]  ffff88810006a300:+1@dup_mmap+0xd1f/0x1560 ffff88810006a300:+1@dup_mmap+0xd1f/0x1560 ffff88810006a300:+1@dup_mmap+0xd1f/0x1560
+[   20.619402]  ffff88810006a300:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.623038]  ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.623086]  ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888100069c00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.623173] 
+[   20.623174] 
+[   20.623174] 
+[   20.623175]  total=0
+[   20.623176] 
+[   20.625211] 
+[   20.626708]  ffff88810006a300:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006a300:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006a300:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006a300:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810d618000:+1@corten_arena_fault_once.part.0+0x13ed/0x23c0 ffff88810d618000:-1@corten_arena_fault_once.part.0+0x13ed/0x23c0 ffff88810d618000:+1@corten_arena_fault_once.part.0+0x13ed/0x23c0 ffff88810d618000:-1@corten_arena_fault_once.part.0+0x13ed/0x23c0 ffff88810d618000:+1@corten_arena_fault_once.part.0+0x13ed/0x23c0 ffff88810d618000:-1@corten_arena_fault_once.part.0+0x13ed/0x23c0 ffff88810d618000:+1@corten_arena_fault_once.part.0+0x13ed/0x23c0 ffff88810d618000:-1@corten_arena_fault_once.part.0+0x13ed/0x23c0 ffff88810d618000:+1@corten_arena_fault_once.part.0+0x13ed/0x23c0 ffff88810d618000:-1@corten_arena_fault_once.part.0+0x13ed/0x23c0
+[   20.626750] 
+[   20.626751] 
+[   20.626751] 
+[   20.626752]  total=0
+[   20.626753] 
+[   20.646561] 
+[   20.661078] 
+[   20.661532]  100000000000 100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000 100000009000 10000000a000 10000000b000 10000000c000 10000000d000 10000000e000 10000000f000
+[   20.661571] 
+[   20.661573] 
+[   20.661575]  ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.661726]  ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006b800:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.661847] 
+[   20.661849] 
+[   20.661851] 
+[   20.661853]  total=0
+[   20.661857] 
+[   20.668565] 
+[   20.669721] 
+[   20.678317] BUG: kernel NULL pointer dereference, address: 0000000000000008
+[   20.678339] #PF: supervisor read access in kernel mode
+[   20.678346] #PF: error_code(0x0000) - not-present page
+[   20.678352] PGD 0 P4D 0 
+[   20.678363] Oops: Oops: 0000 [#1] SMP KASAN NOPTI
+[   20.678643] CPU: 0 UID: 0 PID: 82 Comm: (sd-exec-strv) Not tainted 6.18.32-g8e5dcc661732-dirty #624 PREEMPT(voluntary) 
+[   20.678658] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   20.678687] RIP: 0010:qlist_free_all+0xaf/0x160
+[   20.678769] Code: ea 0c 48 c1 e2 06 48 03 15 ee 30 f9 03 48 8b 72 08 48 89 d1 40 f6 c6 01 0f 85 9e 00 00 00 66 90 31 d2 80 79 33 f5 48 0f 45 ca <48> 8b 69 08 e9 66 ff ff ff 48 83 7d 50 00 0f 85 7b ff ff ff f7 45
+[   20.678811] RSP: 0018:ffff88810d6175a0 EFLAGS: 00010206
+[   20.678965] RAX: ffff888102b57540 RBX: ffff888102b57540 RCX: 0000000000000000
+[   20.678973] RDX: 0000000000000000 RSI: ffffea00040a9588 RDI: ffff88810004b540
+[   20.678978] RBP: 0000000000000000 R08: 0000000000000000 R09: ffffffff91da5100
+[   20.678982] R10: ffff888102b5d0e0 R11: 0000000000000001 R12: 0000000000000000
+[   20.678987] R13: ffff88810d6175d8 R14: ffff888102b5d0e0 R15: ffff888102b5d0e0
+[   20.678992] FS:  0000100000e01540(0000) GS:ffff88817ed6c000(0000) knlGS:0000000000000000
+[   20.678998] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   20.679119] CR2: 0000000000000008 CR3: 0000000101dbf004 CR4: 0000000000770ef0
+[   20.679239] PKRU: 55555554
+[   20.679245] Call Trace:
+[   20.679250]  <TASK>
+[   20.679256]  kasan_quarantine_reduce+0x15d/0x180
+[   20.679394]  __kasan_slab_alloc+0x49/0x70
+[   20.679428]  __kmalloc_cache_noprof+0x13e/0x580
+[   20.679448]  ? _raw_spin_lock+0x7f/0xd0
+[   20.679685]  ? corten_arena_fork_mirror+0x2a6/0x24d0
+[   20.679696]  corten_arena_fork_mirror+0x2a6/0x24d0
+[   20.679707]  ? xas_load+0x24/0x220
+[   20.679835] 
+[   20.679836]  ? __pfx_corten_arena_fork_mirror+0x10/0x10
+[   20.679848]  ? xas_find+0x311/0x490
+[   20.679856]  ? xa_find+0xfe/0x1b0
+[   20.679865]  ? corten_registry_next+0x80/0x4c0
+[   20.679875]  corten_arena_fork_commit+0x232/0x530
+[   20.679886]  ? __pfx_corten_arena_fork_commit+0x10/0x10
+[   20.679893]  ? down_write+0xb2/0x130
+[   20.679904]  dup_mmap+0xf56/0x1560
+[   20.679915]  ? __pfx_dup_mmap+0x10/0x10
+[   20.679924]  ? mm_init.constprop.0+0xb48/0x1150
+[   20.680126]  100000000000
+[   20.680127]  copy_process+0x35f1/0x6210
+[   20.680135]  100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000 100000009000 10000000a000 10000000b000 10000000c000 10000000d000 10000000e000
+[   20.680137]  ? __pfx_do_wp_page+0x10/0x10
+[   20.680163]  10000000f000
+[   20.680166] 
+[   20.680169] 
+[   20.680172] 
+[   20.680176]  ? __pfx_copy_process+0x10/0x10
+[   20.680184]  ? __handle_mm_fault+0x917/0x1650
+[   20.680174]  ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.680192]  ? __pfx___handle_mm_fault+0x10/0x10
+[   20.680196]  ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.680199]  ? __pfx_css_rstat_updated+0x10/0x10
+[   20.680318]  ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.680325]  kernel_clone+0xb8/0x710
+[   20.680326]  ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.680334]  ? __pfx_kernel_clone+0x10/0x10
+[   20.680335]  ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.680341]  ? _raw_spin_lock_irq+0x80/0xe0
+[   20.680344]  ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.680352]  ? __pfx__raw_spin_lock_irq+0x10/0x10
+[   20.680353]  ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.680363]  ? count_memcg_events+0x23a/0x3b0
+[   20.680387]  ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.680400]  ? recalc_sigpending+0x145/0x200
+[   20.680453]  __do_sys_clone+0xb5/0x100
+[   20.680461]  ? __pfx___do_sys_clone+0x10/0x10
+[   20.680508]  ? fpregs_assert_state_consistent+0x26/0xa0
+[   20.680615]  do_syscall_64+0xa8/0x310
+[   20.680658]  ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.680668]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   20.680693]  ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0 ffff88810006bf00:+1@corten_arena_fork_mirror+0x932/0x24d0
+[   20.680721] 
+[   20.680722] 
+[   20.680724] 
+[   20.680727]  total=0
+[   20.680730] 
+[   20.680702] RIP: 0033:0x7fa6b518f242
+[   20.680951] Code: 89 e7 e8 51 3b f6 ff 45 31 c0 31 d2 31 f6 64 48 8b 04 25 10 00 00 00 bf 11 00 20 01 4c 8d 90 d0 02 00 00 b8 38 00 00 00 0f 05 <48> 3d 00 f0 ff ff 77 5e 89 c5 85 c0 75 31 64 48 8b 04 25 10 00 00
+[   20.680961] RSP: 002b:00007fff13eb9550 EFLAGS: 00000246 ORIG_RAX: 0000000000000038
+[   20.680970] RAX: ffffffffffffffda RBX: 00007fff13eb9550 RCX: 00007fa6b518f242
+[   20.680975] RDX: 0000000000000000 RSI: 0000000000000000 RDI: 0000000001200011
+[   20.680980] RBP: 0000000000000003 R08: 0000000000000000 R09: 00007fff13eb9858
+[   20.680984] R10: 0000100000e01810 R11: 0000000000000246 R12: 00007fff13eb96c0
+[   20.680989] R13: 0000000000000002 R14: 0000000000000000 R15: 00007fff13eb9740
+[   20.680997]  </TASK>
+[   20.681000] Modules linked in:
+[   20.681188] CR2: 0000000000000008
+[   20.681350] ---[ end trace 0000000000000000 ]---
+[   20.681356] RIP: 0010:qlist_free_all+0xaf/0x160
+[   20.681369] Code: ea 0c 48 c1 e2 06 48 03 15 ee 30 f9 03 48 8b 72 08 48 89 d1 40 f6 c6 01 0f 85 9e 00 00 00 66 90 31 d2 80 79 33 f5 48 0f 45 ca <48> 8b 69 08 e9 66 ff ff ff 48 83 7d 50 00 0f 85 7b ff ff ff f7 45
+[   20.681375] RSP: 0018:ffff88810d6175a0 EFLAGS: 00010206
+[   20.681419] RAX: ffff888102b57540 RBX: ffff888102b57540 RCX: 0000000000000000
+[   20.681425] RDX: 0000000000000000 RSI: ffffea00040a9588 RDI: ffff88810004b540
+[   20.681429] RBP: 0000000000000000 R08: 0000000000000000 R09: ffffffff91da5100
+[   20.681433] R10: ffff888102b5d0e0 R11: 0000000000000001 R12: 0000000000000000
+[   20.681438] R13: ffff88810d6175d8 R14: ffff888102b5d0e0 R15: ffff888102b5d0e0
+[   20.681442] FS:  0000100000e01540(0000) GS:ffff88817ed6c000(0000) knlGS:0000000000000000
+[   20.681448] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   20.681521] CR2: 0000000000000008 CR3: 0000000101dbf004 CR4: 0000000000770ef0
+[   20.681575] PKRU: 55555554
+[   20.681582] note: (sd-exec-strv)[82] exited with irqs disabled
+[   20.682126] 
+[   20.682132] 
+[   20.683436] 
+[   20.684845]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.732341] 
+[   20.732522] 
+[   20.732819]  100000000000 100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000 100000009000 10000000a000 10000000b000 10000000c000 10000000d000 10000000e000 10000000f000
+[   20.732858] 
+[   20.733086] 
+[   20.733089]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.733247]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.733362] 
+[   20.733363] 
+[   20.733365] 
+[   20.733367]  total=0
+[   20.733372] 
+[   20.781645]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.801625]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.803075]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.804404]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.806039]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.807342]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.816219]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.821204]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   20.821292] 
+[   20.821302] 
+[   20.821304] 
+[   20.821307]  total=0
+[   20.821311] 
+[   21.849883]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   21.850610] corten: state-free st=ffff88810d708000 nr=20 own=ffff888100069500 from=corten_arena_mm_exit+0x77c/0x3e20
+[   21.850627]  ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006aa00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   21.900577] mmap: corten: billing-reconcile anon 30
+[   21.901972] BUG: Bad rss-counter state mm:00000000e2c10b58 type:MM_SHMEMPAGES val:4 Comm:(exec-inner) Pid:85
+[   21.908497]  ffff888100069500:-6@unmap_vmas+0x168/0x320
+[   21.917269] corten-dbg: late stage OK entry=5583d889f280 interp_load=100000000000
+[   21.920576]  ffff888105498e00:+1@__handle_mm_fault+0x929/0x1650 ffff888105498e00:+1@__handle_mm_fault+0x929/0x1650 ffff888105498e00:+1@__handle_mm_fault+0x929/0x1650 ffff888105498e00:+1@__handle_mm_fault+0x929/0x1650 ffff888105498e00:+1@__handle_mm_fault+0x929/0x1650 ffff888105498e00:+1@__handle_mm_fault+0x929/0x1650
+[   21.947319]  55a7f4088000=8400000106a55005 55a7f4089000=8400000116a40005 55a7f408a000=84000001168de005 7fa6b45b8000=8400000108f19005 7fa6b45b9000=8400000108eff005 7fa6b461f000=8400000108f1a005 7fa6b4620000=8400000108f1b005 7fa6b4621000=8400000108efa005
+[   21.961791]  7fa6b5443000=1 7fa6b55ed000=80150015
+[   21.965325] 
+[   21.966677]  total=0
+[   21.968219] 
+[   21.970218] corten: state-free st=ffff88810d7c0000 nr=20 own=ffff88810006a300 from=corten_arena_mm_exit+0x77c/0x3e20
+[   21.970354] corten: state-free st=ffff88810d650000 nr=20 own=ffff888100068700 from=corten_arena_mm_exit+0x77c/0x3e20
+[   21.970698] corten: state-free st=ffff88810d820000 nr=20 own=ffff88810006aa00 from=corten_arena_mm_exit+0x77c/0x3e20
+[   21.973730] mmap: corten: billing-reconcile anon 30
+[   21.977326] BUG: Bad rss-counter state mm:00000000921064d0 type:MM_SHMEMPAGES val:4 Comm:(exec-inner) Pid:88
+[   21.977597] mmap: corten: billing-reconcile anon 30
+[   21.979220] BUG: Bad rss-counter state mm:00000000757c8ce5 type:MM_SHMEMPAGES val:4 Comm:(exec-inner) Pid:87
+[   21.980644] corten: state-free st=ffff88810d900000 nr=20 own=ffff88810006b800 from=corten_arena_mm_exit+0x77c/0x3e20
+[   21.983866] corten: state-free st=ffff88810d898000 nr=20 own=ffff88810006b100 from=corten_arena_mm_exit+0x77c/0x3e20
+[   21.989928] corten-dbg: late stage OK entry=557dcc15b940 interp_load=100000000000
+[   21.990204] corten: state-free st=ffff88810d6a0000 nr=20 own=ffff888100068e00 from=corten_arena_mm_exit+0x77c/0x3e20
+[   21.990527] corten-dbg: sg GROUP-EXIT systemd-fstab-g[85] code=0
+[   21.992983] mmap: corten: billing-reconcile anon 30
+[   21.997072]  -1849015208 -2 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -3 -1849015208 -1 -1849015208 -1 -1849015208 -1
+[   21.997086]  100000400000 100000401000 100000402000 100000403000 100000404000 100000405000 100000406000 100000000000 100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000
+[   21.997094] 
+[   21.997095]  7fa6b4640000=8000000101a4d205 7fa6b5999000=80000000576fa205 7fa6b4640000=8000000101a4d205 7fa6b5999000=80000000576fa205 7fa6b4640000=8000000101a4d205 7fa6b5999000=80000000576fa205 7fa6b4640000=8000000101a4d205 7fa6b5999000=80000000576fa205
+[   21.997102]  ffff88810006b100:-5@unmap_vmas+0x168/0x320 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff88810006b100:-2@unmap_vmas+0x168/0x320 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff88810006b100:-47@unmap_vmas+0x168/0x320 ffff88810006b100:-2@unmap_vmas+0x168/0x320 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff88810006b100:-92@unmap_vmas+0x168/0x320 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff888105498e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105498e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff888105498e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff888105498e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105498e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105498e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff888105498e00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   21.997164]  ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff888105498e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105498e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006b100:-3@unmap_vmas+0x168/0x320 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff88810006b100:-1@unmap_vmas+0x168/0x320 ffff88810006b100:-4@unmap_vmas+0x168/0x320 ffff88810006b100:-2@unmap_vmas+0x168/0x320
+[   21.997183]  55a7f4088000=8400000106a55005 55a7f4089000=8400000116a40005 55a7f408a000=84000001168de005 7fa6b45b8000=8400000108f19005 7fa6b45b9000=8400000108eff005 7fa6b461f000=8400000108f1a005 7fa6b4620000=8400000108f1b005 7fa6b4621000=8400000108efa005
+[   21.997189]  55a7f4030000=200000000000003 55a7f409d000=190019 55a7f40a0000=200000000000001 55a7f40b0000=200000000000003 55a7f410d000=190019 55a7f4110000=200000000000001 55a7f4130000=200000000000003 55a7f41a0000=200000000000001
+[   21.997196] 
+[   21.997196]  total=0
+[   21.997198] 
+[   21.998435] mmap: corten: billing-reconcile anon 30
+[   21.998907] mmap: corten: billing-reconcile anon 30
+[   21.999162] corten-dbg: late stage OK entry=55def374ffc0 interp_load=100000000000
+[   21.999641] BUG: Bad rss-counter state mm:00000000b37e879d type:MM_SHMEMPAGES val:4 Comm:(exec-inner) Pid:89
+[   22.000584] BUG: Bad rss-counter state mm:00000000c708b203 type:MM_SHMEMPAGES val:4 Comm:(exec-inner) Pid:84
+[   22.000868] mmap: corten: billing-reconcile anon 30
+[   22.001363] BUG: Bad rss-counter state mm:0000000022259b1a type:MM_SHMEMPAGES val:4 Comm:(exec-inner) Pid:83
+[   22.001778] ==================================================================
+[   22.001803] BUG: KASAN: slab-use-after-free in corten_arena_check_empty_locked+0x3fa/0x450
+[   22.001811] Read of size 8 at addr ffff888102a73b70 by task selinux-autorel/83
+[   22.001814] 
+[   22.001817] CPU: 3 UID: 0 PID: 83 Comm: selinux-autorel Tainted: G      D             6.18.32-g8e5dcc661732-dirty #624 PREEMPT(voluntary) 
+[   22.001832] Tainted: [D]=DIE
+[   22.001833] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[   22.001835] Call Trace:
+[   22.001852]  <TASK>
+[   22.001853]  dump_stack_lvl+0x55/0x70
+[   22.001880]  print_report+0xcb/0x610
+[   22.001884]  ? corten_arena_check_empty_locked+0x3fa/0x450
+[   22.001886]  kasan_report+0xd6/0x110
+[   22.001888]  ? corten_arena_check_empty_locked+0x3fa/0x450
+[   22.001891]  corten_arena_check_empty_locked+0x3fa/0x450
+[   22.001894]  ? __pfx_corten_arena_check_empty_locked+0x10/0x10
+[   22.001896]  ? corten_arena_overlaps+0x4c/0x230
+[   22.001924]  ? __pfx_corten_arena_active_release+0x10/0x10
+[   22.001928]  corten_arena_declare_locked+0xcbe/0x14c0
+[   22.001932]  ? __pfx_corten_arena_declare_locked+0x10/0x10
+[   22.001934]  ? corten_arena_lookup+0x99/0x310
+[   22.001936]  ? kasan_save_track+0x14/0x30
+[   22.001940]  corten_arena_declare_carrier+0xbc/0x120
+[   22.001942]  corten_arena_mode_sweep+0x84a/0xb40
+[   22.001945]  ? __pfx_corten_arena_mode_sweep+0x10/0x10
+[   22.001948]  ? __pfx_expand_downwards+0x10/0x10
+[   22.001960]  ? corten_arena_stack_calibrate+0x46b/0x770
+[   22.001962]  setup_arg_pages+0x750/0x16e0
+[   22.001996]  ? __pfx_setup_arg_pages+0x10/0x10
+[   22.001998]  ? __pfx_perf_event_comm+0x10/0x10
+[   22.002036]  ? __pfx_selinux_bprm_committing_creds+0x10/0x10
+[   22.002078]  ? commit_creds+0x5fa/0xf70
+[   22.002104]  ? __pfx_get_random_u64+0x10/0x10
+[   22.002171]  ? __pfx_get_random_u64+0x10/0x10
+[   22.002173]  ? mutex_unlock+0x7d/0xd0
+[   22.002177]  load_elf_binary+0x8db/0x4980
+[   22.002203]  ? __pfx___kernel_read+0x10/0x10
+[   22.002218]  ? __pfx_task_work_add+0x10/0x10
+[   22.002228]  ? __pfx_load_elf_binary+0x10/0x10
+[   22.002230]  ? _raw_read_unlock+0x12/0x40
+[   22.002233]  ? load_misc_binary+0x72a/0xa30
+[   22.002244]  ? security_file_permission+0x20/0x40
+[   22.002261]  bprm_execve+0x6a4/0xff0
+[   22.002264]  ? __pfx_bprm_execve+0x10/0x10
+[   22.002266]  do_execveat_common.isra.0+0x3d5/0x540
+[   22.002268]  __x64_sys_execve+0x89/0xb0
+[   22.002271]  do_syscall_64+0xa8/0x310
+[   22.002274]  entry_SYSCALL_64_after_hwframe+0x77/0x7f
+[   22.002277] RIP: 0033:0x7fa6b518fe17
+[   22.002283] Code: Unable to access opcode bytes at 0x7fa6b518fded.
+[   22.002285] RSP: 002b:00007fff13eb9808 EFLAGS: 00000206 ORIG_RAX: 000000000000003b
+[   22.002288] RAX: ffffffffffffffda RBX: 000055a80317b0d0 RCX: 00007fa6b518fe17
+[   22.002290] RDX: 000055a802dbc2d0 RSI: 00007fff13eb9a00 RDI: 000055a80317b0d0
+[   22.002291] RBP: 0000000000000000 R08: 0000000000000020 R09: 0000000000000001
+[   22.002292] R10: 00000000ffffffff R11: 0000000000000206 R12: 0000000000000000
+[   22.002293] R13: 000055a803140cb8 R14: 000055a80317b0d0 R15: 00000000fffffff7
+[   22.002296]  </TASK>
+[   22.002296] 
+[   22.002297] Allocated by task 1:
+[   22.002307]  kasan_save_stack+0x24/0x50
+[   22.002311]  kasan_save_track+0x14/0x30
+[   22.002313]  __kasan_slab_alloc+0x59/0x70
+[   22.002315]  kmem_cache_alloc_noprof+0x134/0x590
+[   22.002326]  acpi_ut_allocate_object_desc_dbg+0x74/0x200
+[   22.002357]  acpi_ut_create_internal_object_dbg+0x4c/0x240
+[   22.002359]  acpi_ds_create_operand+0x521/0x9e0
+[   22.002374]  acpi_ds_create_operands+0x2ad/0x760
+[   22.002376]  acpi_ds_exec_end_op+0x65c/0x1a50
+[   22.002378]  acpi_ps_parse_loop+0x590/0x1d40
+[   22.002388]  acpi_ps_parse_aml+0x5b0/0xeb0
+[   22.002390]  acpi_ps_execute_method+0x526/0xe30
+[   22.002392]  acpi_ns_evaluate+0x856/0x1490
+[   22.002402]  acpi_ut_evaluate_object+0xd9/0x540
+[   22.002412]  acpi_rs_get_prt_method_data+0x92/0x130
+[   22.002415]  acpi_get_irq_routing_table+0x9a/0x120
+[   22.002426]  acpi_pci_irq_find_prt_entry+0x15a/0xb20
+[   22.002442]  acpi_pci_irq_lookup+0x79/0x580
+[   22.002444]  acpi_pci_irq_enable+0x17c/0x4c0
+[   22.002447]  do_pci_enable_device+0x1b3/0x330
+[   22.002477]  pci_enable_device_flags+0x17a/0x220
+[   22.002480]  virtio_pci_probe+0x1d4/0x350
+[   22.002490]  local_pci_probe+0xdd/0x190
+[   22.002491]  pci_device_probe+0x347/0x490
+[   22.002493]  really_probe+0x1d5/0x6c0
+[   22.002530]  __driver_probe_device+0x24e/0x310
+[   22.002532]  driver_probe_device+0x48/0x210
+[   22.002535]  __driver_attach+0x14e/0x510
+[   22.002537]  bus_for_each_dev+0xee/0x170
+[   22.002539]  bus_add_driver+0x20b/0x500
+[   22.002541]  driver_register+0x132/0x460
+[   22.002543]  do_one_initcall+0x89/0x300
+[   22.002546]  kernel_init_freeable+0x424/0x6f0
+[   22.002613]  kernel_init+0x1a/0x1e0
+[   22.002615]  ret_from_fork+0x2dd/0x3c0
+[   22.002618]  ret_from_fork_asm+0x1a/0x30
+[   22.002620] 
+[   22.002621] Freed by task 1:
+[   22.002622]  kasan_save_stack+0x24/0x50
+[   22.002624]  kasan_save_track+0x14/0x30
+[   22.002626]  __kasan_save_free_info+0x3b/0x60
+[   22.002629]  __kasan_slab_free+0x43/0x70
+[   22.002631]  kmem_cache_free+0xf6/0x4b0
+[   22.002633]  acpi_os_release_object+0x9/0x10
+[   22.002649]  acpi_ut_delete_object_desc+0xc4/0x100
+[   22.002651]  acpi_ut_update_ref_count.part.0+0x4c6/0x1a70
+[   22.002654]  acpi_ut_update_object_reference+0x487/0x6c0
+[   22.002656]  acpi_ds_clear_operands+0xbc/0x160
+[   22.002658]  acpi_ds_exec_end_op+0x705/0x1a50
+[   22.002660]  acpi_ps_parse_loop+0x590/0x1d40
+[   22.002662]  acpi_ps_parse_aml+0x5b0/0xeb0
+[   22.002664]  acpi_ps_execute_method+0x526/0xe30
+[   22.002666]  acpi_ns_evaluate+0x856/0x1490
+[   22.002669]  acpi_ut_evaluate_object+0xd9/0x540
+[   22.002671]  acpi_rs_get_prt_method_data+0x92/0x130
+[   22.002674]  acpi_get_irq_routing_table+0x9a/0x120
+[   22.002675]  acpi_pci_irq_find_prt_entry+0x15a/0xb20
+[   22.002678]  acpi_pci_irq_lookup+0x79/0x580
+[   22.002681]  acpi_pci_irq_enable+0x17c/0x4c0
+[   22.002683]  do_pci_enable_device+0x1b3/0x330
+[   22.002685]  pci_enable_device_flags+0x17a/0x220
+[   22.002687]  virtio_pci_probe+0x1d4/0x350
+[   22.002696]  local_pci_probe+0xdd/0x190
+[   22.002710]  pci_device_probe+0x347/0x490
+[   22.002711]  really_probe+0x1d5/0x6c0
+[   22.002714]  __driver_probe_device+0x24e/0x310
+[   22.002716]  driver_probe_device+0x48/0x210
+[   22.002719]  __driver_attach+0x14e/0x510
+[   22.002721]  bus_for_each_dev+0xee/0x170
+[   22.002732]  bus_add_driver+0x20b/0x500
+[   22.002735]  driver_register+0x132/0x460
+[   22.002736]  do_one_initcall+0x89/0x300
+[   22.002738]  kernel_init_freeable+0x424/0x6f0
+[   22.002741]  kernel_init+0x1a/0x1e0
+[   22.002743]  ret_from_fork+0x2dd/0x3c0
+[   22.002745]  ret_from_fork_asm+0x1a/0x30
+[   22.002747] 
+[   22.002747] The buggy address belongs to the object at ffff888102a73b60
+[   22.002747]  which belongs to the cache Acpi-Operand of size 72
+[   22.002759] The buggy address is located 16 bytes inside of
+[   22.002759]  freed 72-byte region [ffff888102a73b60, ffff888102a73ba8)
+[   22.002761] 
+[   22.002762] The buggy address belongs to the physical page:
+[   22.002792] page: refcount:0 mapcount:0 mapping:0000000000000000 index:0xffff888102a73ea0 pfn:0x102a73
+[   22.002803] flags: 0x200000000000200(workingset|node=0|zone=2)
+[   22.002847] page_type: f5(slab)
+[   22.002850] raw: 0200000000000200 ffff88810004b7c0 ffffea00040a9890 ffffea00040aaa90
+[   22.002852] raw: ffff888102a73ea0 0000000000000000 00000000f5000000 0000000000000000
+[   22.002853] page dumped because: kasan: bad access detected
+[   22.002854] 
+[   22.002854] Memory state around the buggy address:
+[   22.002855]  ffff888102a73a00: fb fc fc fc fc fa fb fb fb fb fb fb fb fb fc fc
+[   22.002857]  ffff888102a73a80: fc fc fa fb fb fb fb fb fb fb fb fc fc fc fc fa
+[   22.002858] >ffff888102a73b00: fb fb fb fb fb fb fb fb fc fc fc fc fa fb fb fb
+[   22.002859]                                                              ^
+[   22.002860]  ffff888102a73b80: fb fb fb fb fb fc fc fc fc fa fb fb fb fb fb fb
+[   22.002861]  ffff888102a73c00: fb fb fc fc fc fc fa fb fb fb fb fb fb fb fb fc
+[   22.002862] ==================================================================
+[   22.003246] corten-dbg: late stage OK entry=56135e64f500 interp_load=100000000000
+[   22.005568] corten-dbg: late stage OK entry=55a68356a760 interp_load=100000000000
+[   22.007393] corten: state-free st=ffff88810d768000 nr=20 own=ffff888100069c00 from=corten_arena_mm_exit+0x77c/0x3e20
+[   22.010331] BUG: Bad rss-counter state mm:000000002ebb6708 type:MM_SHMEMPAGES val:4 Comm:(exec-inner) Pid:90
+[   22.015214] corten: state-free st=ffff88810d770000 nr=16 own=ffff888105498e00 from=corten_arena_mm_exit+0x77c/0x3e20
+[   22.022829] corten-dbg: late stage OK entry=5649569174c0 interp_load=100000000000
+[   22.025856] corten-dbg: late stage OK entry=560a7f361930 interp_load=100000000000
+[   22.035501] mmap: corten: billing-reconcile anon 30
+[   22.044259] corten-dbg: sg GROUP-EXIT systemd-hiberna[88] code=0
+[   22.045316] corten-dbg: late stage OK entry=563234745070 interp_load=100000000000
+[   22.051210] corten-dbg: sg GROUP-EXIT selinuxenabled[91] code=0
+[   22.059257] BUG: Bad rss-counter state mm:00000000c130f68a type:MM_SHMEMPAGES val:4 Comm:(exec-inner) Pid:86
+[   22.062087] corten-dbg: late stage OK entry=5630287f9bb0 interp_load=100000000000
+[   22.100825] corten-dbg: sg GROUP-EXIT systemd-run-gen[90] code=0
+[   22.110929]  -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1
+[   22.110980]  100000400000
+[   22.114274] 
+[   22.114289]  100000400000 100000401000 100000402000 100000403000 100000404000 100000405000 100000406000 100000400000 100000401000 100000402000 100000403000 100000404000 100000405000 100000406000 100000400000 100000401000
+[   22.114325] 
+[   22.114334]  7fa6b4640000=8000000101a4d205 7fa6b5999000=80000000576fa205 7fa6b4640000=8000000101a4d205 7fa6b5999000=80000000576fa205
+[   22.114339]  ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650 ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650 ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650 ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650 ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650 ffff8881077f9500:+1@corten_arena_user_fault+0x36b/0xba0 ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650 ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.114513]  ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650 ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650 ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650 ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650 ffff88810d618e00:+1@__handle_mm_fault+0x917/0x1650
+[   22.114615]  55a7f4088000=8400000106a55005 55a7f4089000=8400000116a40005 55a7f408a000=84000001168de005 7fa6b45b8000=8400000108f19005 7fa6b45b9000=8400000108eff005 7fa6b461f000=8400000108f1a005 7fa6b4620000=8400000108f1b005 7fa6b4621000=8400000108efa005
+[   22.114639]  7fa6b54ab000=3 55a7f41f8000=200000000000003 7fa6b4445000=190019 7fa6b4448000=200000000000001 7fa6b44f5000=190019 7fa6b44f8000=200000000000001 7fa6b4565000=70007 7fa6b4568000=200000000000003
+[   22.114661] 
+[   22.114663]  total=0
+[   22.114666] 
+[   22.126172] 
+[   22.126454]  100000400000 100000401000 100000402000 100000403000 100000404000 100000405000 100000406000 100000000000 100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000
+[   22.126491] 
+[   22.126493] 
+[   22.126494]  ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:+1@__handle_mm_fault+0x929/0x1650 ffff88810d618e00:+1@corten_arena_user_fault+0x36b/0xba0 ffff88810d618e00:+1@__handle_mm_fault+0x929/0x1650 ffff88810d618e00:+1@__handle_mm_fault+0x929/0x1650 ffff88810d618e00:+1@corten_arena_user_fault+0x36b/0xba0 ffff8881077f9500:+1@corten_arena_user_fault+0x36b/0xba0 ffff8881077f9500:+1@corten_arena_user_fault+0x36b/0xba0 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.126642]  ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d619c00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.126748] 
+[   22.126750] 
+[   22.126752] 
+[   22.126754]  total=0
+[   22.126757] 
+[   22.126966] corten-dbg: sg GROUP-EXIT systemd-rc-loca[89] code=0
+[   22.135249] 
+[   22.135272]  100000000000 100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000 100000009000 10000000a000 10000000b000 10000000c000 10000000e000 10000000f000 100000010000
+[   22.135508] 
+[   22.135510] 
+[   22.135512]  ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8e00:+1@__handle_mm_fault+0x917/0x1650 ffff8881077f9500:+1@corten_arena_user_fault+0x36b/0xba0 ffff8881077f8e00:+1@__handle_mm_fault+0x917/0x1650 ffff8881077f8e00:+1@__handle_mm_fault+0x917/0x1650 ffff8881077f8e00:+1@__handle_mm_fault+0x917/0x1650 ffff8881077f9500:+1@corten_arena_user_fault+0x36b/0xba0 ffff8881077f8e00:+1@__handle_mm_fault+0x917/0x1650 ffff8881077f9500:+1@corten_arena_user_fault+0x36b/0xba0 ffff8881077f8e00:+1@__handle_mm_fault+0x917/0x1650 ffff8881077f9500:+1@corten_arena_user_fault+0x36b/0xba0 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.135658]  ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810d618e00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.135797] 
+[   22.135799] 
+[   22.135801] 
+[   22.135803]  total=0
+[   22.135807] 
+[   22.149336] corten-dbg: sg GROUP-EXIT systemd-debug-g[84] code=0
+[   22.157805] 
+[   22.173870]  100000401000
+[   22.175272] corten-dbg: sg GROUP-EXIT systemd-gpt-aut[87] code=0
+[   22.187647]  100000400000 100000401000 100000402000 100000403000 100000404000 100000405000 100000406000 100000000000 100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000
+[   22.187690] 
+[   22.187692] 
+[   22.187694]  ffff888105499500:+1@__handle_mm_fault+0xcf2/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0xcf2/0x1650 ffff888105499500:+1@__handle_mm_fault+0xcf2/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.187842]  ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650
+[   22.188467]  100000402000
+[   22.189345]  ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0xcf2/0x1650
+[   22.189382] 
+[   22.189384] 
+[   22.189386] 
+[   22.189389]  total=0
+[   22.189392] 
+[   22.404939] 
+[   22.406515] 
+[   22.411715] 
+[   22.411725] 
+[   22.411727] 
+[   22.411730]  ffff888105499500:+1@__handle_mm_fault+0xcf2/0x1650
+[   22.416435] 
+[   22.421416]  ffff888105499500:+1@__handle_mm_fault+0x917/0x1650
+[   22.426176] 
+[   22.430855]  ffff888105499500:+1@__handle_mm_fault+0x917/0x1650
+[   22.435575]  ffff888105499500:+1@__handle_mm_fault+0xcf2/0x1650
+[   22.436785]  ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0xcf2/0x1650 ffff888105499500:+1@__handle_mm_fault+0xcf2/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@corten_arena_user_fault+0x36b/0xba0 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@corten_arena_user_fault+0x36b/0xba0 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650
+[   22.436837]  ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650
+[   22.438051]  ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0xcf2/0x1650 ffff888105499500:+1@__handle_mm_fault+0xcf2/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@corten_arena_user_fault+0x36b/0xba0 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@__handle_mm_fault+0x929/0x1650 ffff888105499500:+1@corten_arena_user_fault+0x36b/0xba0 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.438193]  ffff8881077f9500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0x917/0x1650 ffff888105499500:+1@__handle_mm_fault+0xcf2/0x1650
+[   22.438274] 
+[   22.438276] 
+[   22.438278] 
+[   22.438280]  total=0
+[   22.438284] 
+[   22.439769] corten: state-free st=ffff88810d8a8000 nr=16 own=ffff88810d618e00 from=corten_arena_mm_exit+0x77c/0x3e20
+[   22.439866] corten: state-free st=ffff888107dd8000 nr=12 own=ffff88810d619c00 from=corten_arena_mm_exit+0x77c/0x3e20
+[   22.441224]  ffff88810d619c00:-1@unmap_vmas+0x168/0x320
+[   22.441335] corten: state-free st=ffff88810d918000 nr=16 own=ffff88810d619500 from=corten_arena_mm_exit+0x77c/0x3e20
+[   22.454139] corten-dbg: late stage OK entry=55c605f40280 interp_load=100000000000
+[   22.454627]  ffff88810006c600:+1@__handle_mm_fault+0x929/0x1650
+[   22.492029] seq_file: buggy .next function m_next did not update position index
+[   22.494072]  ffff88810006c600:+1@corten_arena_user_fault+0x36b/0xba0
+[   22.496779] seq_file: buggy .next function m_next did not update position index
+[   22.496799] seq_file: buggy .next function m_next did not update position index
+[   22.498470] corten-dbg: sg GROUP-EXIT grep[92] code=256
+[   22.499192]  ffff88810006c600:+1@__handle_mm_fault+0xcf2/0x1650
+[   22.508887] 
+[   22.509739]  ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.512328]  100000400000 100000401000 100000402000 100000403000 100000404000 100000405000 100000406000 100000400000 100000400000 100000401000 100000000000 100000001000 100000002000 100000003000 100000004000 100000005000
+[   22.512367] 
+[   22.512369] 
+[   22.512370]  ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.514868]  ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.517229]  ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.520724]  ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.522710]  ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030 ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.526157]  ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.528434]  ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.531335] 
+[   22.533757]  ffff88810006c600:-1@corten_arena_zap_window+0x6f9/0x1030
+[   22.533774]  563234747000=840000010dc74025 563234748000=800000010dc41067 7f3d3f20c000=840000010dc7c025 7f3d3f20d000=800000010dc7b067 7f3d3f3ef000=840000010dc7f025 7f3d3f3f0000=840000010dc80025 7f3d3f3f1000=840000010dc81025 7f3d3f3f2000=840000010dc7a025
+[   22.533789]  7fa288653000=5 7fa2887f4000=5f 7fa288fed000=270005 7fa28901d000=190019 7fa289020000=200000000000001 7fa28902d000=190019 7fa289030000=200000000000001 7fa28913d000=190019
+[   22.533802] 
+[   22.533804]  total=0
+[   22.533807] 
+[   23.914952] 
+[   23.917757] 
+[   23.920275] 
+[   23.920408] corten-dbg: sg GROUP-EXIT systemd-getty-g[86] code=0
+[   23.922411]  total=0
+[   23.927085] 
+[   23.929002] corten: state-free st=ffff88810d8a0000 nr=16 own=ffff88810d618700 from=corten_arena_mm_exit+0x77c/0x3e20
+[   23.930170] corten: state-free st=ffff88810d6b8000 nr=16 own=ffff8881077f8e00 from=corten_arena_mm_exit+0x77c/0x3e20
+[   23.933013] 
+[   23.933024]  100000000000 100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000 100000009000 10000000a000 10000000b000 10000000c000 10000000e000 10000000f000 100000010000
+[   23.933059] 
+[   23.933061] 
+[   23.933063]  ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030
+[   23.933387]  ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030 ffff888105499500:-1@corten_arena_zap_window+0x6f9/0x1030
+[   23.933502] 
+[   23.933503] 
+[   23.933505] 
+[   23.933507]  total=0
+[   23.933588] 
+[   23.938863] corten: state-free st=ffff888102e10000 nr=25 own=ffff88810006c600 from=corten_arena_mm_exit+0x77c/0x3e20
+[   23.950788] corten: state-free st=ffff88810d7d0000 nr=16 own=ffff888105499500 from=corten_arena_mm_exit+0x77c/0x3e20
+[   23.952228] corten: state-free st=ffff88810d838000 nr=17 own=ffff8881077f9500 from=corten_arena_mm_exit+0x77c/0x3e20
+[   23.969480] corten-dbg: late stage OK entry=55c536c6e280 interp_load=100000000000
+[   24.059064] seq_file: buggy .next function m_next did not update position index
+[   24.063597] seq_file: buggy .next function m_next did not update position index
+[   24.068512] seq_file: buggy .next function m_next did not update position index
+[   24.073459] corten-dbg: sg GROUP-EXIT grep[93] code=256
+[   24.085600]  -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1 -1849015208 -1
+[   24.093671]  100000400000 100000401000 100000402000 100000403000 100000404000 100000405000 100000406000 100000400000 100000400000 100000401000 100000000000 100000001000 100000002000 100000003000 100000004000 100000005000
+[   24.106224] 
+[   24.106860] 
+[   24.107196]  ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   24.107244]  ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f9c00:-1@corten_arena_zap_window+0x6f9/0x1030
+[   24.212439]  55def3752000=84000001087e4025 55def3753000=800000010878c067 7f1fa6de0000=84000001087c0025 7f1fa6de1000=80000001087c5067 7f1fa6e8f000=84000001087cc025 7f1fa6e90000=80000001087d1067 7f1fa6eb6000=84000001087d3025 7f1fa6eb7000=80000001087d4067
+[   24.230850]  7f1fa6cdd000=1 7f1fa6cfd000=3 7f1fa6ded000=1 7f1fa6dfd000=3 7f1fa79fd000=5 7f66efc45000=1 7f66efc54000=80159 7f66efc64000=8015b
+[   24.235411] 
+[   24.236369]  total=0
+[   24.238455] 
+[   24.244746] corten: state-free st=ffff88810d6b8000 nr=25 own=ffff8881077f9c00 from=corten_arena_mm_exit+0x77c/0x3e20
+[   24.251524] corten-dbg: sg GROUP-EXIT selinux-autorel[83] code=0
+[   24.262628]  -1849015208 -2 -1849015208 -1 -1849015208 -4 -1849015208 -2 -1849015208 -5 -1849015208 -1 -1849015208 -1
+[   24.269582]  100000000000 100000001000 100000002000 100000003000 100000004000 100000005000 100000006000 100000007000 100000008000 100000009000 10000000a000 10000000b000 10000000c000 10000000e000 10000000f000 100000010000
+[   24.280881] 
+[   24.281773] 
+[   24.283753]  ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030
+[   24.283915]  ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030 ffff8881077f8700:-1@corten_arena_zap_window+0x6f9/0x1030
+[   24.390830]  55c536c98000=8400000108c3d025 55c536c99000=840000010dc38025 55c536c9a000=800000010dc33067 7f45bcb2b000=840000010ddfa025 7f45bcb2c000=840000010ddf9025 7f45bcb2d000=840000010ddf8025 7f45bcb2e000=840000010ddfd025 7f45bcb2f000=800000010ddf7067
+[   24.403996] 
+[   24.404753] 
+[   24.405633]  total=0
+[   24.406603] 
+[   24.413367] corten: state-free st=ffff888109050000 nr=13 own=ffff8881077f8700 from=corten_arena_mm_exit+0x77c/0x3e20

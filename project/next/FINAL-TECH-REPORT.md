@@ -1063,3 +1063,36 @@ state_free 体内五处 free 的 **slab-object 越界写者**（写者先损坏
 xa_store 值家族（multiplity 伪指针/页身份负载, __resv 家族）在
 xa 节点内的越界布局 -- KUnit fork_file_dirty 扩展断言: state_free
 前后页内容不变。
+
+---
+
+## 附三十八: sec 163 -- kASAN 轮判决: UAF 精确定位 -- arena 注册表悬挂指针（#624, kASAN boot 5min+ 存活）
+
+**kASAN 构建**: CONFIG_KASAN=y（generic）全量重编 3280 文件,
+独立产物 `/home/ppw/vm/bzImage-kasan-sec163`（生产 bzImage 已存
+`bzImage-prod-sec163` 不受影响）。
+
+**KASAN 报告（一次, 精确, 全链）**:
+`BUG: KASAN: slab-use-after-free in corten_arena_check_empty_locked`
+Read of size 8 @ ffff888102a73b70 by selinux-autorel/83。
+
+- **使用栈**: check_empty_locked ← overlaps ← declare_locked ←
+  **declare_carrier ← mode_sweep ← setup_arg_pages ← load_elf_binary**
+  （exec 的 mode-enter sweep 栈臂的 overlap 检查）;
+- **被读对象**: 一个已释放的 slab 对象（其缓存与 ACPI object 缓存
+  SLUB 合并, 当前占用者 = 已释放的 acpi object）;
+- **含义**: **state 注册表（arenas 帧表）中残留悬挂 arena 指针**
+  -- arena 已释放（drain+kfree）但帧槽 deregister 遗漏,
+  declare 的 overlap 扫描读到它 = UAF。
+
+**此即全部幽灵族之根**: fs->root NULL、state ghost、anon-chain
+ghost、free_large garbage -- 全部是 **悬挂 arena 指针被各消费者
+读取**后的下游表现。修复位点 = punch/release 路径的
+`corten_slot_remove` 覆盖审计（co-frame bucket 摘除遗漏）。
+
+**kASAN boot 判读**: UAF 报告一次（非风暴）; "Protocol error" = 0;
+系统存活 5min+（KASAN 慢化正常）。修复后生产内核预期零 oops。
+
+**下会话**: ①corten_slot_remove 覆盖审计 + KASAN 复跑验证;
+②生产 bzImage 恢复（bzImage-prod-sec163）+ 全量 boot 零 oops;
+③48h 判定（10-14 02:24）→ 三步删除序列 → J6 终账。
