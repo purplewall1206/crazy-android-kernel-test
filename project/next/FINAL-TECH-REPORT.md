@@ -1530,3 +1530,23 @@ CortenMM 的 arena fault/内存操作写坏了 systemd[1] 的用户空间
 
 **下会话**: 在 init SIGSEGV 的精确时刻捕获（init 的
 `show_fault_regs`/KASAN 报告）→ 定位写者 → 修复 → 零 panic boot。
+
+### 附五十: kASAN 当前内核终审判决（#643, ksg2）-- BSS declare 路径
+
+**报告**: `slab-use-after-free in check_empty_locked+0x482`
+调用栈: `check_empty_locked ← overlaps ← declare_locked ←
+declare_carrier ← **corten_bss_declare_route ← vm_brk_flags ←
+elf_load**` -- **BSS declare 路由**（此前未确定的入口路径）。
+
+**含义**: exec 期间 BSS 段的 declare（vm_brk_flags）触发了
+mode_sweep → declare_carrier → check_empty_locked，而
+`corten_ptdesc_get(pfn)` 返回了一个 **已释放** 的 desc。
+**desc 被释放但 xarray 条目未被擦除** -- 存在 PT 页释放路径
+绕过了 `corten_on_pte_free` 钩子（仅覆盖 `___pte_free_tlb`
+和 `pte_free` 的 asm-generic 路径），导致 xarray 残留
+悬挂 desc。
+
+**修复位点**: 审计 `__free_pages` 族对 PT 页的直接释放路径，
+确保所有 PT 页 free 路径都调用 `corten_on_pte_free` 钩子。
+或在 `check_empty_locked` 中增加 `desc->released` 哨兵检查
+（已有字段但仅 WARN 不跳过 -- 需改为跳过+计入）。
