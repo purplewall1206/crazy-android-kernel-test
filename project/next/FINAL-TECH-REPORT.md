@@ -1044,3 +1044,22 @@ order>0 无告警; order==0 告警 = 唯一损坏指纹）。
 **kASAN 交棒清单**: ①CONFIG_KASAN=y + coden_arena.silent 构建;
 ②KUnit fork_file_dirty 扩展 state_free 路径断言; ③kvfree_call_rcu
 与 unlink_anon_vmas 双嫌疑栈; ④exec-inner fault 活锁 SIGKILL 化。
+
+### 附三十七续: sec 162 归因数据定案（#621-#622, sg50 witness×ghost 1:1 配对）
+
+**owner_mm 归因 + 无门 witness 判读（sg50）**: 23 只 state-free 见证
+与 17 只 ghost **一一配对于自身调用**（同 st、同 own_mm: 见证在
+state_free 入口 nr 完好, ghost 在尾部页已零化 op=0 slab=0）--
+**双重释放不是"第二释放者", 而是发生在 state_free 函数体内部的
+自毁**: 五个 xa_destroy / free_percpu×2 / va_lists_free /
+kfree(implants) / mutex_destroy 之一在释放时把 state 自身的页
+一并放掉（损坏的 xarray 节点/链表节点被 kfree = 释放了错误对象,
+其中之一与 state 页重叠）。守卫 containment 生效: sg50 全程存活,
+"Protocol error" = 0。
+
+**kASAN 交棒精确化**: 不再需要"找第二释放者" -- 需要 kASAN 报告
+state_free 体内五处 free 的 **slab-object 越界写者**（写者先损坏
+节点内容, free 时才爆发）。最高嫌疑: trace_vxa/trace_frames 的
+xa_store 值家族（multiplity 伪指针/页身份负载, __resv 家族）在
+xa 节点内的越界布局 -- KUnit fork_file_dirty 扩展断言: state_free
+前后页内容不变。

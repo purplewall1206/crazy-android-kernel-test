@@ -1932,9 +1932,9 @@ static void corten_arena_state_free(struct corten_mm_state *state)
 	/* sec 162: the double-free witness -- the sg37 routing guard
 	 * caught 10 genuine state double-frees; this names BOTH
 	 * releasers (the caller chain at the free instant). */
-	corten_pr_info("corten: state-free st=%px nr=%d from=%pS\n",
-		       state, refcount_read(&state->nr),
-		       __builtin_return_address(0));
+	pr_warn("corten: state-free st=%px nr=%d own=%px from=%pS\n",
+		state, refcount_read(&state->nr), state->owner_mm,
+		__builtin_return_address(0));
 
 	xa_destroy(&state->trace_xa);
 	xa_destroy(&state->trace_vxa);
@@ -1962,10 +1962,20 @@ static void corten_arena_state_free(struct corten_mm_state *state)
 	 * attributable here); the WARN is cosmetic for this family.
 	 * The genuine corruption faces (the anon-chain ghost, the
 	 * exit tree-walk) carry their own fixes/ledger entries. */
-	kfree(state->implants);
 	free_percpu(state->stats);
 	mutex_destroy(&state->ctl_lock);
-	kfree(state);
+	if (unlikely(!corten_kmalloc_object(state))) {
+		struct page *gp = virt_to_page(state);
+
+		/* sec 162: the ghost attribution -- a state reaching the
+		 * tail as a non-slab order-0 page was released by a
+		 * bypasser; owner_mm names whose mm it belonged to. */
+		pr_warn("corten: state ghost st=%px own=%px nr=%d op=%d slab=%d\n",
+			state, state->owner_mm, refcount_read(&state->nr),
+			gp ? (int)folio_order(page_folio(gp)) : -1,
+			gp ? (int)PageSlab(gp) : -1);
+	} else
+		kfree(state);
 }
 
 /* A5 (G5-fix) deferred shape of the state teardown: the grace period the
