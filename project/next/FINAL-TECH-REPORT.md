@@ -980,3 +980,35 @@ CONFIG_KASAN=y + KUnit fork_file_dirty 扩展（state_free 路径）
 **本会话净交付**: "Protocol error" 永久归零（生成器阶段打通）,
 管理器入队 graphical.target; xa 编码族 WARN 全消; 防线三重加固;
 残余面 = 单一 kASAN 定位项。
+
+---
+
+## 附三十六: sec 161 -- kfree 路由守卫: init panic 消除, 双重释放 10 连捕获, 系统存活（#614 boot）
+
+**修复**: `corten_kmalloc_object()` 路由守卫 -- kfree 前复刻 kfree
+自身的 `folio_test_slab` 路由判据（virt_addr_valid 只验 RAM 有效,
+无法拦截"指向 pagecache/页表内存的陈旧指针"被路由进
+free_large_kmalloc 并把活页放回 buddy 的破坏）。
+
+**sg37 判读**: **"Attempted to kill init" panic 消失**, 系统存活
+158s+（此前 sg32/sg34/sg35/sg36 每版均 panic）。守卫捕获 **10 连
+genuine double-free**（"state ghost" -- state 已过合法 free、
+PG_slab 已清后的二次 free）-- **双重释放源确证**: 每个经沙箱
+exec 的生成器的 old-mm 拆卸（begin_new_exec→exec_mmap→mmput→
+exit_mmap→mm_exit→state_free）路径把 state 释放两次; 守卫把破坏
+ containment（泄漏代替损坏 -- 验证 boot 的正确取舍）。
+
+**残余（下会话 P0 队列, 系统存活前提下）**:
+1. **双重释放源**: exec-inner old-mm 拆卸把 state 释放两次 -- 需
+   审计 mm_exit 与 exec 路径的第二释放者（kASAN 定位或 refcount
+   审计）;
+2. **set_root fs->root NULL**: 守卫捕获的幽灵同族 -- fs_struct 被
+   同族损坏（1 oops, 任务死亡但系统存活, RCU stall P88 = oops 任务
+   的 fault 重试活锁）;
+3. **活锁**: oops 任务卡在窗口域 fault 重试循环（R13=0x100000...,
+   用户级 fault 风暴）-- retry cap 后的任务级 fault 风暴需
+   SIGKILL 化。
+
+**验收对照**: "Protocol error" = 0 ✓; init panic 消除 ✓; 系统全量
+存活 ✓; "零 oops" = 未达成（set_root 1 oops + 活锁, 随双重释放源
+同族）。

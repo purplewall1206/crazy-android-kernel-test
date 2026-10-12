@@ -1878,6 +1878,20 @@ static inline bool corten_freeblk_poisoned(const struct corten_va_freeblk *blk)
 	       (void *)blk->list.next == LIST_POISON1;
 }
 
+/* sec 161: the kfree-routing guard.  virt_addr_valid passes for ANY
+ * valid-RAM address -- a stale list entry pointing into pagecache or
+ * page-table memory reached kfree, whose folio_test_slab() route sent
+ * it to free_large_kmalloc and released a live page to the buddy
+ * allocator (the slab-freelist poisoning that killed init).  This
+ * guard replicates kfree's own route check BEFORE the free and names
+ * the ghost instead. */
+static inline bool corten_kmalloc_object(const void *obj)
+{
+	if (!obj || !virt_addr_valid(obj))
+		return false;
+	return folio_test_slab(page_folio(virt_to_page(obj)));
+}
+
 /* Recycle-list / claimed-segment ledger teardown (M4.T1).  Called from
  * corten_arena_state_free() only: no reader can hold these -- both lists
  * are mmap_write-serialized and the mm is going away.
@@ -1890,14 +1904,14 @@ static void corten_va_lists_free(struct corten_mm_state *state)
 	list_for_each_entry_safe(blk, blk_n, &state->va_free, list) {
 		bool poisoned = corten_freeblk_poisoned(blk);
 
-		/* sec 160: the UAF guard -- a block freed while still
-		 * linked (the sg boots' residual face) reaches here as
-		 * reused memory; the kfree would double-free.  virt_
-		 * addr_valid splits garbage pointers from real ones. */
-		if (poisoned || !virt_addr_valid(blk)) {
-			pr_warn_ratelimited("corten: va-freeblk ghost nrfree=%ld poisoned=%d\n",
-					    state->va_nrfree, poisoned);
-			if (!poisoned)
+		/* sec 160/161: the UAF + routing guards -- a block freed
+		 * while still linked, or a stale entry pointing at
+		 * non-kmalloc memory, must not reach kfree. */
+		if (poisoned || !corten_kmalloc_object(blk)) {
+			pr_warn_ratelimited("corten: va-freeblk ghost nrfree=%ld poisoned=%d kmalloc=%d\n",
+					    state->va_nrfree, poisoned,
+					    virt_addr_valid(blk));
+			if (!poisoned && virt_addr_valid(blk))
 				list_del(&blk->list);
 			continue;
 		}
@@ -1905,6 +1919,13 @@ static void corten_va_lists_free(struct corten_mm_state *state)
 		kfree(blk);
 	}
 	list_for_each_entry_safe(seg, seg_n, &state->seg_list, list) {
+		if (!corten_kmalloc_object(seg)) {
+			pr_warn_ratelimited("corten: va-seg ghost [%lx,%lx)\n",
+					    seg->base, seg->end);
+			if (virt_addr_valid(seg))
+				list_del(&seg->list);
+			continue;
+		}
 		list_del(&seg->list);
 		kfree(seg);
 	}
@@ -1929,7 +1950,7 @@ static void corten_arena_state_free(struct corten_mm_state *state)
 	 * WARN, the slab-freelist poisoning, init's death).  Validate
 	 * before the free; name the ghost. */
 	if (state->implants) {
-		if (unlikely(!virt_addr_valid(state->implants)))
+		if (unlikely(!corten_kmalloc_object(state->implants)))
 			pr_warn_ratelimited("corten: implants ghost %px\n",
 					    state->implants);
 		else
@@ -1937,7 +1958,7 @@ static void corten_arena_state_free(struct corten_mm_state *state)
 	}
 	free_percpu(state->stats);
 	mutex_destroy(&state->ctl_lock);
-	if (unlikely(!virt_addr_valid(state)))
+	if (unlikely(!corten_kmalloc_object(state)))
 		pr_warn_ratelimited("corten: state ghost %px\n", state);
 	else
 		kfree(state);
