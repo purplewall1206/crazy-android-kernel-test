@@ -456,3 +456,22 @@ EPROTO 全臂审计 ③ 仪器重 landing（双 boot）④ 48h 判定 → 三步
 systemd 全量启动（EPROTO 修复后）。
 
 **总账**: 残差 34→2→**vdso/vvar 具名**; 账本 sec 120-137（18 节）。
+
+---
+
+## 附十七: meta-write watch 终判（sec 142, 534be52b）
+
+**终极探针执行**: corten_map/corten_unmap 的 choke point 采样器 +
+census 打印——**全部 exit 的 meta-writes n=0（meta 层零写入）**。
+行为者排除清单终版: meta 层（本次）、tracked/untracked/legacy zap、
+span、funnel、sweep（收缴）。
+
+**残差 +2 的定位**: unmap→destroy 窗口内计数器自身的某
+`add_mm_counter(MM_ANONPAGES, +2)`（census 精确 0 → check_mm 精确
+2, 无雾差）。候选 = 迁移/swap-in 类路径的计数迁移。**下会话仪器 =
+per-folio 身份配对追踪（charge 与 release 的 folio 指针配对,
+census 打印）→ 2 页收口 → val 完全归零。**
+
+**终态**: 残差 34→2（94% 闭合）; 全部修复与仪器在树; N-boot A/B
+各 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14
+02:24）; E2 PR 待批复。
