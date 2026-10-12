@@ -575,3 +575,23 @@ should_zap_folio、vm_normal_page-NULL（rec 采样器 n=0）。
 **终态**: 最终形 #555 零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿
 绿; churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
 34→2（94%）。
+
+---
+
+## 附二十四: 夜战总收束（sec 150, d67b0eec）
+
+**meta-write watch 判读**: 受捕获覆盖限制（串口滚动丢失），读数不
+定论。(b) 成立概率高：全量串口落盘 + 离线 per-exit 解析 = 下会话
+收口路径；或 ftrace events/kmem/rss_stat。
+
+**夜战总账（#467-#561, 90+ 构建）**: 残差 34→2（94% 闭合）; 判别
+器（语义修正+双视图守卫）; meta 收养+帧补全; 崩溃族根除; 仪器链
+（census/采样器×4/folio-watch/delta-tracer/choke-point watch）;
+N-boot campaign; EPROTO 窗口降级; 全部推送。
+
+**状态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿;
+churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。
+
+**队列**: ① 全量串口落盘 → 离线 per-exit 解析 → 残余 2 收口 ②
+generator-fork EPROTO 全臂审计 ③ 48h 判定 → 三步删除序列 → J6 终
+账（"MODE 进程零 VMA 对象"达成）。
