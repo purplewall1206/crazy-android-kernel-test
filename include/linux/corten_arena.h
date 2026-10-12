@@ -574,6 +574,8 @@ void corten_note_leg_sample(unsigned long addr, u64 pteval);
 void corten_folio_watch_add(struct page *page, u8 arm);
 bool corten_folio_watch_del(struct page *page);
 void corten_note_legacy_anon_charge(int nr);
+void corten_trace_map_anon_va(struct mm_struct *mm, unsigned long addr,
+			      int nr);
 void corten_note_freepte_live(int nr);
 void corten_note_funnel_ovfl(void);
 void corten_note_anon_counter(struct mm_struct *mm, long val);

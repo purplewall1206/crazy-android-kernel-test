@@ -2683,3 +2683,20 @@ do_swap_page/迁移位点 = 下一步。
 watch）零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿; churn 浸泡零
 事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差 34→2（94%）;
 最后 2 页 = 下会话以 swap-in/迁移 watch 扩展收口。
+
+## 145. 残余 2 的精确链 + 诚实交接（2026-10-12 晨, #547）
+
+**精确链（#547, swap-in watch 后）**: pre=5 → unmap 释放 3 → post=2
+→ val=2——**残余 2 = 真 PTE 页, unmap 未释放**（VMA 覆盖内）, 全部
+traced 仪器（census/采样器/folio-watch/精确和）显示 balanced——**唯
+一一致解释: unmap 的 zap 在自身范围内跳过了这 2 个 present 页**
+（`vm_normal_page` 返回 NULL 的入口——present 格式的 arena 记录/
+marker 的 pfn 无效路径）→ 清除而不递减 → +2。**下会话收口 =
+zap 的 !page/NULL-page 分支的跳过计数与 VA 采样（rec 采样器已含
+present 格式标记的 !page 入口——本 boot rec-sample n=0: 该入口未
+命中 → 跳过发生在更早的分支）**。
+
+**诚实交接**: 残差 34→2（94% 闭合, 判别器+收养+帧补全）; 全套仪
+器在树（census/采样器/folio-watch/精确和）; systemd 启动零内核
+oops（generator-fork EPROTO 全臂审计排队）; churn 浸泡零事件（48h
+判定 10-14 02:24 → 三步删除序列 → J6 终账）; E2 PR 待批复。

@@ -5153,6 +5153,12 @@ check_folio:
 
 	add_mm_counter(vma->vm_mm, MM_ANONPAGES, nr_pages);
 	add_mm_counter(vma->vm_mm, MM_SWAPENTS, -nr_pages);
+	if (READ_ONCE(vma->vm_mm->corten_mode)) {
+		/* sec 145: the swap-in charge's folio-watch entry (the
+		 * residual-2's uninstrumented charge-site candidate). */
+		corten_folio_watch_add(page, 6);
+		corten_trace_map_anon_va(vma->vm_mm, vmf->address, nr_pages);
+	}
 	pte = mk_pte(page, vma->vm_page_prot);
 	if (pte_swp_soft_dirty(vmf->orig_pte))
 		pte = pte_mksoft_dirty(pte);
