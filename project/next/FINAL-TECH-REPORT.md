@@ -1467,3 +1467,20 @@ check_empty_locked 读者之间的 **跨 CPU 竞态**。M3a 互锁（readers
 
 **下会话路线图**: freeblk/anon_vma RB 双独立 bug 定位 → 修复 →
 生产 boot 零 oops → storm loop 长跑 → 48h 判定 → 三步删除 → J6。
+
+### 附四十八: kASAN 当前内核终审判决（#638, kg1）
+
+**报告**: `slab-use-after-free in check_empty_locked`
+Alloc = acpi_ut_allocate_object_desc_dbg
+Freed = acpi_os_release_object
+
+**定名**: **SLUB 缓存合并**（acpi_object 与 corten_ptdesc 的
+kmalloc 类合并到同一 slab 缓存）+ **PT 页释放与描述符卸载的
+生命周期缺口** = `corten_ptdesc_get` 返回了一个陈旧描述符，
+其内存已被释放→ACPI 重用→再释放。读取 `desc->mm`（回链）
+命中已释放的 ACPI 对象。
+
+**修复位点（最终）**: `check_empty_locked` 的 desc 有效性检查
+需增加 `desc->magic != CORTEN_PTDESC_MAGIC` 哨兵（或在
+`corten_ptdesc_release` 中将 magic 清零，使陈旧描述符的
+`desc->mm != mm` 检查可靠跳过）。这是一行修复 + KASAN 复验。
