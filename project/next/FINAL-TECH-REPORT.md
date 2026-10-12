@@ -863,3 +863,40 @@ kernel_write 写 pattern → attach FILE 类 arena RW → 读安装 →
 断言子进程读回 == pattern（非盘上旧值）; 同断言跑形态 (a)
 （PMD 叶构造）与 (c)（meta 直设 FILE_MAPPED + 子 PTE none）。
 任一形态红 ⇒ 命名修复位点。
+
+---
+
+## 附三十三: sec 158 -- "Protocol error" 打通判决: 生成器全量运行, systemd 管理器启动（#608 boot 实证）
+
+**验收线闭合**: `grep "Protocol error" sg27-boot.log` = **0**（此前
+每一版 boot 均复现）。全部生成器经沙箱 fork→setup→运行→干净退出:
+`GROUP-EXIT systemd-fstab-g[85] code=0 / systemd-run-gen[91] code=0 /
+systemd-tpm2-ge[95] code=0 / systemd-rc-loca[90] code=0 ...`, 管理器
+推进到 `Queued start job for default target graphical.target` -- **自
+该 campaign 记录以来 systemd 管理器首次越过生成器阶段**。
+
+**根因#2 定案（三臂辨识）**: KUnit `corten_arena_test_fork_file_dirty`
+（#599-#607 七轮迭代）红出 **形态 (c)** -- meta 家族与内容家族错配:
+FILE_MAPPED 盲标覆盖 legacy-anon 化的驻留页。修复三处:
+1. **内容家族重分类**（fork_mark_window）: FILE_MAPPED 槽的父 PTE
+   为 anon folio 时经 `corten_map` 重分类为 MAPPED -- 重放的 meta
+   家族跟随内容家族（FILE-RECL 见证）;
+2. **reclaim 内容家族守卫**（zap_window）: FILE_MAPPED 槽的驻留
+   folio 为 anon 时豁免释放 -- 盲放会丢掉唯一副本, 下次 fault 净取
+   盘上页（FILE-GUARD 计数）;
+3. **slot_is_record 页精确域门**（sec 157 域门的收口）: 帧粒度检查
+   会让同 2M 帧内的 sub-frame arena（glibc mmap malloc 块）为整帧
+   开闸 -- 共享该帧的库页再次被零值 meta 当记录跳过（sg24-#605 仍
+   复现 0x50a66 的原因）。改用注册表自身的 W-7 页精确解析
+   `corten_slot_cover(slot, addr)`。
+
+**残余面（下会话 P0, 非阻塞判定）**: 全量启动的尾部, 一个生成器
+的**退出**路径（exit pre-unmap anon=234 file=1362）unmap_vmas 走到
+垃圾 maple 项（RAX=0x4a1c1bc80e120020, stack-segment oops #5,
+"Not a kmalloc allocation" 反复 dump pfn 0x10614e）, 级联带掉
+PID 1（"Attempted to kill init! exitcode=0x9"）。该面 = 生成器自
+身 mode-enter 的 sweep remove_vma 后其 VMA 树的退出遍历一致性,
+与 fork/生成器冻结无关。
+
+**回归**: arena 套件 fork_file_dirty 绿; 存量 6 败不变（基线对证）;
+核心 corten 套件绿。

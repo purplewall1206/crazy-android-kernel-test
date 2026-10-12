@@ -840,24 +840,45 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
 			tsk->comm, tsk->pid, address, regs->ip, error_code,
 			si_code, regs->bx, regs->di, regs->si, regs->sp,
 			(u64)pgd_val(pgdv));
-		if (pgd_present(pgdv)) {
+		/* sec 158: the object dump is NOT gated on the faulting
+		 * address's walk (the jump-to-PLT face faults at pgd=0):
+		 * nofault reads of the faulting call's object page name
+		 * the content family the child actually holds. */
+		{
+			unsigned long objp = (regs->di & PAGE_MASK) + 0x238;
+			u64 w0 = 0, w1 = 0, w2 = 0, w3 = 0;
+			unsigned long __user *wp =
+				(unsigned long __user *)(objp & ~7UL);
+
+			copy_from_user_nofault(&w0, wp, 8);
+			copy_from_user_nofault(&w1, wp + 1, 8);
+			copy_from_user_nofault(&w2, wp + 2, 8);
+			copy_from_user_nofault(&w3, wp + 3, 8);
+			pr_info("corten-dbg: sg BAD-AREA-OBJ %s[%d] obj=%lx [%llx %llx %llx %llx]\n",
+				tsk->comm, tsk->pid, objp, w0, w1, w2, w3);
+		}
+		if (pgd_present(pgdv) && pfn_valid(pgd_pfn(pgdv))) {
 			p4d_t *p4dp = p4d_offset(pgdp, address);
 			p4d_t p4dv = READ_ONCE(*p4dp);
-			pud_t *pudp = pud_offset(p4dp, address);
-			pud_t pudv = READ_ONCE(*pudp);
-			pmd_t *pmdp = pud_present(pudv) && !pud_leaf(pudv) ?
-				      pmd_offset(pudp, address) : NULL;
-			pmd_t pmdv = pmdp ? READ_ONCE(*pmdp) : (pmd_t){ 0 };
+			pud_t *pudp;
+			pud_t pudv;
+			pmd_t *pmdp, pmdv;
 
+			if (!p4d_present(p4dv) || !pfn_valid(p4d_pfn(p4dv)))
+				goto walk_done;
+			pudp = pud_offset(p4dp, address);
+			pudv = READ_ONCE(*pudp);
+			if (!pud_present(pudv) || pud_leaf(pudv) ||
+			    !pfn_valid(pud_pfn(pudv)))
+				goto walk_done;
+			pmdp = pmd_offset(pudp, address);
+			pmdv = READ_ONCE(*pmdp);
 			pr_info("corten-dbg: sg BAD-AREA-WALK %s[%d] p4d=%llx pud=%llx pmd=%llx\n",
 				tsk->comm, tsk->pid, (u64)p4d_val(p4dv),
 				(u64)pud_val(pudv), (u64)pmd_val(pmdv));
-			if (pmdp && pmd_present(pmdv) && !pmd_leaf(pmdv)) {
+			if (pmd_present(pmdv) && !pmd_leaf(pmdv) &&
+			    pfn_valid(pmd_pfn(pmdv))) {
 				pte_t *ptep = pte_offset_map(pmdp, address);
-				unsigned long objp =
-					(regs->di & PAGE_MASK) + 0x238;
-				u64 w0 = 0, w1 = 0, w2 = 0, w3 = 0;
-				unsigned long __user *wp;
 
 				if (ptep) {
 					pr_info("corten-dbg: sg BAD-AREA-PTE %s[%d] pte=%llx\n",
@@ -865,15 +886,8 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
 						(u64)pte_val(READ_ONCE(*ptep)));
 					pte_unmap(ptep);
 				}
-				wp = (unsigned long __user *)(objp & ~7UL);
-				copy_from_user_nofault(&w0, wp, 8);
-				copy_from_user_nofault(&w1, wp + 1, 8);
-				copy_from_user_nofault(&w2, wp + 2, 8);
-				copy_from_user_nofault(&w3, wp + 3, 8);
-				pr_info("corten-dbg: sg BAD-AREA-OBJ %s[%d] obj=%lx [%llx %llx %llx %llx]\n",
-					tsk->comm, tsk->pid, objp, w0, w1,
-					w2, w3);
 			}
+walk_done:;
 		}
 	}
 

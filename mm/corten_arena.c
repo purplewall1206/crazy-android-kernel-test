@@ -552,12 +552,16 @@ void corten_trace_release_va(struct mm_struct *mm, unsigned long addr)
 EXPORT_SYMBOL_GPL(corten_trace_release_va);
 
 static pmd_t *corten_arena_pmd(struct mm_struct *mm, unsigned long addr);
+static inline struct corten_arena *corten_slot_cover(void *slot, unsigned long addr);
 
 /* sec 156: the sg fresh-fill witness counter -- reset at the first fork
  * so the window catches the forked children's fills, not boot noise. */
 static atomic_long_t corten_sg_fresh_n;
 /* the mark-side adoption's witness counter (per boot). */
 static atomic_long_t corten_sg_mark_adopt_n;
+/* the FILE_MAPPED content-family witness counters. */
+static atomic_long_t corten_sg_file_recl_n;
+static atomic_long_t corten_sg_file_guard;
 /* the fork gap pass's witness counter (per boot). */
 static atomic_long_t corten_sg_gap_n;
 
@@ -597,6 +601,17 @@ bool corten_slot_is_record(struct mm_struct *mm, unsigned long addr)
 		return false;
 	slot = xa_load(&state->arenas, addr >> PMD_SHIFT);
 	if (!slot || slot == &corten_va_reserve_sentinel)
+		return false;
+	/* sec 158: page-exact membership.  The frame-granular check lets
+	 * a SUB-FRAME arena (the glibc mmap'd malloc chunks) open the
+	 * record-check for the whole 2M frame -- the libraries whose PT
+	 * pages share that frame lost their present PTEs again (the
+	 * zeroed install-time meta), the partial library loss behind the
+	 * sg child's clean GOT.  corten_slot_cover() is the registry's
+	 * own page-granular resolution (W-7): a single record answers
+	 * only inside its recorded range, a bucket only the member
+	 * covering @addr. */
+	if (!corten_slot_cover(slot, addr))
 		return false;
 
 	pmdp = corten_arena_pmd(mm, addr);
@@ -10671,6 +10686,45 @@ corten_arena_fork_mark_window(struct corten_arena *ar, unsigned long addr,
 			}
 		}
 
+		if (m.state == CORTEN_FILE_MAPPED) {
+			/* sec 158: the content-family reclassify.  The
+			 * blanket adopt_file mark says FILE, but the
+			 * resident page may be a PRIVATE COW copy (the
+			 * loader's relocation write faulted an anon page
+			 * over the clean pagecache folio -- the exec-image
+			 * GOT shape).  A FILE_MAPPED mirror makes the
+			 * child's refetch serve the clean on-disk page
+			 * over the parent's written content (the sg
+			 * generator's unrelocated GOT, the "Protocol
+			 * error" face -- the KUnit fork_file_dirty
+			 * contract).  An anon folio reclassifies the slot
+			 * to MAPPED (map() records the page identity);
+			 * the SHARED mark below then runs.  A clean
+			 * pagecache translation keeps the FILE contract. */
+			pte_t *ptep, cur;
+			spinlock_t *ptl;	/* nests below desc write */
+
+			ptep = pte_offset_map_lock(ar->mm, pmdp, a, &ptl);
+			if (!ptep) {
+				ret = -EAGAIN;
+				break;
+			}
+			cur = ptep_get(ptep);
+			pte_unmap_unlock(ptep, ptl);
+			if (pte_present(cur) && !pte_special(cur) &&
+			    !corten_folio_is_filemap(page_folio(pte_page(cur)))) {
+				m.state = CORTEN_MAPPED;
+				ret = corten_map(&txn, a, pte_page(cur),
+						 m.perm, 0);
+				if (ret)
+					break;
+				if (atomic_long_inc_return(&corten_sg_file_recl_n) <= 16)
+					pr_info("corten-dbg: sg FILE-RECL %s[%d] a=%lx\n",
+						current->comm, current->pid, a);
+				/* fall through to the SHARED mark below */
+			}
+		}
+
 		if (m.state != CORTEN_MAPPED) {
 			snap[pte_index(a)] = m;
 			continue;
@@ -16141,6 +16195,27 @@ static int corten_arena_zap_window(struct mm_struct *mm,
 			    (slot->state == CORTEN_MAPPED ||
 			     slot->state == CORTEN_SWAPPED))
 				continue;
+
+			/* sec 158: the content-family guard.  A
+			 * FILE_MAPPED slot whose resident folio is ANON
+			 * carries private content (the exec-image GOT's
+			 * relocation COW over the clean pagecache folio).
+			 * The blind release drops the only copy and the
+			 * next fault refetches the clean on-disk page --
+			 * the sg generator's unrelocated GOT (the
+			 * "Protocol error" face).  Spare the slot: it
+			 * stays resident, and the fork's FILE-RECL
+			 * reclassify carries it to the child correctly. */
+			if (slot && !IS_ERR(slot) &&
+			    slot->state == CORTEN_FILE_MAPPED) {
+				pte_t peek = ptep_get(ptep);
+
+				if (pte_present(peek) && !pte_special(peek) &&
+				    !corten_folio_is_filemap(page_folio(pte_page(peek)))) {
+					atomic_long_inc(&corten_sg_file_guard);
+					continue;
+				}
+			}
 
 			if (!g) {
 				/* The scan proved the window carries no

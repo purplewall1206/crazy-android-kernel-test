@@ -11358,6 +11358,141 @@ static void corten_arena_test_fork_swapped(struct kunit *test)
 			0);
 }
 
+/*
+ * The exec-image GOT face (the sg generator child's ip=0, sec 157): a
+ * FILE-class arena slot whose resident content is a PRIVATE copy (the
+ * loader's relocation write COW'd an anon page over the clean
+ * pagecache folio) while the slot's metadata still says FILE_MAPPED
+ * (the adopt_file blanket mark over the legacy-anon-fied resident).
+ * The child must read the private content, never the clean on-disk
+ * page: the mirror's meta family must follow the content family, and
+ * a child-side refetch of the slot must serve the private page.
+ */
+static void corten_arena_test_fork_file_dirty(struct kunit *test)
+{
+	struct corten_arena_test_mm *t;
+	struct mm_struct *mm, *child;
+	struct folio *folio;
+	struct file *file;
+	struct page *page;
+	struct corten_pte_meta m;
+	pte_t *ptep, pte, npte;
+	spinlock_t *ptl;
+	pmd_t *pmdp;
+	u64 pat0 = 0xdeadbeefcafe1234ULL, patW = 0xfeedfacebacef00dULL;
+	u64 back = 0;
+	loff_t pos = 0;
+	unsigned int fflags;
+	unsigned long addr = CORTEN_ARENA_TEST_WIN;
+
+	if (!corten_enabled_static())
+		kunit_skip(test, "FILE fork requires corten=on");
+
+	file = shmem_file_setup("corten_fxfd", PAGE_SIZE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(file));
+	KUNIT_ASSERT_EQ(test,
+			kernel_write(file, &pat0, sizeof(pat0), &pos),
+			(ssize_t)sizeof(pat0));
+
+	t = corten_arena_test_mm_setup(test);
+	mm = t->mm;
+
+	KUNIT_ASSERT_EQ(test, corten_arena_mode_enter(mm), 0);
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_file_attach_prot(mm, addr, file,
+							   0,
+							   PROT_READ |
+							   PROT_WRITE), 0);
+
+	/* Read-install pgoff 0: the clean pagecache translation, meta
+	 * FILE_MAPPED.
+	 */
+	fflags = 0;
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_user_fault(mm, addr, 0, NULL, &fflags),
+			CORTEN_FAULT_HANDLED);
+	KUNIT_ASSERT_EQ(test, corten_arena_test_meta(mm, addr, &m), 0);
+	KUNIT_ASSERT_EQ(test, m.state, CORTEN_FILE_MAPPED);
+
+	/* The relocation shape: replace the translation with a PRIVATE
+	 * page holding the written pattern; the metadata stays
+	 * FILE_MAPPED (the blanket mark over the anon-fied resident).
+	 */
+	page = alloc_page(GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, page);
+	{
+		u64 *kaddr = kmap_local_page(page);
+
+		*kaddr = patW;
+		kunmap_local(kaddr);
+	}
+	pmdp = corten_arena_test_pmd(mm, addr);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pmdp);
+	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	pte = ptep_get_and_clear(mm, addr, ptep);
+	KUNIT_ASSERT_TRUE(test, pte_present(pte));
+	pte_unmap_unlock(ptep, ptl);
+	folio = page_folio(page);
+
+
+
+
+	folio_add_anon_rmap_novma(folio);
+	add_mm_counter(mm, MM_ANONPAGES, 1);
+	npte = mk_pte(page, vm_get_page_prot(VM_READ | VM_WRITE));
+	npte = pte_mkwrite(npte, NULL);
+	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptep);
+	set_pte_at(mm, addr, ptep, npte);
+	pte_unmap_unlock(ptep, ptl);
+
+	/* The parent's own readback: the private content. */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(mm, addr, &back, false),
+			0);
+	KUNIT_EXPECT_EQ(test, back, patW);
+
+	/* The fork window (dup_mmap() shape); the mirror's own auto arm
+	 * carries the copy.
+	 */
+	child = mm_alloc();
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, child);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_begin(child, mm), 0);
+	KUNIT_EXPECT_EQ(test, corten_arena_test_fork_commit(child, mm), 0);
+
+	/* The child's translation carries the PRIVATE page (the copy
+	 * arm's family verdict is the folio's own).
+	 */
+	KUNIT_ASSERT_EQ(test,
+			corten_arena_test_page_word(child, addr, &back,
+						    false), 0);
+	KUNIT_EXPECT_EQ(test, back, patW);
+
+	/* THE CONTRACT: the replayed metadata follows the content
+	 * family.  FILE_MAPPED over an anon resident is the
+	 * content-switch face: any child-side refetch serves the clean
+	 * on-disk page (the sg generator's unrelocated GOT).
+	 */
+	KUNIT_EXPECT_EQ(test, corten_arena_test_meta(child, addr, &m), 0);
+	KUNIT_EXPECT_EQ(test, m.state, CORTEN_MAPPED);
+
+	/* sec 158: the child carries the private translation and the
+	 * true meta family -- the fork contract is complete.
+	 */
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, child,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+	KUNIT_EXPECT_EQ(test,
+			corten_arena_test_run_op(test, mm,
+						 corten_arena_test_op_mode_exit,
+						 0, 0),
+			0);
+}
+
+
 /* ------------------------------------------------------------------ *
  * V-C (MV_VMA_FREE_SPEC.md sec 3.3): the dual-source consumers -- the
  * window row stream (/proc maps rendering source), the GUP-slow MODE
@@ -17379,6 +17514,7 @@ static struct kunit_case corten_arena_test_cases[] = {
 	KUNIT_CASE(corten_arena_test_shrink_aging_two_pass),
 	KUNIT_CASE(corten_arena_test_shrink_rotation),
 	KUNIT_CASE(corten_arena_test_fork_swapped),
+	KUNIT_CASE(corten_arena_test_fork_file_dirty),
 	KUNIT_CASE(corten_arena_test_fork_migrated),
 	KUNIT_CASE(corten_arena_test_fork_f2_gate),
 	KUNIT_CASE(corten_arena_test_fork_drain_leak),
