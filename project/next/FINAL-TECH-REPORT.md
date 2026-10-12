@@ -1447,3 +1447,23 @@ KASAN/KUnit 定位。
 - 3 个防线/安全网落地
 - kASAN 内核 ×2 + 报告 ×3 + storm-loop.sh 交棒包完整
 - 残余 = 不同的竞态面（freeblk 列表损坏 + anon_vma RB 损坏）
+
+---
+
+## 附四十六: 最终验证状态（sec 170, #636 生产内核 + KUnit 确认）
+
+**KUnit**: `corten_arena_test_fork_file_dirty` = **ok** ✓（sec 158
+修复验证）。
+
+**生产内核 #636 多 boot 统计**: init panic 从 100% → **0**（多数
+boot）; "Protocol error" 从 100% → **0**（多数 boot）; 残余
+= 2-3 contained oops（间歇, 非致命, 系统存活）。
+
+**残余竞态根因链**（kASAN 长跑定位）: exec-inner 的 old-mm 拆卸
+（unlink_anon_vmas → free_pgtables）与 declare_carrier 的
+check_empty_locked 读者之间的 **跨 CPU 竞态**。M3a 互锁（readers
+排空）已落地但竞态窗口在**其它路径**（anon_vma RB walk / freeblk
+列表走查）。kASAN 交棒包完整。
+
+**下会话路线图**: freeblk/anon_vma RB 双独立 bug 定位 → 修复 →
+生产 boot 零 oops → storm loop 长跑 → 48h 判定 → 三步删除 → J6。
