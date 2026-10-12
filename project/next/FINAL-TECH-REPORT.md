@@ -1614,3 +1614,27 @@ anon_vma_chain 交叉引用。
 期间，防止跨 mm 的 anon_vma 交叉 -- 或在 check_empty_locked 的
 kASAN 报告精确面的 `desc->mm != mm` 检查后增加
 `anon_vma->owner_mm` 归属验证。
+
+---
+
+## 附五十二: 本会话终态（sec 156-174, 35+ 小时, 55+ boot, 26 推送）
+
+**修复的确定性 bug**: 14 个 + 3 防线 + M3a 互锁（spin/wait_event 双形式）
++ magic/released 双哨兵 + __GFP_COMP + meta 生命周期 + 路由守卫。
+
+**生产指标**:
+| 指标 | 基线 | 终态（4 boot 统计） |
+|---|---|---|
+| init panic (SIGKILL) | 100% 必现 | **1/4** |
+| "Protocol error" | 100% 必现 | **2/4** 间歇 |
+| 管理器冻结 | 100% 必现 | **1/4** |
+| 生成器 | ❌ 出生即死 | ✅ 全量运行+退出 |
+| systemd 到达 | ❌ 5s | ✅ **target 阶段** |
+
+**kASAN 3-boot 竞态剖面**: exec 的 mode_sweep（新 mm 的 mmap_write）
+vs 另一 CPU 的 exit-inner old-mm 拆卸（旧 mm 的 mmap_write）--
+共享的 anon_vma_chain 对象被交叉读写。
+
+**下会话**: 防止 exec mode_sweep 窗口内的跨 mm anon_vma 交叉
+（check_empty_locked 增加 desc->mm 归属验证后, 增加
+anon_vma->owner_mm 归属检查）→ 零 oops → storm loop → 48h → J6。
