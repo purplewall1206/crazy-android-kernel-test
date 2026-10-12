@@ -1419,3 +1419,31 @@ init panic = 0, 管理器可达 graphical.target（多数 boot），系统
 
 **下一会话**: kASAN 长跑 3 轮收报告 → 竞态剖面 → 修复 → 零 oops
 → storm loop → 48h 判定 → J6 终账。
+
+---
+
+## 附四十五: kASAN 长跑 boot 1 判决 + 会话终态（#628 swept 内核, k5）
+
+**kASAN 报告**: `slab-out-of-bounds in check_empty_locked` -- 被读
+地址的 Alloc-stack = **BPF verifier state**（copy_verifier_state ←
+bpf_check ← bpf_prog_load）; Free-stack = **free_verifier_state**。
+**非 CortenMM 对象** -- ptdesc 的 meta 数组释放后，其 slab 内存被
+BPF 子系统重用再释放，check_empty_locked 的 desc->meta 走查踩进
+了重用后的 freed 内存。**meta 生命周期修复（sec 170: meta_free
+移入同一 RCU callback）正是此面的修复 -- swept 内核 #628 尚未
+包含该修复（#628 构建于 sec 170 之前）**。
+
+**关键发现**: 生产内核 #636+（含 meta 生命周期修复）的 oops 面
+**不再是 check_empty_locked UAF**（已修复），而是 freeblk/seg
+列表损坏 + anon_vma RB tree 损坏 -- **不同的 bug**，需要独立
+KASAN/KUnit 定位。
+
+**会话终态汇总（sec 156-170, 32+ 小时, 45+ boot, 13 推送）**:
+- "Protocol error" 100% → **0**（多 boot 维持）
+- init panic 100% → **0**（多 boot 维持）
+- 管理器冻结 100% → **0**（多 boot 维持）
+- 生成器从出生即死 → 全量运行+退出
+- 10 个确定性 bug 修复（全验证）
+- 3 个防线/安全网落地
+- kASAN 内核 ×2 + 报告 ×3 + storm-loop.sh 交棒包完整
+- 残余 = 不同的竞态面（freeblk 列表损坏 + anon_vma RB 损坏）
