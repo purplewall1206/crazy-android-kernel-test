@@ -704,3 +704,21 @@ unmap 不走（无 VMA）→ 释放缺口**。
 **修复**: fork 的 VMA 循环对 whitelist VMA 的 PTE 拷贝时查 meta 状
 态，记录槽跳过计费。**下会话**: 该修复的实现与验证 → val 归零 →
 systemd 全量启动。
+
+---
+
+## 附二十八: 残余 2 的生命周期定位（sec 153 补, 574b75cc→334d9382）
+
+**残余 2 = fork 继承的 whitelist 树 VMA 页（+1 计费），其 VMA 被
+child 的 W-4 entry sweep 二代摘除后，exit 的 unmap 不再覆盖这些
+VA → 计费孤儿。** 修复 = W-4 entry sweep 的 VMA 摘除时对已计费页
+的释放（或 fork 不拷贝即将被摘除的 VMA 页——预判性跳过）。涉及
+W-4 entry sweep 与 fork VMA 循环的交互——设计层修订。
+
+**当前稳定态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿
+绿; churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
+34→2（94%）。
+
+**队列**: ① W-4 entry sweep 摘除的计费释放 → val 归零 ②
+generator-fork EPROTO ③ 48h 判定 → 三步删除序列 → J6 终账 ④ E2
+PR 待批复。
