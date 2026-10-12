@@ -1242,3 +1242,32 @@ write-lock 持有内 -- stale 发布阻塞新读者, 有界自旋等已有读者
 
 **storm loop**: `project/bin/storm-loop.sh` 已就绪（40 进程生成器
 风暴 + 200 fork 风暴 + KASAN/Oops 签名中止循环）。
+
+---
+
+## 附四十二: sec 169 -- 非确定性竞态终态判定与 kASAN 长跑移交（#635, sg60）
+
+**判读**: sg60（#635 全防线）与此前 6 boot 的对照证明: 残余损坏
+= **生成器 exec 窗口的非确定性竞态** -- init panic 从 100% 降为
+**零**（连续 3 boot）; "Protocol error" 从 100% 降为 **间歇**;
+__slab_free/free_large oops 从每 boot 3+ 降为 **0-2 间歇**。
+**该竞态需 kASAN 的确定性捕获** -- printk/boot-verify 循环已无法
+进一步收敛（20+ boot 证明）。
+
+**kASAN 长跑交棒**: bzImage-kasan-sweep (#628) +
+`corten_arena.silent=on` + `kasan.common.report=1` 启动; 每轮
+收集 KASAN 报告的 Alloc-stack + Free-stack; 3 轮以上即可建立
+竞态剖面（写者调用栈 + 分配/释放时钟差）→ 修复位点点名。
+
+**已修确定性 bug 全清单（本会话）**:
+1. 采納臂 perm 源自 wrprotect 子 PTE → 范围契约（sec 156）
+2. INVALID→MAPPED 走 mark() → 走 map()（sec 156）
+3. fork gap pass + mark 侧采納（sec 156）
+4. slot_is_record 帧粒度域门 → 页精确（sec 157）
+5. trace_vxa 编码五站点（sec 160）
+6. FILE 类 arena 内容家族重分类（sec 158）
+7. zap_window 私有内容守卫（sec 158）
+8. M3a 读侧排空互锁（sec 165）
+9. __GFP_COMP 状态分配（sec 166）
+10. 防御性 deregister sweep + kfree 路由守卫 + freeblk 守卫
+    （sec 161/164）
