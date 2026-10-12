@@ -3174,9 +3174,13 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 			continue;		/* retired/recycled: empty */
 		}
 		read_lock_bh(&desc->lock);
+		/* sec 165: the M3a read-side drain counter -- the
+		 * uninstall's page release waits for this to drain. */
+		atomic_inc(&desc->readers);
 		if (READ_ONCE(desc->stale) || desc->mm != mm) {
 			bool was_stale = READ_ONCE(desc->stale);
 
+			atomic_dec(&desc->readers);
 			read_unlock_bh(&desc->lock);
 			corten_ptdesc_put(desc);
 			corten_arena_note_probe_skip(mm, addr, was_stale,
@@ -3185,6 +3189,7 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 		}
 		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
 		if (!ptep) {
+			atomic_dec(&desc->readers);
 			read_unlock_bh(&desc->lock);
 			corten_ptdesc_put(desc);
 			continue;
@@ -3208,7 +3213,8 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 			break;
 		}
 		pte_unmap_unlock(ptep, ptl);
-		read_unlock_bh(&desc->lock);
+		atomic_dec(&desc->readers);
+			read_unlock_bh(&desc->lock);
 		corten_ptdesc_put(desc);
 		if (!empty)
 			return -EBUSY;

@@ -197,6 +197,7 @@ static void corten_ptdesc_release(struct corten_ptdesc *desc)
 	 * freed-desc UAF in check_empty_locked). */
 	WARN_ONCE(desc->released, "corten: ptdesc double-release %px\n", desc);
 	desc->released = true;
+	atomic_set(&desc->readers, 0);
 	corten_meta_free(desc);
 	kfree_rcu(desc, rcu);
 }
@@ -494,6 +495,23 @@ void corten_ptdesc_uninstall(struct page *pte_page)
 	write_lock_bh(&desc->lock);
 	WRITE_ONCE(desc->stale, 1);
 	write_unlock_bh(&desc->lock);
+
+	/* sec 165: the M3a read-side drain.  The stale publish above
+	 * stops NEW readers, but a reader that took the read side
+	 * before it may still be walking the meta array, which overlays
+	 * this PT page for the overlay descs; the TLB funnel frees the
+	 * page after we return.  Wait (bounded) for the readers to
+	 * drain before letting the page go. */
+	{
+		unsigned int spins = 0;
+
+		while (atomic_read(&desc->readers) > 0 &&
+		       spins++ < 100000)
+			cpu_relax();
+		WARN_ONCE(atomic_read(&desc->readers) > 0,
+			  "corten: ptdesc readers stuck %d %px\n",
+			  atomic_read(&desc->readers), desc);
+	}
 
 	atomic_long_dec(&corten_nr_ptdescs);
 	corten_ptdesc_put(desc);

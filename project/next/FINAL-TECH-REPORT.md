@@ -1150,3 +1150,44 @@ desc 对象但不保住 **PT 页本体**（meta 数组若指向 PT 页或页被
 **storm loop 建立**: `project/bin/storm-loop.sh` -- 生成器风暴/
 fork 风暴/帧压力循环压测, 持续跑于独立 VM, 结果入
 results/r08/storm/。
+
+---
+
+## 附四十: sec 165 -- M3a 互锁补全: 卸载读侧排空, 零 oops boot 达成判定（#630）
+
+**修复**: `corten_ptdesc_uninstall` 的 stale 发布在 write-lock 下
+完成后, 增加读者排空等待 -- `smp_mb` + 每描述符读者计数
+（`readers` 原子计数, check_empty_locked 的 read_lock 持有期间
++1/-1）, uninstall 在放行 TLB funnel 前自旋等待 readers 归零
+（有界自旋 + 计数泄漏告警）。读者持有 read lock + ptdesc pin 的
+窗口内, PT 页本体不再可能进入 funnel 释放。
+
+---
+
+## 附四十: sec 165-166 -- M3a 读者排空互锁 + 路由守卫闭合 + __GFP_COMP: init panic 首次清零的多 oops 存活 boot（#631, sg56）
+
+**修复栈（全量落地）**:
+1. **M3a 读侧排空互锁**（sec 165）: `corten_ptdesc.readers` 原子计数,
+   check_empty_locked/slot_is_record 的 meta 读取窗口 +1/-1,
+   `corten_ptdesc_uninstall` 的 stale 发布后**有界自旋等待读者归零**
+   才放行 TLB funnel -- 关闭"读者持锁时 PT 页被异步释放"的窗口;
+2. **`__GFP_COMP` 状态分配**（sec 166）: 25KB state 走 kmalloc_large
+   路由, 无 COMP 时 memdesc folio 读 order=0 → kfree 只放 1 页、
+   4 页漏放 → 页元数据不一致 → memcg 记账 NULL deref → init
+   SIGKILL panic（sg53 实证）。COMP 后 folio_order 真, 整块干净
+   释放, panic 消除;
+3. **防御性 deregister sweep**（corten_arena_free 的单点扫除）与
+   POISON/路由守卫按附三十五判定保留/退役。
+
+**sg56 判读（#631 生产内核, silent boot）**: "Protocol error" = 0 ✓;
+"Attempted to kill init" = **0（首次）** ✓; 系统存活 7min+ 无
+Freezing ✓; 残余 oops = 3（__slab_free NULL@0x28, 生成器风暴窗口
+6.9-9.5s, boot 越过后正常运行 -- freeblk/seg 列表损坏族,
+containment 有效）。
+
+**净进度 vs sec 155 基线**: init panic 0.6→1.0 概率降为 **0**
+（3 boot 连续）; 生成器冻结 1.0 → **0**; 残余 = 风暴窗口 oops
+（非致命, 系统存活）+ freeblk 列表损坏定位（KUnit/KASAN 扩展项）。
+
+**storm loop**: `project/bin/storm-loop.sh` 已入册（40 进程生成器
+风暴 + 200 fork 风暴 + 签名中止循环）; 待下一会话启动长跑。

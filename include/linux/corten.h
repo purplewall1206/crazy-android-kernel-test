@@ -367,6 +367,10 @@ struct corten_ptdesc {
 	/* sec 164: set by corten_ptdesc_release(); a put on a released
 	 * descriptor is the double-put the kASAN round convicted. */
 	bool			released;
+	/* sec 165: the M3a read-side drain counter -- check_empty_
+	 * locked's meta walk increments under desc->lock read side;
+	 * the uninstall's page-release waits for it to drain. */
+	atomic_t		readers;
 };
 
 /**
