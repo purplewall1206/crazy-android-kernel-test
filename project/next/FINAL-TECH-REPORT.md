@@ -1381,3 +1381,17 @@ graphical.target（多数 boot）。
 **下会话**: kASAN 构建 + 生产代码（当前 #636 + 附四十一修复方案
 = readers wait 移入 lock 内已落地，需 kASAN 复验）→ 3 轮收报告 →
 竞态剖面 → 修复 → storm loop 长跑。
+
+---
+
+## 附四十五: 3-boot production统计（#637, sec 165-166全修复栈）
+
+| Boot | proto_err | oops | panic | freezing |
+|------|-----------|------|-------|----------|
+| b1 | 0 | 27 | 0 | 0 |
+| b2 | 0 | 2 | 2 | 0 |
+| b3 | 1 | 2 | 0 | 1 |
+
+**判读**: init panic 2/3 boot 复发; "Protocol error" 1/3 复发;
+残余竞态为非确定性, 跨 boot 波动大（b1 的 27 oops + Fatal
+exception = 异常恶劣; b2/b3 接近 sg56 的好转形态）。
