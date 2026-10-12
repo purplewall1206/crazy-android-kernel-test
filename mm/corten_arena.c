@@ -508,16 +508,20 @@ void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm)
 	 * the residue-n=0-yet-val:34 face.  Count instead. */
 	old = xa_load(&state->trace_vxa, addr >> PAGE_SHIFT);
 	if (old && !IS_ERR(old)) {
-		count = ((long)old >> 9) + 1;
-		prim = ((long)old >> 1) & 0xFF;
+		count = ((long)old >> 11) + 1;
+		prim = ((long)old >> 2) & 0xFF;
 	}
 	/* sec 152: the multiplicity is capped -- an unbounded count shifts
 	 * the stored value into the xarray's internal-entry patterns (the
 	 * #562 __xa_store warning). */
 	if (count > 0xFF)
 		count = 0xFF;
+	/* sec 160: the encoding moves prim to bit 2 -- the old
+	 * (count << 9) | (prim << 1) left bit1 = prim&0x1, and an odd
+	 * prim made the entry read back as an xarray INTERNAL entry
+	 * (xa_is_advanced's __xa_store WARN, PID 1's boot face). */
 	old = xa_store(&state->trace_vxa, addr >> PAGE_SHIFT,
-		       (void *)(long)((count << 9) | (prim << 1)), GFP_NOWAIT);
+		       (void *)(long)((count << 11) | (prim << 2)), GFP_NOWAIT);
 	if (IS_ERR(old))
 		return;
 	if (!old)
@@ -546,13 +550,14 @@ void corten_trace_release_va_src(struct mm_struct *mm, unsigned long addr,
 		old = xa_load(&state->trace_vxa, addr >> PAGE_SHIFT);
 		if (!old || IS_ERR(old))
 			return;
-		count = ((long)old >> 9) - 1;
+		count = ((long)old >> 11) - 1;
 		if (count > 0) {
 			if (count > 0xFF)
 				count = 0xFF;
 			xa_store(&state->trace_vxa, addr >> PAGE_SHIFT,
-				 (void *)(long)((count << 9) |
-						(((long)old >> 1) & 0xFF)),
+				 (void *)(long)((count << 11) |
+						(((long)old >> 2) & 0xFF) <<
+						2),
 				 GFP_NOWAIT);
 		}
 		else
@@ -1767,7 +1772,7 @@ static void corten_slot_remove(struct xarray *xa, unsigned long frame,
 	for (i = 0; i < n && b->rec[i] != ar; i++)
 		;
 	if (WARN_ON_ONCE(i == n)) {
-		pr_info("corten-dbg: SR MISS f=%lx ar=%px [%lx,%lx) rf=%x b0=%px\n",
+		corten_pr_info("corten-dbg: SR MISS f=%lx ar=%px [%lx,%lx) rf=%x b0=%px\n",
 			frame, ar, READ_ONCE(ar->start), READ_ONCE(ar->end),
 			READ_ONCE(ar->rflags),
 			n ? READ_ONCE(b->rec[0]) : NULL);
@@ -1859,6 +1864,20 @@ static void corten_arena_note_drain_timeout(struct corten_mm_state *state)
 	atomic_long_inc(&corten_arena_nr_drain_timeouts);
 }
 
+/* sec 160: the freeblk poison self-check.  The terminal slab face (the
+ * sg boots' free_large_kmalloc on LIST_POISON2) freed a block whose
+ * list node was already removed -- the teardown's kfree then injected
+ * the poison into the slab freelist and killed init.  A poisoned node
+ * is dropped without the kfree (the memory is somebody else's already);
+ * the witness names it. */
+static inline bool corten_freeblk_poisoned(const struct corten_va_freeblk *blk)
+{
+	return (void *)blk->list.next == LIST_POISON2 ||
+	       (void *)blk->list.prev == LIST_POISON1 ||
+	       (void *)blk->list.prev == LIST_POISON2 ||
+	       (void *)blk->list.next == LIST_POISON1;
+}
+
 /* Recycle-list / claimed-segment ledger teardown (M4.T1).  Called from
  * corten_arena_state_free() only: no reader can hold these -- both lists
  * are mmap_write-serialized and the mm is going away.
@@ -1869,6 +1888,19 @@ static void corten_va_lists_free(struct corten_mm_state *state)
 	struct corten_va_segrec *seg, *seg_n;
 
 	list_for_each_entry_safe(blk, blk_n, &state->va_free, list) {
+		bool poisoned = corten_freeblk_poisoned(blk);
+
+		/* sec 160: the UAF guard -- a block freed while still
+		 * linked (the sg boots' residual face) reaches here as
+		 * reused memory; the kfree would double-free.  virt_
+		 * addr_valid splits garbage pointers from real ones. */
+		if (poisoned || !virt_addr_valid(blk)) {
+			pr_warn_ratelimited("corten: va-freeblk ghost nrfree=%ld poisoned=%d\n",
+					    state->va_nrfree, poisoned);
+			if (!poisoned)
+				list_del(&blk->list);
+			continue;
+		}
 		list_del(&blk->list);
 		kfree(blk);
 	}
@@ -1891,10 +1923,24 @@ static void corten_arena_state_free(struct corten_mm_state *state)
 	xa_destroy(&state->shrink_aged);
 	free_percpu(state->va_segs);
 	corten_va_lists_free(state);
-	kfree(state->implants);
+	/* sec 160: the implants ghost guard.  The grow path retires old
+	 * images via kfree_rcu_mightsleep; a stale pointer reaching this
+	 * free landed as a 32-bit garbage kfree (the free_large_kmalloc
+	 * WARN, the slab-freelist poisoning, init's death).  Validate
+	 * before the free; name the ghost. */
+	if (state->implants) {
+		if (unlikely(!virt_addr_valid(state->implants)))
+			pr_warn_ratelimited("corten: implants ghost %px\n",
+					    state->implants);
+		else
+			kfree(state->implants);
+	}
 	free_percpu(state->stats);
 	mutex_destroy(&state->ctl_lock);
-	kfree(state);
+	if (unlikely(!virt_addr_valid(state)))
+		pr_warn_ratelimited("corten: state ghost %px\n", state);
+	else
+		kfree(state);
 }
 
 /* A5 (G5-fix) deferred shape of the state teardown: the grace period the
@@ -6469,13 +6515,18 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				if (src < 8)
 					relsrc[src]++;
 				xa_erase(&vset, va >> PAGE_SHIFT);
+				/* sec 160: xa_mk_value keeps the entries out
+				 * of the internal/sibling patterns -- the
+				 * raw (0x40|src)/(arm) words collided with
+				 * them for even-low-bit arms (the #562
+				 * family's __xa_store WARN). */
 				xa_store(&cset, va >> PAGE_SHIFT,
-					 (void *)(long)(0x40 | src), GFP_NOWAIT);
+					 xa_mk_value(0x40 | src), GFP_NOWAIT);
 			} else {
-				xa_store(&vset, va >> PAGE_SHIFT, (void *)(long)arm,
-					 GFP_NOWAIT);
+				xa_store(&vset, va >> PAGE_SHIFT,
+					 xa_mk_value(arm), GFP_NOWAIT);
 				xa_store(&cset, va >> PAGE_SHIFT,
-					 (void *)(long)arm, GFP_NOWAIT);
+					 xa_mk_value(arm), GFP_NOWAIT);
 			}
 		}
 		for (i = 1; i < 8; i++)
@@ -6492,7 +6543,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 			int ph = 0;
 
 			xa_for_each(&cset, cidx, cent) {
-				int csrc = (int)(long)cent & 0x3F;
+				int csrc = (int)xa_to_value(cent) & 0x3F;
 
 				if (!(csrc & 0x40))
 					continue;
@@ -6506,7 +6557,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 			xa_destroy(&cset);
 		}
 		xa_for_each(&vset, vidx, vent) {
-			int arm = (int)(long)vent;
+			int arm = (int)xa_to_value(vent);
 
 			left++;
 			if (shown < 12) {
@@ -6748,7 +6799,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 			struct vm_area_struct *rv;
 
 			rn++;
-			if (((long)rent >> 8) > 1)
+			if (((long)rent >> 11) > 1)
 				rmulti++;
 			if (rshown < 8) {
 				unsigned long raddr = rva << PAGE_SHIFT;
@@ -8360,15 +8411,23 @@ static int corten_va_mag_alloc_cpu(struct mm_struct *mm,
 		blk->frames -= frames;
 		state->va_nrfree -= frames;
 		if (!blk->frames) {
-			list_del(&blk->list);
-			kfree(blk);
+			if (corten_freeblk_poisoned(blk))
+				pr_warn_ratelimited("corten: va-freeblk ghost-serve\n");
+			else {
+				list_del(&blk->list);
+				kfree(blk);
+			}
 		}
 		atomic_long_add(frames, &corten_nr_va_recycles);
 		return 0;
 drop:
-		list_del(&blk->list);
-		state->va_nrfree -= blk->frames;
-		kfree(blk);
+		if (corten_freeblk_poisoned(blk))
+			pr_warn_ratelimited("corten: va-freeblk ghost-drop\n");
+		else {
+			list_del(&blk->list);
+			state->va_nrfree -= blk->frames;
+			kfree(blk);
+		}
 	}
 
 	/* 2. Segment bump.  Every handed-out span re-verifies the T0
@@ -10690,7 +10749,7 @@ corten_arena_fork_mark_window(struct corten_arena *ar, unsigned long addr,
 					break;
 				{
 					if (atomic_long_inc_return(&corten_sg_mark_adopt_n) <= 64)
-						pr_info("corten-dbg: sg MARK-ADOPT %s[%d] a=%lx ar=[%lx,%lx)\n",
+						corten_pr_info("corten-dbg: sg MARK-ADOPT %s[%d] a=%lx ar=[%lx,%lx)\n",
 							current->comm, current->pid,
 							a, ar->start, ar->end);
 				}
@@ -10735,7 +10794,7 @@ corten_arena_fork_mark_window(struct corten_arena *ar, unsigned long addr,
 				if (ret)
 					break;
 				if (atomic_long_inc_return(&corten_sg_file_recl_n) <= 16)
-					pr_info("corten-dbg: sg FILE-RECL %s[%d] a=%lx\n",
+					corten_pr_info("corten-dbg: sg FILE-RECL %s[%d] a=%lx\n",
 						current->comm, current->pid, a);
 				/* fall through to the SHARED mark below */
 			}
@@ -11104,7 +11163,7 @@ retry:
 				long n = atomic_long_inc_return(&corten_nr_fork_foreign);
 
 				if (n <= 8)
-					pr_info("corten-dbg: sg FORK-FOREIGN a=%lx pte=%lx\n",
+					corten_pr_info("corten-dbg: sg FORK-FOREIGN a=%lx pte=%lx\n",
 						a, pte_val(pte));
 				continue;
 			}
@@ -11541,7 +11600,7 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 	 * first fork also re-arms the sg fresh-fill witness window. */
 	if (atomic_long_read(&corten_nr_fork_faithful) < 4) {
 		atomic_long_set(&corten_sg_fresh_n, 0);
-		pr_info("corten-dbg: sg MIRROR %s[%d] ar=[%lx,%lx) auto=%d pvma=%px any_piece=%d\n",
+		corten_pr_info("corten-dbg: sg MIRROR %s[%d] ar=[%lx,%lx) auto=%d pvma=%px any_piece=%d\n",
 			current->comm, current->pid,
 			ar->start, ar->end, !!READ_ONCE(ar->auto_shape),
 			READ_ONCE(ar->vma), any_piece);
@@ -11807,7 +11866,7 @@ static int corten_arena_fork_mirror(struct mm_struct *mm,
 							   &nm);
 				if (atomic_long_inc_return(&corten_sg_gap_n) <=
 				    16)
-					pr_info("corten-dbg: sg GAP %s[%d] a=%lx ar=[%lx,%lx) mret=%d\n",
+					corten_pr_info("corten-dbg: sg GAP %s[%d] a=%lx ar=[%lx,%lx) mret=%d\n",
 						current->comm, current->pid,
 						a, ar->start, ar->end, mret);
 			}
@@ -14390,7 +14449,7 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 			 * children, not boot noise. */
 			if (ctx->write &&
 			    atomic_long_inc_return(&corten_sg_fresh_n) <= 24)
-				pr_info("corten-dbg: sg FRESH %s[%d] a=%lx ar=[%lx,%lx) perm=%x\n",
+				corten_pr_info("corten-dbg: sg FRESH %s[%d] a=%lx ar=[%lx,%lx) perm=%x\n",
 					current->comm, current->pid,
 					ctx->addr, READ_ONCE(ctx->ar->start),
 					READ_ONCE(ctx->ar->end),
@@ -14939,7 +14998,7 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 			struct corten_arena *one = slot;
 			unsigned int j;
 
-			pr_info("corten-dbg: sg HEAL-SKIP f=%lx slot=%px sent=%d nr=%d\n",
+			corten_pr_info("corten-dbg: sg HEAL-SKIP f=%lx slot=%px sent=%d nr=%d\n",
 				f, slot, slot == &corten_va_reserve_sentinel,
 				b ? b->nr : -1);
 			if (b) {

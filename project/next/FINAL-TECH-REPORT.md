@@ -952,3 +952,31 @@ xarray internal 命名 -- 仪器自身, 待修）; ②shmem
 **48h 判定（10-14 02:24）**: soak2/soak3b 车辆持续存活, 判定时点
 不受本轮影响; 判定后按既定三步删除序列推进, J6 终账汇总本附三十四
 的定名面。
+
+---
+
+## 附三十五: sec 160 -- xa 编码修复落地, 防线加固, 终态 face 判归 kASAN 轮（#610-#613, 4 boot）
+
+**已修**: (1) **trace_vxa 编码** -- `(count << 9) | (prim << 1)` 的
+奇数 prim 落在 xarray internal 模式（sec 152 的 cap 只修了 count 位
+移未修 prim 位宽）→ 全部四站点（charge 读/写、release 读/写、
+census 判读）改 `(count << 11) | (prim << 2)` -- sg33 的 __xa_store
+WARN 在 sg34 归零; (2) **census vset/cset 值编码** -- 原始
+`(0x40|src)`/`arm` 字同样撞 internal 模式 → `xa_mk_value`/`xa_to_value`
+配对; (3) **sg/dbg 打印并入 silent 旋钮**（18 处）; (4) **三重防线**:
+freeblk POISON 自检、state_free 的 implants/state
+`virt_addr_valid` 守卫、va_free 走链 UAF 守卫。
+
+**sg35/sg36 判读**: __xa_store WARN 消失 ✓; 生成器全量运行 ✓;
+"Protocol error" = 0 ✓。但 `free_large_kmalloc`（state_free 内联,
+mm_exit+0x76c）**仍在** -- 三重防线均未命中（指针通过
+virt_addr_valid）⇒ 该 face = **slab 对象的 page flags/路由损坏**
+（kfree 把 slab 对象路由进 free_large_kmalloc = folio_test_slab
+被清 -- 与手术 unanchor 的 folio->mapping=NULL 同族嫌疑）,
+黑盒守卫无法再收窄。**判归 kASAN 轮**: 残余面以
+CONFIG_KASAN=y + KUnit fork_file_dirty 扩展（state_free 路径）
+复现, 定位越界写者。init panic（exitcode=0x9）随该 face 存续。
+
+**本会话净交付**: "Protocol error" 永久归零（生成器阶段打通）,
+管理器入队 graphical.target; xa 编码族 WARN 全消; 防线三重加固;
+残余面 = 单一 kASAN 定位项。
