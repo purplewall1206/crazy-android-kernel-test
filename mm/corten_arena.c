@@ -659,6 +659,34 @@ void corten_note_leg_sample(unsigned long addr, u64 pteval)
 }
 EXPORT_SYMBOL_GPL(corten_note_leg_sample);
 
+/* sec 143: the per-folio identity pairing watch -- a global xarray
+ * keyed by the folio pointer: every MODE anon charge inserts (the arm
+ * in the value), every release erases.  The census reads the
+ * survivors: the charged-but-never-released folios, each with its
+ * charge arm -- the +2's identity, finally per-page.  An erase miss
+ * (a release with no charge) counts separately (the double-release
+ * detector). */
+static DEFINE_XARRAY(corten_folio_watch_xa);
+static atomic_long_t corten_fw_erase_miss;
+
+void corten_folio_watch_add(struct page *page, u8 arm)
+{
+	xa_store(&corten_folio_watch_xa, (unsigned long)page,
+		 xa_mk_value(arm), GFP_NOWAIT);
+}
+
+bool corten_folio_watch_del(struct page *page)
+{
+	void *old = xa_erase(&corten_folio_watch_xa, (unsigned long)page);
+
+	if (!old) {
+		atomic_long_inc(&corten_fw_erase_miss);
+		return false;
+	}
+	return true;
+}
+EXPORT_SYMBOL_GPL(corten_folio_watch_del);
+
 void corten_note_rec_sample(unsigned long addr, u64 pteval)
 {
 	if (corten_rec_sample_n < 8) {
@@ -6657,6 +6685,22 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		corten_uzap_sample_n = 0;
 		corten_rec_sample_n = 0;
 		corten_leg_sample_n = 0;
+		{
+			unsigned long fwk;
+			void *fwv;
+			int fwn = 0;
+
+			pr_info("corten: folio-watch survivors:");
+			xa_for_each(&corten_folio_watch_xa, fwk, fwv) {
+				fwn++;
+				if (fwn <= 8)
+					pr_cont(" %lx=arm%ld", fwk,
+						(long)fwv & 0xFF);
+			}
+			pr_cont(" total=%d\n", fwn);
+			pr_info("corten: erase-miss=%ld\n",
+				atomic_long_read(&corten_fw_erase_miss));
+		}
 		{
 			int wi;
 			unsigned long wva;
@@ -15017,6 +15061,10 @@ void corten_zap_release_page(struct mm_struct *mm,
 	bool file = !folio_test_anon(folio) &&
 		    !(folio_test_swapbacked(folio) &&
 		      !folio_mapping(folio));
+
+	/* sec 143: the per-folio identity pairing -- the release erases
+	 * the watch entry (an erase miss = a release with no charge). */
+	corten_folio_watch_del(page);
 
 	corten_trace_release(mm, page);
 	corten_trace_release_va(mm, addr);

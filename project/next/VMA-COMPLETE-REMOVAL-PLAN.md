@@ -2670,3 +2670,16 @@ mm/别的计数器**时即成孤儿）。仪器 = **per-folio 身份配对追踪
 **状态总账**: 残差 34→2（94% 闭合）; 全部修复与仪器在树; N-boot
 A/B 各 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14
 02:24）; E2 PR 待批复。
+
+## 144. folio-watch 判读 + 收尾（2026-10-12 晨, #546）
+
+**folio-watch 判读**: survivors=0（所有已计费 folio 均被释放擦除 ✓）
++ erase-miss=722 递增（未计费 folio 的释放——watch 未覆盖的计费位点
+或双重释放）+ **post 恒 2**。⇒ 残余 2 = **未入 watch 的计费位点**
+（swap-in/migration/THP 类 +1 位点）的孤儿——扩展 watch 到
+do_swap_page/迁移位点 = 下一步。
+
+**收尾状态**: 最终形 #546（判别器语义修正 + 全套仪器 + folio
+watch）零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿; churn 浸泡零
+事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差 34→2（94%）;
+最后 2 页 = 下会话以 swap-in/迁移 watch 扩展收口。

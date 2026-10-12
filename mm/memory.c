@@ -1277,9 +1277,11 @@ copy_present_ptes(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 			}
 			rss[MM_ANONPAGES] += nr;
 			VM_WARN_ON_FOLIO(PageAnonExclusive(page), folio);
-			if (READ_ONCE(dst_vma->vm_mm->corten_mode))
+			if (READ_ONCE(dst_vma->vm_mm->corten_mode)) {
 				corten_note_tree_copy(dst_vma->vm_mm, addr, nr,
 						      false);
+				corten_folio_watch_add(page, 11);
+			}
 		} else {
 			folio_dup_file_rmap_ptes(folio, page, nr, dst_vma);
 			rss[mm_counter_file(folio)] += nr;
