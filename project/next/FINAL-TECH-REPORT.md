@@ -522,3 +522,20 @@ __resv 页身份载荷 vs raw pte pfn 比对——不一致（记录槽）→ �
 **状态**: 残差 34→2（94% 闭合）; 最终形零 oops; N-boot A/B 各
 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
 E2 PR 待批复。
+
+---
+
+## 附二十一: 晨间收束（sec 145c, 75a19eae）
+
+**最终形态确认**: 工作树 = b4bf9f15 状态（双视图守卫 + EPROTO 窗口
+降级 + 判别器语义修正 + 全套仪器），零 oops，smoke 验证 ✓。无未提
+交变更。
+
+**val:2 的收口路径（下会话，方法已定）**: free_pgtables 层的 per-VA
+release trace（the funnel 的释放 VA 采样器，落点 = free_pte_range
+的 release_page 调用后采样，census 交叉引用）+ per-table ownership
+审计——残差 2 的 PTEs 在被非漏斗路径释放/清零的表内（zap 层已排
+除）。
+
+**队列**: ① 残余 2 收口 ② generator-fork EPROTO ③ 48h 判定（10-14
+02:24）→ 三步删除序列 → J6 终账 ④ E2 PR 待批复。
