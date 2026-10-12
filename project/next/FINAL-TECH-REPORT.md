@@ -1680,3 +1680,25 @@ default target graphical.target"**（25.8s）✓ 但 init SIGSEGV
 **终态**: 本会话（37+ 小时, 65+ boot）修复了 14 个确定性 bug +
 3 防线 + 全套取证基础设施。**残余 init SIGSEGV 需 kASAN 内核
 更新至当前代码后 3+ boot 精确定位**。
+
+### 附五十五: kASAN 当前代码终判（#648, kg5）-- exec 的 BSS declare 路由 UAF
+
+**KASAN 报告**: `use-after-free in check_empty_locked+0x4fc`
+Read of size 8 by selinux-autorel/83
+调用栈: `check_empty_locked ← overlaps ← declare_locked ←
+declare_carrier ← mode_sweep ← setup_arg_pages ← load_elf_binary
+← bprm_execve ← execve` -- **exec 的 BSS declare 路由**。
+
+**被读对象**: freed 内存（KASAN poisoned ff 全页）-- desc->meta
+数组或其重叠区域。**meta 生命周期修复（call_rcu 同宽限期）已
+落地但 UAF 仍复现** -- 说明 desc->meta 的释放延迟到 RCU
+callback 不足以保护读者，因为**读者的 pin 采下后，另一个 CPU
+可能将 desc 的 refcount 减至 0 → callback 跑 → meta 数组
+释放 → 读者读已释放的 meta 数组**。
+
+**最终修复方向**: `check_empty_locked` 读者持有的 desc pin 必须
+阻止 `corten_ptdesc_release` 运行。方案: 将 `corten_meta_free`
+从 `corten_ptdesc_release`/callback 中分离 -- meta 数组由
+**desc->rcu 回调的下一个宽限期**释放（双宽限期），或改用
+**kref** 替代 refcount 使 put_atomic 语义更严格。这是协议级
+修复，需下一会话实施。
