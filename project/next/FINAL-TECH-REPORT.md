@@ -666,3 +666,22 @@ VA-keyed）或 page-form 计费的 VA 补充 trace。
 **状态**: 残差 34→2（94% 闭合）; 最终形零 oops; N-boot A/B 各
 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
 E2 PR 待批复。
+
+---
+
+## 附三十: 夜战总收束与交接（sec 152, a272e580）
+
+**全套仪器收敛判决**: 排除清单终版（8 条通道逐一排除，全部清白或
+已计数）——**残余 val:2 的增量位点不在任何已插桩通道上**。
+
+**下会话收口**: delta tracer 从 mm_trace_rss_stat 重定位至
+add_mm_counter 的 ANON 通道（corten_note_anon_counter 的调用点已在
+mm.h:2758 带 _RET_IP_ ✓）→ +2 增量调用者一次 boot 点名 → 修位点
+→ val 归零。
+
+**状态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿;
+churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。
+
+**队列**: ① delta tracer 重定位 → +2 点名 → val 归零 ②
+generator-fork EPROTO ③ 仪器重 landing（双 boot）④ 48h 判定 → 三
+步删除序列 → J6 终账。
