@@ -2903,3 +2903,28 @@ whitelist VMA 的页已被 W-4 adoption 转为 arena 管理，fork 不应再
 
 **下会话**: copy_present_ptes 的 meta-INVALID 判别器（#531 已有）
 对 whitelist VMA 的 PTE 拷贝路径生效验证 → 修 → val 归零。
+
+## 153. 串口仪器穷尽判决 + val:2 交接（2026-10-12 晨, #571-#572）
+
+**排除清单终版**（全部串口可达仪器逐一排除）:
+1. tracked zap 采样 n=0 ✓
+2. untracked zap 采样 n=0 ✓
+3. legacy zap 释放 3（已计数 ✓）
+4. funnel 释放 1（已计数 ✓）
+5. span 收缴 0 ✓
+6. sweep 收缴 ✓（disarmed）
+7. meta-write watch n=0 ✓
+8. should_zap_folio 拒绝 n=0 ✓
+9. vm_normal_page-NULL rec 采样 n=0 ✓
+10. folio-watch survivors=0 ✓
+11. delta tracer（mm_trace_rss_stat 钩）n=0 ✓（钩不在主路径）
+
+**⇒ 残余 val:2 = 2 页/进程的精确真实残面**，增量位点不在任何串口
+可达的 zap/release 路径的跳过分支上。**下会话仪器（设计定案）**:
+percpu_counter_sum 的 exit 窗口增量追踪——corten_note_anon_counter
+的 choke point（mm.h:2758 带 _RET_IP_ ✓ 已落地）武装于 unpublish，
+census 打印增量序列 → +2 的调用者一次 boot 点名。
+
+**状态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿;
+churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
+34→2（94%）。
