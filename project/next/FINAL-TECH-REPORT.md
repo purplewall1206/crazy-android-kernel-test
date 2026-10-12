@@ -1271,3 +1271,29 @@ __slab_free/free_large oops 从每 boot 3+ 降为 **0-2 间歇**。
 9. __GFP_COMP 状态分配（sec 166）
 10. 防御性 deregister sweep + kfree 路由守卫 + freeblk 守卫
     （sec 161/164）
+
+---
+
+## 附四十三: sec 170 -- 互锁补全后首个无冻结 boot + 修复栈终态交付（#635, sg61）
+
+**sg61 判读（#635 = 全修复栈, M3a 互锁在 write-lock 内）**:
+- "Protocol error" = **0** ✓
+- "Attempted to kill init" = **0** ✓
+- "Freezing execution" = **0** ✓
+- 系统存活 4min+，控制台静默 = 正常运行（silent + graphical.target）
+- 残余 oops = 3（生成器风暴窗口, **containment 有效, 系统存活**）
+
+**本会话修复的 10 个确定性 bug 全清单**:
+1. 采納臂 perm 改范围契约（不再从 wrprotect 子 PTE 推导）
+2. INVALID→MAPPED 走 corten_map（mark 拒绝此边）
+3. fork gap pass + mark 侧采納（setup_arg_pages 搬移的 argv 无记账面）
+4. slot_is_record 帧粒度→页精确域门（W-7 slot_cover）
+5. trace_vxa 五站点编码修正（prim 位宽溢出 xarray internal 模式）
+6. FILE 类 arena 内容家族重分类（FILE_MAPPED→MAPPED）
+7. zap_window 私有内容守卫（FILE_MAPPED+anon folio 豁免释放）
+8. M3a 读侧排空互锁（readers 计数, uninstall 在 write-lock 内等待）
+9. __GFP_COMP 状态分配（25KB state 的 folio_order 真读）
+10. 防御性 deregister sweep + kfree 路由守卫 + 双减 sentinel
+
+**残余**: 生成器 exec 窗口的非确定性竞态（3 oops, containment 有
+效）-- kASAN 长跑定位后修复（交棒包完整: 内核+报告+storm-loop）。
