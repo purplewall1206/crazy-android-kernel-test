@@ -1507,3 +1507,26 @@ SIGSEGV**（exitcode=0xb），需要 kASAN 精确定位 init 进程地址
 **下会话**: kASAN 构建（当前代码含 magic sentinel + 全修复栈）
 → 收 init SIGSEGV 的 KASAN 报告 → 定位写者 → 修复 → 零 oops +
 零 panic boot。
+
+---
+
+## 附四十九: sec 173 -- check_empty_locked meta 读取移除 + init SIGSEGV 独立面确认（#643, sg65）
+
+**修复**: `check_empty_locked` 的 `desc->meta[pte_index(a)]` 读取
+移除 -- kASAN 证明 meta 数组内存可被释放并被 anon_vma_chain
+重用（读者 pin 只保 desc 不保 meta 数组）。硬件 PTE 检查已足够
+判定窗口是否为空。
+
+**sg65 判读（#643）**: systemd 推进到 "Queued start job for
+default target graphical.target"（24.6s）✓ 但 init SIGSEGV
+（exitcode=0xb）在 25s 复发 -- **desc->meta 读取移除并未修复
+init SIGSEGV**，确认其为**独立于 check_empty_locked 的损坏面**。
+
+**init SIGSEGV 特征**: systemd[1] 在入队 graphical.target 后
+（~25s）收到 SIGSEGV。每 boot 复现（100%）。发生在管理器启动
+后的稳态运行期，与生成器 fork 窗口（已修复）无关。最可能来源:
+CortenMM 的 arena fault/内存操作写坏了 systemd[1] 的用户空间
+堆/栈页。
+
+**下会话**: 在 init SIGSEGV 的精确时刻捕获（init 的
+`show_fault_regs`/KASAN 报告）→ 定位写者 → 修复 → 零 panic boot。

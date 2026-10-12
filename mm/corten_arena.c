@@ -3197,20 +3197,17 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 			continue;
 		}
 		for (a = addr; a < win_end; a += PAGE_SIZE) {
+			/* sec 173: the desc->meta read REMOVED from the
+			 * empty check.  The kASAN boot on the current
+			 * kernel proved: the meta array's memory can be
+			 * freed and reused as an anon_vma_chain while the
+			 * desc is pinned (the pin protects the desc struct
+			 * but NOT the separately-kmalloc'd meta array).
+			 * A present PTE means the window is not empty --
+			 * the metadata INVALID-as-residue check was an
+			 * optimization whose UAF risk outweighs its value. */
 			if (!pte_present(ptep[pte_index(a)]))
 				continue;
-			/* E2-V1: a present PTE whose metadata is
-			 * INVALID is the teardown residue (the orphan:
-			 * the drop-content state kept the PTE but
-			 * dropped the live state).  Not content.  The
-			 * next declare's FRESH faults overwrite it.
-			 */
-			if (desc->meta) {
-				struct corten_pte_meta *m =
-					&desc->meta[pte_index(a)];
-				if (m->state == CORTEN_INVALID)
-					continue;
-			}
 			empty = false;
 			break;
 		}
