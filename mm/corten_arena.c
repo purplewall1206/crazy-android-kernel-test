@@ -464,8 +464,8 @@ void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm)
 	 * the residue-n=0-yet-val:34 face.  Count instead. */
 	old = xa_load(&state->trace_vxa, addr >> PAGE_SHIFT);
 	if (old && !IS_ERR(old)) {
-		count = ((long)old >> 8) + 1;
-		prim = (long)old & 0xFF;
+		count = ((long)old >> 9) + 1;
+		prim = ((long)old >> 1) & 0xFF;
 	}
 	/* sec 152: the multiplicity is capped -- an unbounded count shifts
 	 * the stored value into the xarray's internal-entry patterns (the
@@ -473,7 +473,7 @@ void corten_trace_charge_va(struct mm_struct *mm, unsigned long addr, int arm)
 	if (count > 0xFF)
 		count = 0xFF;
 	old = xa_store(&state->trace_vxa, addr >> PAGE_SHIFT,
-		       (void *)(long)((count << 8) | prim), GFP_NOWAIT);
+		       (void *)(long)((count << 9) | (prim << 1)), GFP_NOWAIT);
 	if (IS_ERR(old))
 		return;
 	if (!old)
@@ -502,13 +502,13 @@ void corten_trace_release_va_src(struct mm_struct *mm, unsigned long addr,
 		old = xa_load(&state->trace_vxa, addr >> PAGE_SHIFT);
 		if (!old || IS_ERR(old))
 			return;
-		count = ((long)old >> 8) - 1;
+		count = ((long)old >> 9) - 1;
 		if (count > 0) {
 			if (count > 0xFF)
 				count = 0xFF;
 			xa_store(&state->trace_vxa, addr >> PAGE_SHIFT,
-				 (void *)(long)((count << 8) |
-						((long)old & 0xFF)),
+				 (void *)(long)((count << 9) |
+						(((long)old >> 1) & 0xFF)),
 				 GFP_NOWAIT);
 		}
 		else

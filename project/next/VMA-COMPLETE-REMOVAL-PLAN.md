@@ -2801,3 +2801,21 @@ meta 深拷贝缺口（whitelist 树窗的记录态拷贝与树深越界）—�
 **状态**: 残差 34→2（94% 闭合）; 最终形零 oops; N-boot A/B 各
 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
 E2 PR 待批复。
+
+## 151. exit 窗口 delta tracer 的 n=0 判读 + 夜战收束（2026-10-12 晨, #554-#570）
+
+**delta tracer（mm_trace_rss_stat 钩）判决: n=0 全场**——该钩不在主
+add_mm_counter 路径上（trace_rss_stat 只从特定路径触发）——tracer
+设计修正: **choke point = corten_note_anon_counter（已落地: mm.h 的
+add_mm_counter ANON 通道每次 +/- 必经, 带 _RET_IP_ 调用者）**, 但其
+采样器（armed_mm == mm 门）读 n=0——**armed_mm 与采样 mm 的配对
+需调试**（MODE fork: 父 census 武装父 mm; 子 exit 时 armed 仍是父
+→ 子的 delta 全漏）。
+
+**正确设计**: armed_mm 改为 per-cpu 或 per-exit 局部; 或采样器不过
+滤 mm（全局采样, census 侧按 mm 分组）。**残余 2 的定位 = 该修正
+后的一次 boot。**
+
+**状态总账**: 残差 34→2（94% 闭合, 判别器语义修正）; 全套仪器在
+树; N-boot A/B 各 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h
+判定 10-14 02:24）; E2 PR 待批复。
