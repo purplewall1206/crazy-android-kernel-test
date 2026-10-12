@@ -921,3 +921,34 @@ tpm2/getty 生成器含常规 SIGTERM 15/exit-1 形态）-- **修复可复现**�
 **验收对照**: ①"Protocol error 消失" = 2/2 boot 达成; ②生成器全量
 运行 = 达成; ③systemd 管理器越过生成器阶段 = 达成（graphical.target
 入队）; ④"全量启动零 oops" = 未达成（残余 oops 族如上, 下会话首项）。
+
+---
+
+## 附三十四: sec 159 -- 零 oops 推进: 幽灵链守卫落地, 静默 boot 模式, 终态 slab 面定名（#608-#609）
+
+**落地**: (1) `unlink_anon_vmas` 双通道幽灵链守卫（pass-1/pass-2:
+`avc->anon_vma` NULL 时摘除节点+命名 VMA+继续, 不再 GPF -- sg28 的
+(exec-inner) 撕毁面）; (2) `corten_silent` boot 参数（
+`corten_arena.silent=on`）-- 44 处 census/sg 打印单旋钮静默, 修復
+"诊断洪水淹没 oops 文本"的阻塞（控制台 2000+ 行 → 1300 行真实输出）。
+
+**sg32 干净控制台判读**: "Protocol error" = 0; census 洪水 = 0;
+三族真实输出: ①`__xa_store` WARN（folio-watch 计数值偶数编码撞
+xarray internal 命名 -- 仪器自身, 待修）; ②shmem
+`Bad rss-counter val:4` 族（exec-inner 会计噪声）; ③**终态 slab 面
+定名**: `free_large_kmalloc`（corten_arena_mm_exit+0x760 =
+`corten_arena_state_free` 内联, LIST_POISON2=0xdead000000000122
+为 RBX, object=0x227c4298 = 32 位截断垃圾指针）-- **VA-freeblk
+块的 list 节点二次摘除**: state_free 走 `kfree(blk)` 时块的 list
+节点已 POISON -- freeblk 的 park/take/drop 生命周期某处双重摘除;
+被污染的释放摧毁 slab freelist, systemd[1] 从坏 slab 分配 →
+`___slab_alloc` NULL deref → init 死亡（exitcode=0x9）panic。
+
+**下会话修复位点**: `corten_va_freeblk` 生命周期
+（`corten_va_release_frame` 的 blk 摘除 vs `corten_arena_state_free`
+的 `kfree(blk)` 遍历 -- 找出双重 `list_del` 路径, 或在 freeblk 摘除
+处加 POISON 自检守卫）+ folio-watch xa_store 值编码改 `xa_mk_value`。
+
+**48h 判定（10-14 02:24）**: soak2/soak3b 车辆持续存活, 判定时点
+不受本轮影响; 判定后按既定三步删除序列推进, J6 终账汇总本附三十四
+的定名面。

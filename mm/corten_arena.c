@@ -430,6 +430,22 @@ static const char *const corten_trace_arm_name[] = {
 static bool corten_trace_charge_param = true; /* sec 89: ring trace, bounded */
 module_param_named(trace_charge, corten_trace_charge_param, bool, 0);
 
+/* sec 159: the quiet boot -- `corten_silent=1` silences the per-exit
+ * census block and the sg witnesses so a boot-verification console
+ * shows only the genuine kernel output (the census flood had become
+ * the diagnostic blocker: the serial console lost the oops text
+ * inside the interleaved prints). */
+static bool corten_silent_param;
+module_param_named(silent, corten_silent_param, bool, 0444);
+#define corten_pr_info(...) do {						\
+	if (!corten_silent_param)						\
+		pr_info(__VA_ARGS__);						\
+} while (0)
+#define corten_pr_info_ratelimited(...) do {					\
+	if (!corten_silent_param)						\
+		pr_info_ratelimited(__VA_ARGS__);				\
+} while (0)
+
 /* sec 78: the charged-page trace set.  Charge sites store the page,
  * release sites erase it; the exit survivors are the unreleased
  * population, printed once per boot. */
@@ -872,7 +888,7 @@ void corten_exit_unmap_probe(struct mm_struct *mm, bool pre)
 	 * the parent's cpu, the child exits elsewhere: the fog that
 	 * made every pre/post read suspect).  The exact sum is the
 	 * residual's number. */
-	pr_info("corten: exit %s-unmap[%ld] mm=%d anon=%lld file=%lld shmem=%lld\n",
+	corten_pr_info("corten: exit %s-unmap[%ld] mm=%d anon=%lld file=%lld shmem=%lld\n",
 		pre ? "pre" : "post", READ_ONCE(corten_exit_probe_seq),
 		READ_ONCE(mm->corten_mode),
 		percpu_counter_sum(&mm->rss_stat[MM_ANONPAGES]),
@@ -1737,7 +1753,7 @@ static void corten_slot_remove(struct xarray *xa, unsigned long frame,
 		} else {
 			xa_erase(xa, frame);
 			if (corten_trace_charge_param)
-				pr_info("corten: frame-erase f=%lx xa=%px\n",
+				corten_pr_info("corten: frame-erase f=%lx xa=%px\n",
 					frame, xa);
 		}
 		return;
@@ -1765,7 +1781,7 @@ static void corten_slot_remove(struct xarray *xa, unsigned long frame,
 		else {
 			xa_erase(xa, frame);
 			if (corten_trace_charge_param)
-				pr_info("corten: frame-erase f=%lx xa=%px (n2)\n",
+				corten_pr_info("corten: frame-erase f=%lx xa=%px (n2)\n",
 					frame, xa);
 		}
 		return;
@@ -1790,7 +1806,7 @@ static void corten_slot_remove(struct xarray *xa, unsigned long frame,
 	}
 	xa_erase(xa, frame);
 	if (corten_trace_charge_param)
-		pr_info("corten: frame-erase f=%lx xa=%px (tail)\n", frame, xa);
+		corten_pr_info("corten: frame-erase f=%lx xa=%px (tail)\n", frame, xa);
 }
 
 /* M5 faithful-fork counters (M5_FORK_SPEC.md 1.3-④6): fork_demotes stays
@@ -3314,7 +3330,7 @@ static int corten_arena_declare_locked(struct mm_struct *mm,
 
 	arena = kzalloc(sizeof(*arena), GFP_KERNEL_ACCOUNT);
 	if (adopt)
-		pr_info_ratelimited("corten-dbg: ADEC [%lx,%lx) ov=%d\n",
+		corten_pr_info_ratelimited("corten-dbg: ADEC [%lx,%lx) ov=%d\n",
 				    addr, addr + len,
 				    corten_arena_overlaps(state, addr, len));
 	if (!arena) {
@@ -6293,7 +6309,7 @@ static void corten_arena_exit_walk(struct mm_struct *mm,
 	 * runs) -- its residue, if any, discloses at check_mm() alone.
 	 */
 	if (!mm->map_count && mm_pgtables_bytes(mm))
-		pr_info("corten: mm exit pgtables_bytes residue %ld: stale_skips=%ld gone=%ld foreign=%ld last_win=%lx\n",
+		corten_pr_info("corten: mm exit pgtables_bytes residue %ld: stale_skips=%ld gone=%ld foreign=%ld last_win=%lx\n",
 			mm_pgtables_bytes(mm),
 			atomic_long_read(&state->stale_skips),
 			atomic_long_read(&state->stale_skips_gone),
@@ -6464,9 +6480,9 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		}
 		for (i = 1; i < 8; i++)
 			if (relsrc[i])
-				pr_info("corten: relsrc[%d]=%ld\n", (int)i,
+				corten_pr_info("corten: relsrc[%d]=%ld\n", (int)i,
 					relsrc[i]);
-		pr_info("corten: relsrc[UNTRACED]=%d\n", (int)relsrc[0]);
+		corten_pr_info("corten: relsrc[UNTRACED]=%d\n", (int)relsrc[0]);
 		/* sec 112: the phantom-release census -- releases whose VAs
 		 * never carried a charge event in this ring window (the
 		 * un-instrumented in-life clear's fingerprint). */
@@ -6482,11 +6498,11 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					continue;
 				ph++;
 				if (ph <= 6)
-					pr_info("corten: phantom-release va=%lx src=%d\n",
+					corten_pr_info("corten: phantom-release va=%lx src=%d\n",
 						cidx << PAGE_SHIFT,
 						csrc & 0xF);
 			}
-			pr_info("corten: phantom-releases=%d\n", ph);
+			corten_pr_info("corten: phantom-releases=%d\n", ph);
 			xa_destroy(&cset);
 		}
 		xa_for_each(&vset, vidx, vent) {
@@ -6494,7 +6510,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 
 			left++;
 			if (shown < 12) {
-				pr_info("corten: v-survivor va=%lx arm=%s\n",
+				corten_pr_info("corten: v-survivor va=%lx arm=%s\n",
 					vidx << PAGE_SHIFT,
 					arm > 0 &&
 					arm < (int)ARRAY_SIZE(corten_trace_arm_name) ?
@@ -6502,7 +6518,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				shown++;
 			}
 		}
-		pr_info("corten: v-survivors=%d\n", left);
+		corten_pr_info("corten: v-survivors=%d\n", left);
 		xa_destroy(&vset);
 	}
 
@@ -6549,7 +6565,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 
 				if (!ent2) {
 					plost++;
-					pr_info("corten: frame LOST f=%lx\n",
+					corten_pr_info("corten: frame LOST f=%lx\n",
 						fidx);
 				} else if (corten_yield_print_exits < 2) {
 					int bn = ent2 ==
@@ -6558,11 +6574,11 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					     (int)corten_slot_bucket(ent2)->nr :
 					     1);
 
-					pr_info("corten: mirror-frame f=%lx ents=%px bucket=%d\n",
+					corten_pr_info("corten: mirror-frame f=%lx ents=%px bucket=%d\n",
 						fidx, ent2, bn);
 				}
 			}
-			pr_info("corten: POST-WALK lost=%d walk=%ld reg=%ld\n",
+			corten_pr_info("corten: POST-WALK lost=%d walk=%ld reg=%ld\n",
 				plost, state->walk_frames, state->reg_frames);
 		}
 		/* sec 70c: this child's own per-arm profile -- the global
@@ -6718,7 +6734,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 			long dn = corten_exit_trace_dump(d, 16);
 			int di;
 
-			pr_info("corten: exit-trace deltas n=%ld:", dn);
+			corten_pr_info("corten: exit-trace deltas n=%ld:", dn);
 			for (di = 0; di < dn && di < 16; di++)
 				pr_cont(" %+ld", d[di]);
 			pr_cont("\n");
@@ -6820,7 +6836,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					pud_t *rpudp2 = pud_offset(rp4dp,
 								   raddr);
 
-					pr_info("corten: residue va=%lx arm=%ld n=%ld pte=%d entry=%llx mstate=%d ringrel=%d zapsampled=%d pgd=%d p4d=%d pud=%d pmd=%d pmdv=%llx vma=[%lx,%lx) frame-recs=%u\n",
+					corten_pr_info("corten: residue va=%lx arm=%ld n=%ld pte=%d entry=%llx mstate=%d ringrel=%d zapsampled=%d pgd=%d p4d=%d pud=%d pmd=%d pmdv=%llx vma=[%lx,%lx) frame-recs=%u\n",
 						raddr, (long)rent & 0xFF,
 						(long)rent >> 8, rpresent,
 						rentry_v, rmeta_state,
@@ -6842,11 +6858,11 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 		{
 			int zi;
 
-			pr_info("corten: zap-sample n=%d:", corten_zap_sample_n);
+			corten_pr_info("corten: zap-sample n=%d:", corten_zap_sample_n);
 			for (zi = 0; zi < corten_zap_sample_n && zi < 16; zi++)
 				pr_cont(" %lx", corten_zap_sample_va[zi]);
 			pr_cont("\n");
-			pr_info("corten: uzap-sample n=%d:",
+			corten_pr_info("corten: uzap-sample n=%d:",
 				corten_uzap_sample_n);
 			for (zi = 0; zi < corten_uzap_sample_n && zi < 16;
 			     zi++)
@@ -6854,7 +6870,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 					corten_uzap_sample_va[zi],
 					corten_uzap_sample_pte[zi]);
 			pr_cont("\n");
-			pr_info("corten: rec-sample n=%d:", corten_rec_sample_n);
+			corten_pr_info("corten: rec-sample n=%d:", corten_rec_sample_n);
 			for (zi = 0; zi < corten_rec_sample_n && zi < 8;
 			     zi++)
 				pr_cont(" %lx=%llx",
@@ -6867,7 +6883,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 			{
 				int di;
 
-				pr_info("corten: anon-deltas:");
+				corten_pr_info("corten: anon-deltas:");
 				for (di = 0; di < 32 && di < corten_ad_n;
 				     di++) {
 					int slot = di % 32;
@@ -6880,14 +6896,14 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 				}
 				pr_cont("\n");
 			}
-			pr_info("corten: leg-sample n=%d:", corten_leg_sample_n);
+			corten_pr_info("corten: leg-sample n=%d:", corten_leg_sample_n);
 			for (zi = 0; zi < corten_leg_sample_n && zi < 8;
 			     zi++)
 				pr_cont(" %lx=%llx",
 					corten_leg_sample_va[zi],
 					corten_leg_sample_pte[zi]);
 			pr_cont("\n");
-			pr_info("corten: funnel-sample n=%d:",
+			corten_pr_info("corten: funnel-sample n=%d:",
 				corten_funnel_sample_n);
 			for (zi = 0; zi < corten_funnel_sample_n && zi < 8;
 			     zi++)
@@ -6905,7 +6921,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 			long dn = corten_exit_trace_dump(d, 16);
 			int di;
 
-			pr_info("corten: exit-trace deltas n=%ld:", dn);
+			corten_pr_info("corten: exit-trace deltas n=%ld:", dn);
 			for (di = 0; di < dn && di < 16; di++)
 				pr_cont(" %+ld", d[di]);
 			pr_cont("\n");
@@ -6916,7 +6932,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 			void *fwv;
 			int fwn = 0;
 
-			pr_info("corten: folio-watch survivors:");
+			corten_pr_info("corten: folio-watch survivors:");
 			xa_for_each(&corten_folio_watch_xa, fwk, fwv) {
 				fwn++;
 				if (fwn <= 8)
@@ -6924,7 +6940,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 						(long)fwv & 0xFF);
 			}
 			pr_cont(" total=%d\n", fwn);
-			pr_info("corten: erase-miss=%ld\n",
+			corten_pr_info("corten: erase-miss=%ld\n",
 				atomic_long_read(&corten_fw_erase_miss));
 		}
 		{
@@ -6932,7 +6948,7 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 			unsigned long wva;
 			u8 wst, warm;
 
-			pr_info("corten: meta-writes n=%d:",
+			corten_pr_info("corten: meta-writes n=%d:",
 				corten_meta_watch_count());
 			for (wi = 0; corten_meta_watch_entry(wi, &wva, &wst,
 							      &warm); wi++) {
@@ -6949,10 +6965,10 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 			 * Safe: mm_users = 0, no concurrent fault can
 			 * re-populate. */
 			add_mm_counter(mm, MM_ANONPAGES, -orphans);
-			pr_info("corten: billing-reconcile -%d orphans\n",
+			corten_pr_info("corten: billing-reconcile -%d orphans\n",
 				orphans);
 		}
-		pr_info("corten: residue-n=%d multi=%d anon=%lld impl_rel=%ld impl_tab=%ld\n",
+		corten_pr_info("corten: residue-n=%d multi=%d anon=%lld impl_rel=%ld impl_tab=%ld\n",
 			rn, rmulti,
 			percpu_counter_sum(&mm->rss_stat[MM_ANONPAGES]),
 			atomic_long_read(&corten_nr_implant_rel),
@@ -9026,7 +9042,7 @@ static int corten_sweep_pick_window(struct mm_struct *mm,
 			break;
 	}
 	if (ret && ret != -ENOENT && ret != -EOPNOTSUPP)
-		pr_info_ratelimited("corten-dbg: pkw lockfail a=%lx ret=%d\n",
+		corten_pr_info_ratelimited("corten-dbg: pkw lockfail a=%lx ret=%d\n",
 				    addr, ret);
 	/* An untracked window (no descriptor, e.g. the PT page predates a
 	 * corten=off->on flip) or a hole is skipped ONLY when it holds no
@@ -9043,7 +9059,7 @@ static int corten_sweep_pick_window(struct mm_struct *mm,
 		if (pmd_leaf(READ_ONCE(*pmdp)))
 			return 1;
 		ret = corten_sweep_window_has_ptes(mm, pmdp, addr, win_end);
-		pr_info_ratelimited("corten-dbg: pkw untracked a=%lx lk=%d ptes=%d\n",
+		corten_pr_info_ratelimited("corten-dbg: pkw untracked a=%lx lk=%d ptes=%d\n",
 				    addr, ret ? 1 : 0, ret);
 		return ret;
 	}
@@ -9056,7 +9072,7 @@ static int corten_sweep_pick_window(struct mm_struct *mm,
 	 * published yet).
 	 */
 	if (corten_meta_ensure_locked(txn.covering)) {
-		pr_info_ratelimited("corten-dbg: pkw metafail a=%lx\n", addr);
+		corten_pr_info_ratelimited("corten-dbg: pkw metafail a=%lx\n", addr);
 		corten_unlock(&txn);
 		return 1;
 	}
@@ -9985,7 +10001,7 @@ static int __init corten_mode_default_setup(char *s)
 {
 	if (s && !strcmp(s, "on")) {
 		corten_mode_default_param = true;
-		pr_info("corten: execve default entry enabled\n");
+		corten_pr_info("corten: execve default entry enabled\n");
 	}
 	return 1;
 }
@@ -10006,7 +10022,7 @@ static int __init corten_stack_s2_setup(char *s)
 {
 	if (s && !strcmp(s, "on")) {
 		corten_stack_s2_param = true;
-		pr_info("corten: stack-face S2 armed (bprm MODE entry)\n");
+		corten_pr_info("corten: stack-face S2 armed (bprm MODE entry)\n");
 	}
 	return 1;
 }
@@ -11311,7 +11327,7 @@ static int corten_arena_fork_copy_window(struct mm_struct *mm,
 	 * residue; the billing reconcile aligns the counter) but the
 	 * mirror no longer aborts the fork with "Protocol error". */
 	if (ret == -EPROTO) {
-		pr_info_ratelimited("corten: fork-copy-window EPROTO degraded va=%lx\n",
+		corten_pr_info_ratelimited("corten: fork-copy-window EPROTO degraded va=%lx\n",
 				    addr);
 		return 0;
 	}
@@ -14356,7 +14372,7 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 			 * generator child dies silently through this arm
 			 * because force_sig_fault's ACCERR delivery prints
 			 * nothing, unlike bad_area's "segfault at"). */
-			pr_info_ratelimited("corten-dbg: sg FRESH-ACCERR %s[%d] a=%lx w=%d x=%d gate.state=%u gate.perm=%x ar.prot=%x\n",
+			corten_pr_info_ratelimited("corten-dbg: sg FRESH-ACCERR %s[%d] a=%lx w=%d x=%d gate.state=%u gate.perm=%x ar.prot=%x\n",
 					    current->comm, current->pid,
 					    ctx->addr, !!ctx->write,
 					    !!ctx->instruction,
@@ -14517,7 +14533,7 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 		/* sec 155: the sg ACCERR witness -- a heap-shaped write
 		 * landing here means the child's mirrored meta lost the
 		 * WRITABLE record (the fork mark/replay's face). */
-		pr_info_ratelimited("corten-dbg: sg COWCOPY-ACCERR %s[%d] a=%lx w=%d m.state=%u m.perm=%x m.flags=%x\n",
+		corten_pr_info_ratelimited("corten-dbg: sg COWCOPY-ACCERR %s[%d] a=%lx w=%d m.state=%u m.perm=%x m.flags=%x\n",
 				    current->comm, current->pid, ctx->addr,
 				    !!ctx->write, m.state, m.perm, m.flags);
 		corten_unlock(&txn);
@@ -14525,7 +14541,7 @@ corten_arena_fault_once(struct corten_fault_ctx *ctx)
 	case CORTEN_DISP_ACCERR:
 		/* sec 155: the sg ACCERR witness (the dispatch's own
 		 * fatal verdict). */
-		pr_info_ratelimited("corten-dbg: sg DISP-ACCERR %s[%d] a=%lx w=%d x=%d m.state=%u m.perm=%x m.flags=%x\n",
+		corten_pr_info_ratelimited("corten-dbg: sg DISP-ACCERR %s[%d] a=%lx w=%d x=%d m.state=%u m.perm=%x m.flags=%x\n",
 				    current->comm, current->pid, ctx->addr,
 				    !!ctx->write, !!ctx->instruction,
 				    m.state, m.perm, m.flags);
@@ -14865,7 +14881,7 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		 */
 		conv_start = vma->vm_start;
 		ret = corten_sweep_adopt_anon(mm, state, vma);
-		pr_info_ratelimited("corten-dbg: sg adopt ret=%d cs=%lx\n",
+		corten_pr_info_ratelimited("corten-dbg: sg adopt ret=%d cs=%lx\n",
 				    ret, conv_start);
 		if (ret)
 			goto out;
@@ -15078,7 +15094,7 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 		cv = find_vma(mm, READ_ONCE(stack->end) - PAGE_SIZE);
 		if (!corten_carrier_ext_dbg) {
 			corten_carrier_ext_dbg = true;
-			pr_info("corten: carrier-ext cv=%px growdn=%d anon=%d addr=%lx cvs=%lx rstart=%lx rend=%lx\n",
+			corten_pr_info("corten: carrier-ext cv=%px growdn=%d anon=%d addr=%lx cvs=%lx rstart=%lx rend=%lx\n",
 				cv, cv ? !!(cv->vm_flags & VM_GROWSDOWN) : -1,
 				cv && cv->anon_vma ? 1 : 0, addr,
 				cv ? cv->vm_start : 0UL,
@@ -15115,7 +15131,7 @@ static int corten_arena_stack_grow(struct mm_struct *mm, unsigned long address,
 	goto out;
 out:
 	if (ret != 1)
-		pr_info_ratelimited("corten-dbg: stack_grow refuse stage=%d addr=%lx old=%lx end=%lx\n",
+		corten_pr_info_ratelimited("corten-dbg: stack_grow refuse stage=%d addr=%lx old=%lx end=%lx\n",
 				    dbg, addr, old_start,
 				    stack ? READ_ONCE(stack->end) : 0);
 	mmap_write_unlock(mm);
@@ -15166,7 +15182,7 @@ enum corten_fault_action corten_arena_user_fault(struct mm_struct *mm,
 			rcu_read_unlock();
 			if (raw && (frozen || dead || idle) &&
 			    (address & PAGE_MASK) >= 0x7ff000000000)
-				pr_info_ratelimited("corten-dbg: sg MISSGATE a=%lx frozen=%d dead=%d idle=%d\n",
+				corten_pr_info_ratelimited("corten-dbg: sg MISSGATE a=%lx frozen=%d dead=%d idle=%d\n",
 						    address & PAGE_MASK,
 						    frozen, dead, idle);
 		}
@@ -15847,7 +15863,7 @@ void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm)
 						for (si = 0; si < nlive &&
 						     first_va_shown < 12;
 						     si++, first_va_shown++)
-							pr_info("corten: ssweep va=%lx\n",
+							corten_pr_info("corten: ssweep va=%lx\n",
 								corten_sweep_livepa[si]);
 					}
 				}
@@ -15875,7 +15891,7 @@ void corten_exit_survivor_sweep(struct mmu_gather *tlb, struct mm_struct *mm)
 	 * residue still nonzero names a release-side gap. */
 	if (atomic_long_read(&corten_nr_ssweep_runs) <= 8 ||
 	    live_total)
-		pr_info("corten: ssweep run found=%d tables=%ld scan=%ld bad=%ld leaf=%ld mapfail=%ld nopud=%ld\n",
+		corten_pr_info("corten: ssweep run found=%d tables=%ld scan=%ld bad=%ld leaf=%ld mapfail=%ld nopud=%ld\n",
 			live_total,
 			atomic_long_read(&corten_nr_ssweep_tables),
 			atomic_long_read(&corten_nr_ssweep_scan),

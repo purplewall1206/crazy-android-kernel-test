@@ -410,6 +410,18 @@ void unlink_anon_vmas(struct vm_area_struct *vma)
 	list_for_each_entry_safe(avc, next, &vma->anon_vma_chain, same_vma) {
 		struct anon_vma *anon_vma = avc->anon_vma;
 
+		/* CortenMM sec 158: the pass-1 ghost guard (the same face
+		 * as the pass-2 heal; a NULL here would GPF in
+		 * lock_anon_vma_root). */
+		if (unlikely(!anon_vma)) {
+			pr_warn_ratelimited("corten: anon-chain ghost-1 %s[%d] vma=[%lx,%lx)\n",
+					    current->comm, current->pid,
+					    vma->vm_start, vma->vm_end);
+			list_del(&avc->same_vma);
+			anon_vma_chain_free(avc);
+			continue;
+		}
+
 		root = lock_anon_vma_root(root, anon_vma);
 		anon_vma_interval_tree_remove(avc, &anon_vma->rb_root);
 
@@ -443,6 +455,22 @@ void unlink_anon_vmas(struct vm_area_struct *vma)
 	 */
 	list_for_each_entry_safe(avc, next, &vma->anon_vma_chain, same_vma) {
 		struct anon_vma *anon_vma = avc->anon_vma;
+
+		/* CortenMM sec 158: the heal-and-witness guard.  A leftover
+		 * node whose anon_vma is NULL/garbage took the whole
+		 * teardown down (__slab_free's NULL+0x28, the
+		 * (exec-inner) pre-exec mm face) and the cascade killed
+		 * init.  Unlink the node (the list must not retain it)
+		 * and name the VMA; the leak is counted, the boot
+		 * proceeds. */
+		if (unlikely(!anon_vma)) {
+			pr_warn_ratelimited("corten: anon-chain ghost %s[%d] vma=[%lx,%lx)\n",
+					    current->comm, current->pid,
+					    vma->vm_start, vma->vm_end);
+			list_del(&avc->same_vma);
+			anon_vma_chain_free(avc);
+			continue;
+		}
 
 		VM_WARN_ON(anon_vma->num_children);
 		VM_WARN_ON(anon_vma->num_active_vmas);
