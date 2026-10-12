@@ -1550,3 +1550,28 @@ mode_sweep → declare_carrier → check_empty_locked，而
 确保所有 PT 页 free 路径都调用 `corten_on_pte_free` 钩子。
 或在 `check_empty_locked` 中增加 `desc->released` 哨兵检查
 （已有字段但仅 WARN 不跳过 -- 需改为跳过+计入）。
+
+---
+
+## 附五十: sec 174 -- released 哨兵落地 + 多 boot 终态（#644, sg66）
+
+**修复**: `check_empty_locked` 的 sentinel 检查增加 `desc->released`
+（magic + released 双哨兵），对 stale desc 或 double-put desc
+均跳过 meta 走查 + put。
+
+**sg66 判读（#644）**: "Protocol error" = **0** ✓; oops = **1**
+（从此前 2-27 降至 1）; init SIGSEGV（exitcode=0xb）= **仍复现** --
+released 哨兵 + magic sentinel + 全部修复落地后 SIGSEGV 持续。
+
+**残余 init SIGSEGV 根因**: 生成器沙箱的 fork+exec 期间的
+PT 页退休竞态 -- M3a 互锁（readers 排空在 write-lock 内）+
+路由守卫 + magic/released 双哨兵已全部落地但竞态在其它路径。
+**需要 kASAN 长跑**（3+ boot 收 Alloc/Free 栈）精确定位。
+
+**生产内核影响**: init panic 从 100% → 间歇（sg56/37/39/41 零
+panic）; "Protocol error" 从 100% → 间歇; 系统全量启动可达
+graphical.target（多数 boot）。**提升效率**: 每个 bug 修复后
+boot 越过前一阻塞点。
+
+**storm loop**: `project/bin/storm-loop.sh` 已入册; 生产内核 boot
+存活后即可启动长跑。48h 判定（10-14 02:24）soak 两车持续存活。
