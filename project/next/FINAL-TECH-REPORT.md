@@ -722,3 +722,22 @@ W-4 entry sweep 与 fork VMA 循环的交互——设计层修订。
 **队列**: ① W-4 entry sweep 摘除的计费释放 → val 归零 ②
 generator-fork EPROTO ③ 48h 判定 → 三步删除序列 → J6 终账 ④ E2
 PR 待批复。
+
+---
+
+## 附二十九: 串口仪器穷尽判决（sec 153, b14fc202）
+
+**排除清单终版（11 条通道逐一排除）**: tracked zap、untracked zap、
+legacy zap、funnel、span、sweep、meta 层、should_zap_folio、
+vm_normal_page-NULL、folio-watch、delta tracer（mm_trace_rss_stat 钩
+不在主路径）——**全部清白或已计数**。
+
+**⇒ 残余 val:2 = 2 页/进程的精确真实残面**，增量位点不在任何串口
+可达路径上。**下会话仪器**: choke-point delta tracer
+（corten_note_anon_counter 的 ANON 通道调用点，mm.h:2758 带
+_RET_IP_ ✓ 已在树）——unpublish 时武装，census 打印增量序列 →
++2 的调用者一次 boot 点名。
+
+**状态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿;
+churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
+34→2（94%）。
