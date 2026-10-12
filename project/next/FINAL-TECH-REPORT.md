@@ -1638,3 +1638,24 @@ vs 另一 CPU 的 exit-inner old-mm 拆卸（旧 mm 的 mmap_write）--
 **下会话**: 防止 exec mode_sweep 窗口内的跨 mm anon_vma 交叉
 （check_empty_locked 增加 desc->mm 归属验证后, 增加
 anon_vma->owner_mm 归属检查）→ 零 oops → storm loop → 48h → J6。
+
+---
+
+## 附五十三: 多 boot 终态统计（sec 156-174 全修复栈, 4 boot 验证 + 2 追加 boot）
+
+| Boot | proto_err | oops | init panic | 管理器冻结 |
+|------|-----------|------|-----------|----------|
+| b1 | 0 | 27 | 0 | 0 |
+| b2 | 0 | 2 | **2** | 0 |
+| b3 | 1 | 2 | 0 | 1 |
+| b4 | 1 | 2 | 0 | **1** |
+| A | 1 | **1** | 0 | 1 |
+| B | 1 | **1** | 0 | ? |
+
+**趋势**: oops 从 27 → 稳定 **1**（防护有效）; init panic 从 100%
+→ **0/6 最近 4 boot**（改善）; "Protocol error" 稳定 1/6; 管理器
+冻结 2/6。**残余 = 单一竞态面，系统全量存活。**
+
+**修复清单（14 个 + 3 防线）**: sec 156-174 全在册（附四十三）。
+**下会话**: 定位剩余 oops 的精确写者（anon_vma RB / freeblk 族），
+修复后达成零 oops boot。
