@@ -611,3 +611,21 @@ sec 152）。
 **状态**: 残差 34→2（94% 闭合）; 最终形零 oops; N-boot A/B 各
 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
 E2 PR 待批复。
+
+---
+
+## 附二十七: delta tracer 判读与收口设计（sec 151, d63dd8b3）
+
+**delta tracer（mm_trace_rss_stat 钩）判决: n=0 全场**——该钩不在
+主 add_mm_counter 路径上。**修正: choke point =
+corten_note_anon_counter（mm.h 的 add_mm_counter ANON 通道每次 +/-
+必经, 带 _RET_IP_ ✓ 已落地）**, 其采样器的 armed_mm 门需改 per-cpu
+或全局采样（MODE fork: 父武装父 mm, 子 exit 时 armed 配对漏全）。
+
+**状态**: 残差 34→2（94% 闭合）; 全套仪器在树; N-boot A/B 各 5/5
+零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）; E2
+PR 待批复。
+
+**队列**: ① choke-point 采样器的 armed_mm 修正 → 残余 2 定位 →
+val 归零 ② generator-fork EPROTO ③ 48h 判定 → 三步删除序列 → J6
+终账。
