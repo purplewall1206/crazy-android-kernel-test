@@ -1324,3 +1324,16 @@ kfree_rcu 延迟释放后的 reuse -- **kfree_rcu 宽限期已过、slab
 kfree_rcu**（把 meta 指针存入 desc->rcu 后的联合体, 在
 release callback 里一起放）, 或在 uninstall 时同时 erase + meta
 延迟到同一 RCU 宽限期。
+
+### 附四十一续: sec 170 -- meta 生命周期修复落地 + boot 验证（#636, sg62）
+
+**修复**: `corten_ptdesc_release` 的 `corten_meta_free(desc)` +
+`kfree_rcu(desc)` 拆分释放改为 `call_rcu(&desc->rcu,
+corten_ptdesc_free_rcu)` -- meta 数组和 desc 在**同一宽限期**释放,
+消除"meta 数组内存先释放→被 anon_vma_chain 重用→读者 desc->meta
+走查时踩进已释放的重用内存"窗口（kASAN boot 2 的
+slab-out-of-bounds 判决）。
+
+**sg62 boot 验证**: "Protocol error" = 0; oops 3→2; panic = 0;
+系统存活 4min+。残余: RCU stall（P95 生成器活锁）+ 2 oops = 同
+exec 竞态族, 待 kASAN 长跑精确定位。

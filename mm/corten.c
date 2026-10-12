@@ -190,6 +190,8 @@ static void corten_meta_free(struct corten_ptdesc *desc)
  * reclaim), so lockless lookup can no longer find us; kfree_rcu() only has
  * to cover lookups that were in flight between xa_load() and the pin.
  */
+static void corten_ptdesc_free_rcu(struct rcu_head *rcu);
+
 static void corten_ptdesc_release(struct corten_ptdesc *desc)
 {
 	/* sec 164: the double-put sentinel -- a release seen twice is
@@ -198,8 +200,30 @@ static void corten_ptdesc_release(struct corten_ptdesc *desc)
 	WARN_ONCE(desc->released, "corten: ptdesc double-release %px\n", desc);
 	desc->released = true;
 	atomic_set(&desc->readers, 0);
+	/* sec 170: the meta array is freed in the RCU callback, NOT
+	 * here.  The kASAN boot 2 report proved: meta_free here +
+	 * kfree_rcu(desc) means the meta array's slab memory is
+	 * immediately reusable while the desc's kfree_rcu grace period
+	 * is still pending -- a reader holding a pin on the desc (from
+	 * corten_ptdesc_get) walked desc->meta[...] into the reused
+	 * memory (the anon_vma_chain slab-out-of-bounds).  The meta
+	 * array and the desc must free in the SAME grace period. */
+	/* corten_meta_free(desc) -- moved into the RCU callback below. */
+	call_rcu(&desc->rcu, corten_ptdesc_free_rcu);
+}
+
+/* sec 170: the RCU callback that frees both the meta array and the
+ * descriptor in the same grace period -- the kASAN boot 2 report
+ * proved that splitting meta_free here + kfree_rcu(desc) created a
+ * window where the meta array's memory was reused while a reader
+ * still held a desc pin. */
+static void corten_ptdesc_free_rcu(struct rcu_head *rcu)
+{
+	struct corten_ptdesc *desc = container_of(rcu, struct corten_ptdesc,
+						   rcu);
+
 	corten_meta_free(desc);
-	kfree_rcu(desc, rcu);
+	kfree(desc);
 }
 
 /**
