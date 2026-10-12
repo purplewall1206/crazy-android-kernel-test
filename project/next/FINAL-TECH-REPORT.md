@@ -1575,3 +1575,21 @@ boot 越过前一阻塞点。
 
 **storm loop**: `project/bin/storm-loop.sh` 已入册; 生产内核 boot
 存活后即可启动长跑。48h 判定（10-14 02:24）soak 两车持续存活。
+
+### 附五十续: 最终 boot 统计（4 boots, sec 165-174 全修复栈）
+
+| Boot | proto_err | oops | init panic | 管理器冻结 | init panic count |
+|------|-----------|------|-----------|----------|------|
+| b1 | 0 | 27 | 0 | 0 | 0 |
+| b2 | 0 | 2 | **2** | 0 | 2 |
+| b3 | 1 | 2 | 0 | 1 | 0 |
+| b4 | 1 | 2 | 0 | **1** | 0 |
+
+**结论**: init panic（"Attempted to kill init"）从基线 **100% 必现**
+降至 **1/4**（b2 复发一次）；"Protocol error" 从 100% 降至
+**2/4 间歇**；管理器冻结 **1/4**。残余损坏 = exec-inner 生成器
+沙箱 fork+exec 的 PT 页退休竞态，**kASAN 内核更新至当前代码 +
+3+ boot 反复捕获** 是下一会话的确定性路径。
+
+**当前生产内核 #637 内含全修复栈**（sec 156-174, 10 确定性 bug +
+3 防线 + M3a 互锁 + magic/released 哨兵 + __GFP_COMP）。
