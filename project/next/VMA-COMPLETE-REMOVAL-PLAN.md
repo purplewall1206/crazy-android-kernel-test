@@ -2753,3 +2753,20 @@ should_zap_folio 的拒绝分支）→ 位点插桩 → 计费修正 → val 归
 **状态总账**: 残差 34→2（94%）; 全套仪器与修复在树（零 oops）;
 N-boot A/B 各 5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定
 10-14 02:24）; E2 PR 待批复。
+
+## 148. 拒绝分支采样判决 + 完整排除清单终版（2026-10-12 晨, #555）
+
+**should_zap_folio 拒绝分支采样器落地并判决: n=0 全场**——details
+过滤器清白。**排除清单终版（全部 n=0 或已计数）**: tracked zap、
+untracked zap、legacy zap（释放 3, 已计数）、funnel、span、sweep
+（收缴）、meta 层、should_zap_folio、vm_normal_page-NULL（rec 采样
+器 n=0）。
+
+**⇒ 残余 val:2 的增量不在任何 zap 分支的跳过路径上。** 下会话仪
+器 = **exit 窗口的 per-mm `add_mm_counter(MM_ANONPAGES)` 增量位点
+追踪**（静态 key 或 ftrace: 对 MODE mm 的每次 anon +/- 打 VA/调
+用者, exit 窗口内过滤）——+2 增量的调用者一次 boot 点名。
+
+**状态**: 最终形 #555 零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿
+绿; churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
+34→2（94%）。

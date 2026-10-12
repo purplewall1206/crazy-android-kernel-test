@@ -1855,6 +1855,11 @@ static inline int zap_present_ptes(struct mmu_gather *tlb,
 
 	folio = page_folio(page);
 	if (unlikely(!should_zap_folio(details, folio))) {
+		/* sec 147: the rejection sampler -- a present entry the
+		 * details filter refuses to zap (counted; the residual-2
+		 * candidate). */
+		if (READ_ONCE(mm->corten_mode))
+			corten_note_rec_sample(addr, (u64)pte_val(ptent));
 		*any_skipped = true;
 		return 1;
 	}
