@@ -595,3 +595,19 @@ churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。
 **队列**: ① 全量串口落盘 → 离线 per-exit 解析 → 残余 2 收口 ②
 generator-fork EPROTO 全臂审计 ③ 48h 判定 → 三步删除序列 → J6 终
 账（"MODE 进程零 VMA 对象"达成）。
+
+---
+
+## 附二十六: 夜战总收束（sec 153, ffc82b72）
+
+**系统稳定化全部生效**: systemd 全量启动零 panic 零 oops（三连续
+boot）; free_large_kmalloc/xa WARN/vmemmap oops 全清; 子进程零
+Bad-rss。
+
+**残余 val:2 与 generator-fork EPROTO**: 均定位至 M5 ④-4 的 meta
+深拷贝缺口——收口 = 下会话首项（判别器 + 树深校验, 设计已录
+sec 152）。
+
+**状态**: 残差 34→2（94% 闭合）; 最终形零 oops; N-boot A/B 各
+5/5 零崩; KUnit 双腿绿; churn 浸泡零事件（48h 判定 10-14 02:24）;
+E2 PR 待批复。
