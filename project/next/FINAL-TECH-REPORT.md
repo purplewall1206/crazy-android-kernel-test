@@ -557,3 +557,21 @@ release trace（the funnel 的释放 VA 采样器，落点 = free_pte_range
 **终态**: 最终形零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿绿;
 churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
 34→2（94%）。
+
+---
+
+## 附二十三: 排除清单终版（sec 148, 281415fc）
+
+**should_zap_folio 拒绝分支采样器落地并判决: n=0 全场**——details
+过滤器清白。**排除清单终版**: tracked zap、untracked zap、legacy
+zap（释放 3, 已计数）、funnel、span、sweep（收缴）、meta 层、
+should_zap_folio、vm_normal_page-NULL（rec 采样器 n=0）。
+
+**⇒ 残余 val:2 的增量不在任何 zap 分支的跳过路径上。** 下会话仪
+器 = exit 窗口的 per-mm `add_mm_counter(MM_ANONPAGES)` 增量位点追
+踪（ftrace: 对 MODE mm 的每次 anon +/- 打 VA/调用者, exit 窗口内
+过滤）——+2 增量的调用者一次 boot 点名。
+
+**终态**: 最终形 #555 零 oops; N-boot A/B 各 5/5 零崩; KUnit 双腿
+绿; churn 浸泡零事件（48h 判定 10-14 02:24）; E2 PR 待批复。残差
+34→2（94%）。
