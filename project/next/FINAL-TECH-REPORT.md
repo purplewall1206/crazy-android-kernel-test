@@ -1359,3 +1359,25 @@ exec 竞态族, 待 kASAN 长跑精确定位。
 
 **下会话路线图**: kASAN 定位竞态写者 → 修复 → 零 oops boot →
 storm loop 长跑 → 48h 判定 → 三步删除 → J6 终账。
+
+---
+
+## 附四十四: sec 171 -- 30+ 小时会话终态（多 boot 统计 + 残余竞态 kASAN 交棒）
+
+**sg63 (#636 生产内核, 全修复栈)**: proto_err=1, oops=3, panic=0,
+freezing=1 -- 残余损坏为**非确定性竞态**（生成器 exec 窗口），
+boot 间波动（sg56 零 oops 通过，sg57/58/63 复发）。
+
+**已修确定性 bug**: 10 个 + 3 个防线（附四十三全清单）。
+**残余竞态**: exec-inner old-mm 拆卸 PT 页退休 vs mode_sweep
+declare_carrier 读者 -- 跨 CPU, kASAN 报告 ×2 定位（工件入册）。
+**kASAN 交棒包完整**: bzImage-kasan-sweep + config + 报告 ×3 +
+storm-loop.sh + witness 套件。
+
+**生产现状**: "Protocol error" 间歇（sg56 归零，sg57/63 复发）;
+init panic 间歇（多数 boot 通过）; 系统全量启动可达
+graphical.target（多数 boot）。
+
+**下会话**: kASAN 构建 + 生产代码（当前 #636 + 附四十一修复方案
+= readers wait 移入 lock 内已落地，需 kASAN 复验）→ 3 轮收报告 →
+竞态剖面 → 修复 → storm loop 长跑。
