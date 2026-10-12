@@ -192,6 +192,11 @@ static void corten_meta_free(struct corten_ptdesc *desc)
  */
 static void corten_ptdesc_release(struct corten_ptdesc *desc)
 {
+	/* sec 164: the double-put sentinel -- a release seen twice is
+	 * the refcount-protocol breach the kASAN round convicted (the
+	 * freed-desc UAF in check_empty_locked). */
+	WARN_ONCE(desc->released, "corten: ptdesc double-release %px\n", desc);
+	desc->released = true;
 	corten_meta_free(desc);
 	kfree_rcu(desc, rcu);
 }
@@ -228,6 +233,10 @@ struct corten_ptdesc *corten_ptdesc_get(unsigned long pfn)
  */
 void corten_ptdesc_put(struct corten_ptdesc *desc)
 {
+	if (WARN_ONCE(desc->released,
+		      "corten: ptdesc put-after-release %px caller=%pS\n",
+		      desc, __builtin_return_address(0)))
+		return;
 	if (refcount_dec_and_test(&desc->refs))
 		corten_ptdesc_release(desc);
 }

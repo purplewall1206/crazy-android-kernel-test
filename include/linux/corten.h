@@ -364,6 +364,9 @@ struct corten_ptdesc {
 	u32			magic;
 	/* Deferred free of the descriptor itself (kfree_rcu). */
 	struct rcu_head		rcu;
+	/* sec 164: set by corten_ptdesc_release(); a put on a released
+	 * descriptor is the double-put the kASAN round convicted. */
+	bool			released;
 };
 
 /**

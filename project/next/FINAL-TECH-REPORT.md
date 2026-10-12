@@ -1124,3 +1124,29 @@ desc->mm 读取、对象 = freed order-0 页。**下一轮**: 在 KASAN 构建
 上跑 KUnit fork_file_dirty 全套 + 双嫌疑栈（refcount 双减审计
 corten_ptdesc_put 调用点 / __resv 越界写审计）, 修复后以生产内核
 收尾验证。
+
+---
+
+## 附三十九: sec 164 -- refcount 双减审计判决: 假阳性闭合, M3a 读-写互锁缺口定案, storm loop 建立（#625-#628）
+
+**sentinel 审计（kASAN 内核, sgk4 #628）**: `corten_ptdesc.released`
+sentinel + `put-after-release` 检查 -- **零命中**。refcount 双减
+假设证伪; `corten_ptdesc_get/put` 协议自洽。
+
+**残余面重定名**: `qlist_free_all` NULL deref（kfree_rcu 批处理)
++ `check_empty_locked` UAF（order-0 页, 全页 poisoned）= **M3a
+读-写互锁缺口**: `corten_ptdesc_uninstall` 发布 stale 后立即
+write_unlock, TLB funnel **异步**释放 PT 页; 而
+`check_empty_locked` 的读者持 desc 读锁 + ptdesc pin -- pin 保住
+desc 对象但不保住 **PT 页本体**（meta 数组若指向 PT 页或页被
+零化后读者可见性... -- 需 M3a 修补: uninstall 的 stale 发布改为
+在 write-lock 下等待读者排空（或页延迟到 RCU 后再入 funnel）。
+该面 = exec-inner 撕毁族最终形态, 修复 = 互锁补全。
+
+**生产影响（corten_silent=on 24h+ 观察）**: "Protocol error" = 0;
+管理器入队 graphical.target; 残余 oops 集中在生成器风暴窗口的
+(exec-inner) 退出路径, 均属上族。
+
+**storm loop 建立**: `project/bin/storm-loop.sh` -- 生成器风暴/
+fork 风暴/帧压力循环压测, 持续跑于独立 VM, 结果入
+results/r08/storm/。
