@@ -1222,3 +1222,23 @@ boot-verify 循环无法收敛，必须 kASAN 反复捕获以建立竞态剖面�
 
 **storm loop**: `project/bin/storm-loop.sh` 已入册（生成器风暴 +
 fork 风暴 + 签名中止）; 待 kASAN 修复后以生产内核启动长跑。
+
+---
+
+## 附四十二: sec 168 -- M3a 互锁补全落地: oops 3→1, panic 维持归零, storm loop 启动（#634, sg59）
+
+**修复**: `corten_ptdesc_uninstall` 的 readers 排空 wait 移入
+write-lock 持有内 -- stale 发布阻塞新读者, 有界自旋等已有读者
+排空 meta 走, 然后 write_unlock 放行 TLB funnel。跨 CPU 的
+"读者持锁时 PT 页被释放"窗口**结构性关闭**。
+
+**sg59 判读**: oops 3→**1**; panic = **0**（维持）; 系统存活
+4min+ 无冻结; `readers stuck` = 0（有界自旋未超时）。
+
+**残余单 oops**: `__slab_free NULL@0x28`（kfree(blk) 的块指针
+指向非 slab 页）-- 非 M3a 族, 而是 freeblk/seg 列表在生成器
+风暴窗口被越界写损坏（KUnit fork_file_dirty 扩展 +
+`corten_arena.silent` 静默 KASAN 复跑定位）。
+
+**storm loop**: `project/bin/storm-loop.sh` 已就绪（40 进程生成器
+风暴 + 200 fork 风暴 + KASAN/Oops 签名中止循环）。

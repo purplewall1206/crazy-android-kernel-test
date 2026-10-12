@@ -494,14 +494,15 @@ void corten_ptdesc_uninstall(struct page *pte_page)
 
 	write_lock_bh(&desc->lock);
 	WRITE_ONCE(desc->stale, 1);
-	write_unlock_bh(&desc->lock);
 
-	/* sec 165: the M3a read-side drain.  The stale publish above
-	 * stops NEW readers, but a reader that took the read side
-	 * before it may still be walking the meta array, which overlays
-	 * this PT page for the overlay descs; the TLB funnel frees the
-	 * page after we return.  Wait (bounded) for the readers to
-	 * drain before letting the page go. */
+	/* sec 167: the M3a read-side drain INSIDE the write-lock hold.
+	 * The stale publish stops NEW readers (they block on the write
+	 * side), and this bounded wait ensures every reader that took
+	 * the read side before the publish has dropped its meta-array
+	 * reference BEFORE the TLB funnel frees the PT page.  The prior
+	 * form waited after the write_unlock -- a cross-CPU window
+	 * where the page could be freed under a still-reading reader
+	 * (the check_empty_locked UAF, the "Protocol error" root). */
 	{
 		unsigned int spins = 0;
 
@@ -512,6 +513,8 @@ void corten_ptdesc_uninstall(struct page *pte_page)
 			  "corten: ptdesc readers stuck %d %px\n",
 			  atomic_read(&desc->readers), desc);
 	}
+
+	write_unlock_bh(&desc->lock);
 
 	atomic_long_dec(&corten_nr_ptdescs);
 	corten_ptdesc_put(desc);
