@@ -2086,3 +2086,28 @@ sweep 前的时序，而在 exec 内部的其他交叉窗口**。
 **下会话**: ①KASAN 构建当前代码收 init SIGSEGV 的完整报告;
 ②`mmput(old_mm)` 延迟到 mode_sweep 完成（时序重排）; ③storm
 loop 长跑; ④48h 判定; ⑤三步删除; ⑥J6 终账。
+
+---
+
+## 附七十四: 54+ 小时会话最终交付（sec 156-178, 100+ boot, 48 推送）
+
+**生产改进**:
+- init panic 100%→间歇（多数 boot 通过）
+- "Protocol error" 100%→**0**（多 boot 维持）
+- 生成器出生即死→全量运行+退出
+- systemd 5s 冻结→到达 target 阶段
+
+**修复清单（18 个确定性修复 + 3 防线 + 2 诊断工具）**:
+1-10: sec 156-166 采納臂/mark侧/域门/编码/重分类/守卫/互锁/COMP
+11-14: sec 167-175 sweep/路由守卫/哨兵/幽灵链/释放/互斥
+15-18: sec 176-178 注册表守卫/扩展守卫/wait_event排空/avc守卫
+
+**残余竞态定案**: exec-inner 生成器沙箱 fork+exec 的 PT 页退休
+vs mode_sweep 读者的**非确定性跨 CPU 竞态**（间歇 1/4 boot）。
+修复需要 **KCSAN**（内核并发消毒器）捕获精确读写对，printk
+取证已到极限（54+ 小时 100+ boot 证明）。
+
+**storm-loop.sh**: 已入册，KASAN 内核更新至当前代码后可启动
+持续压测。
+**48h 判定**: 10-14 02:24 soak 两车持续存活。
+**E2 PR**: pr-e2a/b/c 等用户批复。
