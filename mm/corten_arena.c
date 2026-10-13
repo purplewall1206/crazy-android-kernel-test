@@ -7198,21 +7198,14 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	list_del_rcu(&state->shrink_reg);
 	spin_unlock(&corten_mm_registry_lock);
 
-	if (!had_arenas) {
-		/* A5 (G5-fix): the grace period is still owed (an
-		 * in-flight shrinker reader may hold the node pointer),
-		 * but nobody has to stand still for it -- the dying
-		 * process hands the teardown to RCU and returns.  This
-		 * is the fast path for every MODE lifecycle that never
-		 * carried an arena.
-		 */
-		call_rcu(&state->rcu, corten_arena_state_free_rcu);
-		return;
-	}
-
-	synchronize_rcu();
-
-	corten_arena_state_free(state);
+	/* sec 179: BOTH paths defer to the work queue.  The sync
+	 * state_free (synchronize_rcu + corten_arena_state_free) raced
+	 * the exec-inner's concurrent mode_sweep on another mm -- the
+	 * shared slab pages (meta arrays, va_free blocks, anon_vma_
+	 * chain objects) were freed here while the other CPU's sweep
+	 * was still walking them.  The work queue deferred free lets
+	 * the system quiesce before the teardown runs. */
+	call_rcu(&state->rcu, corten_arena_state_free_rcu);
 }
 
 /*

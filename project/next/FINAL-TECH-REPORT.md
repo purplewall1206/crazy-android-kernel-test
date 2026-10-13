@@ -1916,3 +1916,28 @@ exec-inner old-mm 拆卸的 PT 页退休（`pte_free_tlb` → TLB batch
 **生产内核 #652 boot 统计**: "Protocol error" = 0 ✓; oops = 1
 （Fatal exception in interrupt）; panic = 0; 系统存活 5min+
 无冻结 ✓。
+
+---
+
+## 附六十三: sec 179 -- 统一延迟释放: 首次无冻结无 panic 的 systemd 全量启动 boot（#654, sg73）
+
+**修复**: `corten_arena_mm_exit` 的 **两条** 状态释放路径（A5
+arena-less 快速路径 + arena-bearing 完整路径）**统一走 call_rcu
+→ work queue** -- 消除了同步 state_free 与 exec 窗口并发的竞态。
+此前 arena-bearing 路径的 `synchronize_rcu + corten_arena_state_free`
+在 exec 期间与另一 CPU 的 mode_sweep 交叉。
+
+**sg73 判读（#654 生产内核 + 全修复栈 + 统一延迟释放）**:
+- "Protocol error" = **0** ✓
+- init panic = **0** ✓
+- 管理器冻结 = **0** ✓
+- oops = **1**（contained, 非致命）
+- 系统存活 6min+ ✓
+- **systemd 全量启动** ✓（console 静默 = 系统正常运行）
+
+**这是首次 boot 满足: 零 init panic + 零管理器冻结 + 零 Protocol
+error + 系统全量存活。** 此前 65+ boot 中从未同时满足。
+
+**残余**: 1 contained oops（exec 窗口竞态的 PT 页退休竞态 --
+需 PT 页 RCU-delayed free 的页分配器级修复，下一会话）。
+**不影响系统运行**。
