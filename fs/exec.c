@@ -820,11 +820,16 @@ ret = expand_stack_locked(vma, stack_base);
 		corten_arena_stack_calibrate(mm, vma->vm_start,
 					     vma->vm_end);
 
-	if (window_form)
+	if (window_form) {
 		/* sec 37: the entry sweep HERE -- the only point the
 		 * final carrier exists under this write lock.
-		 */
+		 * sec 180: synchronize_rcu before the sweep ensures
+		 * concurrent PT-page readers (from the previous exec's
+		 * exit_mmap free_pgtables) have finished before the
+		 * sweep walks this mm's PT pages. */
+		synchronize_rcu();
 		corten_arena_entry_sweep_locked(mm);
+	}
 out_unlock:
 	mmap_write_unlock(mm);
 	return ret;

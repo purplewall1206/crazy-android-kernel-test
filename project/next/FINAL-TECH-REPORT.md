@@ -2058,3 +2058,31 @@ arg_pages 与 exec_mmap 之间的窗口）。
 完成后（setup_arg_pages 的 sweep 移到 begin_new_exec 后），或
 mode_sweep 期间禁止 PT 页 free（free_pgtables 延迟到 sweep 后）。
 两者均需要 audit exec 路径所有调用点的时序依赖。
+
+---
+
+## 附七十三: sec 181 -- synchronize_rcu 时序修复落地 + boot 76 判读（#662）
+
+**修复**: `setup_arg_pages` 的 `corten_arena_entry_sweep_locked` 前
+增加 `synchronize_rcu()` -- 确保 exec 前一个 old-mm 的 free_pgtables
+PT 页释放的所有并发读者已完成，sweep 的 PT 页走查不会踩入
+已释放或重用的页。
+
+**sg76 判读（#662）**: "Protocol error" = **0** ✓; panic = **0**
+（无 init kill）✓; oops = **4**（Fatal exception in interrupt --
+同族竞态仍在）。synchronize_rcu 修复未消除 -- **竞态根源不在
+sweep 前的时序，而在 exec 内部的其他交叉窗口**。
+
+**统计（sg56-76, 20+ boot 全修复栈）**: init panic 间歇 1/4;
+"Protocol error" = 0 稳定; oops 1-4 间歇; 管理器冻结间歇 1/6。
+
+**残余竞态定论**: exec 内部 `exit_mmap(old_mm)` 的 PT 页退休
+（`unlink_anon_vmas` → `__rb_erase` → `pte_free_tlb`）与 **同 mm
+的 mode_sweep 的 PTE/meta 走查** 之间的竞态 -- 两者都运行在
+同一个 exec 调用内（mmap_write 持有），**不是跨 CPU 竞态而是
+同一 exec 调用内部的 `exit_mmap` 与 `setup_arg_pages` 的时序
+交叉**。修复需要 code walkthrough mmput/exit_mmap 的时序。
+
+**下会话**: ①KASAN 构建当前代码收 init SIGSEGV 的完整报告;
+②`mmput(old_mm)` 延迟到 mode_sweep 完成（时序重排）; ③storm
+loop 长跑; ④48h 判定; ⑤三步删除; ⑥J6 终账。
