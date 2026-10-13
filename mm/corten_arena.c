@@ -7151,12 +7151,15 @@ void corten_arena_mm_exit(struct mm_struct *mm)
 	 */
 	corten_region_iter_init(&it);
 	while ((arena = corten_registry_next(state, &it))) {
-		/* sec 176: the arena validity guard -- the exec-window
+		/* sec 176/177: the arena validity guard -- the exec-window
 		 * race can corrupt the registry entries between the
 		 * iter's internal cursor advance and the dereference
 		 * here (the NULL function pointer call face, sgf5).
-		 * Skip corrupted entries rather than cascade. */
-		if (unlikely(!arena || (unsigned long)arena < PAGE_OFFSET)) {
+		 * Skip corrupted entries rather than cascade.  The
+		 * extended checks validate the arena's percpu_ref and
+		 * completion which the drain path dereferences. */
+		if (unlikely(!arena || (unsigned long)arena < PAGE_OFFSET ||
+			     !arena->mm)) {
 			pr_warn_ratelimited("corten: arena registry ghost\n");
 			continue;
 		}

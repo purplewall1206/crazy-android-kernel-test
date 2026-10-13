@@ -1800,3 +1800,35 @@ state_free 中每个函数指针/回调调用前 NULL 检查; ②exec 路径
 的 fork-child arena 生命周期审计（fork-child 独立 state 的
 arena 对象在 exec setup_arg_pages 期间被引用时，确保 old-mm
 teardown 不会先行释放）; ③PT 页退休的 pmd 清除时序审计。
+
+---
+
+## 附六十一: sec 177 -- 扩展 arena 守卫落地 + boot 69 终态（#656）
+
+**修复**: `corten_arena_mm_exit` drain 循环的 arena 有效性检查扩展
+（`!arena || < PAGE_OFFSET || !arena->mm` → 跳过）。
+
+**sg69 判读**: "Protocol error" = **0** ✓; panic = **0** ✓; 
+oops = **1**（__slab_free NULL@0x28 同族，非 drain 循环路径）;
+"Fatal exception in interrupt" 复发。扩展守卫未消除 --
+**Face 确认在 arena drain 循环之外的路径**。
+
+**全会话（sec 156-177, 41+ 小时, 75+ boot）净改善**:
+| 指标 | 基线 | 终态 |
+|---|---|---|
+| "Protocol error" | 100% | **0**（多 boot 零） |
+| init panic | 100% | **间歇**（多数 boot 通过） |
+| 管理器冻结 | 100% | **间歇** |
+| 生成器 | ❌ 出生即死 | ✅ 全量运行+退出 |
+| systemd 到达 | ❌ 5s | ✅ target 阶段 |
+| 残余 oops | 0 | **1** contained |
+| kASAN 检出 | — | ❌（非 tracked-object UAF） |
+| 修复确定性 bug | — | **14** |
+| 防线/安全网 | — | **3** |
+
+**下会话**: 以 KCSAN 或 ftrace 在 arena exit 路径的
+`corten_arena_mm_exit+0x76c`（state_free）和
+`corten_arena_free_ptes_span` 的 PTE 遍历处设探针，捕获竞态
+窗口的精确读写对。或代码走查 `corten_arena_mm_exit` 与
+`exit_mmap` 的交互（mmput 的 old_mm 在 exec_mmap 中的释放
+时序 vs mode_sweep 的 declare 窗口）。
