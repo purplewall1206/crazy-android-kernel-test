@@ -1944,3 +1944,19 @@ error + 系统全量存活。** 此前 65+ boot 中从未同时满足。
 
 **稳定性确认**: sg73 存活 8min+ 无恶化; 1 contained oops 稳定
 （非增长）; 系统持续正常运行。**修复确认有效**。
+
+---
+
+## 附六十四: 会话终态（47+ 小时, 80+ boot, 38 推送, sec 156-179）
+
+**生产内核 #654 多 boot 验证**: sg73 首次 **零 init panic + 零
+管理器冻结 + 零 Protocol error + 系统存活 8min+** ✓。残余
+1 contained oops（页分配器级 PT 页退休竞态, 非致命不影响运行）。
+
+**下会话修复方向**: PT 页 RCU-delayed free -- 在 `corten_arena_
+free_ptes_span` 的 `pte_free_tlb` 改为 `call_rcu` + `free_pages`,
+延迟 PT 页返回 buddy 一个宽限期。这是页分配器级修改，需仔细
+验证对所有 PT 页 free 路径的覆盖。
+
+**48h 判定**: 10-14 02:24 soak 两车持续存活不受影响。
+**E2 PR**: pr-e2a/b/c 等用户批复。
