@@ -1758,3 +1758,25 @@ shrinker callback）为 NULL -- 该指针所在的结构体被 exec 窗口
 对每个 arena 做 `corten_arena_free` 前验证 arena->ops 非NULL,
 或为 arena ops 增加 .probe 阶段初始化保证所有回调非NULL。
 更根本: 防止 exec 窗口竞态导致的结构体重用。
+
+---
+
+## 附五十九: sec 176 -- arena 注册表守卫 + boot 68 终态（#654）
+
+**修复**: `corten_arena_mm_exit` drain 循环增加 arena 指针有效性
+守卫（`!arena || < PAGE_OFFSET` → 跳过+计数）-- exec 窗口竞态
+损坏的注册表条目不再级联。
+
+**sg68 判读（#654）**: "Protocol error" = **0** ✓; panic = 0（无
+init kill）; oops = 2; "Fatal exception in interrupt" = 1（9.9s
+不可中断上下文崩溃）。**arena 注册表守卫未消除 Fatal exception
+-- 损坏在其它路径（非 drain 循环的 arena 指针）**。
+
+**终态**: systemd 到达 target 阶段（多数 boot）✓; 生成器全量
+运行 ✓; "Protocol error" = 0 ✓。残余 = 2 oops + Fatal exception
+在 interrupt（不可中断上下文崩溃，需 kASAN 当前代码 + 反复
+boot 精确定位）。
+
+**下会话路线图**: ①kASAN 构建（当前代码 sec 165-176 全修复栈）
++ 3+ boot 收精确报告; ②修复; ③生产内核零 oops; ④storm loop
+长跑; ⑤48h 判定（10-14 02:24）; ⑥三步删除; ⑦J6 终账。
