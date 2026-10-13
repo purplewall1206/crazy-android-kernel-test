@@ -1737,3 +1737,24 @@ graphical.target 阶段；残余 = 1 oops（meta_free 在 interrupt
 上下文的不安全面 + exec 窗口竞态）。**需下一会话将 meta_free
 改为在进程上下文安全释放**（如 work queue 延迟释放），或将
 meta 数组内嵌到 desc 分配中消除独立生命周期。
+
+---
+
+## 附五十八: 终态 oops 定名: arena ops NULL 函数指针调用（#652, sgf5）
+
+**Oops 分析**: `RIP: 0x0` -- 跳转到 NULL。调用链:
+`corten_arena_mm_exit+0x71f`（exit 的 arena 清理路径）。
+PID 85 systemd-fstab-g。
+
+**根因**: `corten_arena_mm_exit` 中的 arena drain/free 循环或
+state_free 路径里, 某个函数指针（arena ops / desc callback /
+shrinker callback）为 NULL -- 该指针所在的结构体被 exec 窗口
+竞态释放/重用后, 回调指针变成了 NULL。
+
+**这不是新 bug**: 而是整个 exec 窗口竞态族的最后一环 -- arena
+子系统退出路径的函数指针表被竞态损坏。
+
+**下会话修复方向**: 在 `corten_arena_mm_exit` 的 drain 循环中,
+对每个 arena 做 `corten_arena_free` 前验证 arena->ops 非NULL,
+或为 arena ops 增加 .probe 阶段初始化保证所有回调非NULL。
+更根本: 防止 exec 窗口竞态导致的结构体重用。
