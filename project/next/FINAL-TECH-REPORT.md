@@ -1960,3 +1960,36 @@ free_ptes_span` 的 `pte_free_tlb` 改为 `call_rcu` + `free_pages`,
 
 **48h 判定**: 10-14 02:24 soak 两车持续存活不受影响。
 **E2 PR**: pr-e2a/b/c 等用户批复。
+
+---
+
+## 附六十五: sec 180 -- synchronize_rcu PT 页释放修复 + 48h 判定临近（#657, sg74）
+
+**修复**: `corten_arena_free_ptes_span` 的 pte_free_tlb 前增加
+`synchronize_rcu()` -- 确保 PT 页在返回 buddy 前所有并发读者
+已完成（RCU 宽限期屏障）。
+
+**sg74 判读（#657）**: "Protocol error" = **0** ✓; panic = **0**
+✓; oops = **4**（较前几版增加 -- synchronize_rcu 增加了 arena
+mm_exit 的延迟，放大了竞态窗口）; "Fatal exception in interrupt"
+复发。**synchronize_rcu 修复未收敛**。
+
+**多 boot 统计汇总（sg56-74, 20+ boot 全修复栈）**:
+| 指标 | 最好 | 最差 | 典型 |
+|---|---|---|---|
+| "Protocol error" | 0 | 1 | 0-1 |
+| oops | 0 | 27 | 1-4 |
+| init panic | 0 | 2 | 0-2 |
+| 管理器冻结 | 0 | 1 | 0-1 |
+
+**48h 判定（10-14 02:24）**: 约 6 小时后，soak 两车持续存活。
+**三步删除序列**判定后推进。
+
+**残余竞态定论**: exec-inner 的 fork-mm teardown (exit_mmap →
+free_pgtables → unlink_anon_vmas → pte_free_tlb) 与 **同 mm 的
+mode_sweep** (setup_arg_pages → declare_carrier → check_empty_
+locked) 在不同 CPU 上的竞态。**不是跨 mm** -- 是同一 mm 内
+free_pgtables 的 PT 页退休与 mode_sweep 的 PTE 遍历之间的窗口。
+**修复需要** setup_arg_pages 期间的 mode_sweep 在 free_pgtables
+完成后执行（时序重排），或 free_pgtables 推迟到 mode_sweep 完成
+后（增加 exec 路径延迟）。

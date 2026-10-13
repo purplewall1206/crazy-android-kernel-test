@@ -4172,6 +4172,15 @@ unsigned long addr;
 				continue;
 			}
 		}
+		/* sec 180: the RCU-delayed PT page free -- the pte_free_
+		 * tlb funnel frees the PT page after the TLB flush, but
+		 * a concurrent reader on another CPU (check_empty_locked's
+		 * meta walk) may still hold the desc read lock and read
+		 * the PT page through the meta overlay.  The synchronize_
+		 * rcu before the free ensures all readers have finished.
+		 * This is a cold path (PT retirement at mode_exit), the
+		 * RCU wait is acceptable. */
+		synchronize_rcu();
 		pte_free_tlb(tlb, pmd_pgtable(READ_ONCE(*pmdp)), addr);
 		pmd_clear(pmdp);
 		mm_dec_nr_ptes(mm);
