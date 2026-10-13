@@ -1780,3 +1780,23 @@ boot 精确定位）。
 **下会话路线图**: ①kASAN 构建（当前代码 sec 165-176 全修复栈）
 + 3+ boot 收精确报告; ②修复; ③生产内核零 oops; ④storm loop
 长跑; ⑤48h 判定（10-14 02:24）; ⑥三步删除; ⑦J6 终账。
+
+---
+
+## 附六十: kASAN 3-boot 判决 -- KASAN 无法捕获此面（#655, sg61-62）
+
+**3 boot 一致**: `corten_arena.silent=on` KASAN 内核 boot 后
+**零 KASAN 报告**。残余 oops（NULL@0x28、RIP=0x0、Fatal
+exception in interrupt）均为 NULL 指针解引用/函数指针调用，
+**不是 KASAN 追踪的 heap-buffer-overflow 或 use-after-free**。
+
+**判决**: kASAN 工具对此面无效 -- 损坏为 arena 子系统退出路径
+的 NULL 函数指针/页表项解引用（结构体被零化后函数指针清零/
+PT 页被放回 buddy 后 pmd 仍指向它），需要 **KCSAN（数据竞态）
+或代码走查** 定位。
+
+**下会话修复方向**: ①`corten_arena_mm_exit` 的 drain 循环 +
+state_free 中每个函数指针/回调调用前 NULL 检查; ②exec 路径
+的 fork-child arena 生命周期审计（fork-child 独立 state 的
+arena 对象在 exec setup_arg_pages 期间被引用时，确保 old-mm
+teardown 不会先行释放）; ③PT 页退休的 pmd 清除时序审计。
