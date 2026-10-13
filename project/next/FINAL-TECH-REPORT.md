@@ -1864,3 +1864,31 @@ refcount**（kref_get 在 0 时 BUG 而非静默成功）使协议违约
 显性化。**或最简: 退出路径的 `corten_arena_mm_exit` 增加互斥**
 -- `mutex_lock(&corten_mm_exit_lock)` 全局互斥锁防止两个 mm_exit
 并发执行（exec 的 old_mm 拆卸与新 mm 的 setup_arg_pages 交叉）。
+
+---
+
+## 附六十二: 会话最终交付（sec 156-177, 43+ 小时, 85+ boot, 33 推送）
+
+**生产改进**:
+| 指标 | 基线 | 终态 |
+|---|---|---|
+| 生成器阶段冻结 | 100% 必现 | **消除** |
+| "Protocol error" | 100% 必现 | **0**（多数 boot） |
+| init panic (SIGKILL) | 100% 必现 | **间歇**（多数 boot 零） |
+| 生成器 | ❌ 出生即死 | ✅ **全量运行+退出** |
+| systemd 到达 | ❌ 5s | ✅ **target 阶段** |
+| 残余 oops | 0 | 1-2 contained（非致命） |
+
+**修复清单（14 确定性 + 3 防线 + 1 协议增强）**:
+sec 156-175 全在册（附四十三全清单 + 附五十至五十二增量）。
+
+**kASAN 交棒包**: bzImage-kasan-current（#645 含全修复栈）+
+报告 ×5 + storm-loop.sh + 完整竞态剖面（anon_vma_chain 64B
+OOB 读取 @ check_empty_locked，跨 CPU exec 窗口竞态）。
+
+**残余竞态定案**: exec-inner 的 old-mm 拆卸（exit_mmap →
+free_pgtables → PT 页退休）与 exec 的 mode_sweep（setup_arg_pages
+→ declare_carrier → check_empty_locked 的 meta/PTE 走）之间的
+跨 CPU 竞态。**修复需下会话以 KCSAN 捕获精确读写对**，或
+代码走查 `mmput(old_mm)` 在 `exec_mmap` 中的时序与 `mode_sweep`
+的 mmap_write 持有窗口的交叉。
