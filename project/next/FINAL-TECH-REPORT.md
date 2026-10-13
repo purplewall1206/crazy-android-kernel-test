@@ -2012,3 +2012,29 @@ free_pgtables 的 PT 页退休与 mode_sweep 的 PTE 遍历之间的窗口。
 **storm loop**: `project/bin/storm-loop.sh` 已入册。
 **48h 判定**: 10-14 02:24 soak 两车持续存活。
 **E2 PR**: pr-e2a/b/c 等用户批复。
+
+---
+
+## 附六十七: 51+ 小时会话最终交付（sec 156-181）
+
+**本会话核心交付**:
+1. 14+ 确定性 bug 修复（采納臂/域门/编码/重分类/守卫/互锁/分配/生命周期）
+2. 3 防线（POISON/路由/幽灵链）
+3. M3a 读侧排空互锁（wait_event + wake_up + 双哨兵）
+4. __GFP_COMP 状态分配
+5. 防御 sweep + gap pass + meta 生命周期修复
+6. synchronize_rcu PT 页释放
+7. arena 注册表有效性守卫
+8. magic + released 双哨兵
+9. desc->meta 读取移除（check_empty_locked）
+10. avc 有效性守卫（unlink_anon_vmas pass-1/pass-2）
+11. 完整 kASAN 取证（内核 ×3 + 报告 ×5）
+12. storm-loop.sh 压测框架
+
+**生产改进**: init panic 100%→间歇; Protocol error 100%→间歇
+（多数 boot 零）; 管理器冻结 100%→间歇; 生成器出生即死→全量
+运行; systemd 5s 冻结→到达 target 阶段。
+
+**残余**: exec 窗口竞态（1-2 contained oops 间歇）。**下会话
+修复方向**: mode_sweep 时序重排（sweep 推迟到 exec_mmap 后）或
+mode_sweep 跳过 retiring PT 页。+ PT 页 RCU-delayed free。
