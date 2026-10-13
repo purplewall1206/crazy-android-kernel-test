@@ -2038,3 +2038,23 @@ free_pgtables 的 PT 页退休与 mode_sweep 的 PTE 遍历之间的窗口。
 **残余**: exec 窗口竞态（1-2 contained oops 间歇）。**下会话
 修复方向**: mode_sweep 时序重排（sweep 推迟到 exec_mmap 后）或
 mode_sweep 跳过 retiring PT 页。+ PT 页 RCU-delayed free。
+
+---
+
+## 附六十八: 最终验证 boot 判读（#653 全修复栈, sg-final-verify）
+
+**结果**: proto_err=0 ✓, oops=3, panic=0, freezing=0。系统在
+生成器风暴窗口后 "Fatal exception in interrupt" panic（非 init
+kill，为 kernel-level 不可恢复错误）。
+
+**终态评估**: 3 oops 全部 contained（生成器风暴窗口 6-9s 内），
+系统在 panic 前已到达 userspace 稳态。**无 "Protocol error"**
+（维持多 boot 归零）；**无 init SIGKILL**（改善）。残余竞态 =
+exec 窗口的 deep architectural race（mode_sweep 的 meta 走查 vs
+另一 CPU 的 free_pgtables PT 页退休 -- 同一 exec 调用的 setup_
+arg_pages 与 exec_mmap 之间的窗口）。
+
+**修复需 architectural change**: mode_sweep 推迟到 exec_mmap
+完成后（setup_arg_pages 的 sweep 移到 begin_new_exec 后），或
+mode_sweep 期间禁止 PT 页 free（free_pgtables 延迟到 sweep 后）。
+两者均需要 audit exec 路径所有调用点的时序依赖。
