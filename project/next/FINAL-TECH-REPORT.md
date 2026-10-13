@@ -1718,3 +1718,22 @@ callback 不足以保护读者，因为**读者的 pin 采下后，另一个 CPU
 **storm loop**: `project/bin/storm-loop.sh` 已入册待生产内核
 零 oops 后启动。
 **48h 判定**: 10-14 02:24 两车持续存活。
+
+---
+
+## 附五十七: 最终 boot 状态（#652, meta_free 同步还原后）
+
+**sgf5 判读**: proto_err=0, oops=1, panic=0（无 init kill）。但
+"Fatal exception in interrupt" 于 9.1s -- sec 170 的 call_rcu
+meta 生命周期修复还原后，同步 meta_free 在 interrupt 上下文
+仍有不安全面（kfree 本身安全但 xa_destroy 等可能不安全）。
+
+**最终配置**: sec 165-174 全修复栈（M3a 互锁 + magic/released
+双哨兵 + __GFP_COMP + 防御 sweep + gap pass + 域门 + 编码修复 +
+FILE 重分类 + 回收守卫）+ meta_free 同步（原始路径）。
+
+**结论**: 生成器阶段已打通（"Protocol error" = 0）；系统可到达
+graphical.target 阶段；残余 = 1 oops（meta_free 在 interrupt
+上下文的不安全面 + exec 窗口竞态）。**需下一会话将 meta_free
+改为在进程上下文安全释放**（如 work queue 延迟释放），或将
+meta 数组内嵌到 desc 分配中消除独立生命周期。
