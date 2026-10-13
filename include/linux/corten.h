@@ -376,6 +376,10 @@ struct corten_ptdesc {
 	 * locked's meta walk increments under desc->lock read side;
 	 * the uninstall's page-release waits for it to drain. */
 	atomic_t		readers;
+	/* sec 178: the drain waitqueue -- the uninstall waits here
+	 * (sleep-safe context after write_unlock) for meta-array
+	 * readers to drain before the TLB funnel frees the PT page. */
+	wait_queue_head_t	readers_wq;
 };
 
 /**

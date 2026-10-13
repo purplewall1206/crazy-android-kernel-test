@@ -3183,6 +3183,7 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 			bool was_stale = READ_ONCE(desc->stale);
 
 			atomic_dec(&desc->readers);
+			wake_up(&desc->readers_wq);
 			wake_up(&desc->waitq);
 			read_unlock_bh(&desc->lock);
 			corten_ptdesc_put(desc);
@@ -3193,6 +3194,7 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 		ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
 		if (!ptep) {
 			atomic_dec(&desc->readers);
+			wake_up(&desc->readers_wq);
 			wake_up(&desc->waitq);
 			read_unlock_bh(&desc->lock);
 			corten_ptdesc_put(desc);
@@ -3215,6 +3217,7 @@ static int corten_arena_check_empty_locked(struct mm_struct *mm,
 		}
 		pte_unmap_unlock(ptep, ptl);
 		atomic_dec(&desc->readers);
+			wake_up(&desc->readers_wq);
 			wake_up(&desc->waitq);
 			read_unlock_bh(&desc->lock);
 		corten_ptdesc_put(desc);

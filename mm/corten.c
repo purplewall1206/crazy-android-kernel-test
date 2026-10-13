@@ -415,6 +415,7 @@ int corten_ptdesc_install(struct mm_struct *mm, struct page *pte_page)
 	desc->rec_hi = 0;
 	corten_ptdesc_set_level(desc, CORTEN_LEVEL_PTE);
 	desc->magic = CORTEN_PTDESC_MAGIC;
+	init_waitqueue_head(&desc->readers_wq);
 
 	/*
 	 * Insert before the page becomes reachable through the page table
@@ -536,6 +537,12 @@ void corten_ptdesc_uninstall(struct page *pte_page)
 	}
 
 	write_unlock_bh(&desc->lock);
+
+	/* sec 178: the slow-path drain -- existing readers that passed
+	 * the stale check before the publish drain here (sleep-safe
+	 * context, the desc is pinned by the base reference).  The
+	 * TLB funnel frees the PT page only after we return. */
+	wait_event(desc->readers_wq, atomic_read(&desc->readers) == 0);
 
 	atomic_long_dec(&corten_nr_ptdescs);
 	corten_ptdesc_put(desc);

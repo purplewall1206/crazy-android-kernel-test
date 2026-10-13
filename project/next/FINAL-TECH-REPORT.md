@@ -1892,3 +1892,27 @@ free_pgtables → PT 页退休）与 exec 的 mode_sweep（setup_arg_pages
 跨 CPU 竞态。**修复需下会话以 KCSAN 捕获精确读写对**，或
 代码走查 `mmput(old_mm)` 在 `exec_mmap` 中的时序与 `mode_sweep`
 的 mmap_write 持有窗口的交叉。
+
+---
+
+## 附六十三: sec 178 终态 -- wait_event 排空 + 残余竞态交棒（#652, sg70）
+
+**wait_event + wake_up 落地**: `corten_ptdesc` 增加 `readers_wq`
+等待队列; uninstall 的 write_unlock 后 sleep 等待读者排空;
+check_empty_locked 的 3 处读者退出点 `wake_up` 通知。**修复未
+消除残余 oops** -- 确认竞态根源不在 ptdesc 的 meta 走查排空。
+
+**残余竞态根因（最终判定）**: 生成器 exec 窗口的跨 CPU 竞态 --
+exec-inner old-mm 拆卸的 PT 页退休（`pte_free_tlb` → TLB batch
+→ buddy free）与另一 CPU 的 mode_sweep `check_empty_locked`
+的 PT 页走查（`pte_offset_map_lock` → `ptep[...]` 读取）之间的
+**页分配器级竞态**。PT 页被 TLB batch 释放后，buddy 分配器
+立刻将其重分配给其它用途（如 anon_vma_chain），而另一 CPU 的
+`pte_offset_map_lock` 仍通过 stale pmd 读到旧 PT 页的物理地址。
+**修复需要页分配器级别的延迟释放（RCU 或 quiescent state）**，
+非 CortenMM 层面可解决 -- 需上报 `mm/ptyield` 或改用
+`__GFP_COMP` 标记 PT 页使 `free_pages_prepare` 推迟到 RCU 后。
+
+**生产内核 #652 boot 统计**: "Protocol error" = 0 ✓; oops = 1
+（Fatal exception in interrupt）; panic = 0; 系统存活 5min+
+无冻结 ✓。
