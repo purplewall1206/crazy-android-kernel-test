@@ -1993,3 +1993,22 @@ free_pgtables 的 PT 页退休与 mode_sweep 的 PTE 遍历之间的窗口。
 **修复需要** setup_arg_pages 期间的 mode_sweep 在 free_pgtables
 完成后执行（时序重排），或 free_pgtables 推迟到 mode_sweep 完成
 后（增加 exec 路径延迟）。
+
+---
+
+## 附六十六: sec 181 -- 会话终态确认与下会话路线图（sec 156-180, 50+ 小时, 95+ boot, 45 推送）
+
+**生产内核 #657 多 boot 验证**: init panic 从 100% 降至间歇;
+"Protocol error" 从 100% 降至间歇; 管理器冻结从 100% 降至间歇;
+生成器从出生即死→全量运行; systemd 从 5s 冻结→到达 target 阶段。
+
+**残余竞态修复路线（已精确定位到函数级别）**:
+`setup_arg_pages` 的 mode_sweep 在 `exit_mmap` 的 `free_pgtables`
+期间运行 -- 同一 exec 调用内部的**时序竞态**。修复:
+`corten_arena_entry_sweep_locked` 推迟到 `exec_mmap` 的
+`mmput(old_mm)` 之后执行（时序重排），或 mode_sweep 跳过
+`exit_mmap` 已标记 retiring 的 PT 页。
+
+**storm loop**: `project/bin/storm-loop.sh` 已入册。
+**48h 判定**: 10-14 02:24 soak 两车持续存活。
+**E2 PR**: pr-e2a/b/c 等用户批复。
