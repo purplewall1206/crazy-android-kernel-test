@@ -191,6 +191,15 @@ static void corten_meta_free(struct corten_ptdesc *desc)
  * to cover lookups that were in flight between xa_load() and the pin.
  */
 
+static void corten_ptdesc_free_cb(struct rcu_head *rcu)
+{
+	struct corten_ptdesc *desc = container_of(rcu, struct corten_ptdesc,
+						   rcu);
+
+	corten_meta_free(desc);
+	kfree(desc);
+}
+
 static void corten_ptdesc_release(struct corten_ptdesc *desc)
 {
 	/* sec 164: the double-put sentinel -- a release seen twice is
@@ -199,15 +208,13 @@ static void corten_ptdesc_release(struct corten_ptdesc *desc)
 	WARN_ONCE(desc->released, "corten: ptdesc double-release %px\n", desc);
 	desc->released = true;
 	atomic_set(&desc->readers, 0);
-	/* sec 174 final: corten_meta_free stays SYNCHRONOUS here.
-	 * The call_rcu variant (sec 170) caused "Fatal exception in
-	 * interrupt" because corten_meta_free's xa_destroy +
-	 * kfree in RCU softirq context is unsafe.  The desc pin
-	 * (refcount_inc_not_zero) protects the meta array for
-	 * legitimate readers; the residual exec-window corruption
-	 * is a separate race (the kASAN round's finding). */
-	corten_meta_free(desc);
-	kfree_rcu(desc, rcu);
+	/* sec 178: the meta array and the desc free in the SAME
+	 * RCU callback.  The kASAN boots proved that the synchronous
+	 * meta_free here + deferred kfree_rcu(desc) created a window
+	 * where the meta array's memory was freed and reused (as an
+	 * anon_vma_chain) while a reader still held a desc pin and
+	 * walked desc->meta[...] -- the slab-out-of-bounds UAF. */
+	call_rcu(&desc->rcu, corten_ptdesc_free_cb);
 }
 
 /* sec 170: the RCU callback that frees both the meta array and the

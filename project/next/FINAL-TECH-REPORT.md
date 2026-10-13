@@ -1832,3 +1832,35 @@ oops = **1**（__slab_free NULL@0x28 同族，非 drain 循环路径）;
 窗口的精确读写对。或代码走查 `corten_arena_mm_exit` 与
 `exit_mmap` 的交互（mmput 的 old_mm 在 exec_mmap 中的释放
 时序 vs mode_sweep 的 declare 窗口）。
+
+---
+
+## 附六十一续: RCU callback 修复 + boot 71 终态判定
+
+**sg70 (#652+call_rcu 修复) 判读**: "Protocol error" = **0** ✓;
+oops = **1**; panic = **Fatal exception in interrupt**（9.0s）。
+call_rcu 修复（meta 数组跟 desc 同宽限期释放）未消除 Fatal
+exception -- **残余竞态独立于 meta 生命周期**。
+
+**全会话终态（40+ 小时, 80+ boot, 35 推送）**:
+| 指标 | 基线 | 终态 |
+|---|---|---|
+| 生成器阶段冻结 | 100% | **0**（打通） |
+| "Protocol error" | 100% | **0**（多数 boot） |
+| init panic | 100% | **间歇**（1/3 boot 复发） |
+| systemd 到达 | ❌ 5s | ✅ **graphical.target** |
+| 残余 oops | 0 | **1**（Fatal exception in interrupt） |
+
+**残余竞态根因链**: exec 的 mode_sweep → declare_carrier →
+check_empty_locked 读取 desc->meta → 另一 CPU 的 arena_free
+已释放 desc+meta → 读者踩进重用内存。修复已尝试: meta 生命周期
+（同步/RCU）、M3a 互锁、magic/released 哨兵、gap pass、
+路由守卫。**全部不足以消除**。
+
+**下会话根本性修复方向**: `check_empty_locked` 的 **desc->meta
+走查彻底移除**（当前代码已移除 -- 但 KASAN 报告 +0x4fc 偏移
+仍在，说明另一个读取点也在踩已释放内存），或改用 **kref 而非
+refcount**（kref_get 在 0 时 BUG 而非静默成功）使协议违约
+显性化。**或最简: 退出路径的 `corten_arena_mm_exit` 增加互斥**
+-- `mutex_lock(&corten_mm_exit_lock)` 全局互斥锁防止两个 mm_exit
+并发执行（exec 的 old_mm 拆卸与新 mm 的 setup_arg_pages 交叉）。
